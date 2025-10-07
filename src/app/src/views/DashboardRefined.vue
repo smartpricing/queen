@@ -508,9 +508,7 @@ onUnmounted(() => {
 }
 
 .chart-container {
-  height: 300px;
-  position: relative;
-  overflow: hidden;
+  height: 200px;
 }
 
 /* Status List */

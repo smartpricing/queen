@@ -5,31 +5,7 @@
       <p>No throughput data available</p>
     </div>
     <div v-else class="multi-chart-wrapper">
-      <!-- Chart Controls -->
-      <div class="chart-controls">
-        <div class="metric-toggles">
-          <label class="metric-toggle" v-for="metric in metrics" :key="metric.key">
-            <Checkbox 
-              v-model="visibleMetrics" 
-              :value="metric.key" 
-              :inputId="metric.key"
-            />
-            <label :for="metric.key" class="ml-2">
-              <span class="metric-badge" :style="{ backgroundColor: metric.color }"></span>
-              {{ metric.label }}
-            </label>
-          </label>
-        </div>
-        <div class="chart-options">
-          <SelectButton 
-            v-model="displayMode" 
-            :options="displayModes"
-            optionLabel="label"
-            optionValue="value"
-            size="small"
-          />
-        </div>
-      </div>
+      <!-- Simplified Chart Display -->
       
       <!-- Main Throughput Chart -->
       <div class="main-chart">
@@ -143,10 +119,11 @@ const chartData = computed(() => {
       data: sortedData.map(d => d.incoming?.[metricField] || 0),
       borderColor: '#3b82f6',
       backgroundColor: 'rgba(59, 130, 246, 0.1)',
-      borderWidth: 2,
+      borderWidth: 3,
       fill: false,
-      tension: 0.4,
+      tension: 0,
       pointRadius: 0,
+      pointHoverRadius: 4,
       pointHoverRadius: 4
     })
   }
@@ -157,10 +134,11 @@ const chartData = computed(() => {
       data: sortedData.map(d => d.completed?.[metricField] || 0),
       borderColor: '#10b981',
       backgroundColor: 'rgba(16, 185, 129, 0.1)',
-      borderWidth: 2,
+      borderWidth: 3,
       fill: false,
-      tension: 0.4,
+      tension: 0,
       pointRadius: 0,
+      pointHoverRadius: 4,
       pointHoverRadius: 4
     })
   }
@@ -171,10 +149,11 @@ const chartData = computed(() => {
       data: sortedData.map(d => d.processing?.[metricField] || 0),
       borderColor: '#f59e0b',
       backgroundColor: 'rgba(245, 158, 11, 0.1)',
-      borderWidth: 2,
+      borderWidth: 3,
       fill: false,
-      tension: 0.4,
+      tension: 0,
       pointRadius: 0,
+      pointHoverRadius: 4,
       pointHoverRadius: 4
     })
   }
@@ -185,10 +164,11 @@ const chartData = computed(() => {
       data: sortedData.map(d => d.failed?.[metricField] || 0),
       borderColor: '#ef4444',
       backgroundColor: 'rgba(239, 68, 68, 0.1)',
-      borderWidth: 2,
+      borderWidth: 3,
       fill: false,
-      tension: 0.4,
+      tension: 0,
       pointRadius: 0,
+      pointHoverRadius: 4,
       pointHoverRadius: 4
     })
   }
@@ -298,7 +278,12 @@ const chartOptions = {
       labels: {
         color: '#d1d5db',
         usePointStyle: true,
-        padding: 15
+        padding: 8,
+        boxWidth: 6,
+        boxHeight: 6,
+        font: {
+          size: 10
+        }
       }
     },
     tooltip: {
@@ -326,7 +311,9 @@ const chartOptions = {
       ticks: {
         color: '#737373',
         maxRotation: 45,
-        minRotation: 0
+        minRotation: 0,
+        font: { size: 9 },
+        maxTicksLimit: 8
       }
     },
     y: {
@@ -337,6 +324,8 @@ const chartOptions = {
       },
       ticks: {
         color: '#737373',
+        font: { size: 10 },
+        padding: 5,
         callback: (value) => {
           const unit = displayMode.value === 'perSecond' ? 'msg/s' : ''
           return `${value}${unit}`
@@ -391,7 +380,9 @@ const lagChartOptions = {
       ticks: {
         color: '#737373',
         maxRotation: 45,
-        minRotation: 0
+        minRotation: 0,
+        font: { size: 9 },
+        maxTicksLimit: 8
       }
     },
     y: {
@@ -402,6 +393,8 @@ const lagChartOptions = {
       },
       ticks: {
         color: '#737373',
+        font: { size: 10 },
+        padding: 5,
         callback: (value) => {
           if (value > 1) {
             return `${value}s`
@@ -425,24 +418,27 @@ const lagChartOptions = {
   width: 100%;
   height: 100%;
   position: relative;
+  overflow: hidden;
 }
 
 .multi-chart-wrapper {
   display: flex;
   flex-direction: column;
-  gap: 1rem;
+  gap: 0.75rem;
   height: 100%;
+  padding: 0.5rem;
 }
 
 .chart-controls {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  padding: 0.75rem;
+  padding: 0.5rem;
   background: var(--surface-100);
   border-radius: 6px;
   flex-wrap: wrap;
-  gap: 1rem;
+  gap: 0.5rem;
+  flex-shrink: 0;
 }
 
 .metric-toggles {
@@ -479,15 +475,18 @@ const lagChartOptions = {
 
 .main-chart {
   flex: 1;
-  min-height: 250px;
+  min-height: 200px;
+  max-height: 280px;
   position: relative;
+  overflow: hidden;
 }
 
 .lag-chart {
-  height: 150px;
+  height: 100px;
   position: relative;
-  padding-top: 1rem;
+  padding-top: 0.5rem;
   border-top: 1px solid var(--surface-200);
+  overflow: hidden;
 }
 
 .chart-subtitle {

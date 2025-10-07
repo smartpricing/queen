@@ -24,7 +24,7 @@ async function main() {
   
   // Production rate configuration
   const messagesPerBatch = parseInt(process.env.BATCH_SIZE) || 100;
-  const intervalMilliseconds = parseInt(process.env.INTERVAL) || 10;
+  const intervalMilliseconds = parseInt(process.env.INTERVAL) || 10000;
   const burstMode = process.env.BURST === 'true';
   const highPerformanceMode = process.env.HIGH_PERF === 'true';
 

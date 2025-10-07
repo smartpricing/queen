@@ -48,24 +48,6 @@ const routes = [
     name: 'Analytics',
     component: () => import('../views/Analytics.vue'),
     meta: { title: 'Analytics', icon: 'pi pi-chart-line' }
-  },
-  {
-    path: '/configure',
-    name: 'Configure',
-    component: () => import('../views/Configure.vue'),
-    meta: { title: 'Configure', icon: 'pi pi-cog' }
-  },
-  {
-    path: '/test',
-    name: 'TestTool',
-    component: () => import('../views/TestTool.vue'),
-    meta: { title: 'Test Tool', icon: 'pi pi-play' }
-  },
-  {
-    path: '/settings',
-    name: 'Settings',
-    component: () => import('../views/Settings.vue'),
-    meta: { title: 'Settings', icon: 'pi pi-sliders-h' }
   }
 ]
 

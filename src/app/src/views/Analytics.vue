@@ -501,6 +501,59 @@ onMounted(() => {
 
 .metric-card {
   height: 100%;
+  background: var(--bg-secondary) !important;
+  border: 1px solid var(--border-subtle) !important;
+}
+
+/* Override PrimeVue Card styles for dark theme */
+:deep(.p-card) {
+  background: var(--bg-secondary) !important;
+  border: 1px solid var(--border-subtle) !important;
+  color: var(--text-primary) !important;
+}
+
+:deep(.p-card-title) {
+  color: var(--text-primary) !important;
+}
+
+:deep(.p-card-content) {
+  padding: 1rem !important;
+}
+
+:deep(.p-datatable) {
+  background: transparent !important;
+}
+
+:deep(.p-datatable .p-datatable-header) {
+  background: var(--bg-tertiary) !important;
+  border: none !important;
+}
+
+:deep(.p-datatable .p-datatable-thead > tr > th) {
+  background: var(--bg-tertiary) !important;
+  color: var(--text-tertiary) !important;
+  border-color: var(--border-subtle) !important;
+}
+
+:deep(.p-datatable .p-datatable-tbody > tr) {
+  background: transparent !important;
+  color: var(--text-secondary) !important;
+}
+
+:deep(.p-datatable .p-datatable-tbody > tr:hover) {
+  background: var(--bg-tertiary) !important;
+}
+
+:deep(.p-datatable .p-datatable-tbody > tr > td) {
+  border-color: var(--border-subtle) !important;
+}
+
+:deep(.p-progressbar) {
+  background: var(--bg-tertiary) !important;
+}
+
+:deep(.p-progressbar-value) {
+  background: var(--success) !important;
 }
 
 .metric {

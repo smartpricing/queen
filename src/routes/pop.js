@@ -20,11 +20,14 @@ export const createPopRoute = (queueManager, eventManager) => {
     
     const startTime = Date.now();
     
+    // Optimized polling with shorter intervals for better responsiveness
+    const pollInterval = Math.min(100, effectiveTimeout / 10); // 100ms max, or 1/10th of timeout
+    
     while (Date.now() - startTime < effectiveTimeout) {
-      // Wait for message notification or timeout
+      // Wait for message notification or short timeout for faster response
       const notification = await Promise.race([
-        eventManager.waitForMessage(queuePath, 1000),
-        new Promise(resolve => setTimeout(() => resolve(null), 1000))
+        eventManager.waitForMessage(queuePath, pollInterval),
+        new Promise(resolve => setTimeout(() => resolve(null), pollInterval))
       ]);
       
       // Try to get messages whether notified or not
@@ -34,7 +37,7 @@ export const createPopRoute = (queueManager, eventManager) => {
       }
       
       // If we got a notification but no messages, someone else got them
-      // Continue waiting
+      // Continue waiting with minimal delay
     }
     
     // Timeout reached, no messages
