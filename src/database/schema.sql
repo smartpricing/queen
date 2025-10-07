@@ -55,6 +55,30 @@ CREATE INDEX IF NOT EXISTS idx_tasks_namespace_name ON queen.tasks(namespace_id,
 CREATE INDEX IF NOT EXISTS idx_queues_task_name ON queen.queues(task_id, name);
 CREATE INDEX IF NOT EXISTS idx_queues_priority ON queen.queues(priority DESC);
 
+-- Performance optimization indexes for high-throughput message consumption
+-- Run this script to improve pop operation performance
+
+-- Composite index for efficient message retrieval
+-- This index covers the WHERE clause and ORDER BY for queue-specific pops
+CREATE INDEX IF NOT EXISTS idx_messages_pop_queue 
+ON queen.messages(queue_id, status, created_at) 
+WHERE status = 'pending';
+
+-- Index for namespace-level and task-level pops with priority ordering
+CREATE INDEX IF NOT EXISTS idx_messages_pop_priority 
+ON queen.messages(status, created_at) 
+INCLUDE (queue_id)
+WHERE status = 'pending';
+
+-- Partial index for faster pending message counts
+CREATE INDEX IF NOT EXISTS idx_messages_pending_count 
+ON queen.messages(queue_id) 
+WHERE status = 'pending';
+
+-- Index to speed up lease expiration checks
+CREATE INDEX IF NOT EXISTS idx_messages_lease_check 
+ON queen.messages(lease_expires_at, status) 
+WHERE status = 'processing';
 
 -- Additional indexes for enhanced throughput analytics
 -- These indexes optimize the new throughput queries that calculate incoming, completed, processing, failed, and lag metrics
