@@ -47,7 +47,11 @@ export const createQueenClient = (options = {}) => {
       batch: batch.toString()
     });
     
-    const result = await http.get(`${path}?${params}`);
+    // For long polling, use a slightly longer client timeout than server timeout
+    // This ensures the server has time to respond before the client times out
+    const clientTimeout = wait ? timeout + 5000 : timeout;
+    
+    const result = await http.get(`${path}?${params}`, clientTimeout);
     
     // Return empty array if no messages (204 response)
     if (!result) {
@@ -123,12 +127,26 @@ export const createQueenClient = (options = {}) => {
               }
             }
           }
+          // If no messages received (timeout on server side), immediately continue to next iteration
+          // No delay needed - this is expected behavior for long polling
         } catch (error) {
+          // Check if this is a timeout/abort error from the HTTP client
+          const isTimeoutError = error.name === 'AbortError' || 
+                                error.message?.includes('abort') ||
+                                error.message?.includes('timeout');
+          
+          if (isTimeoutError) {
+            // For timeout errors, immediately retry without delay
+            // This is expected behavior for long polling - just start a new request
+            console.debug('Long poll timeout, immediately retrying...');
+            continue;
+          }
+          
           console.error('Error in consume loop:', error);
           if (stopOnError) {
             running = false;
           } else {
-            // Wait before retrying
+            // For other errors (network issues, server errors), wait before retrying
             await new Promise(resolve => setTimeout(resolve, retryDelay));
           }
         }

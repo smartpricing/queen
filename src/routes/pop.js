@@ -4,11 +4,11 @@ export const createPopRoute = (queueManager, eventManager) => {
     const maxTimeout = 60000;
     const effectiveTimeout = Math.min(timeout, maxTimeout);
     
-    // Try to get messages immediately
-    let messages = await queueManager.popMessages(scope, { batch });
+    // Try to get messages immediately (pass all options including wait)
+    let result = await queueManager.popMessages(scope, { batch, wait: false, timeout: effectiveTimeout });
     
-    if (messages.length > 0 || !wait) {
-      return { messages };
+    if (result.messages.length > 0 || !wait) {
+      return result;
     }
     
     // Long polling with event-driven optimization
@@ -28,9 +28,9 @@ export const createPopRoute = (queueManager, eventManager) => {
       ]);
       
       // Try to get messages whether notified or not
-      messages = await queueManager.popMessages(scope, { batch });
-      if (messages.length > 0) {
-        return { messages };
+      result = await queueManager.popMessages(scope, { batch, wait: false });
+      if (result.messages.length > 0) {
+        return result;
       }
       
       // If we got a notification but no messages, someone else got them

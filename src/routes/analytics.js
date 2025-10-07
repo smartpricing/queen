@@ -72,25 +72,292 @@ export const createAnalyticsRoutes = (queueManager) => {
   };
   
   const getThroughput = async (pool) => {
-    // Calculate throughput over last minute
-    const result = await pool.query(`
-      SELECT 
-        DATE_TRUNC('minute', completed_at) as minute,
-        COUNT(*) as completed_count
-      FROM queen.messages
-      WHERE completed_at >= NOW() - INTERVAL '5 minutes'
-        AND status = 'completed'
-      GROUP BY minute
-      ORDER BY minute DESC
-    `);
+    // Get comprehensive throughput metrics over the last hour
+    const timeWindow = '1 hour';
+    const minuteInterval = 60; // Number of minutes to fetch
     
-    const throughput = result.rows.map(row => ({
-      timestamp: row.minute,
-      messagesPerMinute: parseInt(row.completed_count),
-      messagesPerSecond: Math.round(parseInt(row.completed_count) / 60)
-    }));
-    
-    return { throughput };
+    try {
+      // Generate a time series for the last hour with minute intervals
+      const timeSeriesQuery = `
+        WITH time_series AS (
+          SELECT generate_series(
+            DATE_TRUNC('minute', NOW() - INTERVAL '${timeWindow}'),
+            DATE_TRUNC('minute', NOW()),
+            '1 minute'::interval
+          ) AS minute
+        )
+        SELECT minute FROM time_series
+        ORDER BY minute DESC
+        LIMIT ${minuteInterval}
+      `;
+      
+      // 1. Incoming messages (created/inserted)
+      const incomingQuery = `
+        WITH time_series AS (
+          SELECT generate_series(
+            DATE_TRUNC('minute', NOW() - INTERVAL '${timeWindow}'),
+            DATE_TRUNC('minute', NOW()),
+            '1 minute'::interval
+          ) AS minute
+        )
+        SELECT 
+          ts.minute,
+          COALESCE(COUNT(m.id), 0) as count
+        FROM time_series ts
+        LEFT JOIN queen.messages m ON 
+          DATE_TRUNC('minute', m.created_at) = ts.minute
+          AND m.created_at >= NOW() - INTERVAL '${timeWindow}'
+        GROUP BY ts.minute
+        ORDER BY ts.minute DESC
+        LIMIT ${minuteInterval}
+      `;
+      
+      // 2. Completed messages
+      const completedQuery = `
+        WITH time_series AS (
+          SELECT generate_series(
+            DATE_TRUNC('minute', NOW() - INTERVAL '${timeWindow}'),
+            DATE_TRUNC('minute', NOW()),
+            '1 minute'::interval
+          ) AS minute
+        )
+        SELECT 
+          ts.minute,
+          COALESCE(COUNT(m.id), 0) as count
+        FROM time_series ts
+        LEFT JOIN queen.messages m ON 
+          DATE_TRUNC('minute', m.completed_at) = ts.minute
+          AND m.completed_at >= NOW() - INTERVAL '${timeWindow}'
+          AND m.status = 'completed'
+        GROUP BY ts.minute
+        ORDER BY ts.minute DESC
+        LIMIT ${minuteInterval}
+      `;
+      
+      // 3. Processing messages (started processing in this minute)
+      const processingQuery = `
+        WITH time_series AS (
+          SELECT generate_series(
+            DATE_TRUNC('minute', NOW() - INTERVAL '${timeWindow}'),
+            DATE_TRUNC('minute', NOW()),
+            '1 minute'::interval
+          ) AS minute
+        )
+        SELECT 
+          ts.minute,
+          COALESCE(COUNT(m.id), 0) as count
+        FROM time_series ts
+        LEFT JOIN queen.messages m ON 
+          DATE_TRUNC('minute', m.processing_at) = ts.minute
+          AND m.processing_at >= NOW() - INTERVAL '${timeWindow}'
+        GROUP BY ts.minute
+        ORDER BY ts.minute DESC
+        LIMIT ${minuteInterval}
+      `;
+      
+      // 4. Failed messages
+      const failedQuery = `
+        WITH time_series AS (
+          SELECT generate_series(
+            DATE_TRUNC('minute', NOW() - INTERVAL '${timeWindow}'),
+            DATE_TRUNC('minute', NOW()),
+            '1 minute'::interval
+          ) AS minute
+        )
+        SELECT 
+          ts.minute,
+          COALESCE(COUNT(m.id), 0) as count
+        FROM time_series ts
+        LEFT JOIN queen.messages m ON 
+          DATE_TRUNC('minute', m.completed_at) = ts.minute
+          AND m.completed_at >= NOW() - INTERVAL '${timeWindow}'
+          AND m.status = 'failed'
+        GROUP BY ts.minute
+        ORDER BY ts.minute DESC
+        LIMIT ${minuteInterval}
+      `;
+      
+      // 5. Average lag (processing time) per minute
+      const lagQuery = `
+        WITH time_series AS (
+          SELECT generate_series(
+            DATE_TRUNC('minute', NOW() - INTERVAL '${timeWindow}'),
+            DATE_TRUNC('minute', NOW()),
+            '1 minute'::interval
+          ) AS minute
+        )
+        SELECT 
+          ts.minute,
+          COALESCE(
+            AVG(
+              EXTRACT(EPOCH FROM (m.completed_at - m.created_at))
+            ), 
+            0
+          ) as avg_lag_seconds,
+          COUNT(m.id) as sample_count
+        FROM time_series ts
+        LEFT JOIN queen.messages m ON 
+          DATE_TRUNC('minute', m.completed_at) = ts.minute
+          AND m.completed_at >= NOW() - INTERVAL '${timeWindow}'
+          AND m.status IN ('completed', 'failed')
+          AND m.completed_at IS NOT NULL
+          AND m.created_at IS NOT NULL
+        GROUP BY ts.minute
+        ORDER BY ts.minute DESC
+        LIMIT ${minuteInterval}
+      `;
+      
+      // Execute all queries in parallel
+      const [incoming, completed, processing, failed, lag] = await Promise.all([
+        pool.query(incomingQuery),
+        pool.query(completedQuery),
+        pool.query(processingQuery),
+        pool.query(failedQuery),
+        pool.query(lagQuery)
+      ]);
+      
+      // If we have no data at all in the last hour, get the last 10 minutes of actual data
+      if (incoming.rows.every(row => row.count === 0 || row.count === '0')) {
+        const fallbackQuery = `
+          SELECT 
+            DATE_TRUNC('minute', created_at) as minute,
+            COUNT(*) as incoming_count,
+            COUNT(CASE WHEN status = 'completed' THEN 1 END) as completed_count,
+            COUNT(CASE WHEN status = 'processing' THEN 1 END) as processing_count,
+            COUNT(CASE WHEN status = 'failed' THEN 1 END) as failed_count,
+            AVG(
+              CASE 
+                WHEN completed_at IS NOT NULL AND created_at IS NOT NULL 
+                THEN EXTRACT(EPOCH FROM (completed_at - created_at))
+                ELSE NULL
+              END
+            ) as avg_lag_seconds
+          FROM queen.messages
+          WHERE created_at IS NOT NULL
+          GROUP BY minute
+          ORDER BY minute DESC
+          LIMIT 10
+        `;
+        
+        const fallbackResult = await pool.query(fallbackQuery);
+        
+        const throughput = fallbackResult.rows.map(row => ({
+          timestamp: row.minute,
+          incoming: {
+            messagesPerMinute: parseInt(row.incoming_count || 0),
+            messagesPerSecond: Math.round(parseInt(row.incoming_count || 0) / 60)
+          },
+          completed: {
+            messagesPerMinute: parseInt(row.completed_count || 0),
+            messagesPerSecond: Math.round(parseInt(row.completed_count || 0) / 60)
+          },
+          processing: {
+            messagesPerMinute: parseInt(row.processing_count || 0),
+            messagesPerSecond: Math.round(parseInt(row.processing_count || 0) / 60)
+          },
+          failed: {
+            messagesPerMinute: parseInt(row.failed_count || 0),
+            messagesPerSecond: Math.round(parseInt(row.failed_count || 0) / 60)
+          },
+          lag: {
+            avgSeconds: parseFloat(row.avg_lag_seconds || 0),
+            avgMilliseconds: Math.round(parseFloat(row.avg_lag_seconds || 0) * 1000)
+          }
+        }));
+        
+        return { throughput };
+      }
+      
+      // Combine all metrics by timestamp
+      const throughputMap = new Map();
+      
+      // Initialize with time series
+      incoming.rows.forEach(row => {
+        throughputMap.set(row.minute.toISOString(), {
+          timestamp: row.minute,
+          incoming: {
+            messagesPerMinute: parseInt(row.count || 0),
+            messagesPerSecond: Math.round(parseInt(row.count || 0) / 60)
+          },
+          completed: {
+            messagesPerMinute: 0,
+            messagesPerSecond: 0
+          },
+          processing: {
+            messagesPerMinute: 0,
+            messagesPerSecond: 0
+          },
+          failed: {
+            messagesPerMinute: 0,
+            messagesPerSecond: 0
+          },
+          lag: {
+            avgSeconds: 0,
+            avgMilliseconds: 0
+          }
+        });
+      });
+      
+      // Add completed metrics
+      completed.rows.forEach(row => {
+        const key = row.minute.toISOString();
+        if (throughputMap.has(key)) {
+          const entry = throughputMap.get(key);
+          entry.completed = {
+            messagesPerMinute: parseInt(row.count || 0),
+            messagesPerSecond: Math.round(parseInt(row.count || 0) / 60)
+          };
+        }
+      });
+      
+      // Add processing metrics
+      processing.rows.forEach(row => {
+        const key = row.minute.toISOString();
+        if (throughputMap.has(key)) {
+          const entry = throughputMap.get(key);
+          entry.processing = {
+            messagesPerMinute: parseInt(row.count || 0),
+            messagesPerSecond: Math.round(parseInt(row.count || 0) / 60)
+          };
+        }
+      });
+      
+      // Add failed metrics
+      failed.rows.forEach(row => {
+        const key = row.minute.toISOString();
+        if (throughputMap.has(key)) {
+          const entry = throughputMap.get(key);
+          entry.failed = {
+            messagesPerMinute: parseInt(row.count || 0),
+            messagesPerSecond: Math.round(parseInt(row.count || 0) / 60)
+          };
+        }
+      });
+      
+      // Add lag metrics
+      lag.rows.forEach(row => {
+        const key = row.minute.toISOString();
+        if (throughputMap.has(key)) {
+          const entry = throughputMap.get(key);
+          const avgSeconds = parseFloat(row.avg_lag_seconds || 0);
+          entry.lag = {
+            avgSeconds: avgSeconds,
+            avgMilliseconds: Math.round(avgSeconds * 1000),
+            sampleCount: parseInt(row.sample_count || 0)
+          };
+        }
+      });
+      
+      // Convert map to array and sort by timestamp (newest first)
+      const throughput = Array.from(throughputMap.values())
+        .sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
+      
+      return { throughput };
+      
+    } catch (error) {
+      console.error('Error calculating throughput metrics:', error);
+      throw error;
+    }
   };
   
   return {
