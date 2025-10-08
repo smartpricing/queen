@@ -93,26 +93,3 @@ WHERE completed_at IS NOT NULL AND created_at IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_messages_failed_status ON queen.messages(completed_at, status) 
 WHERE status = 'failed';
 
--- Function to ensure default partition exists for a queue
-CREATE OR REPLACE FUNCTION queen.ensure_default_partition()
-RETURNS TRIGGER AS $$
-BEGIN
-    -- Create Default partition for new queue
-    INSERT INTO queen.partitions (queue_id, name, priority, options)
-    VALUES (NEW.id, 'Default', 0, '{"leaseTime": 300, "retryLimit": 3}')
-    ON CONFLICT (queue_id, name) DO NOTHING;
-    RETURN NEW;
-END;
-$$ LANGUAGE plpgsql;
-
--- Trigger to create default partition on queue creation
-DROP TRIGGER IF EXISTS create_default_partition ON queen.queues;
-CREATE TRIGGER create_default_partition
-    AFTER INSERT ON queen.queues
-    FOR EACH ROW
-    EXECUTE FUNCTION queen.ensure_default_partition();
-
--- Analyze tables for query planner
-ANALYZE queen.queues;
-ANALYZE queen.partitions;
-ANALYZE queen.messages;

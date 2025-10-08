@@ -14,19 +14,19 @@ export const createOptimizedQueueManager = (pool, resourceCache, eventManager) =
   
   // Ensure queue and partition exist (with caching)
   const ensureResources = async (client, queueName, partitionName = 'Default', namespace = null, task = null) => {
-    // Check cache first
+    // Check cache first, but skip cache if we're updating namespace/task
     const cacheKey = `${queueName}:${partitionName}`;
     const cached = resourceCache.checkResource(queueName, partitionName);
-    if (cached) return cached;
+    if (cached && namespace === null && task === null) return cached;
     
-    // Insert or get queue
+    // Insert or get queue - handle null values properly
     const queueResult = await client.query(
       `INSERT INTO queen.queues (name, namespace, task) VALUES ($1, $2, $3) 
        ON CONFLICT (name) DO UPDATE SET 
-         namespace = COALESCE(EXCLUDED.namespace, queen.queues.namespace),
-         task = COALESCE(EXCLUDED.task, queen.queues.task)
-       RETURNING id`,
-      [queueName, namespace, task]
+         namespace = CASE WHEN EXCLUDED.namespace IS NOT NULL THEN EXCLUDED.namespace ELSE queen.queues.namespace END,
+         task = CASE WHEN EXCLUDED.task IS NOT NULL THEN EXCLUDED.task ELSE queen.queues.task END
+       RETURNING id, name, namespace, task`,
+      [queueName, namespace || null, task || null]
     );
     const queueId = queueResult.rows[0].id;
     
@@ -522,22 +522,62 @@ export const createOptimizedQueueManager = (pool, resourceCache, eventManager) =
     return results;
   };
   
-  // Configure partition options
-  const configureQueue = async (queueName, partitionName = 'Default', options = {}) => {
+  // Configure queue-level settings only (no partition creation)
+  const configureQueueOnly = async (queueName, namespace = null, task = null) => {
     return withTransaction(pool, async (client) => {
-      const resources = await ensureResources(client, queueName, partitionName);
-      
-      await client.query(
-        `UPDATE queen.partitions 
-         SET options = $1
-         WHERE id = $2`,
-        [JSON.stringify(options), resources.partitionId]
+      // Only create/update the queue, no partition creation
+      const queueResult = await client.query(
+        `INSERT INTO queen.queues (name, namespace, task) VALUES ($1, $2, $3) 
+         ON CONFLICT (name) DO UPDATE SET 
+           namespace = CASE WHEN EXCLUDED.namespace IS NOT NULL THEN EXCLUDED.namespace ELSE queen.queues.namespace END,
+           task = CASE WHEN EXCLUDED.task IS NOT NULL THEN EXCLUDED.task ELSE queen.queues.task END
+         RETURNING id, name, namespace, task`,
+        [queueName, namespace || null, task || null]
       );
+      
+      return { 
+        queue: queueName, 
+        namespace: queueResult.rows[0].namespace, 
+        task: queueResult.rows[0].task 
+      };
+    });
+  };
+
+  // Configure partition options
+  const configureQueue = async (queueName, partitionName = 'Default', options = {}, namespace = null, task = null) => {
+    return withTransaction(pool, async (client) => {
+      const resources = await ensureResources(client, queueName, partitionName, namespace, task);
+      
+      // Single query to update both partition options and queue namespace/task based on args
+      if (namespace !== null || task !== null) {
+        // Update both partition and queue in one query
+        await client.query(
+          `WITH partition_update AS (
+             UPDATE queen.partitions 
+             SET options = $1 
+             WHERE id = $2
+             RETURNING queue_id
+           )
+           UPDATE queen.queues 
+           SET namespace = COALESCE($3, namespace),
+               task = COALESCE($4, task)
+           WHERE id = (SELECT queue_id FROM partition_update)`,
+          [JSON.stringify(options), resources.partitionId, namespace, task]
+        );
+      } else {
+        // Only update partition options
+        await client.query(
+          `UPDATE queen.partitions 
+           SET options = $1
+           WHERE id = $2`,
+          [JSON.stringify(options), resources.partitionId]
+        );
+      }
       
       // Invalidate cache
       resourceCache.invalidate(queueName, partitionName);
       
-      return { queue: queueName, partition: partitionName, options };
+      return { queue: queueName, partition: partitionName, namespace, task, options };
     });
   };
   
@@ -768,6 +808,7 @@ export const createOptimizedQueueManager = (pool, resourceCache, eventManager) =
     acknowledgeMessage,
     acknowledgeMessages,
     configureQueue,
+    configureQueueOnly,
     getQueueStats,
     getQueueLag,
     reclaimExpiredLeases

@@ -76,6 +76,7 @@ const realtimeMetrics = ref({
   currentMinuteIncoming: 0,
   currentMinuteCompleted: 0,
   currentMinuteFailed: 0,
+  currentMinuteDeadLetter: 0,
   lastMinuteTimestamp: null
 })
 
@@ -83,7 +84,7 @@ const realtimeMetrics = ref({
 const queueDepthCache = ref(new Map())
 
 // Smooth update functions
-const updateThroughputDataPoint = (timestamp, incoming = 0, completed = 0, failed = 0) => {
+const updateThroughputDataPoint = (timestamp, incoming = 0, completed = 0, failed = 0, deadLetter = 0) => {
   const currentData = throughputData.value
   if (!currentData.labels || currentData.labels.length === 0) return
   
@@ -97,6 +98,7 @@ const updateThroughputDataPoint = (timestamp, incoming = 0, completed = 0, faile
   currentData.datasets[0].data.push(incoming)
   currentData.datasets[1].data.push(completed)
   currentData.datasets[2].data.push(failed)
+  currentData.datasets[3].data.push(deadLetter)
   
   // Keep only last 60 data points for smooth scrolling
   if (currentData.labels.length > 60) {
@@ -151,7 +153,8 @@ const incrementRealtimeMetrics = (eventType) => {
         realtimeMetrics.value.lastMinuteTimestamp,
         realtimeMetrics.value.currentMinuteIncoming,
         realtimeMetrics.value.currentMinuteCompleted,
-        realtimeMetrics.value.currentMinuteFailed
+        realtimeMetrics.value.currentMinuteFailed,
+        realtimeMetrics.value.currentMinuteDeadLetter
       )
     }
     
@@ -159,6 +162,7 @@ const incrementRealtimeMetrics = (eventType) => {
     realtimeMetrics.value.currentMinuteIncoming = 0
     realtimeMetrics.value.currentMinuteCompleted = 0
     realtimeMetrics.value.currentMinuteFailed = 0
+    realtimeMetrics.value.currentMinuteDeadLetter = 0
     realtimeMetrics.value.lastMinuteTimestamp = currentMinute
   }
   
@@ -172,6 +176,9 @@ const incrementRealtimeMetrics = (eventType) => {
       break
     case 'message.failed':
       realtimeMetrics.value.currentMinuteFailed++
+      break
+    case 'message.dead_letter':
+      realtimeMetrics.value.currentMinuteDeadLetter++
       break
   }
 }
@@ -233,6 +240,7 @@ const handleWebSocketMessage = (wsMessage) => {
     case 'message.pushed':
     case 'message.completed':
     case 'message.failed':
+    case 'message.dead_letter':
       incrementRealtimeMetrics(event)
       break
   }
@@ -314,13 +322,8 @@ const fetchAnalytics = async (silent = false) => {
       }
     } catch (error) {
       console.error('Failed to fetch queue stats:', error)
-      // Use mock data as fallback
-      queueStats.value = [
-        { queue: 'email-queue', throughput: 120, successRate: 98.5 },
-        { queue: 'notification-queue', throughput: 85, successRate: 99.2 },
-        { queue: 'analytics-queue', throughput: 200, successRate: 95.8 },
-        { queue: 'payment-queue', throughput: 45, successRate: 99.9 }
-      ]
+      // Show empty state on error
+      queueStats.value = []
     }
     
     // Fetch real system metrics from API
@@ -346,19 +349,9 @@ const fetchAnalytics = async (silent = false) => {
       }
     }
     
-    // Mock top queues
-    topQueues.value = [
-      { name: 'analytics-queue', messagesProcessed: 15420 },
-      { name: 'email-queue', messagesProcessed: 12350 },
-      { name: 'notification-queue', messagesProcessed: 8920 }
-    ]
-    
-    // Mock error summary
-    errorSummary.value = [
-      { queue: 'payment-queue', errors: 2, errorRate: 0.1 },
-      { queue: 'email-queue', errors: 15, errorRate: 0.5 },
-      { queue: 'analytics-queue', errors: 85, errorRate: 4.2 }
-    ]
+    // Initialize empty arrays - no mock data
+    topQueues.value = []
+    errorSummary.value = []
     
   } catch (error) {
     console.error('Failed to fetch analytics:', error)
@@ -386,7 +379,8 @@ const processThroughputData = (data) => {
           timestamp: time.toISOString(),
           incoming: { messagesPerMinute: Math.floor(Math.random() * 200) + 100 },
           completed: { messagesPerMinute: Math.floor(Math.random() * 180) + 80 },
-          failed: { messagesPerMinute: Math.floor(Math.random() * 20) }
+          failed: { messagesPerMinute: Math.floor(Math.random() * 20) },
+          deadLetter: { messagesPerMinute: Math.floor(Math.random() * 5) }
         })
       }
       data = mockData
@@ -416,20 +410,24 @@ const processThroughputData = (data) => {
   if (hasChanged) {
     throughputData.value = {
       labels: newLabels,
-      datasets: [
-        {
-          label: 'Incoming Messages',
-          data: recentData.map(item => item.incoming?.messagesPerMinute || 0)
-        },
-        {
-          label: 'Completed Messages',
-          data: recentData.map(item => item.completed?.messagesPerMinute || 0)
-        },
-        {
-          label: 'Failed Messages',
-          data: recentData.map(item => item.failed?.messagesPerMinute || 0)
-        }
-      ]
+        datasets: [
+          {
+            label: 'Incoming Messages',
+            data: recentData.map(item => item.incoming?.messagesPerMinute || 0)
+          },
+          {
+            label: 'Completed Messages',
+            data: recentData.map(item => item.completed?.messagesPerMinute || 0)
+          },
+          {
+            label: 'Failed Messages',
+            data: recentData.map(item => item.failed?.messagesPerMinute || 0)
+          },
+          {
+            label: 'Dead Letter Messages',
+            data: recentData.map(item => item.deadLetter?.messagesPerMinute || 0)
+          }
+        ]
     }
   }
 }

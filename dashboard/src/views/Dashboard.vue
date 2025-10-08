@@ -43,6 +43,14 @@
         :loading="loading"
         :sparklineData="sparklineData.failed"
       />
+      <MetricCard 
+        title="Dead Letter"
+        :value="metrics.deadLetter"
+        icon="pi pi-exclamation-triangle"
+        color="secondary"
+        :loading="loading"
+        :sparklineData="sparklineData.deadLetter"
+      />
     </div>
 
     <!-- Charts Row -->
@@ -169,7 +177,8 @@ const metrics = ref({
   pending: 0,
   processing: 0,
   completedToday: 0,
-  failedToday: 0
+  failedToday: 0,
+  deadLetter: 0
 })
 
 // Sparkline data for metric cards
@@ -178,17 +187,19 @@ const sparklineData = ref({
   pending: [],
   processing: [],
   completed: [],
-  failed: []
+  failed: [],
+  deadLetter: []
 })
 
 // Chart data - Initialize with empty structure
 const throughputData = ref({
   labels: [],
-  datasets: [
-    { label: 'Incoming', data: [] },
-    { label: 'Completed', data: [] },
-    { label: 'Failed', data: [] }
-  ]
+        datasets: [
+          { label: 'Incoming', data: [] },
+          { label: 'Completed', data: [] },
+          { label: 'Failed', data: [] },
+          { label: 'Dead Letter', data: [] }
+        ]
 })
 
 const queueDepthData = ref({
@@ -222,7 +233,8 @@ const generateSparklineData = () => {
     pending: generateArray(50, 20),
     processing: generateArray(30, 10),
     completed: generateArray(800, 150),
-    failed: generateArray(10, 5)
+    failed: generateArray(10, 5),
+    deadLetter: generateArray(5, 3)
   }
 }
 
@@ -276,7 +288,8 @@ const fetchData = async () => {
         pending: overview.messages?.pending || 0,
         processing: overview.messages?.processing || 0,
         completedToday: overview.messages?.completed || 0,
-        failedToday: overview.messages?.failed || 0
+        failedToday: overview.messages?.failed || 0,
+        deadLetter: overview.messages?.deadLetter || 0
       }
     }
 
@@ -308,20 +321,9 @@ const fetchData = async () => {
 
 // Process throughput data for chart
 const processThroughputData = (data) => {
-  // Generate mock data if no real data available
+  // Use empty array if no data available
   if (!data || data.length === 0) {
-    const now = new Date()
-    const mockData = []
-    for (let i = 11; i >= 0; i--) {
-      const time = new Date(now.getTime() - i * 5 * 60 * 1000)
-      mockData.push({
-        timestamp: time.toISOString(),
-        incoming: { messagesPerMinute: Math.floor(Math.random() * 100) + 50 },
-        completed: { messagesPerMinute: Math.floor(Math.random() * 80) + 40 },
-        failed: { messagesPerMinute: Math.floor(Math.random() * 10) }
-      })
-    }
-    data = mockData
+    data = []
   }
 
   // Take last 12 data points for hourly view and reverse to show chronological order (oldest to newest)
@@ -347,6 +349,10 @@ const processThroughputData = (data) => {
       {
         label: 'Failed Messages',
         data: recentData.map(item => item.failed?.messagesPerMinute || 0)
+      },
+      {
+        label: 'Dead Letter Messages',
+        data: recentData.map(item => item.deadLetter?.messagesPerMinute || 0)
       }
     ]
   }
@@ -354,15 +360,9 @@ const processThroughputData = (data) => {
 
 // Process queue depth data for chart
 const processQueueDepthData = (data) => {
-  // Generate mock data if no real data available
+  // Use empty array if no data available
   if (!data || data.length === 0) {
-    data = [
-      { queue: 'email-queue', depth: 45, processing: 12 },
-      { queue: 'notification-queue', depth: 32, processing: 8 },
-      { queue: 'analytics-queue', depth: 28, processing: 5 },
-      { queue: 'payment-queue', depth: 15, processing: 3 },
-      { queue: 'report-queue', depth: 10, processing: 2 }
-    ]
+    data = []
   }
 
   // Filter out queues with no messages and sort by total messages, take top 8
@@ -388,15 +388,9 @@ const processQueueDepthData = (data) => {
 
 // Process top queues for table
 const processTopQueues = (queues) => {
-  // Use mock data if no real queues
+  // Use empty array if no real queues
   if (!queues || queues.length === 0) {
-    queues = [
-      { name: 'email-queue', namespace: 'default', stats: { pending: 120, processing: 30, completed: 1500 } },
-      { name: 'notification-queue', namespace: 'alerts', stats: { pending: 85, processing: 20, completed: 950 } },
-      { name: 'analytics-queue', namespace: null, stats: { pending: 200, processing: 45, completed: 3200 } },
-      { name: 'payment-queue', namespace: 'finance', stats: { pending: 45, processing: 10, completed: 420 } },
-      { name: 'report-queue', namespace: null, stats: { pending: 30, processing: 5, completed: 280 } }
-    ]
+    queues = []
   }
 
   topQueues.value = queues
@@ -405,7 +399,7 @@ const processTopQueues = (queues) => {
       namespace: queue.namespace,
       pending: queue.stats?.pending || 0,
       processing: queue.stats?.processing || 0,
-      throughput: Math.floor(Math.random() * 100) // Mock throughput
+      throughput: 0 // No throughput data available
     }))
     .sort((a, b) => (b.pending + b.processing) - (a.pending + a.processing))
     .slice(0, 5)
@@ -443,6 +437,8 @@ const handleWebSocketEvent = (wsMessage) => {
   } else if (eventType === 'message.failed') {
     metrics.value.processing = Math.max(0, metrics.value.processing - 1)
     metrics.value.failedToday++
+  } else if (eventType === 'message.dead_letter') {
+    metrics.value.deadLetter++
   }
 }
 

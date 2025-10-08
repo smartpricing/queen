@@ -308,7 +308,29 @@ export const createAnalyticsRoutes = (queueManager) => {
         LIMIT ${minuteInterval}
       `;
       
-      // 5. Average lag (processing time) per minute
+      // 5. Dead letter messages
+      const deadLetterQuery = `
+        WITH time_series AS (
+          SELECT generate_series(
+            DATE_TRUNC('minute', NOW() - INTERVAL '${timeWindow}'),
+            DATE_TRUNC('minute', NOW()),
+            '1 minute'::interval
+          ) AS minute
+        )
+        SELECT 
+          ts.minute,
+          COALESCE(COUNT(m.id), 0) as count
+        FROM time_series ts
+        LEFT JOIN queen.messages m ON 
+          DATE_TRUNC('minute', m.failed_at) = ts.minute
+          AND m.failed_at >= NOW() - INTERVAL '${timeWindow}'
+          AND m.status = 'dead_letter'
+        GROUP BY ts.minute
+        ORDER BY ts.minute DESC
+        LIMIT ${minuteInterval}
+      `;
+      
+      // 6. Average lag (processing time) per minute
       const lagQuery = `
         WITH time_series AS (
           SELECT generate_series(
@@ -339,11 +361,12 @@ export const createAnalyticsRoutes = (queueManager) => {
       `;
       
       // Execute all queries in parallel
-      const [incoming, completed, processing, failed, lag] = await Promise.all([
+      const [incoming, completed, processing, failed, deadLetter, lag] = await Promise.all([
         pool.query(incomingQuery),
         pool.query(completedQuery),
         pool.query(processingQuery),
         pool.query(failedQuery),
+        pool.query(deadLetterQuery),
         pool.query(lagQuery)
       ]);
       
@@ -356,6 +379,7 @@ export const createAnalyticsRoutes = (queueManager) => {
             COUNT(CASE WHEN status = 'completed' THEN 1 END) as completed_count,
             COUNT(CASE WHEN status = 'processing' THEN 1 END) as processing_count,
             COUNT(CASE WHEN status = 'failed' THEN 1 END) as failed_count,
+            COUNT(CASE WHEN status = 'dead_letter' THEN 1 END) as dead_letter_count,
             AVG(
               CASE 
                 WHEN completed_at IS NOT NULL AND created_at IS NOT NULL 
@@ -390,6 +414,10 @@ export const createAnalyticsRoutes = (queueManager) => {
             messagesPerMinute: parseInt(row.failed_count || 0),
             messagesPerSecond: Math.round(parseInt(row.failed_count || 0) / 60)
           },
+          deadLetter: {
+            messagesPerMinute: parseInt(row.dead_letter_count || 0),
+            messagesPerSecond: Math.round(parseInt(row.dead_letter_count || 0) / 60)
+          },
           lag: {
             avgSeconds: parseFloat(row.avg_lag_seconds || 0),
             avgMilliseconds: Math.round(parseFloat(row.avg_lag_seconds || 0) * 1000)
@@ -419,6 +447,10 @@ export const createAnalyticsRoutes = (queueManager) => {
             messagesPerSecond: 0
           },
           failed: {
+            messagesPerMinute: 0,
+            messagesPerSecond: 0
+          },
+          deadLetter: {
             messagesPerMinute: 0,
             messagesPerSecond: 0
           },
@@ -459,6 +491,18 @@ export const createAnalyticsRoutes = (queueManager) => {
         if (throughputMap.has(key)) {
           const entry = throughputMap.get(key);
           entry.failed = {
+            messagesPerMinute: parseInt(row.count || 0),
+            messagesPerSecond: Math.round(parseInt(row.count || 0) / 60)
+          };
+        }
+      });
+      
+      // Add dead letter metrics
+      deadLetter.rows.forEach(row => {
+        const key = row.minute.toISOString();
+        if (throughputMap.has(key)) {
+          const entry = throughputMap.get(key);
+          entry.deadLetter = {
             messagesPerMinute: parseInt(row.count || 0),
             messagesPerSecond: Math.round(parseInt(row.count || 0) / 60)
           };

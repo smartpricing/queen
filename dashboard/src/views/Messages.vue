@@ -208,33 +208,8 @@ const fetchMessages = async () => {
         payload: message.payload || message.data || {}
       }))
     } else {
-      // Fallback to mock data if API returns no data
-      messages.value = [
-        {
-          transactionId: 'abc123def456ghi789',
-          queue: 'email-queue',
-          status: 'completed',
-          created: new Date().toISOString(),
-          attempts: 1,
-          payload: { to: 'user@example.com', subject: 'Welcome!' }
-        },
-        {
-          transactionId: 'xyz789uvw456rst123',
-          queue: 'notification-queue',
-          status: 'processing',
-          created: new Date(Date.now() - 3600000).toISOString(),
-          attempts: 2,
-          payload: { type: 'alert', message: 'New message received' }
-        },
-        {
-          transactionId: 'mno456pqr789stu123',
-          queue: 'payment-queue',
-          status: 'failed',
-          created: new Date(Date.now() - 7200000).toISOString(),
-          attempts: 3,
-          payload: { amount: 99.99, currency: 'USD' }
-        }
-      ]
+      // No data available
+      messages.value = []
     }
     
   } catch (error) {
@@ -246,17 +221,8 @@ const fetchMessages = async () => {
       life: 3000
     })
     
-    // Show mock data as fallback
-    messages.value = [
-      {
-        transactionId: 'abc123def456ghi789',
-        queue: 'email-queue',
-        status: 'completed',
-        created: new Date().toISOString(),
-        attempts: 1,
-        payload: { to: 'user@example.com', subject: 'Welcome!' }
-      }
-    ]
+    // Show empty state on error
+    messages.value = []
   } finally {
     loading.value = false
   }

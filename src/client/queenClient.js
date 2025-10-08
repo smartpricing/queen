@@ -12,9 +12,9 @@ export const createQueenClient = (options = {}) => {
   const http = createHttpClient({ baseUrl, timeout });
   
   // Configure a queue partition
-  const configure = async ({ queue, partition = 'Default', options = {} }) => {
+  const configure = async ({ queue, partition, namespace, task, options = {} }) => {
     return withRetry(
-      () => http.post('/api/v1/configure', { queue, partition, options }),
+      () => http.post('/api/v1/configure', { queue, partition, namespace, task, options }),
       retryAttempts,
       retryDelay
     );
@@ -225,13 +225,25 @@ export const createQueenClient = (options = {}) => {
   };
   
   // Consumer helper - continuously pop and process messages
-  const consume = ({ queue, partition, namespace, task, handler, options = {} }) => {
+  const consume = ({ queue, partition, namespace, task, handler, handlerBatch, options = {} }) => {
     const {
       batch = 1,
       wait = true,
       timeout = 30000,
       stopOnError = false
     } = options;
+    
+    // Validate that only one handler type is provided
+    if (handler && handlerBatch) {
+      throw new Error('Cannot specify both handler and handlerBatch. Choose one processing mode.');
+    }
+    
+    if (!handler && !handlerBatch) {
+      throw new Error('Must specify either handler (for individual processing) or handlerBatch (for batch processing).');
+    }
+    
+    const isBatchMode = !!handlerBatch;
+    const messageHandler = handler || handlerBatch;
     
     let running = true;
     
@@ -254,19 +266,52 @@ export const createQueenClient = (options = {}) => {
           });
           
           if (result.messages && result.messages.length > 0) {
-            for (const message of result.messages) {
-              if (!running) break; // Check if stopped
+            if (isBatchMode) {
+              // Batch processing mode
+              if (!running) return;
               
               try {
-                await handler(message);
-                await ack(message.transactionId, 'completed');
+                await messageHandler(result.messages);
+                
+                // Batch acknowledge all messages as completed
+                const acknowledgments = result.messages.map(msg => ({
+                  transactionId: msg.transactionId,
+                  status: 'completed'
+                }));
+                
+                await ackBatch(acknowledgments);
               } catch (error) {
-                console.error('Error processing message:', error);
-                await ack(message.transactionId, 'failed', error.message);
+                console.error('Error processing message batch:', error);
+                
+                // Batch acknowledge all messages as failed
+                const acknowledgments = result.messages.map(msg => ({
+                  transactionId: msg.transactionId,
+                  status: 'failed',
+                  error: error.message
+                }));
+                
+                await ackBatch(acknowledgments);
                 
                 if (stopOnError) {
                   running = false;
-                  break;
+                }
+              }
+            } else {
+              // Individual processing mode (original behavior)
+              for (const message of result.messages) {
+                if (!running) break; // Check if stopped
+                
+                try {
+                  await messageHandler(message);
+                  await ack(message.transactionId, 'completed');
+                } catch (error) {
+                  console.error('Error processing message:', error);
+                  await ack(message.transactionId, 'failed', error.message);
+                  
+                  if (stopOnError) {
+                    running = false;
+                    break;
+                  }
                 }
               }
             }

@@ -14,7 +14,7 @@ A modern, high-performance message queue system built with PostgreSQL and uWebSo
 - **🔒 Message Guarantees**: ACID transactions, idempotency, and no message loss
 - **🚄 High Performance**: 10,000+ messages/second with sub-10ms latency
 - **🌐 Long Polling**: Event-driven optimization for real-time message consumption
-- **📦 Batch Operations**: Efficient bulk message processing
+- **📦 Batch Operations**: Efficient bulk message processing with individual and batch consumer modes
 - **🛠️ Client SDK**: Full-featured JavaScript client with retry logic and helpers
 
 ## 📋 Table of Contents
@@ -403,7 +403,11 @@ for (const message of result.messages) {
 
 ### Consumer Pattern
 
-The SDK provides a convenient consumer helper for continuous message processing:
+The SDK provides a convenient consumer helper for continuous message processing with two modes:
+
+#### Individual Message Processing
+
+Process messages one by one (default behavior):
 
 ```javascript
 const stopConsumer = client.consume({
@@ -418,14 +422,57 @@ const stopConsumer = client.consume({
     batch: 5,
     wait: true,
     timeout: 30000,
-    stopOnError: false,
-    retryDelay: 5000
+    stopOnError: false
   }
 });
 
 // Stop the consumer when needed
 // stopConsumer();
 ```
+
+#### Batch Message Processing
+
+Process entire batches of messages at once for better performance:
+
+```javascript
+const stopConsumer = client.consume({
+  queue: 'orders',
+  partition: 'high-priority',
+  handlerBatch: async (messages) => {
+    console.log(`Processing batch of ${messages.length} orders`);
+    
+    // Process all messages in parallel
+    await Promise.all(messages.map(async (message) => {
+      console.log('Processing order:', message.data.orderId);
+      await processOrder(message.data);
+    }));
+    
+    // Or process sequentially if needed
+    // for (const message of messages) {
+    //   await processOrder(message.data);
+    // }
+    
+    // All messages are automatically batch-acknowledged on success
+  },
+  options: {
+    batch: 10,  // Larger batches for better throughput
+    wait: true,
+    timeout: 30000,
+    stopOnError: false
+  }
+});
+```
+
+**Key Benefits of Batch Processing:**
+- **Higher Throughput**: Process multiple messages simultaneously
+- **Efficient Acknowledgments**: Single batch ACK instead of individual ACKs
+- **Atomic Processing**: Either the entire batch succeeds or fails together
+- **Reduced Network Overhead**: Fewer round trips to the server
+
+**Important Notes:**
+- Use either `handler` OR `handlerBatch`, not both
+- In batch mode, if processing fails, all messages in the batch are marked as failed
+- Batch size is controlled by the `batch` option (default: 1)
 
 ### Advanced Features
 
@@ -679,6 +726,66 @@ const stopConsumer = client.consume({
   },
   options: { batch: 5, wait: true }
 });
+```
+
+### High-Throughput Batch Processing
+
+```javascript
+// Configure queue for high-throughput batch processing
+await client.configure({
+  queue: 'data-processing',
+  partition: 'analytics',
+  options: {
+    priority: 5,
+    leaseTime: 600, // 10 minutes for batch processing
+    windowBuffer: 30 // Buffer messages for 30 seconds
+  }
+});
+
+// High-performance batch consumer
+const stopConsumer = client.consume({
+  queue: 'data-processing',
+  partition: 'analytics',
+  handlerBatch: async (messages) => {
+    const startTime = Date.now();
+    console.log(`Processing batch of ${messages.length} analytics events`);
+    
+    try {
+      // Extract all payloads for batch processing
+      const events = messages.map(msg => ({
+        id: msg.transactionId,
+        ...msg.data
+      }));
+      
+      // Process entire batch efficiently
+      await processAnalyticsBatch(events);
+      
+      const processingTime = Date.now() - startTime;
+      console.log(`✅ Batch processed in ${processingTime}ms`);
+      
+    } catch (error) {
+      console.error('Batch processing failed:', error);
+      throw error; // Will mark all messages as failed
+    }
+  },
+  options: {
+    batch: 50,     // Process up to 50 messages at once
+    wait: true,    // Use long polling
+    timeout: 30000,
+    stopOnError: false
+  }
+});
+
+async function processAnalyticsBatch(events) {
+  // Example: Bulk insert to database
+  await database.analytics.insertMany(events);
+  
+  // Example: Send to external analytics service
+  await analyticsService.sendBatch(events);
+  
+  // Example: Update aggregated metrics
+  await updateMetrics(events);
+}
 ```
 
 ## ⚡ Performance
