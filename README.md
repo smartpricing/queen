@@ -2,6 +2,8 @@
 
 A modern, high-performance message queue system built with PostgreSQL and uWebSockets.js, featuring priority-based processing, advanced scheduling, and real-time monitoring.
 
+![Queen Dashboard](assets/dashboard.png)
+
 ## 🚀 Features
 
 - **🏗️ Flexible Architecture**: Queues → Partitions → Messages with optional namespace/task grouping
@@ -38,7 +40,7 @@ A modern, high-performance message queue system built with PostgreSQL and uWebSo
 
 ```bash
 # Clone the repository
-git clone <repository-url>
+git clone https://github.com/smartpricing/queen
 cd queen
 
 # Install dependencies
