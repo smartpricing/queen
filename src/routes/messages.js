@@ -2,7 +2,7 @@ export const createMessagesRoutes = (pool, queueManager) => {
   
   // List messages with filters
   const listMessages = async (filters = {}) => {
-    const { ns, task, queue, status, limit = 100, offset = 0 } = filters;
+    const { queue, partition, namespace, task, status, limit = 100, offset = 0 } = filters;
     
     let query = `
       SELECT 
@@ -18,28 +18,35 @@ export const createMessagesRoutes = (pool, queueManager) => {
         m.error_message,
         m.retry_count,
         m.lease_expires_at,
-        n.name || '/' || t.name || '/' || q.name as queue_path
+        q.name || '/' || p.name as queue_path,
+        q.name as queue_name,
+        p.name as partition_name,
+        q.namespace,
+        q.task
       FROM queen.messages m
-      JOIN queen.queues q ON q.id = m.queue_id
-      JOIN queen.tasks t ON t.id = q.task_id
-      JOIN queen.namespaces n ON n.id = t.namespace_id
+      JOIN queen.partitions p ON p.id = m.partition_id
+      JOIN queen.queues q ON q.id = p.queue_id
       WHERE 1=1
     `;
     
     const params = [];
     let paramCount = 0;
     
-    if (ns) {
-      params.push(ns);
-      query += ` AND n.name = $${++paramCount}`;
-    }
-    if (task) {
-      params.push(task);
-      query += ` AND t.name = $${++paramCount}`;
-    }
     if (queue) {
       params.push(queue);
       query += ` AND q.name = $${++paramCount}`;
+    }
+    if (partition) {
+      params.push(partition);
+      query += ` AND p.name = $${++paramCount}`;
+    }
+    if (namespace) {
+      params.push(namespace);
+      query += ` AND q.namespace = $${++paramCount}`;
+    }
+    if (task) {
+      params.push(task);
+      query += ` AND q.task = $${++paramCount}`;
     }
     if (status) {
       params.push(status);
@@ -60,6 +67,10 @@ export const createMessagesRoutes = (pool, queueManager) => {
       id: row.id,
       transactionId: row.transaction_id,
       queuePath: row.queue_path,
+      queue: row.queue_name,
+      partition: row.partition_name,
+      namespace: row.namespace,
+      task: row.task,
       payload: row.payload,
       status: row.status,
       workerId: row.worker_id,
@@ -78,12 +89,15 @@ export const createMessagesRoutes = (pool, queueManager) => {
     const result = await pool.query(`
       SELECT 
         m.*,
-        n.name || '/' || t.name || '/' || q.name as queue_path,
-        q.options as queue_options
+        q.name || '/' || p.name as queue_path,
+        q.name as queue_name,
+        p.name as partition_name,
+        q.namespace,
+        q.task,
+        p.options as partition_options
       FROM queen.messages m
-      JOIN queen.queues q ON q.id = m.queue_id
-      JOIN queen.tasks t ON t.id = q.task_id
-      JOIN queen.namespaces n ON n.id = t.namespace_id
+      JOIN queen.partitions p ON p.id = m.partition_id
+      JOIN queen.queues q ON q.id = p.queue_id
       WHERE m.transaction_id = $1
     `, [transactionId]);
     
@@ -96,6 +110,10 @@ export const createMessagesRoutes = (pool, queueManager) => {
       id: row.id,
       transactionId: row.transaction_id,
       queuePath: row.queue_path,
+      queue: row.queue_name,
+      partition: row.partition_name,
+      namespace: row.namespace,
+      task: row.task,
       payload: row.payload,
       status: row.status,
       workerId: row.worker_id,
@@ -106,7 +124,7 @@ export const createMessagesRoutes = (pool, queueManager) => {
       errorMessage: row.error_message,
       retryCount: row.retry_count,
       leaseExpiresAt: row.lease_expires_at,
-      queueOptions: row.queue_options
+      partitionOptions: row.partition_options
     };
   };
   
@@ -167,11 +185,11 @@ export const createMessagesRoutes = (pool, queueManager) => {
     return { movedToDLQ: true, transactionId };
   };
   
-  // Get related messages (same queue, near in time)
+  // Get related messages (same partition, near in time)
   const getRelatedMessages = async (transactionId) => {
     // First get the message details
     const msgResult = await pool.query(`
-      SELECT queue_id, created_at 
+      SELECT partition_id, created_at 
       FROM queen.messages 
       WHERE transaction_id = $1
     `, [transactionId]);
@@ -180,9 +198,9 @@ export const createMessagesRoutes = (pool, queueManager) => {
       return [];
     }
     
-    const { queue_id, created_at } = msgResult.rows[0];
+    const { partition_id, created_at } = msgResult.rows[0];
     
-    // Get messages from same queue within 1 hour
+    // Get messages from same partition within 1 hour
     const result = await pool.query(`
       SELECT 
         m.transaction_id,
@@ -190,13 +208,13 @@ export const createMessagesRoutes = (pool, queueManager) => {
         m.created_at,
         m.payload
       FROM queen.messages m
-      WHERE m.queue_id = $1
+      WHERE m.partition_id = $1
         AND m.transaction_id != $2
         AND m.created_at BETWEEN $3::timestamp - INTERVAL '1 hour' 
                             AND $3::timestamp + INTERVAL '1 hour'
       ORDER BY ABS(EXTRACT(EPOCH FROM (m.created_at - $3::timestamp)))
       LIMIT 10
-    `, [queue_id, transactionId, created_at]);
+    `, [partition_id, transactionId, created_at]);
     
     return result.rows.map(row => ({
       transactionId: row.transaction_id,
@@ -206,24 +224,46 @@ export const createMessagesRoutes = (pool, queueManager) => {
     }));
   };
   
-  // Clear all messages in a queue
-  const clearQueue = async (ns, task, queue) => {
-    const result = await pool.query(`
-      DELETE FROM queen.messages
-      WHERE queue_id IN (
-        SELECT q.id 
-        FROM queen.queues q
-        JOIN queen.tasks t ON t.id = q.task_id
-        JOIN queen.namespaces n ON n.id = t.namespace_id
-        WHERE n.name = $1 AND t.name = $2 AND q.name = $3
-      )
-      RETURNING id
-    `, [ns, task, queue]);
+  // Clear all messages in a queue or partition
+  const clearQueue = async (queue, partition = null) => {
+    let query;
+    let params;
+    
+    if (partition) {
+      // Clear specific partition
+      query = `
+        DELETE FROM queen.messages
+        WHERE partition_id IN (
+          SELECT p.id 
+          FROM queen.partitions p
+          JOIN queen.queues q ON q.id = p.queue_id
+          WHERE q.name = $1 AND p.name = $2
+        )
+        RETURNING id
+      `;
+      params = [queue, partition];
+    } else {
+      // Clear entire queue (all partitions)
+      query = `
+        DELETE FROM queen.messages
+        WHERE partition_id IN (
+          SELECT p.id 
+          FROM queen.partitions p
+          JOIN queen.queues q ON q.id = p.queue_id
+          WHERE q.name = $1
+        )
+        RETURNING id
+      `;
+      params = [queue];
+    }
+    
+    const result = await pool.query(query, params);
     
     return { 
       cleared: true, 
       count: result.rowCount,
-      queue: `${ns}/${task}/${queue}`
+      queue,
+      partition: partition || 'all'
     };
   };
   

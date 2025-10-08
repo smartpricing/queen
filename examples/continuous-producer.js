@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 /**
- * Continuous Producer Example
+ * Continuous Producer Example for Queen V2
  * 
  * This example demonstrates a continuous message producer that pushes
  * messages to a Queen queue at regular intervals. It's designed to work
@@ -18,9 +18,10 @@ async function main() {
     timeout: 10000  // 10 second timeout for push operations
   });
 
-  const namespace = process.env.NS || 'smartchat';
-  const task = process.env.TASK || 'translations';
-  const queue = process.env.QUEUE || 'email';
+  // V2: Using queue and optional partition
+  const queue = process.env.QUEUE || 'email-translations';
+  const partition = process.env.PARTITION;  // Optional: if not set, uses "Default"
+  const useMultiplePartitions = process.env.MULTI_PARTITION === 'true';
   
   // Production rate configuration
   const messagesPerBatch = parseInt(process.env.BATCH_SIZE) || 100;
@@ -28,34 +29,35 @@ async function main() {
   const burstMode = process.env.BURST === 'true';
   const highPerformanceMode = process.env.HIGH_PERF === 'true';
 
-  console.log('🚀 Starting continuous producer');
-  console.log(`📦 Target Queue: ${namespace}/${task}/${queue}`);
+  console.log('🚀 Starting continuous producer (V2)');
+  console.log(`📦 Target Queue: ${queue}${partition ? '/' + partition : ''}`);
   console.log(`📊 Configuration:`);
   console.log(`   - Messages per batch: ${messagesPerBatch}`);
   console.log(`   - Interval: ${intervalMilliseconds} milliseconds`);
   console.log(`   - Burst mode: ${burstMode ? 'enabled' : 'disabled'}`);
   console.log(`   - High performance: ${highPerformanceMode ? 'enabled' : 'disabled'}`);
+  console.log(`   - Multiple partitions: ${useMultiplePartitions ? 'enabled' : 'disabled'}`);
   
   if (highPerformanceMode) {
     console.log('\n⚡ HIGH PERFORMANCE MODE ENABLED');
     console.log('   Target: 10,000+ messages/second');
-    console.log('   Make sure server is running with: DB_POOL_SIZE=100 node start-optimized.js');
+    console.log('   Make sure server is running with: DB_POOL_SIZE=100 node src/server.js');
   }
   console.log('');
 
-  // Configure the queue
+  // Configure the queue partition
   try {
     await client.configure({
-      ns: namespace,
-      task: task,
       queue: queue,
+      partition: partition || 'Default',
       options: {
-        maxRetries: 3,
+        retryLimit: 3,
         retryDelay: 1000,
-        dlqAfterMaxRetries: true
+        dlqAfterMaxRetries: true,
+        leaseTime: 300
       }
     });
-    console.log('✅ Queue configured successfully\n');
+    console.log('✅ Queue/partition configured successfully\n');
   } catch (error) {
     console.log('⚠️  Queue configuration failed (may already exist):', error.message, '\n');
   }
@@ -65,8 +67,14 @@ async function main() {
     messages: 0,
     errors: 0,
     startTime: Date.now(),
-    lastBatchTime: null
+    lastBatchTime: null,
+    partitionCounts: {}
   };
+
+  // Partition selection for multi-partition mode
+  const partitions = useMultiplePartitions 
+    ? ['Default', 'urgent', 'bulk', 'priority', 'standard']
+    : [partition || 'Default'];
 
   // Message generator function
   function generateMessages(count) {
@@ -83,10 +91,26 @@ async function main() {
       const template = templates[Math.floor(Math.random() * templates.length)];
       const messageId = `msg-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
       
+      // Select partition based on message type or random
+      let selectedPartition;
+      if (useMultiplePartitions) {
+        // Route alerts to urgent, newsletters to bulk, etc.
+        if (template.type === 'alert') {
+          selectedPartition = 'urgent';
+        } else if (template.type === 'newsletter') {
+          selectedPartition = 'bulk';
+        } else if (Math.random() > 0.7) {
+          selectedPartition = 'priority';
+        } else {
+          selectedPartition = partitions[Math.floor(Math.random() * partitions.length)];
+        }
+      } else {
+        selectedPartition = partition || 'Default';
+      }
+      
       messages.push({
-        ns: namespace,
-        task: task,
         queue: queue,
+        partition: selectedPartition,
         payload: {
           id: messageId,
           type: template.type,
@@ -104,6 +128,9 @@ async function main() {
           createdAt: new Date().toISOString()
         }
       });
+      
+      // Track partition usage
+      stats.partitionCounts[selectedPartition] = (stats.partitionCounts[selectedPartition] || 0) + 1;
     }
     
     return messages;
@@ -129,7 +156,17 @@ async function main() {
       stats.lastBatchTime = Date.now();
       
       console.log(`✅ Successfully pushed ${result.messages.length} messages`);
-      console.log(`   Sample IDs: ${result.messages.slice(0, 3).map(m => m.id).join(', ')}${result.messages.length > 3 ? '...' : ''}`);
+      
+      if (useMultiplePartitions) {
+        // Show partition distribution for this batch
+        const batchPartitions = {};
+        messages.forEach(m => {
+          batchPartitions[m.partition] = (batchPartitions[m.partition] || 0) + 1;
+        });
+        console.log(`   Partition distribution:`, batchPartitions);
+      }
+      
+      console.log(`   Sample IDs: ${result.messages.slice(0, 3).map(m => m.transactionId).join(', ')}${result.messages.length > 3 ? '...' : ''}`);
       
       // Show sample message details occasionally
       if (stats.batches % 5 === 0) {
@@ -154,9 +191,6 @@ async function main() {
     console.log(`⚡ Running ${concurrentProducers} concurrent producers`);
     console.log(`⚡ Each producing ${highPerfBatchSize} messages every ${highPerfInterval}ms`);
     console.log(`⚡ Theoretical max: ${(concurrentProducers * highPerfBatchSize * (1000/highPerfInterval)).toFixed(0)} messages/second\n`);
-    
-    // Override batch size for high performance
-    const originalBatchSize = messagesPerBatch;
     
     // Start multiple concurrent producers
     const producers = [];
@@ -217,6 +251,14 @@ async function main() {
     console.log(`  Production rate: ${rate.toFixed(2)} msg/min`);
     console.log(`  Errors: ${stats.errors}`);
     
+    if (useMultiplePartitions && Object.keys(stats.partitionCounts).length > 0) {
+      console.log('  Total partition distribution:');
+      for (const [part, count] of Object.entries(stats.partitionCounts)) {
+        const percentage = ((count / stats.messages) * 100).toFixed(1);
+        console.log(`    ${part}: ${count} messages (${percentage}%)`);
+      }
+    }
+    
     if (stats.lastBatchTime) {
       const timeSinceLastBatch = Math.floor((Date.now() - stats.lastBatchTime) / 1000);
       console.log(`  Time since last batch: ${timeSinceLastBatch}s`);
@@ -246,6 +288,14 @@ async function main() {
     console.log(`  Overall rate: ${(stats.messages / (uptime / 60)).toFixed(2)} msg/min`);
     console.log(`  Errors encountered: ${stats.errors}`);
     console.log(`  Success rate: ${((1 - stats.errors / stats.batches) * 100).toFixed(1)}%`);
+    
+    if (useMultiplePartitions && Object.keys(stats.partitionCounts).length > 0) {
+      console.log('\n  Final partition distribution:');
+      for (const [part, count] of Object.entries(stats.partitionCounts)) {
+        const percentage = ((count / stats.messages) * 100).toFixed(1);
+        console.log(`    ${part}: ${count} messages (${percentage}%)`);
+      }
+    }
     
     process.exit(0);
   });

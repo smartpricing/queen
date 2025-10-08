@@ -16,7 +16,8 @@
   "dependencies": {
     "pg": "^8.13.3",
     "uuid": "^13.0.0",
-    "uWebSockets.js": "github:uNetworking/uWebSockets.js#v20.52.0"
+    "uWebSockets.js": "github:uNetworking/uWebSockets.js#v20.52.0",
+    "ws": "^8.18.3"
   },
   "engines": {
     "node": ">=22.0.0"

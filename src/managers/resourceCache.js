@@ -3,10 +3,10 @@ export const createResourceCache = () => {
   const cache = new Map();
   const TTL = 60000; // 1 minute TTL
   
-  const getCacheKey = (ns, task, queue) => `${ns}:${task}:${queue}`;
+  const getCacheKey = (queue, partition) => `${queue}:${partition || 'Default'}`;
   
-  const checkResource = (ns, task, queue) => {
-    const key = getCacheKey(ns, task, queue);
+  const checkResource = (queue, partition) => {
+    const key = getCacheKey(queue, partition);
     const cached = cache.get(key);
     
     if (cached && Date.now() - cached.timestamp < TTL) {
@@ -16,14 +16,21 @@ export const createResourceCache = () => {
     return null; // Not in cache
   };
   
-  const cacheResource = (ns, task, queue, exists = true) => {
-    const key = getCacheKey(ns, task, queue);
+  const cacheResource = (queue, partition, exists = true) => {
+    const key = getCacheKey(queue, partition);
     cache.set(key, { exists, timestamp: Date.now() });
   };
   
-  const invalidate = (ns, task, queue) => {
-    if (ns && task && queue) {
-      cache.delete(getCacheKey(ns, task, queue));
+  const invalidate = (queue, partition) => {
+    if (queue && partition) {
+      cache.delete(getCacheKey(queue, partition));
+    } else if (queue) {
+      // Clear all partitions for this queue
+      for (const key of cache.keys()) {
+        if (key.startsWith(`${queue}:`)) {
+          cache.delete(key);
+        }
+      }
     } else {
       cache.clear(); // Clear all if no specific resource
     }

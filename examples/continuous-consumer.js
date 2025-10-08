@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 /**
- * Continuous Consumer Example
+ * Continuous Consumer Example for Queen V2
  * 
  * This example demonstrates how the Queen client performs continuous
  * long polling without delays when timeouts occur. The consumer will
@@ -18,12 +18,18 @@ async function main() {
     timeout: 35000  // Client timeout for non-polling requests
   });
 
-  const namespace = process.env.NS || 'smartchat';
-  const task = process.env.TASK || 'translations';
-  const queue = process.env.QUEUE || 'email';
+  // V2: Using queue and optional partition
+  const queue = process.env.QUEUE || 'email-translations';
+  const partition = process.env.PARTITION;  // Optional: if not set, consumes from any partition
+  const namespace = process.env.NAMESPACE;  // Optional: for filtering
+  const task = process.env.TASK;           // Optional: for filtering
 
-  console.log('🚀 Starting continuous consumer');
-  console.log(`📦 Queue: ${namespace}/${task}/${queue}`);
+  console.log('🚀 Starting continuous consumer (V2)');
+  if (queue) {
+    console.log(`📦 Queue: ${queue}${partition ? '/' + partition : ' (any partition)'}`);
+  } else if (namespace || task) {
+    console.log(`🔍 Filtering by: ${namespace ? 'namespace=' + namespace : ''} ${task ? 'task=' + task : ''}`);
+  }
   console.log('⏱️  Long polling timeout: 30 seconds');
   console.log('🔄 Will immediately retry on timeout (no delays)\n');
 
@@ -31,22 +37,29 @@ async function main() {
     messages: 0,
     errors: 0,
     startTime: Date.now(),
-    lastMessageTime: null
+    lastMessageTime: null,
+    partitionCounts: {}
   };
 
   // Start the consumer
   const stop = client.consume({
-    ns: namespace,
-    task: task,
     queue: queue,
+    partition: partition,
+    namespace: namespace,
+    task: task,
     handler: async (message) => {
       stats.messages++;
       stats.lastMessageTime = Date.now();
       
+      // Track messages per partition
+      const partitionKey = `${message.queue}/${message.partition}`;
+      stats.partitionCounts[partitionKey] = (stats.partitionCounts[partitionKey] || 0) + 1;
+      
       console.log(`✉️  [${new Date().toISOString()}] Message received:`, {
-        id: message.id,
+        queue: message.queue,
+        partition: message.partition,
         transactionId: message.transactionId,
-        attempt: message.attempt,
+        retryCount: message.retryCount,
         data: message.data
       });
 
@@ -56,7 +69,7 @@ async function main() {
     options: {
       wait: true,         // Enable long polling
       timeout: 30000,     // 30 second server timeout
-      batch: 1000,          // Process up to 10 messages at once
+      batch: 10,          // Process up to 10 messages at once
       stopOnError: false  // Continue processing on errors
     }
   });
@@ -71,6 +84,15 @@ async function main() {
     console.log(`  Messages processed: ${stats.messages}`);
     console.log(`  Processing rate: ${rate.toFixed(2)} msg/min`);
     console.log(`  Errors: ${stats.errors}`);
+    
+    // Show partition distribution
+    if (Object.keys(stats.partitionCounts).length > 0) {
+      console.log('  Distribution by partition:');
+      for (const [partition, count] of Object.entries(stats.partitionCounts)) {
+        const percentage = ((count / stats.messages) * 100).toFixed(1);
+        console.log(`    ${partition}: ${count} messages (${percentage}%)`);
+      }
+    }
     
     if (stats.lastMessageTime) {
       const idle = Math.floor((Date.now() - stats.lastMessageTime) / 1000);
@@ -92,6 +114,14 @@ async function main() {
     console.log(`  Messages processed: ${stats.messages}`);
     console.log(`  Errors encountered: ${stats.errors}`);
     
+    if (Object.keys(stats.partitionCounts).length > 0) {
+      console.log('  Final partition distribution:');
+      for (const [partition, count] of Object.entries(stats.partitionCounts)) {
+        const percentage = ((count / stats.messages) * 100).toFixed(1);
+        console.log(`    ${partition}: ${count} messages (${percentage}%)`);
+      }
+    }
+    
     process.exit(0);
   });
 
@@ -100,13 +130,13 @@ async function main() {
 
 async function processMessage(message) {
   // Simulate some processing work
-  //const processingTime = Math.random() * 1000 + 500; // 0.5-1.5 seconds
-  //await new Promise(resolve => setTimeout(resolve, processingTime));
+  const processingTime = Math.random() * 1000 + 500; // 0.5-1.5 seconds
+  await new Promise(resolve => setTimeout(resolve, processingTime));
   
   // Randomly simulate occasional processing errors (5% chance)
-  //if (Math.random() < 0.05) {
-  //  throw new Error('Simulated processing error');
- // }
+  if (Math.random() < 0.05) {
+    throw new Error('Simulated processing error');
+  }
 }
 
 function formatUptime(seconds) {

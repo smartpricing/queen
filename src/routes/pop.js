@@ -4,7 +4,31 @@ export const createPopRoute = (queueManager, eventManager) => {
     const maxTimeout = 60000;
     const effectiveTimeout = Math.min(timeout, maxTimeout);
     
-    // Try to get messages immediately (pass all options including wait)
+    // Handle different pop scenarios
+    if (scope.namespace || scope.task) {
+      // Pop with filters (namespace or task)
+      let result = await queueManager.popMessagesWithFilters(scope, { batch, wait: false, timeout: effectiveTimeout });
+      
+      if (result.messages.length > 0 || !wait) {
+        return result;
+      }
+      
+      // Simple polling for filtered pops (no specific queue path to wait on)
+      const startTime = Date.now();
+      const pollInterval = Math.min(1000, effectiveTimeout / 10);
+      
+      while (Date.now() - startTime < effectiveTimeout) {
+        await new Promise(resolve => setTimeout(resolve, pollInterval));
+        result = await queueManager.popMessagesWithFilters(scope, { batch, wait: false });
+        if (result.messages.length > 0) {
+          return result;
+        }
+      }
+      
+      return { messages: [] };
+    }
+    
+    // Regular queue/partition pop
     let result = await queueManager.popMessages(scope, { batch, wait: false, timeout: effectiveTimeout });
     
     if (result.messages.length > 0 || !wait) {
@@ -12,19 +36,15 @@ export const createPopRoute = (queueManager, eventManager) => {
     }
     
     // Long polling with event-driven optimization
-    const queuePath = scope.queue 
-      ? `${scope.ns}/${scope.task}/${scope.queue}`
-      : scope.task
-      ? `${scope.ns}/${scope.task}`
-      : scope.ns;
+    const queuePath = scope.partition 
+      ? `${scope.queue}/${scope.partition}`
+      : scope.queue;
     
     const startTime = Date.now();
-    
-    // Optimized polling with shorter intervals for better responsiveness
-    const pollInterval = Math.min(100, effectiveTimeout / 10); // 100ms max, or 1/10th of timeout
+    const pollInterval = Math.min(100, effectiveTimeout / 10);
     
     while (Date.now() - startTime < effectiveTimeout) {
-      // Wait for message notification or short timeout for faster response
+      // Wait for message notification or short timeout
       const notification = await Promise.race([
         eventManager.waitForMessage(queuePath, pollInterval),
         new Promise(resolve => setTimeout(() => resolve(null), pollInterval))
@@ -35,9 +55,6 @@ export const createPopRoute = (queueManager, eventManager) => {
       if (result.messages.length > 0) {
         return result;
       }
-      
-      // If we got a notification but no messages, someone else got them
-      // Continue waiting with minimal delay
     }
     
     // Timeout reached, no messages

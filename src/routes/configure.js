@@ -1,10 +1,13 @@
 export const createConfigureRoute = (queueManager) => {
   return async (body) => {
-    const { ns, task, queue, options = {} } = body;
+    const { queue, partition, options = {} } = body;
     
-    if (!ns || !task || !queue) {
-      throw new Error('ns, task, and queue are required');
+    if (!queue) {
+      throw new Error('queue is required');
     }
+    
+    // partition is optional, defaults to "Default"
+    const partitionName = partition || 'Default';
     
     // Validate options
     const validOptions = {
@@ -14,15 +17,17 @@ export const createConfigureRoute = (queueManager) => {
       retryLimit: options.retryLimit || 3,
       retryDelay: options.retryDelay || 1000,
       deadLetterQueue: options.deadLetterQueue || false,
+      dlqAfterMaxRetries: options.dlqAfterMaxRetries || false,
       priority: options.priority || 0,
       delayedProcessing: options.delayedProcessing || 0,
       windowBuffer: options.windowBuffer || 0
     };
     
-    const result = await queueManager.configureQueue(ns, task, queue, validOptions);
+    const result = await queueManager.configureQueue(queue, partitionName, validOptions);
     
     return {
-      queue: `${ns}/${task}/${queue}`,
+      queue,
+      partition: partitionName,
       configured: true,
       options: result.options
     };

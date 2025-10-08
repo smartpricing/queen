@@ -1,73 +1,218 @@
 export const createAnalyticsRoutes = (queueManager) => {
   
-  const getQueues = async () => {
-    const stats = await queueManager.getQueueStats();
-    return { queues: stats };
+  const getQueues = async (filters = {}) => {
+    const stats = await queueManager.getQueueStats(filters);
+    
+    // Group by queue for aggregation
+    const queueMap = new Map();
+    
+    stats.forEach(row => {
+      if (!queueMap.has(row.queue)) {
+        queueMap.set(row.queue, {
+          queue: row.queue,
+          namespace: row.namespace,
+          task: row.task,
+          partitions: [],
+          totals: {
+            pending: 0,
+            processing: 0,
+            completed: 0,
+            failed: 0,
+            deadLetter: 0,
+            total: 0
+          }
+        });
+      }
+      
+      const queueData = queueMap.get(row.queue);
+      queueData.partitions.push({
+        name: row.partition,
+        stats: row.stats
+      });
+      
+      // Aggregate totals
+      Object.keys(row.stats).forEach(key => {
+        queueData.totals[key] += row.stats[key];
+      });
+    });
+    
+    return { queues: Array.from(queueMap.values()) };
   };
   
-  const getNamespaceStats = async (ns) => {
-    const stats = await queueManager.getQueueStats({ ns });
+  const getQueueStats = async (queueName) => {
+    const stats = await queueManager.getQueueStats({ queue: queueName });
     
-    // Aggregate namespace-level stats
-    const totals = stats.reduce((acc, queue) => ({
-      pending: acc.pending + queue.stats.pending,
-      processing: acc.processing + queue.stats.processing,
-      completed: acc.completed + queue.stats.completed,
-      failed: acc.failed + queue.stats.failed,
-      deadLetter: acc.deadLetter + queue.stats.deadLetter,
-      total: acc.total + queue.stats.total
-    }), {
+    const totals = {
       pending: 0,
       processing: 0,
       completed: 0,
       failed: 0,
       deadLetter: 0,
       total: 0
+    };
+    
+    const partitions = stats.map(row => {
+      Object.keys(row.stats).forEach(key => {
+        totals[key] += row.stats[key];
+      });
+      
+      return {
+        name: row.partition,
+        stats: row.stats
+      };
     });
     
     return {
-      namespace: ns,
+      queue: queueName,
+      namespace: stats[0]?.namespace,
+      task: stats[0]?.task,
       totals,
-      queues: stats
+      partitions
     };
   };
   
-  const getTaskStats = async (ns, task) => {
-    const stats = await queueManager.getQueueStats({ ns, task });
+  const getNamespaceStats = async (namespace) => {
+    const stats = await queueManager.getQueueStats({ namespace });
     
-    const totals = stats.reduce((acc, queue) => ({
-      pending: acc.pending + queue.stats.pending,
-      processing: acc.processing + queue.stats.processing,
-      completed: acc.completed + queue.stats.completed,
-      failed: acc.failed + queue.stats.failed,
-      deadLetter: acc.deadLetter + queue.stats.deadLetter,
-      total: acc.total + queue.stats.total
-    }), {
+    // Group by queue
+    const queueMap = new Map();
+    
+    stats.forEach(row => {
+      if (!queueMap.has(row.queue)) {
+        queueMap.set(row.queue, {
+          queue: row.queue,
+          task: row.task,
+          partitions: [],
+          totals: {
+            pending: 0,
+            processing: 0,
+            completed: 0,
+            failed: 0,
+            deadLetter: 0,
+            total: 0
+          }
+        });
+      }
+      
+      const queueData = queueMap.get(row.queue);
+      queueData.partitions.push({
+        name: row.partition,
+        stats: row.stats
+      });
+      
+      Object.keys(row.stats).forEach(key => {
+        queueData.totals[key] += row.stats[key];
+      });
+    });
+    
+    // Calculate namespace totals
+    const totals = {
       pending: 0,
       processing: 0,
       completed: 0,
       failed: 0,
       deadLetter: 0,
       total: 0
+    };
+    
+    queueMap.forEach(queueData => {
+      Object.keys(queueData.totals).forEach(key => {
+        totals[key] += queueData.totals[key];
+      });
     });
     
     return {
-      namespace: ns,
+      namespace,
+      totals,
+      queues: Array.from(queueMap.values())
+    };
+  };
+  
+  const getTaskStats = async (task) => {
+    const stats = await queueManager.getQueueStats({ task });
+    
+    // Group by queue
+    const queueMap = new Map();
+    
+    stats.forEach(row => {
+      if (!queueMap.has(row.queue)) {
+        queueMap.set(row.queue, {
+          queue: row.queue,
+          namespace: row.namespace,
+          partitions: [],
+          totals: {
+            pending: 0,
+            processing: 0,
+            completed: 0,
+            failed: 0,
+            deadLetter: 0,
+            total: 0
+          }
+        });
+      }
+      
+      const queueData = queueMap.get(row.queue);
+      queueData.partitions.push({
+        name: row.partition,
+        stats: row.stats
+      });
+      
+      Object.keys(row.stats).forEach(key => {
+        queueData.totals[key] += row.stats[key];
+      });
+    });
+    
+    // Calculate task totals
+    const totals = {
+      pending: 0,
+      processing: 0,
+      completed: 0,
+      failed: 0,
+      deadLetter: 0,
+      total: 0
+    };
+    
+    queueMap.forEach(queueData => {
+      Object.keys(queueData.totals).forEach(key => {
+        totals[key] += queueData.totals[key];
+      });
+    });
+    
+    return {
       task,
       totals,
-      queues: stats
+      queues: Array.from(queueMap.values())
     };
   };
   
-  const getQueueDepths = async () => {
-    const stats = await queueManager.getQueueStats();
+  const getQueueDepths = async (filters = {}) => {
+    const stats = await queueManager.getQueueStats(filters);
+    
+    // Group by queue for aggregation
+    const queueMap = new Map();
+    
+    stats.forEach(row => {
+      if (!queueMap.has(row.queue)) {
+        queueMap.set(row.queue, {
+          queue: row.queue,
+          depth: 0,
+          processing: 0,
+          partitions: []
+        });
+      }
+      
+      const queueData = queueMap.get(row.queue);
+      queueData.depth += row.stats.pending;
+      queueData.processing += row.stats.processing;
+      queueData.partitions.push({
+        name: row.partition,
+        depth: row.stats.pending,
+        processing: row.stats.processing
+      });
+    });
     
     return {
-      depths: stats.map(q => ({
-        queue: q.queue,
-        depth: q.stats.pending,
-        processing: q.stats.processing
-      }))
+      depths: Array.from(queueMap.values())
     };
   };
   
@@ -77,20 +222,6 @@ export const createAnalyticsRoutes = (queueManager) => {
     const minuteInterval = 60; // Number of minutes to fetch
     
     try {
-      // Generate a time series for the last hour with minute intervals
-      const timeSeriesQuery = `
-        WITH time_series AS (
-          SELECT generate_series(
-            DATE_TRUNC('minute', NOW() - INTERVAL '${timeWindow}'),
-            DATE_TRUNC('minute', NOW()),
-            '1 minute'::interval
-          ) AS minute
-        )
-        SELECT minute FROM time_series
-        ORDER BY minute DESC
-        LIMIT ${minuteInterval}
-      `;
-      
       // 1. Incoming messages (created/inserted)
       const incomingQuery = `
         WITH time_series AS (
@@ -362,6 +493,7 @@ export const createAnalyticsRoutes = (queueManager) => {
   
   return {
     getQueues,
+    getQueueStats,
     getNamespaceStats,
     getTaskStats,
     getQueueDepths,

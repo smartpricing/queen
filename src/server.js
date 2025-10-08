@@ -10,6 +10,7 @@ import { createAckRoute } from './routes/ack.js';
 import { createConfigureRoute } from './routes/configure.js';
 import { createAnalyticsRoutes } from './routes/analytics.js';
 import { createMessagesRoutes } from './routes/messages.js';
+import { createResourcesRoutes } from './routes/resources.js';
 import { createWebSocketServer } from './websocket/wsServer.js';
 
 const PORT = process.env.PORT || 6632;
@@ -57,6 +58,7 @@ const eventManager = createEventManager();
 const queueManager = createOptimizedQueueManager(pool, resourceCache, eventManager);
 const analyticsRoutes = createAnalyticsRoutes(queueManager);
 const messagesRoutes = createMessagesRoutes(pool, queueManager);
+const resourcesRoutes = createResourcesRoutes(pool);
 
 // Initialize database
 await initDatabase(pool);
@@ -83,6 +85,11 @@ const wsServer = createWebSocketServer(app, eventManager);
 setInterval(async () => {
   await wsServer.updateQueueDepths(queueManager);
 }, 5000);
+
+// Background job for system stats
+setInterval(async () => {
+  await wsServer.sendSystemStats(pool);
+}, 10000);
 
 // CORS headers helper
 const setCorsHeaders = (res) => {
@@ -185,9 +192,11 @@ app.post('/api/v1/push', (res, req) => {
             i.transactionId === msg.transactionId || !i.transactionId
           );
           if (item) {
-            const queuePath = `${item.ns}/${item.task}/${item.queue}`;
+            const partition = item.partition ?? 'Default';
+            const queuePath = `${item.queue}/${partition}`;
             eventManager.emit('message.pushed', {
-              queue: queuePath,
+              queue: item.queue,
+              partition: partition,
               transactionId: msg.transactionId
             });
             eventManager.notifyMessageAvailable(queuePath);
@@ -210,11 +219,10 @@ app.post('/api/v1/push', (res, req) => {
   }, abortedRef);
 });
 
-// Pop routes with different scopes
-app.get('/api/v1/pop/ns/:ns/task/:task/queue/:queue', (res, req) => {
-  const ns = req.getParameter(0);
-  const task = req.getParameter(1);
-  const queue = req.getParameter(2);
+// Pop routes with new structure
+app.get('/api/v1/pop/queue/:queue/partition/:partition', (res, req) => {
+  const queue = req.getParameter(0);
+  const partition = req.getParameter(1);
   const query = new URLSearchParams(req.getQuery());
   
   let aborted = false;
@@ -224,7 +232,7 @@ app.get('/api/v1/pop/ns/:ns/task/:task/queue/:queue', (res, req) => {
   });
   
   createPopRoute(queueManager, eventManager)(
-    { ns, task, queue },
+    { queue, partition },
     {
       wait: query.get('wait') === 'true',
       timeout: parseInt(query.get('timeout') || '30000'),
@@ -237,6 +245,7 @@ app.get('/api/v1/pop/ns/:ns/task/:task/queue/:queue', (res, req) => {
     for (const msg of result.messages) {
       eventManager.emit('message.processing', {
         queue: msg.queue,
+        partition: msg.partition,
         transactionId: msg.transactionId,
         workerId: `worker-${process.pid}`
       });
@@ -247,7 +256,7 @@ app.get('/api/v1/pop/ns/:ns/task/:task/queue/:queue', (res, req) => {
       if (result.messages.length > 0) {
         res.writeStatus('200').end(JSON.stringify(result));
       } else {
-        res.writeHeader('Content-Length', '0').writeStatus('204').end();
+        res.writeStatus('204').end();
       }
     });
   }).catch(error => {
@@ -260,9 +269,8 @@ app.get('/api/v1/pop/ns/:ns/task/:task/queue/:queue', (res, req) => {
   });
 });
 
-app.get('/api/v1/pop/ns/:ns/task/:task', (res, req) => {
-  const ns = req.getParameter(0);
-  const task = req.getParameter(1);
+app.get('/api/v1/pop/queue/:queue', (res, req) => {
+  const queue = req.getParameter(0);
   const query = new URLSearchParams(req.getQuery());
   
   let aborted = false;
@@ -272,7 +280,7 @@ app.get('/api/v1/pop/ns/:ns/task/:task', (res, req) => {
   });
   
   createPopRoute(queueManager, eventManager)(
-    { ns, task },
+    { queue },
     {
       wait: query.get('wait') === 'true',
       timeout: parseInt(query.get('timeout') || '30000'),
@@ -284,6 +292,7 @@ app.get('/api/v1/pop/ns/:ns/task/:task', (res, req) => {
     for (const msg of result.messages) {
       eventManager.emit('message.processing', {
         queue: msg.queue,
+        partition: msg.partition,
         transactionId: msg.transactionId,
         workerId: `worker-${process.pid}`
       });
@@ -294,7 +303,7 @@ app.get('/api/v1/pop/ns/:ns/task/:task', (res, req) => {
       if (result.messages.length > 0) {
         res.writeStatus('200').end(JSON.stringify(result));
       } else {
-        res.writeHeader('Content-Length', '0').writeStatus('204').end();
+        res.writeStatus('204').end();
       }
     });
   }).catch(error => {
@@ -307,9 +316,11 @@ app.get('/api/v1/pop/ns/:ns/task/:task', (res, req) => {
   });
 });
 
-app.get('/api/v1/pop/ns/:ns', (res, req) => {
-  const ns = req.getParameter(0);
+// Pop with filters (namespace or task)
+app.get('/api/v1/pop', (res, req) => {
   const query = new URLSearchParams(req.getQuery());
+  const namespace = query.get('namespace');
+  const task = query.get('task');
   
   let aborted = false;
   res.onAborted(() => {
@@ -318,7 +329,7 @@ app.get('/api/v1/pop/ns/:ns', (res, req) => {
   });
   
   createPopRoute(queueManager, eventManager)(
-    { ns },
+    { namespace, task },
     {
       wait: query.get('wait') === 'true',
       timeout: parseInt(query.get('timeout') || '30000'),
@@ -330,6 +341,7 @@ app.get('/api/v1/pop/ns/:ns', (res, req) => {
     for (const msg of result.messages) {
       eventManager.emit('message.processing', {
         queue: msg.queue,
+        partition: msg.partition,
         transactionId: msg.transactionId,
         workerId: `worker-${process.pid}`
       });
@@ -340,7 +352,7 @@ app.get('/api/v1/pop/ns/:ns', (res, req) => {
       if (result.messages.length > 0) {
         res.writeStatus('200').end(JSON.stringify(result));
       } else {
-        res.writeHeader('Content-Length', '0').writeStatus('204').end();
+        res.writeStatus('204').end();
       }
     });
   }).catch(error => {
@@ -464,8 +476,8 @@ app.get('/api/v1/analytics/queues', (res, req) => {
   });
 });
 
-app.get('/api/v1/analytics/ns/:ns', (res, req) => {
-  const ns = req.getParameter(0);
+app.get('/api/v1/analytics/queue/:queue', (res, req) => {
+  const queue = req.getParameter(0);
   
   let aborted = false;
   res.onAborted(() => {
@@ -473,7 +485,7 @@ app.get('/api/v1/analytics/ns/:ns', (res, req) => {
     console.log('Analytics request aborted');
   });
   
-  analyticsRoutes.getNamespaceStats(ns).then(result => {
+  analyticsRoutes.getQueueStats(queue).then(result => {
     if (aborted) return;
     res.cork(() => {
       setCorsHeaders(res);
@@ -489,9 +501,11 @@ app.get('/api/v1/analytics/ns/:ns', (res, req) => {
   });
 });
 
-app.get('/api/v1/analytics/ns/:ns/task/:task', (res, req) => {
-  const ns = req.getParameter(0);
-  const task = req.getParameter(1);
+// Analytics with filters
+app.get('/api/v1/analytics', (res, req) => {
+  const query = new URLSearchParams(req.getQuery());
+  const namespace = query.get('namespace');
+  const task = query.get('task');
   
   let aborted = false;
   res.onAborted(() => {
@@ -499,7 +513,13 @@ app.get('/api/v1/analytics/ns/:ns/task/:task', (res, req) => {
     console.log('Analytics request aborted');
   });
   
-  analyticsRoutes.getTaskStats(ns, task).then(result => {
+  const getStats = namespace 
+    ? analyticsRoutes.getNamespaceStats(namespace)
+    : task 
+    ? analyticsRoutes.getTaskStats(task)
+    : analyticsRoutes.getQueues();
+    
+  getStats.then(result => {
     if (aborted) return;
     res.cork(() => {
       setCorsHeaders(res);
@@ -564,9 +584,9 @@ app.get('/api/v1/analytics/throughput', (res, req) => {
 // Queue stats route
 app.get('/api/v1/analytics/queue-stats', (res, req) => {
   const query = new URLSearchParams(req.getQuery());
-  const ns = query.get('ns');
-  const task = query.get('task');
   const queue = query.get('queue');
+  const namespace = query.get('namespace');
+  const task = query.get('task');
   
   let aborted = false;
   res.onAborted(() => {
@@ -574,7 +594,7 @@ app.get('/api/v1/analytics/queue-stats', (res, req) => {
     console.log('Queue stats request aborted');
   });
   
-  queueManager.getQueueStats({ ns, task, queue }).then(result => {
+  queueManager.getQueueStats({ queue, namespace, task }).then(result => {
     if (aborted) return;
     res.cork(() => {
       setCorsHeaders(res);
@@ -752,10 +772,10 @@ app.get('/api/v1/messages/:transactionId/related', (res, req) => {
   });
 });
 
-app.del('/api/v1/queues/:ns/:task/:queue/clear', (res, req) => {
-  const ns = req.getParameter(0);
-  const task = req.getParameter(1);
-  const queue = req.getParameter(2);
+app.del('/api/v1/queues/:queue/clear', (res, req) => {
+  const queue = req.getParameter(0);
+  const query = new URLSearchParams(req.getQuery());
+  const partition = query.get('partition');
   
   let aborted = false;
   res.onAborted(() => {
@@ -763,7 +783,7 @@ app.del('/api/v1/queues/:ns/:task/:queue/clear', (res, req) => {
     console.log('Clear queue request aborted');
   });
   
-  messagesRoutes.clearQueue(ns, task, queue).then(result => {
+  messagesRoutes.clearQueue(queue, partition).then(result => {
     if (aborted) return;
     res.cork(() => {
       setCorsHeaders(res);
@@ -772,6 +792,156 @@ app.del('/api/v1/queues/:ns/:task/:queue/clear', (res, req) => {
   }).catch(error => {
     if (aborted) return;
     console.error('Clear queue error:', error);
+    res.cork(() => {
+      setCorsHeaders(res);
+      res.writeStatus('500').end(JSON.stringify({ error: error.message }));
+    });
+  });
+});
+
+// Resources routes
+app.get('/api/v1/resources/queues', (res, req) => {
+  const query = new URLSearchParams(req.getQuery());
+  const namespace = query.get('namespace');
+  const task = query.get('task');
+  
+  let aborted = false;
+  res.onAborted(() => {
+    aborted = true;
+    console.log('Get queues request aborted');
+  });
+  
+  resourcesRoutes.getQueues({ namespace, task }).then(result => {
+    if (aborted) return;
+    res.cork(() => {
+      setCorsHeaders(res);
+      res.writeStatus('200').end(JSON.stringify({ queues: result }));
+    });
+  }).catch(error => {
+    if (aborted) return;
+    console.error('Get queues error:', error);
+    res.cork(() => {
+      setCorsHeaders(res);
+      res.writeStatus('500').end(JSON.stringify({ error: error.message }));
+    });
+  });
+});
+
+app.get('/api/v1/resources/queues/:queue', (res, req) => {
+  const queue = req.getParameter(0);
+  
+  let aborted = false;
+  res.onAborted(() => {
+    aborted = true;
+    console.log('Get queue request aborted');
+  });
+  
+  resourcesRoutes.getQueue(queue).then(result => {
+    if (aborted) return;
+    res.cork(() => {
+      setCorsHeaders(res);
+      res.writeStatus('200').end(JSON.stringify(result));
+    });
+  }).catch(error => {
+    if (aborted) return;
+    console.error('Get queue error:', error);
+    res.cork(() => {
+      setCorsHeaders(res);
+      res.writeStatus(error.message === 'Queue not found' ? '404' : '500')
+        .end(JSON.stringify({ error: error.message }));
+    });
+  });
+});
+
+app.get('/api/v1/resources/partitions', (res, req) => {
+  const query = new URLSearchParams(req.getQuery());
+  const queue = query.get('queue');
+  const minDepth = query.get('minDepth');
+  
+  let aborted = false;
+  res.onAborted(() => {
+    aborted = true;
+    console.log('Get partitions request aborted');
+  });
+  
+  resourcesRoutes.getPartitions({ queue, minDepth: minDepth ? parseInt(minDepth) : null }).then(result => {
+    if (aborted) return;
+    res.cork(() => {
+      setCorsHeaders(res);
+      res.writeStatus('200').end(JSON.stringify({ partitions: result }));
+    });
+  }).catch(error => {
+    if (aborted) return;
+    console.error('Get partitions error:', error);
+    res.cork(() => {
+      setCorsHeaders(res);
+      res.writeStatus('500').end(JSON.stringify({ error: error.message }));
+    });
+  });
+});
+
+app.get('/api/v1/resources/namespaces', (res, req) => {
+  let aborted = false;
+  res.onAborted(() => {
+    aborted = true;
+    console.log('Get namespaces request aborted');
+  });
+  
+  resourcesRoutes.getNamespaces().then(result => {
+    if (aborted) return;
+    res.cork(() => {
+      setCorsHeaders(res);
+      res.writeStatus('200').end(JSON.stringify({ namespaces: result }));
+    });
+  }).catch(error => {
+    if (aborted) return;
+    console.error('Get namespaces error:', error);
+    res.cork(() => {
+      setCorsHeaders(res);
+      res.writeStatus('500').end(JSON.stringify({ error: error.message }));
+    });
+  });
+});
+
+app.get('/api/v1/resources/tasks', (res, req) => {
+  let aborted = false;
+  res.onAborted(() => {
+    aborted = true;
+    console.log('Get tasks request aborted');
+  });
+  
+  resourcesRoutes.getTasks().then(result => {
+    if (aborted) return;
+    res.cork(() => {
+      setCorsHeaders(res);
+      res.writeStatus('200').end(JSON.stringify({ tasks: result }));
+    });
+  }).catch(error => {
+    if (aborted) return;
+    console.error('Get tasks error:', error);
+    res.cork(() => {
+      setCorsHeaders(res);
+      res.writeStatus('500').end(JSON.stringify({ error: error.message }));
+    });
+  });
+});
+
+app.get('/api/v1/resources/overview', (res, req) => {
+  let aborted = false;
+  res.onAborted(() => {
+    aborted = true;
+    console.log('Get overview request aborted');
+  });
+  
+  resourcesRoutes.getSystemOverview().then(result => {
+    if (aborted) return;
+    res.cork(() => {
+      setCorsHeaders(res);
+      res.writeStatus('200').end(JSON.stringify(result));
+    });
+  }).catch(error => {
+    if (aborted) return;
+    console.error('Get overview error:', error);
     res.cork(() => {
       setCorsHeaders(res);
       res.writeStatus('500').end(JSON.stringify({ error: error.message }));

@@ -22,12 +22,12 @@ export const createPool = () => {
 
 // Initialize database schema
 export const initDatabase = async (pool) => {
-  const schemaPath = path.join(__dirname, 'schema.sql');
+  const schemaPath = path.join(__dirname, 'schema-v2.sql');
   const schema = fs.readFileSync(schemaPath, 'utf8');
   
   try {
     await pool.query(schema);
-    console.log('Database schema initialized');
+    console.log('Database schema V2 initialized');
   } catch (error) {
     console.error('Failed to initialize database schema:', error);
     throw error;

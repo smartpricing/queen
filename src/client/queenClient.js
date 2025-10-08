@@ -11,10 +11,10 @@ export const createQueenClient = (options = {}) => {
   
   const http = createHttpClient({ baseUrl, timeout });
   
-  // Configure a queue
-  const configure = async ({ ns, task, queue, options = {} }) => {
+  // Configure a queue partition
+  const configure = async ({ queue, partition = 'Default', options = {} }) => {
     return withRetry(
-      () => http.post('/api/v1/configure', { ns, task, queue, options }),
+      () => http.post('/api/v1/configure', { queue, partition, options }),
       retryAttempts,
       retryDelay
     );
@@ -26,29 +26,57 @@ export const createQueenClient = (options = {}) => {
       items = [items];
     }
     
+    // Ensure each item has the correct structure for V2
+    const v2Items = items.map(item => ({
+      queue: item.queue,
+      partition: item.partition ?? 'Default',
+      payload: item.payload || item.data,
+      transactionId: item.transactionId
+    }));
+    
     return withRetry(
-      () => http.post('/api/v1/push', { items, config }),
+      () => http.post('/api/v1/push', { items: v2Items, config }),
       retryAttempts,
       retryDelay
     );
   };
   
   // Pop messages from queue
-  const pop = async ({ ns, task, queue, wait = false, timeout = 30000, batch = 1 }) => {
-    const path = queue 
-      ? `/api/v1/pop/ns/${ns}/task/${task}/queue/${queue}`
-      : task
-      ? `/api/v1/pop/ns/${ns}/task/${task}`
-      : `/api/v1/pop/ns/${ns}`;
+  const pop = async (options = {}) => {
+    const { 
+      queue, 
+      partition, 
+      namespace,
+      task,
+      wait = false, 
+      timeout = 30000, 
+      batch = 1 
+    } = options;
     
+    let path;
     const params = new URLSearchParams({
       wait: wait.toString(),
       timeout: timeout.toString(),
       batch: batch.toString()
     });
     
+    // Determine the appropriate endpoint based on parameters
+    if (queue && partition) {
+      // Pop from specific partition
+      path = `/api/v1/pop/queue/${queue}/partition/${partition}`;
+    } else if (queue) {
+      // Pop from any partition in queue
+      path = `/api/v1/pop/queue/${queue}`;
+    } else if (namespace || task) {
+      // Pop with filters
+      path = '/api/v1/pop';
+      if (namespace) params.append('namespace', namespace);
+      if (task) params.append('task', task);
+    } else {
+      throw new Error('Must specify either queue, namespace, or task for pop operation');
+    }
+    
     // For long polling, use a slightly longer client timeout than server timeout
-    // This ensures the server has time to respond before the client times out
     const clientTimeout = wait ? timeout + 5000 : timeout;
     
     const result = await http.get(`${path}?${params}`, clientTimeout);
@@ -79,17 +107,115 @@ export const createQueenClient = (options = {}) => {
     );
   };
   
-  // Get analytics
+  // Message management
+  const messages = {
+    // List messages with filters
+    list: async (filters = {}) => {
+      const params = new URLSearchParams();
+      if (filters.queue) params.append('queue', filters.queue);
+      if (filters.partition) params.append('partition', filters.partition);
+      if (filters.namespace) params.append('namespace', filters.namespace);
+      if (filters.task) params.append('task', filters.task);
+      if (filters.status) params.append('status', filters.status);
+      if (filters.limit) params.append('limit', filters.limit);
+      if (filters.offset) params.append('offset', filters.offset);
+      
+      return http.get(`/api/v1/messages?${params}`);
+    },
+    
+    // Get single message
+    get: async (transactionId) => {
+      return http.get(`/api/v1/messages/${transactionId}`);
+    },
+    
+    // Delete message
+    delete: async (transactionId) => {
+      return http.delete(`/api/v1/messages/${transactionId}`);
+    },
+    
+    // Retry failed message
+    retry: async (transactionId) => {
+      return http.post(`/api/v1/messages/${transactionId}/retry`);
+    },
+    
+    // Move to DLQ
+    moveToDLQ: async (transactionId) => {
+      return http.post(`/api/v1/messages/${transactionId}/dlq`);
+    },
+    
+    // Get related messages
+    getRelated: async (transactionId) => {
+      return http.get(`/api/v1/messages/${transactionId}/related`);
+    }
+  };
+  
+  // Queue management
+  const queues = {
+    // Clear queue or partition
+    clear: async (queue, partition = null) => {
+      const params = partition ? `?partition=${partition}` : '';
+      return http.delete(`/api/v1/queues/${queue}/clear${params}`);
+    }
+  };
+  
+  // Analytics
   const analytics = {
-    queues: async () => http.get('/api/v1/analytics/queues'),
-    namespace: async (ns) => http.get(`/api/v1/analytics/ns/${ns}`),
-    task: async (ns, task) => http.get(`/api/v1/analytics/ns/${ns}/task/${task}`),
-    queueDepths: async () => http.get('/api/v1/analytics/queue-depths'),
-    throughput: async () => http.get('/api/v1/analytics/throughput')
+    // Get all queues overview
+    queues: async (filters = {}) => {
+      const params = new URLSearchParams();
+      if (filters.namespace) params.append('namespace', filters.namespace);
+      if (filters.task) params.append('task', filters.task);
+      const query = params.toString();
+      return http.get(`/api/v1/analytics/queues${query ? '?' + query : ''}`);
+    },
+    
+    // Get specific queue statistics
+    queue: async (queue) => {
+      return http.get(`/api/v1/analytics/queue/${queue}`);
+    },
+    
+    // Get stats by namespace
+    namespace: async (namespace) => {
+      return http.get(`/api/v1/analytics?namespace=${namespace}`);
+    },
+    
+    // Get stats by task
+    task: async (task) => {
+      return http.get(`/api/v1/analytics?task=${task}`);
+    },
+    
+    // Get queue depths
+    queueDepths: async (filters = {}) => {
+      const params = new URLSearchParams();
+      if (filters.namespace) params.append('namespace', filters.namespace);
+      if (filters.task) params.append('task', filters.task);
+      const query = params.toString();
+      return http.get(`/api/v1/analytics/queue-depths${query ? '?' + query : ''}`);
+    },
+    
+    // Get throughput metrics
+    throughput: async () => {
+      return http.get('/api/v1/analytics/throughput');
+    },
+    
+    // Get queue stats with filters
+    queueStats: async (filters = {}) => {
+      const params = new URLSearchParams();
+      if (filters.queue) params.append('queue', filters.queue);
+      if (filters.namespace) params.append('namespace', filters.namespace);
+      if (filters.task) params.append('task', filters.task);
+      return http.get(`/api/v1/analytics/queue-stats?${params}`);
+    }
+  };
+  
+  // System health
+  const health = {
+    check: async () => http.get('/health'),
+    metrics: async () => http.get('/metrics')
   };
   
   // Consumer helper - continuously pop and process messages
-  const consume = ({ ns, task, queue, handler, options = {} }) => {
+  const consume = ({ queue, partition, namespace, task, handler, options = {} }) => {
     const {
       batch = 1,
       wait = true,
@@ -107,7 +233,15 @@ export const createQueenClient = (options = {}) => {
     (async () => {
       while (running) {
         try {
-          const result = await pop({ ns, task, queue, wait, timeout, batch });
+          const result = await pop({ 
+            queue, 
+            partition, 
+            namespace, 
+            task, 
+            wait, 
+            timeout, 
+            batch 
+          });
           
           if (result.messages && result.messages.length > 0) {
             for (const message of result.messages) {
@@ -127,7 +261,7 @@ export const createQueenClient = (options = {}) => {
               }
             }
           }
-          // If no messages received (timeout on server side), immediately continue to next iteration
+          // If no messages received (timeout on server side), immediately continue
           // No delay needed - this is expected behavior for long polling
         } catch (error) {
           // Check if this is a timeout/abort error from the HTTP client
@@ -137,7 +271,6 @@ export const createQueenClient = (options = {}) => {
           
           if (isTimeoutError) {
             // For timeout errors, immediately retry without delay
-            // This is expected behavior for long polling - just start a new request
             console.debug('Long poll timeout, immediately retrying...');
             continue;
           }
@@ -157,13 +290,56 @@ export const createQueenClient = (options = {}) => {
     return stop;
   };
   
+  // WebSocket support for real-time updates
+  const createWebSocketConnection = (path = '/ws/dashboard') => {
+    const wsUrl = baseUrl.replace('http://', 'ws://').replace('https://', 'wss://');
+    const ws = new WebSocket(`${wsUrl}${path}`);
+    
+    return {
+      ws,
+      onMessage: (handler) => {
+        ws.addEventListener('message', (event) => {
+          try {
+            const data = JSON.parse(event.data);
+            handler(data);
+          } catch (error) {
+            console.error('Error parsing WebSocket message:', error);
+          }
+        });
+      },
+      onError: (handler) => ws.addEventListener('error', handler),
+      onClose: (handler) => ws.addEventListener('close', handler),
+      onOpen: (handler) => ws.addEventListener('open', handler),
+      close: () => ws.close()
+    };
+  };
+  
   return {
     configure,
     push,
     pop,
     ack,
     ackBatch,
+    messages,
+    queues,
     analytics,
-    consume
+    health,
+    consume,
+    createWebSocketConnection
+  };
+};
+
+// Export helper for creating a simple consumer
+export const createConsumer = (options) => {
+  const client = createQueenClient(options);
+  return client.consume;
+};
+
+// Export helper for creating a producer
+export const createProducer = (options) => {
+  const client = createQueenClient(options);
+  return {
+    push: client.push,
+    configure: client.configure
   };
 };

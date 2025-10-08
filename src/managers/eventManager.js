@@ -40,12 +40,10 @@ export const createEventManager = () => {
   // Notify when message is available
   const notifyMessageAvailable = (queuePath) => {
     emit(`message:${queuePath}`, { available: true });
-    // Also emit for parent paths
+    // Also emit for parent queue if this is a partition path
     const parts = queuePath.split('/');
-    if (parts.length >= 2) {
-      emit(`message:${parts[0]}/${parts[1]}`, { available: true });
-    }
-    if (parts.length >= 1) {
+    if (parts.length === 2) {
+      // This is queue/partition, also notify queue level
       emit(`message:${parts[0]}`, { available: true });
     }
   };

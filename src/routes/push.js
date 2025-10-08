@@ -8,12 +8,13 @@ export const createPushRoute = (queueManager) => {
     
     // Validate items
     for (const item of items) {
-      if (!item.ns || !item.task || !item.queue) {
-        throw new Error('Each item must have ns, task, and queue');
+      if (!item.queue) {
+        throw new Error('Each item must have a queue');
       }
       if (!item.payload) {
         throw new Error('Each item must have a payload');
       }
+      // partition is optional, defaults to "Default"
     }
     
     const results = await queueManager.pushMessages(items);
