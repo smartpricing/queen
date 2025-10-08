@@ -1,6 +1,14 @@
 <template>
-  <div class="sidebar-wrapper" :class="{ collapsed: !visible }" @click.self="handleOverlayClick">
+  <div class="sidebar-wrapper" :class="{ collapsed: !visible, expanded: visible }">
     <div class="sidebar-content">
+      <!-- Logo -->
+      <div class="sidebar-logo">
+        <div class="logo-icon">
+          <i class="pi pi-bolt"></i>
+        </div>
+      </div>
+      
+      <!-- Navigation -->
       <nav class="sidebar-nav">
         <router-link 
           v-for="item in menuItems" 
@@ -8,27 +16,24 @@
           :to="item.path"
           class="nav-item"
           :class="{ active: isActive(item.path) }"
+          v-tooltip.right="!visible ? item.label : ''"
         >
-          <i :class="item.icon" class="nav-icon"></i>
-          <span class="nav-label">{{ item.label }}</span>
-          <Badge 
-            v-if="item.badge" 
-            :value="item.badge" 
-            :severity="item.badgeSeverity"
-            class="nav-badge"
-          />
+          <div class="nav-icon">
+            <i :class="item.icon"></i>
+          </div>
         </router-link>
       </nav>
       
+      <!-- Footer -->
       <div class="sidebar-footer">
-        <div class="system-stats">
-          <div class="stat-item">
-            <span class="stat-label">Uptime</span>
-            <span class="stat-value">{{ uptime }}</span>
+        <div class="nav-item settings-item">
+          <div class="nav-icon">
+            <i class="pi pi-cog"></i>
           </div>
-          <div class="stat-item">
-            <span class="stat-label">Version</span>
-            <span class="stat-value">v2.0.0</span>
+        </div>
+        <div class="user-item">
+          <div class="user-avatar">
+            <i class="pi pi-user"></i>
           </div>
         </div>
       </div>
@@ -39,14 +44,11 @@
 <script setup>
 import { ref, computed, onMounted, onUnmounted } from 'vue'
 import { useRoute } from 'vue-router'
-import Badge from 'primevue/badge'
-import api from '../../services/api.js'
-import { formatRelativeTime } from '../../utils/helpers.js'
 
 const props = defineProps({
   visible: {
     type: Boolean,
-    default: true
+    default: false
   }
 })
 
@@ -58,7 +60,7 @@ const visible = computed({
   set: (val) => emit('update:visible', val)
 })
 
-// Menu items
+// Menu items - icon only sidebar
 const menuItems = ref([
   {
     path: '/',
@@ -68,9 +70,7 @@ const menuItems = ref([
   {
     path: '/queues',
     label: 'Queues',
-    icon: 'pi pi-inbox',
-    badge: null,
-    badgeSeverity: 'info'
+    icon: 'pi pi-inbox'
   },
   {
     path: '/analytics',
@@ -82,16 +82,7 @@ const menuItems = ref([
     label: 'Messages',
     icon: 'pi pi-envelope'
   },
-  {
-    path: '/system',
-    label: 'System',
-    icon: 'pi pi-server'
-  }
 ])
-
-// System stats
-const uptime = ref('--')
-const startTime = ref(null)
 
 // Check if route is active
 const isActive = (path) => {
@@ -100,209 +91,171 @@ const isActive = (path) => {
   }
   return route.path.startsWith(path)
 }
-
-// Fetch system health
-const fetchHealth = async () => {
-  try {
-    const data = await api.getHealth()
-    if (data.uptime) {
-      // Parse uptime (format: "3600s")
-      const seconds = parseInt(data.uptime)
-      const hours = Math.floor(seconds / 3600)
-      const minutes = Math.floor((seconds % 3600) / 60)
-      
-      if (hours > 24) {
-        const days = Math.floor(hours / 24)
-        uptime.value = `${days}d ${hours % 24}h`
-      } else if (hours > 0) {
-        uptime.value = `${hours}h ${minutes}m`
-      } else {
-        uptime.value = `${minutes}m`
-      }
-    }
-  } catch (error) {
-    console.error('Failed to fetch health:', error)
-  }
-}
-
-// Handle overlay click on mobile
-const handleOverlayClick = () => {
-  if (window.innerWidth <= 768) {
-    visible.value = false
-  }
-}
-
-// Fetch queue count for badge
-const fetchQueueCount = async () => {
-  try {
-    const data = await api.getQueues()
-    if (data.queues) {
-      const queueItem = menuItems.value.find(item => item.path === '/queues')
-      if (queueItem) {
-        queueItem.badge = data.queues.length
-      }
-    }
-  } catch (error) {
-    console.error('Failed to fetch queue count:', error)
-  }
-}
-
-let healthInterval = null
-
-onMounted(() => {
-  fetchHealth()
-  fetchQueueCount()
-  
-  // Refresh health every 30 seconds
-  healthInterval = setInterval(() => {
-    fetchHealth()
-  }, 30000)
-})
-
-onUnmounted(() => {
-  if (healthInterval) {
-    clearInterval(healthInterval)
-  }
-})
 </script>
 
 <style scoped>
 .sidebar-wrapper {
   position: fixed;
   left: 0;
-  top: 60px;
-  width: 250px;
-  height: calc(100vh - 60px);
-  background: white;
-  box-shadow: 2px 0 12px rgba(0, 0, 0, 0.08);
-  transition: transform 0.3s cubic-bezier(0.4, 0, 0.2, 1);
-  z-index: 99;
-  overflow: hidden;
+  top: 0;
+  width: 80px;
+  height: 100vh;
+  background: #0c0a09;
+  border-right: 1px solid rgba(255, 255, 255, 0.05);
+  transition: width 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+  z-index: 100;
+  display: flex;
+  flex-direction: column;
 }
 
-.sidebar-wrapper.collapsed {
-  transform: translateX(-100%);
+.sidebar-wrapper.expanded {
+  width: 250px;
 }
 
 .sidebar-content {
   height: 100%;
   display: flex;
   flex-direction: column;
-  justify-content: space-between;
-  background: white;
+  padding: 1rem 0;
 }
 
+/* Logo */
+.sidebar-logo {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 1rem 0 2rem 0;
+  margin-bottom: 1rem;
+}
+
+.logo-icon {
+  width: 48px;
+  height: 48px;
+  border-radius: 12px;
+  background: linear-gradient(135deg, #ec4899 0%, #db2777 100%);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: white;
+  font-size: 1.5rem;
+  box-shadow: 0 4px 12px rgba(236, 72, 153, 0.3);
+}
+
+/* Navigation */
 .sidebar-nav {
-  padding: 1rem 0;
   flex: 1;
-  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  padding: 0 1rem;
 }
 
 .nav-item {
   display: flex;
   align-items: center;
-  padding: 0.75rem 1.5rem;
-  color: var(--gray-700);
+  justify-content: center;
+  width: 48px;
+  height: 48px;
+  margin: 0 auto;
+  color: #78716c;
   text-decoration: none;
   transition: all 0.2s ease;
   position: relative;
+  border-radius: 12px;
+  cursor: pointer;
 }
 
 .nav-item:hover {
-  background: var(--gray-50);
-  color: var(--primary-color);
+  color: #d6d3d1;
+  background: rgba(236, 72, 153, 0.1);
 }
 
 .nav-item.active {
-  background: linear-gradient(90deg, rgba(59, 130, 246, 0.1) 0%, transparent 100%);
-  color: var(--primary-color);
+  color: #ec4899;
+  background: rgba(236, 72, 153, 0.15);
 }
 
 .nav-item.active::before {
   content: '';
   position: absolute;
-  left: 0;
-  top: 0;
-  bottom: 0;
+  left: -1rem;
+  top: 50%;
+  transform: translateY(-50%);
   width: 3px;
-  background: var(--primary-color);
+  height: 24px;
+  background: #ec4899;
+  border-radius: 0 2px 2px 0;
 }
 
 .nav-icon {
-  font-size: 1.125rem;
-  margin-right: 0.75rem;
-  width: 1.5rem;
+  font-size: 1.25rem;
+  display: flex;
+  align-items: center;
+  justify-content: center;
 }
 
-.nav-label {
-  flex: 1;
-  font-weight: 500;
-  font-size: 0.875rem;
-}
-
-.nav-badge {
-  margin-left: auto;
-}
-
+/* Footer */
 .sidebar-footer {
-  padding: 1rem 1.5rem;
-  border-top: 1px solid var(--gray-200);
-  background: var(--gray-50);
-}
-
-.system-stats {
   display: flex;
   flex-direction: column;
-  gap: 0.5rem;
-}
-
-.stat-item {
-  display: flex;
-  justify-content: space-between;
   align-items: center;
+  gap: 1rem;
+  padding: 1rem 0;
+  margin-top: auto;
 }
 
-.stat-label {
-  font-size: 0.875rem;
-  color: var(--gray-600);
+.settings-item {
+  margin: 0;
 }
 
-.stat-value {
+.user-item {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.user-avatar {
+  width: 36px;
+  height: 36px;
+  border-radius: 10px;
+  background: #1c1917;
+  border: 2px solid #292524;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #78716c;
+  font-size: 1rem;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.user-avatar:hover {
+  border-color: #ec4899;
+  color: #ec4899;
+}
+
+/* Expanded state styles */
+.sidebar-wrapper.expanded .nav-item {
+  justify-content: flex-start;
+  width: auto;
+  padding: 0 1rem;
+  gap: 1rem;
+}
+
+.sidebar-wrapper.expanded .nav-item::after {
+  content: attr(data-label);
   font-size: 0.875rem;
-  font-weight: 600;
-  color: var(--gray-800);
+  font-weight: 500;
 }
 
 /* Mobile responsive */
 @media (max-width: 768px) {
   .sidebar-wrapper {
-    width: 280px;
-    box-shadow: 4px 0 24px rgba(0, 0, 0, 0.15);
+    transform: translateX(-100%);
   }
   
-  .sidebar-wrapper:not(.collapsed)::before {
-    content: '';
-    position: fixed;
-    top: 0;
-    left: 0;
-    right: 0;
-    bottom: 0;
-    background: rgba(0, 0, 0, 0.5);
-    z-index: -1;
-    animation: fadeIn 0.3s ease;
+  .sidebar-wrapper.expanded {
+    transform: translateX(0);
   }
-  
-  .nav-label {
-    font-size: 0.9rem;
-  }
-  
-  .sidebar-footer {
-    padding: 0.75rem 1.25rem;
-  }
-}
-
-@keyframes fadeIn {
-  from { opacity: 0; }
-  to { opacity: 1; }
 }
 </style>

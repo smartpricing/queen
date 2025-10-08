@@ -25,14 +25,14 @@
         
         <Button 
           icon="pi pi-refresh" 
-          class="p-button-text p-button-plain"
+          class="p-button-text p-button-plain header-btn"
           v-tooltip="'Refresh'"
           @click="handleRefresh"
         />
         
         <Button 
           icon="pi pi-cog" 
-          class="p-button-text p-button-plain"
+          class="p-button-text p-button-plain header-btn"
           v-tooltip="'Settings'"
         />
       </div>
@@ -81,10 +81,11 @@ const handleRefresh = () => {
 
 <style scoped>
 .app-header {
-  height: 60px;
-  background: white;
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.08);
-  border-bottom: 1px solid var(--gray-200);
+  height: 64px;
+  background: rgba(28, 25, 23, 0.95);  /* stone-900 with opacity */
+  backdrop-filter: blur(12px);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.3);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.05);
   position: sticky;
   top: 0;
   z-index: 100;
@@ -108,6 +109,12 @@ const handleRefresh = () => {
 .menu-toggle {
   display: flex !important;
   margin-right: 1rem;
+  color: var(--surface-600) !important;
+}
+
+.menu-toggle:hover {
+  color: var(--primary-500) !important;
+  background: rgba(236, 72, 153, 0.1) !important;
 }
 
 .logo {
@@ -116,17 +123,21 @@ const handleRefresh = () => {
   gap: 0.5rem;
   font-size: 1rem;
   font-weight: 600;
-  color: var(--primary-color);
+  background: var(--gradient-primary);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
 }
 
 .logo-icon {
   font-size: 1.25rem;
+  color: var(--primary-500);
 }
 
 .page-title {
   font-size: 1.125rem;
   font-weight: 600;
-  color: var(--gray-800);
+  color: var(--surface-700);
   margin: 0;
 }
 
@@ -142,12 +153,12 @@ const handleRefresh = () => {
 }
 
 .connection-status.connected {
-  background: rgba(16, 185, 129, 0.1);
+  background: rgba(16, 185, 129, 0.15);
   color: var(--success-color);
 }
 
 .connection-status.disconnected {
-  background: rgba(239, 68, 68, 0.1);
+  background: rgba(239, 68, 68, 0.15);
   color: var(--danger-color);
 }
 
@@ -169,6 +180,15 @@ const handleRefresh = () => {
   50% {
     opacity: 0.5;
   }
+}
+
+.header-btn {
+  color: var(--surface-500) !important;
+}
+
+.header-btn:hover {
+  color: var(--primary-500) !important;
+  background: rgba(236, 72, 153, 0.1) !important;
 }
 
 /* Responsive */

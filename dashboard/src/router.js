@@ -6,7 +6,6 @@ const Queues = () => import('./views/Queues.vue')
 const QueueDetail = () => import('./views/QueueDetail.vue')
 const Analytics = () => import('./views/Analytics.vue')
 const Messages = () => import('./views/Messages.vue')
-const System = () => import('./views/System.vue')
 
 const routes = [
   {
@@ -22,7 +21,7 @@ const routes = [
     meta: { title: 'Queues' }
   },
   {
-    path: '/queues/:queueName',
+    path: '/queues/:name',
     name: 'queue-detail',
     component: QueueDetail,
     meta: { title: 'Queue Detail' }
@@ -39,12 +38,6 @@ const routes = [
     component: Messages,
     meta: { title: 'Messages' }
   },
-  {
-    path: '/system',
-    name: 'system',
-    component: System,
-    meta: { title: 'System' }
-  }
 ]
 
 const router = createRouter({

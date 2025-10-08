@@ -15,17 +15,24 @@ import router from './router.js'
 
 const app = createApp(App)
 
-// Configure PrimeVue
+// Configure PrimeVue with Aura Dark Theme
 app.use(PrimeVue, {
   theme: {
     preset: Aura,
     options: {
-      prefix: 'p',
-      darkModeSelector: '.dark-mode',
-      cssLayer: false
+      primary: 'rose',
+      darkModeSelector: '.dark',
+      cssLayer: {
+        name: 'primevue',
+        order: 'primevue'
+      }
     }
-  }
+  },
+  ripple: true
 })
+
+// Set dark mode by default
+document.documentElement.classList.add('dark')
 
 app.use(ToastService)
 app.use(ConfirmationService)

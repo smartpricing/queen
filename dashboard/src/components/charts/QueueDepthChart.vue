@@ -1,19 +1,34 @@
 <template>
-  <div class="queue-depth-chart">
-    <Chart 
-      v-if="!loading && chartData && chartData.labels && chartData.labels.length > 0"
-      type="bar" 
-      :data="chartData" 
-      :options="chartOptions"
-      class="chart"
-    />
-    <div v-else-if="loading" class="chart-loading">
-      <ProgressSpinner />
-      <span>Loading chart data...</span>
+  <div class="chart-container">
+    <div class="chart-header">
+      <h3 class="chart-title">{{ title || 'Queue Depth' }}</h3>
+      <div class="chart-actions">
+        <Button 
+          icon="pi pi-refresh" 
+          class="p-button-text p-button-sm"
+          @click="$emit('refresh')"
+          v-tooltip="'Refresh'"
+        />
+      </div>
     </div>
-    <div v-else class="chart-empty">
-      <i class="pi pi-chart-bar empty-icon"></i>
-      <span>No queues with messages</span>
+    
+    <div class="queue-depth-chart">
+      <Chart 
+        v-if="!loading && chartDataWithTheme && chartDataWithTheme.labels && chartDataWithTheme.labels.length > 0"
+        :key="`queue-depth-${chartDataWithTheme.labels.length}`"
+        type="bar" 
+        :data="chartDataWithTheme" 
+        :options="chartOptionsWithTheme"
+        class="chart"
+      />
+      <div v-else-if="loading" class="chart-loading">
+        <ProgressSpinner />
+        <span>Loading chart data...</span>
+      </div>
+      <div v-else class="chart-empty">
+        <i class="pi pi-chart-bar empty-icon"></i>
+        <span>No queues with messages</span>
+      </div>
     </div>
   </div>
 </template>
@@ -21,6 +36,7 @@
 <script setup>
 import { computed } from 'vue'
 import Chart from 'primevue/chart'
+import Button from 'primevue/button'
 import ProgressSpinner from 'primevue/progressspinner'
 
 // Import and register Chart.js components
@@ -44,6 +60,10 @@ ChartJS.register(
 )
 
 const props = defineProps({
+  title: {
+    type: String,
+    default: null
+  },
   data: {
     type: Object,
     default: null
@@ -54,9 +74,35 @@ const props = defineProps({
   }
 })
 
-const chartData = computed(() => props.data)
+const emit = defineEmits(['refresh'])
 
-const chartOptions = {
+// Apply dark theme colors to chart data
+const chartDataWithTheme = computed(() => {
+  if (!props.data) return null
+  
+  // Create gradient colors for each dataset
+  const colors = {
+    pending: '#f59e0b',
+    processing: '#06b6d4',
+    completed: '#10b981',
+    failed: '#ef4444',
+    dead_letter: '#64748b'
+  }
+  
+  return {
+    labels: props.data.labels,
+    datasets: props.data.datasets?.map(dataset => ({
+      ...dataset,
+      backgroundColor: colors[dataset.label?.toLowerCase().replace(' ', '_')] || '#ec4899',
+      borderColor: 'transparent',
+      borderWidth: 0,
+      borderRadius: 4
+    })) || []
+  }
+})
+
+// Dark theme chart options
+const chartOptionsWithTheme = computed(() => ({
   responsive: true,
   maintainAspectRatio: false,
   plugins: {
@@ -66,14 +112,24 @@ const chartOptions = {
         padding: 15,
         usePointStyle: true,
         font: {
-          size: 12
-        }
+          size: 11,
+          family: 'Inter'
+        },
+        color: '#cbd5e1'
       }
     },
     tooltip: {
+      backgroundColor: 'rgba(30, 41, 59, 0.95)',
+      titleColor: '#f1f5f9',
+      bodyColor: '#cbd5e1',
+      borderColor: 'rgba(236, 72, 153, 0.3)',
+      borderWidth: 1,
+      cornerRadius: 8,
+      padding: 12,
+      displayColors: true,
       callbacks: {
         label: (context) => {
-          return `${context.dataset.label}: ${context.parsed.y} messages`
+          return `${context.dataset.label}: ${context.parsed.y.toLocaleString()} messages`
         }
       }
     }
@@ -85,26 +141,34 @@ const chartOptions = {
         display: false
       },
       ticks: {
+        color: '#94a3b8',
         maxRotation: 45,
-        minRotation: 45,
+        minRotation: 0,
         font: {
           size: 11
         },
         callback: function(value, index) {
           const label = this.getLabelForValue(value)
-          return label.length > 15 ? label.substr(0, 15) + '...' : label
+          return label && label.length > 15 ? label.substr(0, 15) + '...' : (label || '')
         }
+      },
+      border: {
+        display: false
       }
     },
     y: {
       stacked: true,
       beginAtZero: true,
       grid: {
-        color: 'rgba(0, 0, 0, 0.05)'
+        color: 'rgba(255, 255, 255, 0.03)',
+        drawBorder: false
       },
       ticks: {
+        color: '#94a3b8',
         callback: (value) => {
-          if (value >= 1000) {
+          if (value >= 1000000) {
+            return (value / 1000000).toFixed(1) + 'M'
+          } else if (value >= 1000) {
             return (value / 1000).toFixed(1) + 'K'
           }
           return value
@@ -112,15 +176,51 @@ const chartOptions = {
         font: {
           size: 11
         }
+      },
+      border: {
+        display: false
       }
     }
+  },
+  animation: {
+    duration: 750,
+    easing: 'easeInOutQuart'
   }
-}
+}))
 </script>
 
 <style scoped>
-.queue-depth-chart {
+.chart-container {
+  background: transparent;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 16px;
+  padding: 1.5rem;
   height: 100%;
+  display: flex;
+  flex-direction: column;
+}
+
+.chart-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 1.5rem;
+}
+
+.chart-title {
+  font-size: 1.125rem;
+  font-weight: 600;
+  color: var(--surface-700);
+  margin: 0;
+}
+
+.chart-actions {
+  display: flex;
+  gap: 0.5rem;
+}
+
+.queue-depth-chart {
+  flex: 1;
   min-height: 300px;
   position: relative;
 }
@@ -137,11 +237,40 @@ const chartOptions = {
   align-items: center;
   justify-content: center;
   gap: 1rem;
-  color: var(--gray-500);
+  color: var(--surface-400);
 }
 
 .empty-icon {
   font-size: 3rem;
-  color: var(--gray-300);
+  color: var(--surface-300);
+}
+
+:deep(.p-button-sm) {
+  padding: 0.5rem;
+  font-size: 0.875rem;
+}
+
+:deep(.p-button-text) {
+  color: var(--surface-500);
+}
+
+:deep(.p-button-text:hover) {
+  background: rgba(236, 72, 153, 0.1);
+  color: var(--primary-500);
+}
+
+/* Responsive */
+@media (max-width: 768px) {
+  .chart-container {
+    padding: 1rem;
+  }
+  
+  .chart-title {
+    font-size: 1rem;
+  }
+  
+  .queue-depth-chart {
+    min-height: 250px;
+  }
 }
 </style>

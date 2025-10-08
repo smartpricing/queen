@@ -14,13 +14,13 @@
           <div class="feed-content">
             <div class="feed-title">{{ getEventTitle(event.event) }}</div>
             <div class="feed-details">
-              <span v-if="event.data.queue" class="feed-queue">
+              <span v-if="event.data && event.data.queue" class="feed-queue">
                 {{ event.data.queue }}
                 <span v-if="event.data.partition && event.data.partition !== 'Default'">
                   /{{ event.data.partition }}
                 </span>
               </span>
-              <span v-if="event.data.transactionId" class="feed-id">
+              <span v-if="event.data && event.data.transactionId" class="feed-id">
                 {{ event.data.transactionId.substring(0, 8) }}...
               </span>
             </div>
@@ -52,6 +52,7 @@ const props = defineProps({
 
 // Get event icon
 const getEventIcon = (eventType) => {
+  if (!eventType || typeof eventType !== 'string') return 'pi pi-info-circle'
   const icons = {
     'message.pushed': 'pi pi-plus',
     'message.processing': 'pi pi-spin pi-spinner',
@@ -68,6 +69,7 @@ const getEventIcon = (eventType) => {
 
 // Get event class for styling
 const getEventClass = (eventType) => {
+  if (!eventType || typeof eventType !== 'string') return 'event-default'
   if (eventType.includes('completed')) return 'event-success'
   if (eventType.includes('failed')) return 'event-danger'
   if (eventType.includes('processing')) return 'event-info'
@@ -77,6 +79,7 @@ const getEventClass = (eventType) => {
 
 // Get event title
 const getEventTitle = (eventType) => {
+  if (!eventType || typeof eventType !== 'string') return 'Unknown Event'
   const titles = {
     'message.pushed': 'Message Pushed',
     'message.processing': 'Processing Message',
@@ -113,27 +116,29 @@ const formatTime = (timestamp) => {
 .feed-items {
   display: flex;
   flex-direction: column;
-  gap: 0.75rem;
+  gap: 0.5rem;
 }
 
 .feed-item {
   display: flex;
   align-items: flex-start;
-  gap: 0.75rem;
-  padding: 0.75rem;
-  border-radius: var(--radius-md);
-  background: var(--gray-50);
+  gap: 1rem;
+  padding: 0.875rem;
+  border-radius: 8px;
+  background: var(--surface-0);
+  border: 1px solid rgba(255, 255, 255, 0.03);
   transition: all 0.2s ease;
 }
 
 .feed-item:hover {
-  background: var(--gray-100);
+  background: rgba(236, 72, 153, 0.05);
+  border-color: rgba(236, 72, 153, 0.1);
 }
 
 .feed-icon {
-  width: 32px;
-  height: 32px;
-  border-radius: 50%;
+  width: 36px;
+  height: 36px;
+  border-radius: 8px;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -142,28 +147,28 @@ const formatTime = (timestamp) => {
 }
 
 .event-primary {
-  background: rgba(59, 130, 246, 0.1);
-  color: var(--primary-color);
+  background: rgba(236, 72, 153, 0.15);
+  color: var(--primary-500);
 }
 
 .event-success {
-  background: rgba(16, 185, 129, 0.1);
+  background: rgba(16, 185, 129, 0.15);
   color: var(--success-color);
 }
 
 .event-info {
-  background: rgba(6, 182, 212, 0.1);
+  background: rgba(6, 182, 212, 0.15);
   color: var(--info-color);
 }
 
 .event-danger {
-  background: rgba(239, 68, 68, 0.1);
+  background: rgba(239, 68, 68, 0.15);
   color: var(--danger-color);
 }
 
 .event-default {
-  background: rgba(107, 114, 128, 0.1);
-  color: var(--gray-600);
+  background: rgba(148, 163, 184, 0.15);
+  color: var(--surface-400);
 }
 
 .feed-content {
@@ -173,9 +178,9 @@ const formatTime = (timestamp) => {
 
 .feed-title {
   font-size: 0.875rem;
-  font-weight: 600;
-  color: var(--gray-800);
-  margin-bottom: 0.25rem;
+  font-weight: 500;
+  color: var(--surface-600);
+  margin-bottom: 0.125rem;
 }
 
 .feed-details {
@@ -183,26 +188,27 @@ const formatTime = (timestamp) => {
   align-items: center;
   gap: 0.5rem;
   font-size: 0.75rem;
-  color: var(--gray-600);
+  color: var(--surface-400);
   margin-bottom: 0.25rem;
 }
 
 .feed-queue {
-  background: var(--gray-200);
+  background: rgba(236, 72, 153, 0.1);
+  color: var(--primary-500);
   padding: 0.125rem 0.5rem;
-  border-radius: var(--radius-sm);
+  border-radius: 4px;
   font-weight: 500;
 }
 
 .feed-id {
-  font-family: monospace;
+  font-family: 'Courier New', monospace;
   font-size: 0.75rem;
-  color: var(--gray-500);
+  color: var(--surface-400);
 }
 
 .feed-time {
   font-size: 0.75rem;
-  color: var(--gray-500);
+  color: var(--surface-300);
 }
 
 .feed-empty {
@@ -212,20 +218,20 @@ const formatTime = (timestamp) => {
   align-items: center;
   justify-content: center;
   gap: 0.5rem;
-  color: var(--gray-400);
+  color: var(--surface-400);
   padding: 2rem;
   text-align: center;
 }
 
 .empty-icon {
   font-size: 3rem;
-  color: var(--gray-300);
+  color: var(--surface-300);
   margin-bottom: 0.5rem;
 }
 
 .empty-subtitle {
   font-size: 0.875rem;
-  color: var(--gray-400);
+  color: var(--surface-300);
 }
 
 .fade-in {
