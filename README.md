@@ -71,7 +71,7 @@ npm start
 ### Basic Usage
 
 ```javascript
-import { createQueenClient } from './src/client/queenClient.js';
+import { createQueenClient } from '@dev.smartpricing/queen'
 
 const client = createQueenClient({
   baseUrl: 'http://localhost:6632'
