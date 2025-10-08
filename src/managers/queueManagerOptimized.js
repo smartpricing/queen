@@ -185,12 +185,13 @@ export const createOptimizedQueueManager = (pool, resourceCache, eventManager) =
       let result;
       
       if (partition) {
-        // Specific partition: use a simpler, more efficient query with delayed processing support
+        // Specific partition: use a simpler, more efficient query with delayed processing and windowBuffer support
         result = await client.query(`
           WITH partition_info AS (
             SELECT p.id, p.name as partition_name, p.options, p.priority,
                    q.name as queue_name,
-                   COALESCE((p.options->>'delayedProcessing')::int, 0) as delayed_processing
+                   COALESCE((p.options->>'delayedProcessing')::int, 0) as delayed_processing,
+                   COALESCE((p.options->>'windowBuffer')::int, 0) as window_buffer
             FROM queen.partitions p
             JOIN queen.queues q ON p.queue_id = q.id
             WHERE q.name = $1 AND p.name = $2
@@ -201,12 +202,18 @@ export const createOptimizedQueueManager = (pool, resourceCache, eventManager) =
           JOIN partition_info pi ON m.partition_id = pi.id
           WHERE m.status = 'pending'
             AND m.created_at <= NOW() - INTERVAL '1 second' * pi.delayed_processing
+            AND (pi.window_buffer = 0 OR NOT EXISTS (
+              SELECT 1 FROM queen.messages m2 
+              WHERE m2.partition_id = pi.id 
+                AND m2.status = 'pending'
+                AND m2.created_at > NOW() - INTERVAL '1 second' * pi.window_buffer
+            ))
           ORDER BY m.created_at ASC
           LIMIT $3
           FOR UPDATE OF m SKIP LOCKED
         `, [queue, partition, batch]);
       } else {
-        // Queue level: get from any partition in the queue (oldest first across all partitions) with delayed processing
+        // Queue level: get from any partition in the queue with priority ordering, then FIFO within partition
         result = await client.query(`
           SELECT m.*, p.name as partition_name, q.name as queue_name, 
                  p.options, p.priority
@@ -216,7 +223,13 @@ export const createOptimizedQueueManager = (pool, resourceCache, eventManager) =
           WHERE q.name = $1
             AND m.status = 'pending'
             AND m.created_at <= NOW() - INTERVAL '1 second' * COALESCE((p.options->>'delayedProcessing')::int, 0)
-          ORDER BY m.created_at ASC
+            AND (COALESCE((p.options->>'windowBuffer')::int, 0) = 0 OR NOT EXISTS (
+              SELECT 1 FROM queen.messages m2 
+              WHERE m2.partition_id = p.id 
+                AND m2.status = 'pending'
+                AND m2.created_at > NOW() - INTERVAL '1 second' * COALESCE((p.options->>'windowBuffer')::int, 0)
+            ))
+          ORDER BY p.priority DESC, m.created_at ASC
           LIMIT $2
           FOR UPDATE OF m SKIP LOCKED
         `, [queue, batch]);
@@ -262,7 +275,7 @@ export const createOptimizedQueueManager = (pool, resourceCache, eventManager) =
             JOIN queen.queues q ON p.queue_id = q.id
             WHERE q.name = $1
               AND m.status = 'pending'
-            ORDER BY m.created_at ASC
+            ORDER BY p.priority DESC, m.created_at ASC
             LIMIT $2
             FOR UPDATE OF m SKIP LOCKED
           `, [queue, batch]);
@@ -296,7 +309,7 @@ export const createOptimizedQueueManager = (pool, resourceCache, eventManager) =
         partition: row.partition_name,
         data: row.payload,
         retryCount: row.retry_count || 0,
-        priority: row.priority || 0,
+        priority: row.priority || 0, // partition priority
         createdAt: row.created_at,
         lockedAt: row.locked_at,
         options: row.options || {}
@@ -314,12 +327,18 @@ export const createOptimizedQueueManager = (pool, resourceCache, eventManager) =
     return withTransaction(pool, async (client) => {
       let query = `
         SELECT m.*, p.name as partition_name, q.name as queue_name,
-               p.options, p.priority, q.namespace, q.task
+               p.options, p.priority as partition_priority, q.namespace, q.task, q.priority as queue_priority
         FROM queen.messages m
         JOIN queen.partitions p ON m.partition_id = p.id
         JOIN queen.queues q ON p.queue_id = q.id
         WHERE m.status = 'pending'
           AND m.created_at <= NOW() - INTERVAL '1 second' * COALESCE((p.options->>'delayedProcessing')::int, 0)
+          AND (COALESCE((p.options->>'windowBuffer')::int, 0) = 0 OR NOT EXISTS (
+            SELECT 1 FROM queen.messages m2 
+            WHERE m2.partition_id = p.id 
+              AND m2.status = 'pending'
+              AND m2.created_at > NOW() - INTERVAL '1 second' * COALESCE((p.options->>'windowBuffer')::int, 0)
+          ))
       `;
       
       const params = [];
@@ -333,7 +352,8 @@ export const createOptimizedQueueManager = (pool, resourceCache, eventManager) =
       }
       
       params.push(batch);
-      query += ` ORDER BY m.created_at ASC LIMIT $${params.length} FOR UPDATE OF m SKIP LOCKED`;
+      // Priority-based ordering: highest queue priority first, then highest partition priority, then FIFO within partition
+      query += ` ORDER BY q.priority DESC, p.priority DESC, m.created_at ASC LIMIT $${params.length} FOR UPDATE OF m SKIP LOCKED`;
       
       let result = await client.query(query, params);
       
@@ -376,7 +396,8 @@ export const createOptimizedQueueManager = (pool, resourceCache, eventManager) =
         task: row.task,
         data: row.payload,
         retryCount: row.retry_count || 0,
-        priority: row.priority || 0,
+        priority: row.partition_priority || 0, // partition priority
+        queuePriority: row.queue_priority || 0, // queue priority
         createdAt: row.created_at,
         lockedAt: row.locked_at,
         options: row.options || {}

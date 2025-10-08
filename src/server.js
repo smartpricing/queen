@@ -28,12 +28,6 @@ const createOptimizedPool = () => {
   const idleTimeout = parseInt(process.env.DB_IDLE_TIMEOUT) || 30000;
   const connectionTimeout = parseInt(process.env.DB_CONNECTION_TIMEOUT) || 2000;
   
-  if (poolSize >= 50) {
-    console.log('🚀 High-performance mode enabled');
-    console.log(`   Pool Size: ${poolSize}`);
-    console.log(`   Connection Timeout: ${connectionTimeout}ms`);
-  }
-  
   return new Pool({
     user: process.env.PG_USER || 'postgres',
     host: process.env.PG_HOST || 'localhost',
@@ -1058,29 +1052,11 @@ app.listen(HOST, PORT, (token) => {
   if (token) {
     console.log(`Queen server listening on http://${HOST}:${PORT}`);
     console.log(`WebSocket dashboard available at ws://${HOST}:${PORT}/ws/dashboard`);
-    console.log('⚡ Optimized queue manager enabled');
-    console.log('📊 Monitor performance at /metrics');
-    
-    const poolSize = parseInt(process.env.DB_POOL_SIZE || '20');
-    if (poolSize >= 50) {
-      console.log('🚀 High-performance mode: Pool size =', poolSize);
-      console.log('📈 Target: 10,000+ messages/second');
-    }
   } else {
     console.log(`Failed to start server on port ${PORT}`);
     process.exit(1);
   }
 });
-
-// Performance monitoring log (only when processing messages)
-setInterval(() => {
-  if (messageCount > 0) {
-    const uptime = (Date.now() - startTime) / 1000;
-    const rps = requestCount / uptime;
-    const mps = messageCount / uptime;
-    console.log(`📊 Performance: ${requestCount} requests, ${messageCount} messages, ${rps.toFixed(1)} req/s, ${mps.toFixed(1)} msg/s`);
-  }
-}, 30000); // Log every 30 seconds
 
 // Graceful shutdown
 const shutdown = async (signal) => {

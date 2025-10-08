@@ -9,6 +9,7 @@ CREATE TABLE IF NOT EXISTS queen.queues (
     name VARCHAR(255) UNIQUE NOT NULL,
     namespace VARCHAR(255),  -- optional grouping
     task VARCHAR(255),       -- optional grouping
+    priority INTEGER DEFAULT 0,  -- Queue priority (higher = processed first)
     created_at TIMESTAMP DEFAULT NOW()
 );
 
@@ -43,9 +44,12 @@ CREATE TABLE IF NOT EXISTS queen.messages (
 
 -- Indexes for queues
 CREATE INDEX IF NOT EXISTS idx_queues_name ON queen.queues(name);
+CREATE INDEX IF NOT EXISTS idx_queues_priority ON queen.queues(priority DESC);
 CREATE INDEX IF NOT EXISTS idx_queues_namespace ON queen.queues(namespace) WHERE namespace IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_queues_task ON queen.queues(task) WHERE task IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_queues_namespace_task ON queen.queues(namespace, task) WHERE namespace IS NOT NULL AND task IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_queues_namespace_priority ON queen.queues(namespace, priority DESC) WHERE namespace IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_queues_task_priority ON queen.queues(task, priority DESC) WHERE task IS NOT NULL;
 
 -- Indexes for partitions
 CREATE INDEX IF NOT EXISTS idx_partitions_queue_name ON queen.partitions(queue_id, name);

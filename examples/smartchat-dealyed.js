@@ -11,7 +11,8 @@ await client.configure({
     queue: 'htmls-delayed-02',
     partition: 'html-02',  // Use 'Default' instead of 0
     options: {
-      delayedProcessing: 10,  // Don't process messages until 60 seconds old
+      windowBuffer: 10,
+      //delayedProcessing: 10,  // Don't process messages until 60 seconds old
       leaseTime: 300,
       retryLimit: 3
     }
