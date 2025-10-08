@@ -581,6 +581,34 @@ app.get('/api/v1/analytics/throughput', (res, req) => {
   });
 });
 
+app.get('/api/v1/analytics/queue-lag', (res, req) => {
+  const query = new URLSearchParams(req.getQuery());
+  const queue = query.get('queue');
+  const namespace = query.get('namespace');
+  const task = query.get('task');
+  
+  let aborted = false;
+  res.onAborted(() => {
+    aborted = true;
+    console.log('Queue lag request aborted');
+  });
+  
+  analyticsRoutes.getQueueLag({ queue, namespace, task }).then(result => {
+    if (aborted) return;
+    res.cork(() => {
+      setCorsHeaders(res);
+      res.writeStatus('200').end(JSON.stringify(result));
+    });
+  }).catch(error => {
+    if (aborted) return;
+    console.error('Queue lag error:', error);
+    res.cork(() => {
+      setCorsHeaders(res);
+      res.writeStatus('500').end(JSON.stringify({ error: error.message }));
+    });
+  });
+});
+
 // Queue stats route
 app.get('/api/v1/analytics/queue-stats', (res, req) => {
   const query = new URLSearchParams(req.getQuery());

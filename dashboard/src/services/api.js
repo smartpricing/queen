@@ -120,6 +120,10 @@ class ApiService {
     return this.get('/analytics/queue-stats', params)
   }
 
+  async getQueueLag(params = {}) {
+    return this.get('/analytics/queue-lag', params)
+  }
+
   // Messages
   async getMessages(params = {}) {
     return this.get('/messages', params)

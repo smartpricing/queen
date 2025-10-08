@@ -491,12 +491,94 @@ export const createAnalyticsRoutes = (queueManager) => {
     }
   };
   
+  const getQueueLag = async (filters = {}) => {
+    const lagStats = await queueManager.getQueueLag(filters);
+    
+    // Group by queue for aggregation
+    const queueMap = new Map();
+    
+    lagStats.forEach(row => {
+      if (!queueMap.has(row.queue)) {
+        queueMap.set(row.queue, {
+          queue: row.queue,
+          namespace: row.namespace,
+          task: row.task,
+          partitions: [],
+          totals: {
+            pendingCount: 0,
+            processingCount: 0,
+            totalBacklog: 0,
+            completedMessages: 0,
+            avgProcessingTimeSeconds: 0,
+            medianProcessingTimeSeconds: 0,
+            p95ProcessingTimeSeconds: 0,
+            estimatedLagSeconds: 0,
+            medianLagSeconds: 0,
+            p95LagSeconds: 0
+          }
+        });
+      }
+      
+      const queueData = queueMap.get(row.queue);
+      queueData.partitions.push({
+        name: row.partition,
+        stats: row.stats
+      });
+      
+      // Aggregate totals (weighted averages for processing times)
+      const currentTotal = queueData.totals.completedMessages;
+      const newTotal = currentTotal + row.stats.completedMessages;
+      
+      if (newTotal > 0) {
+        // Weighted average for processing times
+        queueData.totals.avgProcessingTimeSeconds = 
+          (queueData.totals.avgProcessingTimeSeconds * currentTotal + 
+           row.stats.avgProcessingTimeSeconds * row.stats.completedMessages) / newTotal;
+        queueData.totals.medianProcessingTimeSeconds = 
+          (queueData.totals.medianProcessingTimeSeconds * currentTotal + 
+           row.stats.medianProcessingTimeSeconds * row.stats.completedMessages) / newTotal;
+        queueData.totals.p95ProcessingTimeSeconds = 
+          Math.max(queueData.totals.p95ProcessingTimeSeconds, row.stats.p95ProcessingTimeSeconds);
+      }
+      
+      // Sum up counts and lags
+      queueData.totals.pendingCount += row.stats.pendingCount;
+      queueData.totals.processingCount += row.stats.processingCount;
+      queueData.totals.totalBacklog += row.stats.totalBacklog;
+      queueData.totals.completedMessages = newTotal;
+      queueData.totals.estimatedLagSeconds += row.stats.estimatedLagSeconds;
+      queueData.totals.medianLagSeconds += row.stats.medianLagSeconds;
+      queueData.totals.p95LagSeconds += row.stats.p95LagSeconds;
+    });
+    
+    // Add human-readable formats to totals
+    Array.from(queueMap.values()).forEach(queueData => {
+      const formatDuration = (seconds) => {
+        if (seconds === 0) return '0s';
+        if (seconds < 60) return `${seconds.toFixed(1)}s`;
+        if (seconds < 3600) return `${Math.floor(seconds / 60)}m ${Math.floor(seconds % 60)}s`;
+        if (seconds < 86400) return `${Math.floor(seconds / 3600)}h ${Math.floor((seconds % 3600) / 60)}m`;
+        return `${Math.floor(seconds / 86400)}d ${Math.floor((seconds % 86400) / 3600)}h`;
+      };
+      
+      queueData.totals.estimatedLag = formatDuration(queueData.totals.estimatedLagSeconds);
+      queueData.totals.medianLag = formatDuration(queueData.totals.medianLagSeconds);
+      queueData.totals.p95Lag = formatDuration(queueData.totals.p95LagSeconds);
+      queueData.totals.avgProcessingTime = formatDuration(queueData.totals.avgProcessingTimeSeconds);
+      queueData.totals.medianProcessingTime = formatDuration(queueData.totals.medianProcessingTimeSeconds);
+      queueData.totals.p95ProcessingTime = formatDuration(queueData.totals.p95ProcessingTimeSeconds);
+    });
+    
+    return { queues: Array.from(queueMap.values()) };
+  };
+
   return {
     getQueues,
     getQueueStats,
     getNamespaceStats,
     getTaskStats,
     getQueueDepths,
-    getThroughput
+    getThroughput,
+    getQueueLag
   };
 };

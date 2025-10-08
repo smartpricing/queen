@@ -185,11 +185,12 @@ export const createOptimizedQueueManager = (pool, resourceCache, eventManager) =
       let result;
       
       if (partition) {
-        // Specific partition: use a simpler, more efficient query
+        // Specific partition: use a simpler, more efficient query with delayed processing support
         result = await client.query(`
           WITH partition_info AS (
             SELECT p.id, p.name as partition_name, p.options, p.priority,
-                   q.name as queue_name
+                   q.name as queue_name,
+                   COALESCE((p.options->>'delayedProcessing')::int, 0) as delayed_processing
             FROM queen.partitions p
             JOIN queen.queues q ON p.queue_id = q.id
             WHERE q.name = $1 AND p.name = $2
@@ -199,12 +200,13 @@ export const createOptimizedQueueManager = (pool, resourceCache, eventManager) =
           FROM queen.messages m
           JOIN partition_info pi ON m.partition_id = pi.id
           WHERE m.status = 'pending'
+            AND m.created_at <= NOW() - INTERVAL '1 second' * pi.delayed_processing
           ORDER BY m.created_at ASC
           LIMIT $3
           FOR UPDATE OF m SKIP LOCKED
         `, [queue, partition, batch]);
       } else {
-        // Queue level: get from any partition in the queue (oldest first across all partitions)
+        // Queue level: get from any partition in the queue (oldest first across all partitions) with delayed processing
         result = await client.query(`
           SELECT m.*, p.name as partition_name, q.name as queue_name, 
                  p.options, p.priority
@@ -213,6 +215,7 @@ export const createOptimizedQueueManager = (pool, resourceCache, eventManager) =
           JOIN queen.queues q ON p.queue_id = q.id
           WHERE q.name = $1
             AND m.status = 'pending'
+            AND m.created_at <= NOW() - INTERVAL '1 second' * COALESCE((p.options->>'delayedProcessing')::int, 0)
           ORDER BY m.created_at ASC
           LIMIT $2
           FOR UPDATE OF m SKIP LOCKED
@@ -316,6 +319,7 @@ export const createOptimizedQueueManager = (pool, resourceCache, eventManager) =
         JOIN queen.partitions p ON m.partition_id = p.id
         JOIN queen.queues q ON p.queue_id = q.id
         WHERE m.status = 'pending'
+          AND m.created_at <= NOW() - INTERVAL '1 second' * COALESCE((p.options->>'delayedProcessing')::int, 0)
       `;
       
       const params = [];
@@ -593,6 +597,147 @@ export const createOptimizedQueueManager = (pool, resourceCache, eventManager) =
     
     return result.rowCount;
   };
+
+  // Get queue lag statistics
+  const getQueueLag = async (filters = {}) => {
+    const { queue, namespace, task } = filters;
+    
+    let query = `
+      WITH queue_stats AS (
+        SELECT 
+          q.name as queue,
+          q.namespace,
+          q.task,
+          p.name as partition,
+          COUNT(CASE WHEN m.status = 'pending' THEN 1 END) as pending_count,
+          COUNT(CASE WHEN m.status = 'processing' THEN 1 END) as processing_count
+        FROM queen.queues q
+        LEFT JOIN queen.partitions p ON p.queue_id = q.id
+        LEFT JOIN queen.messages m ON m.partition_id = p.id
+        WHERE 1=1
+    `;
+    
+    const conditions = [];
+    const params = [];
+    
+    if (queue) {
+      conditions.push(`q.name = $${params.length + 1}`);
+      params.push(queue);
+    }
+    if (namespace) {
+      conditions.push(`q.namespace = $${params.length + 1}`);
+      params.push(namespace);
+    }
+    if (task) {
+      conditions.push(`q.task = $${params.length + 1}`);
+      params.push(task);
+    }
+    
+    if (conditions.length > 0) {
+      query += ` AND ${conditions.join(' AND ')}`;
+    }
+    
+    query += `
+        GROUP BY q.name, q.namespace, q.task, p.name
+      ),
+      processing_times AS (
+        SELECT 
+          q.name as queue,
+          p.name as partition,
+          AVG(EXTRACT(EPOCH FROM (m.completed_at - m.created_at))) as avg_processing_time_seconds,
+          COUNT(*) as completed_messages,
+          PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY EXTRACT(EPOCH FROM (m.completed_at - m.created_at))) as median_processing_time_seconds,
+          PERCENTILE_CONT(0.95) WITHIN GROUP (ORDER BY EXTRACT(EPOCH FROM (m.completed_at - m.created_at))) as p95_processing_time_seconds
+        FROM queen.queues q
+        LEFT JOIN queen.partitions p ON p.queue_id = q.id
+        LEFT JOIN queen.messages m ON m.partition_id = p.id
+        WHERE m.status = 'completed' 
+          AND m.completed_at IS NOT NULL 
+          AND m.created_at IS NOT NULL
+          AND m.completed_at >= NOW() - INTERVAL '24 hours'  -- Only consider recent completions
+    `;
+    
+    if (conditions.length > 0) {
+      query += ` AND ${conditions.join(' AND ')}`;
+    }
+    
+    query += `
+        GROUP BY q.name, p.name
+        HAVING COUNT(*) >= 5  -- Only include queues with sufficient data
+      )
+      SELECT 
+        qs.queue,
+        qs.namespace,
+        qs.task,
+        qs.partition,
+        qs.pending_count,
+        qs.processing_count,
+        COALESCE(pt.avg_processing_time_seconds, 0) as avg_processing_time_seconds,
+        COALESCE(pt.median_processing_time_seconds, 0) as median_processing_time_seconds,
+        COALESCE(pt.p95_processing_time_seconds, 0) as p95_processing_time_seconds,
+        COALESCE(pt.completed_messages, 0) as completed_messages,
+        -- Calculate lag using average processing time
+        CASE 
+          WHEN pt.avg_processing_time_seconds > 0 THEN 
+            (qs.pending_count + qs.processing_count) * pt.avg_processing_time_seconds
+          ELSE 0 
+        END as estimated_lag_seconds,
+        -- Calculate lag using median processing time (more robust to outliers)
+        CASE 
+          WHEN pt.median_processing_time_seconds > 0 THEN 
+            (qs.pending_count + qs.processing_count) * pt.median_processing_time_seconds
+          ELSE 0 
+        END as median_lag_seconds,
+        -- Calculate worst-case lag using 95th percentile
+        CASE 
+          WHEN pt.p95_processing_time_seconds > 0 THEN 
+            (qs.pending_count + qs.processing_count) * pt.p95_processing_time_seconds
+          ELSE 0 
+        END as p95_lag_seconds
+      FROM queue_stats qs
+      LEFT JOIN processing_times pt ON qs.queue = pt.queue AND qs.partition = pt.partition
+      ORDER BY qs.queue, qs.partition
+    `;
+    
+    const result = await pool.query(query, params);
+    
+    // Transform the results into a more usable format
+    return result.rows.map(row => ({
+      queue: row.queue,
+      namespace: row.namespace,
+      task: row.task,
+      partition: row.partition,
+      stats: {
+        pendingCount: parseInt(row.pending_count) || 0,
+        processingCount: parseInt(row.processing_count) || 0,
+        totalBacklog: (parseInt(row.pending_count) || 0) + (parseInt(row.processing_count) || 0),
+        completedMessages: parseInt(row.completed_messages) || 0,
+        avgProcessingTimeSeconds: parseFloat(row.avg_processing_time_seconds) || 0,
+        medianProcessingTimeSeconds: parseFloat(row.median_processing_time_seconds) || 0,
+        p95ProcessingTimeSeconds: parseFloat(row.p95_processing_time_seconds) || 0,
+        estimatedLagSeconds: parseFloat(row.estimated_lag_seconds) || 0,
+        medianLagSeconds: parseFloat(row.median_lag_seconds) || 0,
+        p95LagSeconds: parseFloat(row.p95_lag_seconds) || 0,
+        // Human-readable lag estimates
+        estimatedLag: formatDuration(parseFloat(row.estimated_lag_seconds) || 0),
+        medianLag: formatDuration(parseFloat(row.median_lag_seconds) || 0),
+        p95Lag: formatDuration(parseFloat(row.p95_lag_seconds) || 0),
+        // Processing time in human-readable format
+        avgProcessingTime: formatDuration(parseFloat(row.avg_processing_time_seconds) || 0),
+        medianProcessingTime: formatDuration(parseFloat(row.median_processing_time_seconds) || 0),
+        p95ProcessingTime: formatDuration(parseFloat(row.p95_processing_time_seconds) || 0)
+      }
+    }));
+  };
+
+  // Helper function to format duration in human-readable format
+  const formatDuration = (seconds) => {
+    if (seconds === 0) return '0s';
+    if (seconds < 60) return `${seconds.toFixed(1)}s`;
+    if (seconds < 3600) return `${Math.floor(seconds / 60)}m ${Math.floor(seconds % 60)}s`;
+    if (seconds < 86400) return `${Math.floor(seconds / 3600)}h ${Math.floor((seconds % 3600) / 60)}m`;
+    return `${Math.floor(seconds / 86400)}d ${Math.floor((seconds % 86400) / 3600)}h`;
+  };
   
   return {
     pushMessages,
@@ -603,6 +748,7 @@ export const createOptimizedQueueManager = (pool, resourceCache, eventManager) =
     acknowledgeMessages,
     configureQueue,
     getQueueStats,
+    getQueueLag,
     reclaimExpiredLeases
   };
 };

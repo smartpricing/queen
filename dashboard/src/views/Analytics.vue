@@ -37,6 +37,11 @@
           </Column>
         </DataTable>
       </div>
+
+      <!-- Queue Lag Analysis -->
+      <div class="lag-chart-wrapper full-width">
+        <QueueLagChart />
+      </div>
     </div>
   </div>
 </template>
@@ -49,6 +54,7 @@ import Column from 'primevue/column'
 import Button from 'primevue/button'
 import Tag from 'primevue/tag'
 import ThroughputChart from '../components/charts/ThroughputChart.vue'
+import QueueLagChart from '../components/charts/QueueLagChart.vue'
 import api from '../services/api.js'
 import websocket from '../services/websocket.js'
 
@@ -643,6 +649,19 @@ onUnmounted(() => {
   color: var(--surface-600) !important;
   border-color: rgba(255, 255, 255, 0.05) !important;
   padding: 0.625rem 0.75rem;
+}
+
+.full-width {
+  grid-column: 1 / -1;
+}
+
+.lag-chart-wrapper {
+  background: #0a0a0a;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 16px;
+  overflow: hidden;
+  position: relative;
+  z-index: 1;
 }
 
 /* Responsive */

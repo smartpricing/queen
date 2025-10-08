@@ -373,7 +373,81 @@ Gets throughput metrics over the last hour (minute-by-minute).
 }
 ```
 
-#### 5.5 Queue-Specific Stats
+#### 5.5 Queue Lag Analysis
+**Endpoint:** `GET /api/v1/analytics/queue-lag`
+
+Gets queue lag metrics based on processing times and current backlog.
+
+**Query Parameters:**
+- `queue` (string): Filter by queue name
+- `namespace` (string): Filter by namespace
+- `task` (string): Filter by task
+
+**Response:**
+```json
+{
+  "queues": [
+    {
+      "queue": "emails",
+      "namespace": "production",
+      "task": "notifications",
+      "partitions": [
+        {
+          "name": "Default",
+          "stats": {
+            "pendingCount": 150,
+            "processingCount": 25,
+            "totalBacklog": 175,
+            "completedMessages": 1250,
+            "avgProcessingTimeSeconds": 2.5,
+            "medianProcessingTimeSeconds": 2.1,
+            "p95ProcessingTimeSeconds": 4.8,
+            "estimatedLagSeconds": 437.5,
+            "medianLagSeconds": 367.5,
+            "p95LagSeconds": 840.0,
+            "estimatedLag": "7m 17s",
+            "medianLag": "6m 7s",
+            "p95Lag": "14m 0s",
+            "avgProcessingTime": "2.5s",
+            "medianProcessingTime": "2.1s",
+            "p95ProcessingTime": "4.8s"
+          }
+        }
+      ],
+      "totals": {
+        "pendingCount": 150,
+        "processingCount": 25,
+        "totalBacklog": 175,
+        "completedMessages": 1250,
+        "avgProcessingTimeSeconds": 2.5,
+        "medianProcessingTimeSeconds": 2.1,
+        "p95ProcessingTimeSeconds": 4.8,
+        "estimatedLagSeconds": 437.5,
+        "medianLagSeconds": 367.5,
+        "p95LagSeconds": 840.0,
+        "estimatedLag": "7m 17s",
+        "medianLag": "6m 7s",
+        "p95Lag": "14m 0s",
+        "avgProcessingTime": "2.5s",
+        "medianProcessingTime": "2.1s",
+        "p95ProcessingTime": "4.8s"
+      }
+    }
+  ]
+}
+```
+
+**Lag Calculation:**
+- **Estimated Lag**: `(pending + processing) × average_processing_time`
+- **Median Lag**: `(pending + processing) × median_processing_time`
+- **95th Percentile Lag**: `(pending + processing) × p95_processing_time`
+
+**Notes:**
+- Only includes queues with at least 5 completed messages in the last 24 hours
+- Processing times are calculated from `completed_at - created_at` for completed messages
+- Lag represents the estimated time for all current backlog to be processed
+
+#### 5.6 Queue-Specific Stats
 **Endpoint:** `GET /api/v1/analytics/queue-stats`
 
 Gets statistics with flexible filtering.

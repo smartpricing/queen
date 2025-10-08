@@ -205,6 +205,16 @@ export const createQueenClient = (options = {}) => {
       if (filters.namespace) params.append('namespace', filters.namespace);
       if (filters.task) params.append('task', filters.task);
       return http.get(`/api/v1/analytics/queue-stats?${params}`);
+    },
+
+    // Get queue lag metrics
+    queueLag: async (filters = {}) => {
+      const params = new URLSearchParams();
+      if (filters.queue) params.append('queue', filters.queue);
+      if (filters.namespace) params.append('namespace', filters.namespace);
+      if (filters.task) params.append('task', filters.task);
+      const query = params.toString();
+      return http.get(`/api/v1/analytics/queue-lag${query ? '?' + query : ''}`);
     }
   };
   
