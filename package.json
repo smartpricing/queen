@@ -1,9 +1,10 @@
 {
-  "name": "queen",
+  "name": "@dev.smartpricing/queen",
   "version": "0.1.0",
   "type": "module",
   "description": "High-performance message queue backed by PostgreSQL",
-  "main": "src/server.js",
+  "main": "src/client/index.js",
+
   "scripts": {
     "start": "node src/server.js",
     "test:produce": "node test.js produce",
