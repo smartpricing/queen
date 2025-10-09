@@ -133,18 +133,52 @@ const setCorsHeaders = (res) => {
 // Helper to read JSON body
 const readJson = (res, cb, abortedRef) => {
   let buffer;
+  const maxBodySize = config.API.MAX_BODY_SIZE; // 10MB max body size
+  
   res.onData((ab, isLast) => {
     const chunk = Buffer.from(ab);
+    
+    // Check size limit
+    const currentSize = (buffer ? buffer.length : 0) + chunk.length;
+    if (currentSize > maxBodySize) {
+      if (abortedRef && abortedRef.aborted) return;
+      res.writeStatus(config.HTTP_STATUS.BAD_REQUEST.toString()).end(JSON.stringify({ error: 'Request body too large' }));
+      return;
+    }
+    
     if (isLast) {
       let json;
       try {
+        let fullData;
         if (buffer) {
-          json = JSON.parse(Buffer.concat([buffer, chunk]).toString());
+          fullData = Buffer.concat([buffer, chunk]);
         } else {
-          json = JSON.parse(chunk.toString());
+          fullData = chunk;
         }
+        
+        const jsonString = fullData.toString('utf8');
+        
+        // Debug large payloads
+        if (jsonString.length > 1000000) {
+          log(`Parsing large JSON: ${jsonString.length} bytes, starts with: ${jsonString.substring(0, 100)}`);
+        }
+        
+        json = JSON.parse(jsonString);
       } catch (e) {
         if (abortedRef && abortedRef.aborted) return;
+        // Log the actual error for debugging  
+        log(`JSON parse error: ${e.message}`);
+        
+        // Log what we're trying to parse for debugging
+        let sample = '';
+        if (buffer) {
+          const fullData = Buffer.concat([buffer, chunk]);
+          sample = fullData.toString('utf8').substring(0, 200);
+        } else {
+          sample = chunk.toString('utf8').substring(0, 200);
+        }
+        log(`Failed to parse data starting with: ${sample}`);
+        
         res.writeStatus(config.HTTP_STATUS.BAD_REQUEST.toString()).end(JSON.stringify({ error: 'Invalid JSON' }));
         return;
       }
@@ -153,7 +187,7 @@ const readJson = (res, cb, abortedRef) => {
       if (buffer) {
         buffer = Buffer.concat([buffer, chunk]);
       } else {
-        buffer = chunk;
+        buffer = Buffer.from(chunk);  // Ensure it's a Buffer
       }
     }
   });
@@ -263,11 +297,17 @@ app.get('/api/v1/pop/queue/:queue/partition/:partition', (res, req) => {
   });
   
   createPopRoute(queueManager, eventManager)(
-    { queue, partition },
+    { 
+      queue, 
+      partition,
+      consumerGroup: query.get('consumerGroup') || query.get('consumer_group')
+    },
     {
       wait: query.get('wait') === 'true',
       timeout: parseInt(query.get('timeout') || config.QUEUE.DEFAULT_TIMEOUT.toString()),
-      batch: parseInt(query.get('batch') || config.QUEUE.DEFAULT_BATCH_SIZE.toString())
+      batch: parseInt(query.get('batch') || config.QUEUE.DEFAULT_BATCH_SIZE.toString()),
+      subscriptionMode: query.get('subscriptionMode'),
+      subscriptionFrom: query.get('subscriptionFrom')
     }
   ).then(result => {
     if (aborted) return;
@@ -311,11 +351,16 @@ app.get('/api/v1/pop/queue/:queue', (res, req) => {
   });
   
   createPopRoute(queueManager, eventManager)(
-    { queue },
+    { 
+      queue,
+      consumerGroup: query.get('consumerGroup') || query.get('consumer_group')
+    },
     {
       wait: query.get('wait') === 'true',
       timeout: parseInt(query.get('timeout') || config.QUEUE.DEFAULT_TIMEOUT.toString()),
-      batch: parseInt(query.get('batch') || config.QUEUE.DEFAULT_BATCH_SIZE.toString())
+      batch: parseInt(query.get('batch') || config.QUEUE.DEFAULT_BATCH_SIZE.toString()),
+      subscriptionMode: query.get('subscriptionMode'),
+      subscriptionFrom: query.get('subscriptionFrom')
     }
   ).then(result => {
     if (aborted) return;
@@ -360,11 +405,17 @@ app.get('/api/v1/pop', (res, req) => {
   });
   
   createPopRoute(queueManager, eventManager)(
-    { namespace, task },
+    { 
+      namespace, 
+      task,
+      consumerGroup: query.get('consumerGroup') || query.get('consumer_group')
+    },
     {
       wait: query.get('wait') === 'true',
       timeout: parseInt(query.get('timeout') || config.QUEUE.DEFAULT_TIMEOUT.toString()),
-      batch: parseInt(query.get('batch') || config.QUEUE.DEFAULT_BATCH_SIZE.toString())
+      batch: parseInt(query.get('batch') || config.QUEUE.DEFAULT_BATCH_SIZE.toString()),
+      subscriptionMode: query.get('subscriptionMode'),
+      subscriptionFrom: query.get('subscriptionFrom')
     }
   ).then(result => {
     if (aborted) return;
@@ -448,7 +499,7 @@ app.post('/api/v1/ack/batch', (res, req) => {
   readJson(res, async (body) => {
     if (abortedRef.aborted) return;
     try {
-      const results = await queueManager.acknowledgeMessages(body.acknowledgments);
+      const results = await queueManager.acknowledgeMessages(body.acknowledgments, body.consumerGroup);
       if (abortedRef.aborted) return;
       
       // Emit events for each acknowledgment

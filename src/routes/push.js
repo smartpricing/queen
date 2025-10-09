@@ -11,8 +11,10 @@ export const createPushRoute = (queueManager) => {
       if (!item.queue) {
         throw new Error('Each item must have a queue');
       }
-      if (!item.payload) {
-        throw new Error('Each item must have a payload');
+      // Allow missing, null or undefined payloads - they'll be stored as null in JSONB
+      // If payload is not provided, set it to null
+      if (!('payload' in item)) {
+        item.payload = null;
       }
       // partition is optional, defaults to "Default"
     }

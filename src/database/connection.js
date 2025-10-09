@@ -48,10 +48,14 @@ export const initDatabase = async (pool) => {
 };
 
 // Helper for transactions
-export const withTransaction = async (pool, callback) => {
+export const withTransaction = async (pool, callback, isolationLevel = null) => {
   const client = await pool.connect();
   try {
-    await client.query('BEGIN');
+    if (isolationLevel) {
+      await client.query(`BEGIN ISOLATION LEVEL ${isolationLevel}`);
+    } else {
+      await client.query('BEGIN');
+    }
     const result = await callback(client);
     await client.query('COMMIT');
     return result;

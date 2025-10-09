@@ -116,6 +116,7 @@ export const CLIENT = {
 
 // API Configuration
 export const API = {
+  MAX_BODY_SIZE: parseInt(process.env.MAX_BODY_SIZE) || 10 * 1024 * 1024, // 10MB max body size
   // Pagination
   DEFAULT_LIMIT: parseInt(process.env.API_DEFAULT_LIMIT) || 100,
   MAX_LIMIT: parseInt(process.env.API_MAX_LIMIT) || 1000,

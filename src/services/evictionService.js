@@ -8,22 +8,31 @@ const EVICTION_INTERVAL = config.JOBS.EVICTION_INTERVAL;
 const evictMessages = async (client, queueName, maxWaitTimeSeconds) => {
   if (!maxWaitTimeSeconds || maxWaitTimeSeconds <= 0) return 0;
   
+  // For the new schema, we need to update or create status entries for evicted messages
   const result = await client.query(`
     WITH queue_partitions AS (
       SELECT p.id
       FROM queen.partitions p
       JOIN queen.queues q ON p.queue_id = q.id
       WHERE q.name = $1
+    ),
+    eligible_messages AS (
+      SELECT m.id
+      FROM queen.messages m
+      JOIN queue_partitions qp ON m.partition_id = qp.id
+      LEFT JOIN queen.messages_status ms ON m.id = ms.message_id AND ms.consumer_group IS NULL
+      WHERE m.created_at < NOW() - INTERVAL '1 second' * $2
+        AND (ms.status = 'pending' OR ms.status IS NULL)
     )
-    UPDATE queen.messages m
-    SET status = 'evicted',
-        completed_at = NOW(),
-        error_message = 'Message exceeded maximum wait time'
-    FROM queue_partitions qp
-    WHERE m.partition_id = qp.id
-      AND m.status = 'pending'
-      AND m.created_at < NOW() - INTERVAL '1 second' * $2
-    RETURNING m.id
+    INSERT INTO queen.messages_status (message_id, consumer_group, status, completed_at, error_message)
+    SELECT id, NULL, 'evicted', NOW(), 'Message exceeded maximum wait time'
+    FROM eligible_messages
+    ON CONFLICT (message_id, consumer_group) 
+    DO UPDATE SET 
+      status = 'evicted',
+      completed_at = NOW(),
+      error_message = 'Message exceeded maximum wait time'
+    RETURNING message_id
   `, [queueName, maxWaitTimeSeconds]);
   
   return result.rowCount || 0;

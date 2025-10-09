@@ -13,11 +13,12 @@ export const createResourcesRoutes = (pool) => {
         q.created_at as queue_created_at,
         COUNT(DISTINCT p.id) as partition_count,
         COUNT(DISTINCT m.id) as message_count,
-        COUNT(DISTINCT CASE WHEN m.status = 'pending' THEN m.id END) as pending_count,
-        COUNT(DISTINCT CASE WHEN m.status = 'processing' THEN m.id END) as processing_count
+        COUNT(DISTINCT CASE WHEN ms.status = 'pending' THEN m.id END) as pending_count,
+        COUNT(DISTINCT CASE WHEN ms.status = 'processing' THEN m.id END) as processing_count
       FROM queen.queues q
       LEFT JOIN queen.partitions p ON p.queue_id = q.id
       LEFT JOIN queen.messages m ON m.partition_id = p.id
+      LEFT JOIN queen.messages_status ms ON ms.message_id = m.id AND ms.consumer_group IS NULL
       WHERE 1=1
     `;
     
@@ -78,15 +79,16 @@ export const createResourcesRoutes = (pool) => {
         p.name,
         p.created_at,
         COUNT(DISTINCT m.id) as message_count,
-        COUNT(DISTINCT CASE WHEN m.status = 'pending' THEN m.id END) as pending,
-        COUNT(DISTINCT CASE WHEN m.status = 'processing' THEN m.id END) as processing,
-        COUNT(DISTINCT CASE WHEN m.status = 'completed' THEN m.id END) as completed,
-        COUNT(DISTINCT CASE WHEN m.status = 'failed' THEN m.id END) as failed,
-        COUNT(DISTINCT CASE WHEN m.status = 'dead_letter' THEN m.id END) as dead_letter,
+        COUNT(DISTINCT CASE WHEN ms.status = 'pending' THEN m.id END) as pending,
+        COUNT(DISTINCT CASE WHEN ms.status = 'processing' THEN m.id END) as processing,
+        COUNT(DISTINCT CASE WHEN ms.status = 'completed' THEN m.id END) as completed,
+        COUNT(DISTINCT CASE WHEN ms.status = 'failed' THEN m.id END) as failed,
+        COUNT(DISTINCT CASE WHEN ms.status = 'dead_letter' THEN m.id END) as dead_letter,
         MIN(m.created_at) as oldest_message,
         MAX(m.created_at) as newest_message
       FROM queen.partitions p
       LEFT JOIN queen.messages m ON m.partition_id = p.id
+      LEFT JOIN queen.messages_status ms ON ms.message_id = m.id AND ms.consumer_group IS NULL
       WHERE p.queue_id = $1
       GROUP BY p.id, p.name, p.created_at
       ORDER BY p.name
@@ -149,12 +151,13 @@ export const createResourcesRoutes = (pool) => {
         q.namespace,
         q.task,
         q.priority,
-        COUNT(DISTINCT CASE WHEN m.status = 'pending' THEN m.id END) as pending,
-        COUNT(DISTINCT CASE WHEN m.status = 'processing' THEN m.id END) as processing,
+        COUNT(DISTINCT CASE WHEN ms.status = 'pending' THEN m.id END) as pending,
+        COUNT(DISTINCT CASE WHEN ms.status = 'processing' THEN m.id END) as processing,
         COUNT(DISTINCT m.id) as total
       FROM queen.partitions p
       JOIN queen.queues q ON q.id = p.queue_id
       LEFT JOIN queen.messages m ON m.partition_id = p.id
+      LEFT JOIN queen.messages_status ms ON ms.message_id = m.id AND ms.consumer_group IS NULL
       WHERE 1=1
     `;
     
@@ -169,7 +172,7 @@ export const createResourcesRoutes = (pool) => {
     
     if (minDepth) {
       params.push(minDepth);
-      query += ` HAVING COUNT(DISTINCT CASE WHEN m.status = 'pending' THEN m.id END) >= $${params.length}`;
+      query += ` HAVING COUNT(DISTINCT CASE WHEN ms.status = 'pending' THEN m.id END) >= $${params.length}`;
     }
     
     query += ` ORDER BY q.name, q.priority DESC, p.name`;
@@ -198,10 +201,11 @@ export const createResourcesRoutes = (pool) => {
         COUNT(DISTINCT q.id) as queue_count,
         COUNT(DISTINCT p.id) as partition_count,
         COUNT(DISTINCT m.id) as message_count,
-        COUNT(DISTINCT CASE WHEN m.status = 'pending' THEN m.id END) as pending_count
+        COUNT(DISTINCT CASE WHEN ms.status = 'pending' THEN m.id END) as pending_count
       FROM queen.queues q
       LEFT JOIN queen.partitions p ON p.queue_id = q.id
       LEFT JOIN queen.messages m ON m.partition_id = p.id
+      LEFT JOIN queen.messages_status ms ON ms.message_id = m.id AND ms.consumer_group IS NULL
       WHERE q.namespace IS NOT NULL
       GROUP BY q.namespace
       ORDER BY q.namespace
@@ -225,10 +229,11 @@ export const createResourcesRoutes = (pool) => {
         COUNT(DISTINCT q.id) as queue_count,
         COUNT(DISTINCT p.id) as partition_count,
         COUNT(DISTINCT m.id) as message_count,
-        COUNT(DISTINCT CASE WHEN m.status = 'pending' THEN m.id END) as pending_count
+        COUNT(DISTINCT CASE WHEN ms.status = 'pending' THEN m.id END) as pending_count
       FROM queen.queues q
       LEFT JOIN queen.partitions p ON p.queue_id = q.id
       LEFT JOIN queen.messages m ON m.partition_id = p.id
+      LEFT JOIN queen.messages_status ms ON ms.message_id = m.id AND ms.consumer_group IS NULL
       WHERE q.task IS NOT NULL
       GROUP BY q.task
       ORDER BY q.task
@@ -252,11 +257,11 @@ export const createResourcesRoutes = (pool) => {
         (SELECT COUNT(*) FROM queen.queues) as total_queues,
         (SELECT COUNT(*) FROM queen.partitions) as total_partitions,
         (SELECT COUNT(*) FROM queen.messages) as total_messages,
-        (SELECT COUNT(*) FROM queen.messages WHERE status = 'pending') as pending_messages,
-        (SELECT COUNT(*) FROM queen.messages WHERE status = 'processing') as processing_messages,
-        (SELECT COUNT(*) FROM queen.messages WHERE status = 'completed') as completed_messages,
-        (SELECT COUNT(*) FROM queen.messages WHERE status = 'failed') as failed_messages,
-        (SELECT COUNT(*) FROM queen.messages WHERE status = 'dead_letter') as dead_letter_messages,
+        (SELECT COUNT(*) FROM queen.messages_status WHERE status = 'pending' AND consumer_group IS NULL) as pending_messages,
+        (SELECT COUNT(*) FROM queen.messages_status WHERE status = 'processing' AND consumer_group IS NULL) as processing_messages,
+        (SELECT COUNT(*) FROM queen.messages_status WHERE status = 'completed' AND consumer_group IS NULL) as completed_messages,
+        (SELECT COUNT(*) FROM queen.messages_status WHERE status = 'failed' AND consumer_group IS NULL) as failed_messages,
+        (SELECT COUNT(*) FROM queen.messages_status WHERE status = 'dead_letter' AND consumer_group IS NULL) as dead_letter_messages,
         (SELECT COUNT(DISTINCT namespace) FROM queen.queues WHERE namespace IS NOT NULL) as namespaces,
         (SELECT COUNT(DISTINCT task) FROM queen.queues WHERE task IS NOT NULL) as tasks
     `);

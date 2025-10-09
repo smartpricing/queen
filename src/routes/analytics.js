@@ -254,12 +254,13 @@ export const createAnalyticsRoutes = (queueManager) => {
         )
         SELECT 
           ts.minute,
-          COALESCE(COUNT(m.id), 0) as count
+          COALESCE(COUNT(ms.id), 0) as count
         FROM time_series ts
-        LEFT JOIN queen.messages m ON 
-          DATE_TRUNC('minute', m.completed_at) = ts.minute
-          AND m.completed_at >= NOW() - INTERVAL '${timeWindow}'
-          AND m.status = 'completed'
+        LEFT JOIN queen.messages_status ms ON 
+          DATE_TRUNC('minute', ms.completed_at) = ts.minute
+          AND ms.completed_at >= NOW() - INTERVAL '${timeWindow}'
+          AND ms.status = 'completed'
+          AND ms.consumer_group IS NULL
         GROUP BY ts.minute
         ORDER BY ts.minute DESC
         LIMIT ${minuteInterval}
@@ -276,11 +277,12 @@ export const createAnalyticsRoutes = (queueManager) => {
         )
         SELECT 
           ts.minute,
-          COALESCE(COUNT(m.id), 0) as count
+          COALESCE(COUNT(ms.id), 0) as count
         FROM time_series ts
-        LEFT JOIN queen.messages m ON 
-          DATE_TRUNC('minute', m.processing_at) = ts.minute
-          AND m.processing_at >= NOW() - INTERVAL '${timeWindow}'
+        LEFT JOIN queen.messages_status ms ON 
+          DATE_TRUNC('minute', ms.processing_at) = ts.minute
+          AND ms.processing_at >= NOW() - INTERVAL '${timeWindow}'
+          AND ms.consumer_group IS NULL
         GROUP BY ts.minute
         ORDER BY ts.minute DESC
         LIMIT ${minuteInterval}
@@ -297,12 +299,13 @@ export const createAnalyticsRoutes = (queueManager) => {
         )
         SELECT 
           ts.minute,
-          COALESCE(COUNT(m.id), 0) as count
+          COALESCE(COUNT(ms.id), 0) as count
         FROM time_series ts
-        LEFT JOIN queen.messages m ON 
-          DATE_TRUNC('minute', m.completed_at) = ts.minute
-          AND m.completed_at >= NOW() - INTERVAL '${timeWindow}'
-          AND m.status = 'failed'
+        LEFT JOIN queen.messages_status ms ON 
+          DATE_TRUNC('minute', ms.failed_at) = ts.minute
+          AND ms.failed_at >= NOW() - INTERVAL '${timeWindow}'
+          AND ms.status = 'failed'
+          AND ms.consumer_group IS NULL
         GROUP BY ts.minute
         ORDER BY ts.minute DESC
         LIMIT ${minuteInterval}
@@ -319,12 +322,13 @@ export const createAnalyticsRoutes = (queueManager) => {
         )
         SELECT 
           ts.minute,
-          COALESCE(COUNT(m.id), 0) as count
+          COALESCE(COUNT(ms.id), 0) as count
         FROM time_series ts
-        LEFT JOIN queen.messages m ON 
-          DATE_TRUNC('minute', m.failed_at) = ts.minute
-          AND m.failed_at >= NOW() - INTERVAL '${timeWindow}'
-          AND m.status = 'dead_letter'
+        LEFT JOIN queen.messages_status ms ON 
+          DATE_TRUNC('minute', ms.failed_at) = ts.minute
+          AND ms.failed_at >= NOW() - INTERVAL '${timeWindow}'
+          AND ms.status = 'dead_letter'
+          AND ms.consumer_group IS NULL
         GROUP BY ts.minute
         ORDER BY ts.minute DESC
         LIMIT ${minuteInterval}
@@ -343,17 +347,19 @@ export const createAnalyticsRoutes = (queueManager) => {
           ts.minute,
           COALESCE(
             AVG(
-              EXTRACT(EPOCH FROM (m.completed_at - m.created_at))
+              EXTRACT(EPOCH FROM (ms.completed_at - m.created_at))
             ), 
             0
           ) as avg_lag_seconds,
           COUNT(m.id) as sample_count
         FROM time_series ts
-        LEFT JOIN queen.messages m ON 
-          DATE_TRUNC('minute', m.completed_at) = ts.minute
-          AND m.completed_at >= NOW() - INTERVAL '${timeWindow}'
-          AND m.status IN ('completed', 'failed')
-          AND m.completed_at IS NOT NULL
+        LEFT JOIN queen.messages_status ms ON 
+          DATE_TRUNC('minute', ms.completed_at) = ts.minute
+          AND ms.completed_at >= NOW() - INTERVAL '${timeWindow}'
+          AND ms.status IN ('completed', 'failed')
+          AND ms.completed_at IS NOT NULL
+          AND ms.consumer_group IS NULL
+        LEFT JOIN queen.messages m ON ms.message_id = m.id
           AND m.created_at IS NOT NULL
         GROUP BY ts.minute
         ORDER BY ts.minute DESC
@@ -374,21 +380,22 @@ export const createAnalyticsRoutes = (queueManager) => {
       if (incoming.rows.every(row => row.count === 0 || row.count === '0')) {
         const fallbackQuery = `
           SELECT 
-            DATE_TRUNC('minute', created_at) as minute,
-            COUNT(*) as incoming_count,
-            COUNT(CASE WHEN status = 'completed' THEN 1 END) as completed_count,
-            COUNT(CASE WHEN status = 'processing' THEN 1 END) as processing_count,
-            COUNT(CASE WHEN status = 'failed' THEN 1 END) as failed_count,
-            COUNT(CASE WHEN status = 'dead_letter' THEN 1 END) as dead_letter_count,
+            DATE_TRUNC('minute', m.created_at) as minute,
+            COUNT(DISTINCT m.id) as incoming_count,
+            COUNT(DISTINCT CASE WHEN ms.status = 'completed' THEN m.id END) as completed_count,
+            COUNT(DISTINCT CASE WHEN ms.status = 'processing' THEN m.id END) as processing_count,
+            COUNT(DISTINCT CASE WHEN ms.status = 'failed' THEN m.id END) as failed_count,
+            COUNT(DISTINCT CASE WHEN ms.status = 'dead_letter' THEN m.id END) as dead_letter_count,
             AVG(
               CASE 
-                WHEN completed_at IS NOT NULL AND created_at IS NOT NULL 
-                THEN EXTRACT(EPOCH FROM (completed_at - created_at))
+                WHEN ms.completed_at IS NOT NULL AND m.created_at IS NOT NULL 
+                THEN EXTRACT(EPOCH FROM (ms.completed_at - m.created_at))
                 ELSE NULL
               END
             ) as avg_lag_seconds
-          FROM queen.messages
-          WHERE created_at IS NOT NULL
+          FROM queen.messages m
+          LEFT JOIN queen.messages_status ms ON m.id = ms.message_id AND ms.consumer_group IS NULL
+          WHERE m.created_at IS NOT NULL
           GROUP BY minute
           ORDER BY minute DESC
           LIMIT 10

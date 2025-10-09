@@ -31,7 +31,8 @@ export const createQueenClient = (options = {}) => {
     const v2Items = items.map(item => ({
       queue: item.queue,
       partition: item.partition ?? 'Default',
-      payload: item.payload || item.data,
+      // Use 'payload' if it exists (even if null), otherwise fall back to 'data'
+      payload: 'payload' in item ? item.payload : item.data,
       transactionId: item.transactionId
     }));
     
@@ -42,13 +43,16 @@ export const createQueenClient = (options = {}) => {
     );
   };
   
-  // Pop messages from queue
+  // Pop messages from queue (with consumer group support)
   const pop = async (options = {}) => {
     const { 
       queue, 
       partition, 
       namespace,
       task,
+      consumerGroup,
+      subscriptionMode,
+      subscriptionFrom,
       wait = false, 
       timeout = 30000, 
       batch = 1 
@@ -60,6 +64,11 @@ export const createQueenClient = (options = {}) => {
       timeout: timeout.toString(),
       batch: batch.toString()
     });
+    
+    // Add consumer group parameters if provided
+    if (consumerGroup) params.append('consumerGroup', consumerGroup);
+    if (subscriptionMode) params.append('subscriptionMode', subscriptionMode);
+    if (subscriptionFrom) params.append('subscriptionFrom', subscriptionFrom);
     
     // Determine the appropriate endpoint based on parameters
     if (queue && partition) {
@@ -90,19 +99,19 @@ export const createQueenClient = (options = {}) => {
     return result;
   };
   
-  // Acknowledge a message
-  const ack = async (transactionId, status = 'completed', error = null) => {
+  // Acknowledge a message (with consumer group support)
+  const ack = async (transactionId, status = 'completed', error = null, consumerGroup = null) => {
     return withRetry(
-      () => http.post('/api/v1/ack', { transactionId, status, error }),
+      () => http.post('/api/v1/ack', { transactionId, status, error, consumerGroup }),
       retryAttempts,
       retryDelay
     );
   };
   
-  // Batch acknowledge messages
-  const ackBatch = async (acknowledgments) => {
+  // Batch acknowledge messages (with consumer group support)
+  const ackBatch = async (acknowledgments, consumerGroup = null) => {
     return withRetry(
-      () => http.post('/api/v1/ack/batch', { acknowledgments }),
+      () => http.post('/api/v1/ack/batch', { acknowledgments, consumerGroup }),
       retryAttempts,
       retryDelay
     );
@@ -225,13 +234,15 @@ export const createQueenClient = (options = {}) => {
     metrics: async () => http.get('/metrics')
   };
   
-  // Consumer helper - continuously pop and process messages
-  const consume = ({ queue, partition, namespace, task, handler, handlerBatch, options = {} }) => {
+  // Consumer helper - continuously pop and process messages (with consumer group support)
+  const consume = ({ queue, partition, namespace, task, consumerGroup, handler, handlerBatch, options = {} }) => {
     const {
       batch = 1,
       wait = true,
       timeout = 30000,
-      stopOnError = false
+      stopOnError = false,
+      subscriptionMode = null,
+      subscriptionFrom = null
     } = options;
     
     // Validate that only one handler type is provided
@@ -260,7 +271,10 @@ export const createQueenClient = (options = {}) => {
             queue, 
             partition, 
             namespace, 
-            task, 
+            task,
+            consumerGroup,
+            subscriptionMode,
+            subscriptionFrom,
             wait, 
             timeout, 
             batch 
@@ -280,7 +294,7 @@ export const createQueenClient = (options = {}) => {
                   status: 'completed'
                 }));
                 
-                await ackBatch(acknowledgments);
+                await ackBatch(acknowledgments, consumerGroup);
               } catch (error) {
                 console.error('Error processing message batch:', error);
                 
@@ -291,7 +305,7 @@ export const createQueenClient = (options = {}) => {
                   error: error.message
                 }));
                 
-                await ackBatch(acknowledgments);
+                await ackBatch(acknowledgments, consumerGroup);
                 
                 if (stopOnError) {
                   running = false;
@@ -304,10 +318,10 @@ export const createQueenClient = (options = {}) => {
                 
                 try {
                   await messageHandler(message);
-                  await ack(message.transactionId, 'completed');
+                  await ack(message.transactionId, 'completed', null, consumerGroup);
                 } catch (error) {
                   console.error('Error processing message:', error);
-                  await ack(message.transactionId, 'failed', error.message);
+                  await ack(message.transactionId, 'failed', error.message, consumerGroup);
                   
                   if (stopOnError) {
                     running = false;

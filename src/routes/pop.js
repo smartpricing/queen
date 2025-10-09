@@ -2,7 +2,14 @@ import config from '../config.js';
 
 export const createPopRoute = (queueManager, eventManager) => {
   return async (scope, options = {}) => {
-    const { wait = false, timeout = config.QUEUE.DEFAULT_TIMEOUT, batch = config.QUEUE.DEFAULT_BATCH_SIZE } = options;
+    const { 
+      wait = false, 
+      timeout = config.QUEUE.DEFAULT_TIMEOUT, 
+      batch = config.QUEUE.DEFAULT_BATCH_SIZE,
+      consumerGroup = scope.consumerGroup || null,
+      subscriptionMode = scope.subscriptionMode || null,
+      subscriptionFrom = scope.subscriptionFrom || null
+    } = options;
     const maxTimeout = config.QUEUE.MAX_TIMEOUT;
     const effectiveTimeout = Math.min(timeout, maxTimeout);
     
@@ -30,8 +37,21 @@ export const createPopRoute = (queueManager, eventManager) => {
       return { messages: [] };
     }
     
-    // Regular queue/partition pop
-    let result = await queueManager.popMessages(scope, { batch, wait: false, timeout: effectiveTimeout });
+    // Regular queue/partition pop (now with consumer group support)
+    const popScope = {
+      ...scope,
+      consumerGroup: consumerGroup || scope.consumerGroup
+    };
+    
+    const popOptions = {
+      batch, 
+      wait: false, 
+      timeout: effectiveTimeout,
+      subscriptionMode,
+      subscriptionFrom
+    };
+    
+    let result = await queueManager.popMessages(popScope, popOptions);
     
     if (result.messages.length > 0 || !wait) {
       return result;
@@ -53,7 +73,7 @@ export const createPopRoute = (queueManager, eventManager) => {
       ]);
       
       // Try to get messages whether notified or not
-      result = await queueManager.popMessages(scope, { batch, wait: false });
+      result = await queueManager.popMessages(popScope, popOptions);
       if (result.messages.length > 0) {
         return result;
       }

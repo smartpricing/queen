@@ -134,17 +134,30 @@ export const createWebSocketServer = (app, eventManager) => {
           };
         }
         
-        // Add partition stats
-        queueDepths[stat.queue].partitions[stat.partition] = {
-          depth: stat.stats.pending,
-          processing: stat.stats.processing,
-          completed: stat.stats.completed,
-          failed: stat.stats.failed
-        };
+        // Skip consumer group specific stats for queue depth calculation
+        // Only count NULL consumer_group (queue mode) stats
+        if (stat.consumer_group) continue;
+        
+        // Initialize partition if not exists
+        if (!queueDepths[stat.queue].partitions[stat.partition]) {
+          queueDepths[stat.queue].partitions[stat.partition] = {
+            depth: 0,
+            processing: 0,
+            completed: 0,
+            failed: 0
+          };
+        }
+        
+        // Add partition stats (using direct field names from new schema)
+        const partitionStats = queueDepths[stat.queue].partitions[stat.partition];
+        partitionStats.depth += parseInt(stat.pending || 0);
+        partitionStats.processing += parseInt(stat.processing || 0);
+        partitionStats.completed += parseInt(stat.completed || 0);
+        partitionStats.failed += parseInt(stat.failed || 0);
         
         // Update totals
-        queueDepths[stat.queue].totalDepth += stat.stats.pending;
-        queueDepths[stat.queue].totalProcessing += stat.stats.processing;
+        queueDepths[stat.queue].totalDepth += parseInt(stat.pending || 0);
+        queueDepths[stat.queue].totalProcessing += parseInt(stat.processing || 0);
       }
       
       // Broadcast aggregated queue depths
@@ -154,14 +167,17 @@ export const createWebSocketServer = (app, eventManager) => {
       
       // Also broadcast individual partition depths for detailed monitoring
       for (const stat of stats) {
+        // Skip consumer group specific stats
+        if (stat.consumer_group) continue;
+        
         broadcast('partition.depth', {
           queue: stat.queue,
           partition: stat.partition,
-          depth: stat.stats.pending,
-          processing: stat.stats.processing,
-          completed: stat.stats.completed,
-          failed: stat.stats.failed,
-          total: stat.stats.total
+          depth: parseInt(stat.pending || 0),
+          processing: parseInt(stat.processing || 0),
+          completed: parseInt(stat.completed || 0),
+          failed: parseInt(stat.failed || 0),
+          total: parseInt(stat.total_messages || 0)
         });
       }
       
@@ -175,19 +191,19 @@ export const createWebSocketServer = (app, eventManager) => {
     try {
       const result = await pool.query(`
         SELECT
-          (SELECT COUNT(*) FROM queen.messages WHERE status = 'pending') as pending,
-          (SELECT COUNT(*) FROM queen.messages WHERE status = 'processing') as processing,
+          (SELECT COUNT(*) FROM queen.messages_status WHERE status = 'pending' AND consumer_group IS NULL) as pending,
+          (SELECT COUNT(*) FROM queen.messages_status WHERE status = 'processing' AND consumer_group IS NULL) as processing,
           (SELECT COUNT(*) FROM queen.messages WHERE created_at > NOW() - INTERVAL '1 minute') as recent_created,
-          (SELECT COUNT(*) FROM queen.messages WHERE completed_at > NOW() - INTERVAL '1 minute') as recent_completed
+          (SELECT COUNT(*) FROM queen.messages_status WHERE completed_at > NOW() - INTERVAL '1 minute' AND consumer_group IS NULL) as recent_completed
       `);
       
       const stats = result.rows[0];
       
       broadcast('system.stats', {
-        pending: parseInt(stats.pending),
-        processing: parseInt(stats.processing),
-        recentCreated: parseInt(stats.recent_created),
-        recentCompleted: parseInt(stats.recent_completed),
+        pending: parseInt(stats.pending || 0),
+        processing: parseInt(stats.processing || 0),
+        recentCreated: parseInt(stats.recent_created || 0),
+        recentCompleted: parseInt(stats.recent_completed || 0),
         connections: connections.size
       });
     } catch (error) {
