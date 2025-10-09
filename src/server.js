@@ -550,7 +550,7 @@ app.get('/api/v1/analytics/queues', (res, req) => {
     });
   }).catch(error => {
     if (aborted) return;
-    log('Analytics error:', error);
+    log('Analytics error:', error.message || error);
     res.cork(() => {
       setCorsHeaders(res);
       res.writeStatus(config.HTTP_STATUS.INTERNAL_SERVER_ERROR.toString()).end(JSON.stringify({ error: error.message }));
@@ -575,7 +575,7 @@ app.get('/api/v1/analytics/queue/:queue', (res, req) => {
     });
   }).catch(error => {
     if (aborted) return;
-    log('Analytics error:', error);
+    log('Analytics error:', error.message || error);
     res.cork(() => {
       setCorsHeaders(res);
       res.writeStatus(config.HTTP_STATUS.INTERNAL_SERVER_ERROR.toString()).end(JSON.stringify({ error: error.message }));
@@ -609,7 +609,7 @@ app.get('/api/v1/analytics', (res, req) => {
     });
   }).catch(error => {
     if (aborted) return;
-    log('Analytics error:', error);
+    log('Analytics error:', error.message || error);
     res.cork(() => {
       setCorsHeaders(res);
       res.writeStatus(config.HTTP_STATUS.INTERNAL_SERVER_ERROR.toString()).end(JSON.stringify({ error: error.message }));
@@ -632,7 +632,7 @@ app.get('/api/v1/analytics/queue-depths', (res, req) => {
     });
   }).catch(error => {
     if (aborted) return;
-    log('Analytics error:', error);
+    log('Analytics error:', error.message || error);
     res.cork(() => {
       setCorsHeaders(res);
       res.writeStatus(config.HTTP_STATUS.INTERNAL_SERVER_ERROR.toString()).end(JSON.stringify({ error: error.message }));
@@ -655,7 +655,7 @@ app.get('/api/v1/analytics/throughput', (res, req) => {
     });
   }).catch(error => {
     if (aborted) return;
-    log('Analytics error:', error);
+    log('Analytics error:', error.message || error);
     res.cork(() => {
       setCorsHeaders(res);
       res.writeStatus(config.HTTP_STATUS.INTERNAL_SERVER_ERROR.toString()).end(JSON.stringify({ error: error.message }));

@@ -25,14 +25,27 @@ export const createAnalyticsRoutes = (queueManager) => {
       }
       
       const queueData = queueMap.get(row.queue);
+      
+      // Create stats object from row data
+      const stats = {
+        pending: parseInt(row.pending || 0),
+        processing: parseInt(row.processing || 0),
+        completed: parseInt(row.completed || 0),
+        failed: parseInt(row.failed || 0),
+        deadLetter: parseInt(row.dead_letter || 0),
+        total: parseInt(row.total_messages || 0)
+      };
+      
       queueData.partitions.push({
         name: row.partition,
-        stats: row.stats
+        stats: stats
       });
       
       // Aggregate totals
-      Object.keys(row.stats).forEach(key => {
-        queueData.totals[key] += row.stats[key];
+      Object.keys(stats).forEach(key => {
+        if (queueData.totals[key] !== undefined) {
+          queueData.totals[key] += stats[key];
+        }
       });
     });
     
@@ -52,13 +65,25 @@ export const createAnalyticsRoutes = (queueManager) => {
     };
     
     const partitions = stats.map(row => {
-      Object.keys(row.stats).forEach(key => {
-        totals[key] += row.stats[key];
+      // Create stats object from row data
+      const stats = {
+        pending: parseInt(row.pending || 0),
+        processing: parseInt(row.processing || 0),
+        completed: parseInt(row.completed || 0),
+        failed: parseInt(row.failed || 0),
+        deadLetter: parseInt(row.dead_letter || 0),
+        total: parseInt(row.total_messages || 0)
+      };
+      
+      Object.keys(stats).forEach(key => {
+        if (totals[key] !== undefined) {
+          totals[key] += stats[key];
+        }
       });
       
       return {
         name: row.partition,
-        stats: row.stats
+        stats: stats
       };
     });
     
@@ -95,13 +120,26 @@ export const createAnalyticsRoutes = (queueManager) => {
       }
       
       const queueData = queueMap.get(row.queue);
+      
+      // Create stats object from row data
+      const stats = {
+        pending: parseInt(row.pending || 0),
+        processing: parseInt(row.processing || 0),
+        completed: parseInt(row.completed || 0),
+        failed: parseInt(row.failed || 0),
+        deadLetter: parseInt(row.dead_letter || 0),
+        total: parseInt(row.total_messages || 0)
+      };
+      
       queueData.partitions.push({
         name: row.partition,
-        stats: row.stats
+        stats: stats
       });
       
-      Object.keys(row.stats).forEach(key => {
-        queueData.totals[key] += row.stats[key];
+      Object.keys(stats).forEach(key => {
+        if (queueData.totals[key] !== undefined) {
+          queueData.totals[key] += stats[key];
+        }
       });
     });
     
@@ -152,13 +190,26 @@ export const createAnalyticsRoutes = (queueManager) => {
       }
       
       const queueData = queueMap.get(row.queue);
+      
+      // Create stats object from row data
+      const stats = {
+        pending: parseInt(row.pending || 0),
+        processing: parseInt(row.processing || 0),
+        completed: parseInt(row.completed || 0),
+        failed: parseInt(row.failed || 0),
+        deadLetter: parseInt(row.dead_letter || 0),
+        total: parseInt(row.total_messages || 0)
+      };
+      
       queueData.partitions.push({
         name: row.partition,
-        stats: row.stats
+        stats: stats
       });
       
-      Object.keys(row.stats).forEach(key => {
-        queueData.totals[key] += row.stats[key];
+      Object.keys(stats).forEach(key => {
+        if (queueData.totals[key] !== undefined) {
+          queueData.totals[key] += stats[key];
+        }
       });
     });
     
@@ -202,12 +253,14 @@ export const createAnalyticsRoutes = (queueManager) => {
       }
       
       const queueData = queueMap.get(row.queue);
-      queueData.depth += row.stats.pending;
-      queueData.processing += row.stats.processing;
+      const pending = parseInt(row.pending || 0);
+      const processing = parseInt(row.processing || 0);
+      queueData.depth += pending;
+      queueData.processing += processing;
       queueData.partitions.push({
         name: row.partition,
-        depth: row.stats.pending,
-        processing: row.stats.processing
+        depth: pending,
+        processing: processing
       });
     });
     
@@ -571,35 +624,50 @@ export const createAnalyticsRoutes = (queueManager) => {
       }
       
       const queueData = queueMap.get(row.queue);
+      
+      // Handle case where stats might not exist or be malformed
+      const stats = row.stats || {
+        pendingCount: 0,
+        processingCount: 0,
+        totalBacklog: 0,
+        completedMessages: 0,
+        avgProcessingTimeSeconds: 0,
+        medianProcessingTimeSeconds: 0,
+        p95ProcessingTimeSeconds: 0,
+        estimatedLagSeconds: 0,
+        medianLagSeconds: 0,
+        p95LagSeconds: 0
+      };
+      
       queueData.partitions.push({
         name: row.partition,
-        stats: row.stats
+        stats: stats
       });
       
       // Aggregate totals (weighted averages for processing times)
       const currentTotal = queueData.totals.completedMessages;
-      const newTotal = currentTotal + row.stats.completedMessages;
+      const newTotal = currentTotal + (stats.completedMessages || 0);
       
       if (newTotal > 0) {
         // Weighted average for processing times
         queueData.totals.avgProcessingTimeSeconds = 
           (queueData.totals.avgProcessingTimeSeconds * currentTotal + 
-           row.stats.avgProcessingTimeSeconds * row.stats.completedMessages) / newTotal;
+           (stats.avgProcessingTimeSeconds || 0) * (stats.completedMessages || 0)) / newTotal;
         queueData.totals.medianProcessingTimeSeconds = 
           (queueData.totals.medianProcessingTimeSeconds * currentTotal + 
-           row.stats.medianProcessingTimeSeconds * row.stats.completedMessages) / newTotal;
+           (stats.medianProcessingTimeSeconds || 0) * (stats.completedMessages || 0)) / newTotal;
         queueData.totals.p95ProcessingTimeSeconds = 
-          Math.max(queueData.totals.p95ProcessingTimeSeconds, row.stats.p95ProcessingTimeSeconds);
+          Math.max(queueData.totals.p95ProcessingTimeSeconds, stats.p95ProcessingTimeSeconds || 0);
       }
       
       // Sum up counts and lags
-      queueData.totals.pendingCount += row.stats.pendingCount;
-      queueData.totals.processingCount += row.stats.processingCount;
-      queueData.totals.totalBacklog += row.stats.totalBacklog;
+      queueData.totals.pendingCount += stats.pendingCount || 0;
+      queueData.totals.processingCount += stats.processingCount || 0;
+      queueData.totals.totalBacklog += stats.totalBacklog || 0;
       queueData.totals.completedMessages = newTotal;
-      queueData.totals.estimatedLagSeconds += row.stats.estimatedLagSeconds;
-      queueData.totals.medianLagSeconds += row.stats.medianLagSeconds;
-      queueData.totals.p95LagSeconds += row.stats.p95LagSeconds;
+      queueData.totals.estimatedLagSeconds += stats.estimatedLagSeconds || 0;
+      queueData.totals.medianLagSeconds += stats.medianLagSeconds || 0;
+      queueData.totals.p95LagSeconds += stats.p95LagSeconds || 0;
     });
     
     // Add human-readable formats to totals

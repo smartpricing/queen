@@ -47,22 +47,57 @@ export const initDatabase = async (pool) => {
   }
 };
 
-// Helper for transactions
-export const withTransaction = async (pool, callback, isolationLevel = null) => {
-  const client = await pool.connect();
-  try {
-    if (isolationLevel) {
-      await client.query(`BEGIN ISOLATION LEVEL ${isolationLevel}`);
-    } else {
-      await client.query('BEGIN');
-    }
-    const result = await callback(client);
-    await client.query('COMMIT');
-    return result;
-  } catch (error) {
-    await client.query('ROLLBACK');
-    throw error;
-  } finally {
-    client.release();
+// Valid transaction isolation levels
+const VALID_ISOLATION_LEVELS = [
+  'READ COMMITTED',
+  'REPEATABLE READ', 
+  'SERIALIZABLE'
+];
+
+// Helper for transactions with retry logic
+export const withTransaction = async (pool, callback, isolationLevel = 'READ COMMITTED') => {
+  // Validate isolation level
+  if (isolationLevel && !VALID_ISOLATION_LEVELS.includes(isolationLevel)) {
+    throw new Error(`Invalid isolation level: ${isolationLevel}`);
   }
+  
+  const maxAttempts = 3;
+  let attempt = 1;
+  
+  while (attempt <= maxAttempts) {
+    const client = await pool.connect();
+    try {
+      await client.query('BEGIN');
+      
+      if (isolationLevel) {
+        await client.query(`SET TRANSACTION ISOLATION LEVEL ${isolationLevel}`);
+      }
+      
+      // Set timeouts to prevent long blocks
+      await client.query('SET LOCAL statement_timeout = 30000'); // 30 seconds
+      await client.query('SET LOCAL lock_timeout = 5000'); // 5 seconds
+      
+      const result = await callback(client);
+      await client.query('COMMIT');
+      return result;
+    } catch (error) {
+      await client.query('ROLLBACK');
+      
+      // Check for serialization failure or deadlock
+      if ((error.code === '40001' || error.code === '40P01') && attempt < maxAttempts) {
+        // Exponential backoff: 100ms, 200ms, 400ms
+        const delay = Math.min(100 * Math.pow(2, attempt - 1), 1000);
+        await new Promise(resolve => setTimeout(resolve, delay));
+        attempt++;
+        console.log(`Transaction retry attempt ${attempt}/${maxAttempts} after ${error.code}`);
+        continue;
+      }
+      
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
+  
+  throw new Error('Max transaction retry attempts exceeded');
 };

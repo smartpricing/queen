@@ -26,6 +26,7 @@ CREATE TABLE IF NOT EXISTS queen.queues (
     retention_enabled BOOLEAN DEFAULT FALSE,
     encryption_enabled BOOLEAN DEFAULT FALSE,
     max_wait_time_seconds INTEGER DEFAULT 0,
+    max_queue_size INTEGER DEFAULT 0,  -- 0 = unlimited queue size
     created_at TIMESTAMPTZ DEFAULT NOW()
 );
 
@@ -42,7 +43,8 @@ CREATE TABLE IF NOT EXISTS queen.partitions (
 -- Messages table (immutable message data only)
 CREATE TABLE IF NOT EXISTS queen.messages (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    transaction_id UUID UNIQUE NOT NULL,  -- Set during push, immutable
+    transaction_id VARCHAR(255) UNIQUE NOT NULL,  -- Changed from UUID to string for flexibility
+    trace_id UUID DEFAULT gen_random_uuid(),  -- For tracking multi-step pipelines
     partition_id UUID REFERENCES queen.partitions(id) ON DELETE CASCADE,
     payload JSONB NOT NULL,
     created_at TIMESTAMPTZ DEFAULT NOW(),
@@ -80,6 +82,18 @@ CREATE TABLE IF NOT EXISTS queen.consumer_groups (
     UNIQUE(queue_id, name)
 );
 
+-- Partition leases table (tracks which partition is locked for which consumer group)
+CREATE TABLE IF NOT EXISTS queen.partition_leases (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    partition_id UUID REFERENCES queen.partitions(id) ON DELETE CASCADE,
+    consumer_group VARCHAR(255) DEFAULT '__QUEUE_MODE__',  -- '__QUEUE_MODE__' for queue mode
+    lease_expires_at TIMESTAMPTZ NOT NULL,
+    message_batch JSONB,  -- Store IDs of messages in this lease
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    released_at TIMESTAMPTZ,  -- When lease was released (NULL if active)
+    UNIQUE(partition_id, consumer_group)  -- One active lease per partition per consumer group
+);
+
 -- Indexes for queues
 CREATE INDEX IF NOT EXISTS idx_queues_name ON queen.queues(name);
 CREATE INDEX IF NOT EXISTS idx_queues_priority ON queen.queues(priority DESC);
@@ -98,6 +112,7 @@ CREATE INDEX IF NOT EXISTS idx_partitions_queue_name ON queen.partitions(queue_i
 -- Indexes for messages (simplified - no status fields)
 CREATE INDEX IF NOT EXISTS idx_messages_partition_created ON queen.messages(partition_id, created_at);
 CREATE INDEX IF NOT EXISTS idx_messages_transaction_id ON queen.messages(transaction_id);
+CREATE INDEX IF NOT EXISTS idx_messages_trace_id ON queen.messages(trace_id);
 CREATE INDEX IF NOT EXISTS idx_messages_created_at ON queen.messages(created_at);
 
 -- Indexes for messages_status (critical for performance)
@@ -119,6 +134,11 @@ CREATE INDEX IF NOT EXISTS idx_status_lease_expires
 ON queen.messages_status(lease_expires_at, status, consumer_group) 
 WHERE status = 'processing';
 
+-- Index for fast queue depth checks
+CREATE INDEX IF NOT EXISTS idx_messages_status_pending_processing 
+ON queen.messages_status(message_id, status) 
+WHERE status IN ('pending', 'processing') OR status IS NULL;
+
 -- Index for efficient pop operations (find messages without status for a consumer group)
 CREATE INDEX IF NOT EXISTS idx_status_message_consumer 
 ON queen.messages_status(message_id, consumer_group);
@@ -130,6 +150,19 @@ ON queen.consumer_groups(queue_id, name);
 CREATE INDEX IF NOT EXISTS idx_consumer_groups_active 
 ON queen.consumer_groups(queue_id, active) 
 WHERE active = true;
+
+-- Indexes for partition leases
+CREATE INDEX IF NOT EXISTS idx_partition_leases_expires 
+ON queen.partition_leases(lease_expires_at) 
+WHERE released_at IS NULL;
+
+CREATE INDEX IF NOT EXISTS idx_partition_leases_active 
+ON queen.partition_leases(partition_id, consumer_group) 
+WHERE released_at IS NULL;
+
+CREATE INDEX IF NOT EXISTS idx_partition_leases_active_lookup 
+ON queen.partition_leases(partition_id, consumer_group, lease_expires_at) 
+WHERE released_at IS NULL;
 
 -- Retention history table for tracking deletions
 CREATE TABLE IF NOT EXISTS queen.retention_history (

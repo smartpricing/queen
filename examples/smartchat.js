@@ -24,11 +24,12 @@ async function producer () {
     }
 }
 
-async function consumer () {
+async function consumer (i) {
     const stop = client.consume({
         queue: 'htmls',
+        consumerGroup: 'smartchat-' + i,
         handler: async (message) => {
-          console.log('Processing:', message.data);
+          console.log(i, 'Processing:', message.data);
           //fs.appendFileSync('consumed_items ' + message.partition + '.json', JSON.stringify(message.data) + '\n');
         },
         options: {
@@ -46,6 +47,6 @@ if (process.argv[2] === 'producer') {
     producer(); 
 } else {
     for (let i = 0; i < numberOfConsumers; i++) {
-        consumer();
+        consumer(i);
     }
 }

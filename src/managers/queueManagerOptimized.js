@@ -32,7 +32,7 @@ export const createOptimizedQueueManager = (pool, resourceCache, eventManager) =
        RETURNING id, name, namespace, task, encryption_enabled, max_wait_time_seconds,
                 lease_time, retry_limit, retry_delay, max_size, ttl, dead_letter_queue,
                 dlq_after_max_retries, delayed_processing, window_buffer, retention_seconds,
-                completed_retention_seconds, retention_enabled, priority`,
+                completed_retention_seconds, retention_enabled, priority, max_queue_size`,
       [queueName, namespace || null, task || null]
     );
     const queue = queueResult.rows[0];
@@ -64,7 +64,8 @@ export const createOptimizedQueueManager = (pool, resourceCache, eventManager) =
         retentionSeconds: queue.retention_seconds,
         completedRetentionSeconds: queue.completed_retention_seconds,
         retentionEnabled: queue.retention_enabled,
-        priority: queue.priority
+        priority: queue.priority,
+        maxQueueSize: queue.max_queue_size
       },
       encryptionEnabled: queue.encryption_enabled,
       maxWaitTimeSeconds: queue.max_wait_time_seconds
@@ -147,7 +148,28 @@ export const createOptimizedQueueManager = (pool, resourceCache, eventManager) =
       const results = await poolManager.withClient(async (client) => {
         // Ensure resources exist (cached after first call)
         const resources = await ensureResources(client, queueName, partitionName);
-        const { partitionId, encryptionEnabled } = resources;
+        const { partitionId, encryptionEnabled, queueConfig } = resources;
+        
+        // Check queue capacity if max_queue_size is set
+        if (queueConfig.maxQueueSize > 0) {
+          const capacityCheck = await client.query(
+            `SELECT COUNT(m.id) as current_depth
+             FROM queen.messages m
+             JOIN queen.partitions p ON m.partition_id = p.id
+             JOIN queen.queues q ON p.queue_id = q.id
+             LEFT JOIN queen.messages_status ms ON m.id = ms.message_id 
+               AND ms.consumer_group = '__QUEUE_MODE__'
+             WHERE q.name = $1
+               AND (ms.status IS NULL OR ms.status IN ('pending', 'processing'))`,
+            [queueName]
+          );
+          
+          const currentDepth = parseInt(capacityCheck.rows[0].current_depth);
+          const batchSize = partitionItems.length;
+          if (currentDepth + batchSize > queueConfig.maxQueueSize) {
+            throw new Error(`Queue '${queueName}' would exceed max capacity (${queueConfig.maxQueueSize}). Current: ${currentDepth}, Batch: ${batchSize}`);
+          }
+        }
         
         // Process items in batches
         const batchResults = [];
@@ -158,6 +180,7 @@ export const createOptimizedQueueManager = (pool, resourceCache, eventManager) =
           // Prepare batch data
           const messageIds = [];
           const transactionIds = [];
+          const traceIds = [];
           const payloads = [];
           const encryptedFlags = [];
           const duplicates = [];
@@ -165,6 +188,7 @@ export const createOptimizedQueueManager = (pool, resourceCache, eventManager) =
           for (const item of batch) {
             const messageId = generateUUID();
             const transactionId = item.transactionId || generateUUID();
+            const traceId = item.traceId || null;
             
             // Check for duplicate transaction ID
             const dupCheck = await client.query(
@@ -183,6 +207,7 @@ export const createOptimizedQueueManager = (pool, resourceCache, eventManager) =
             
             messageIds.push(messageId);
             transactionIds.push(transactionId);
+            traceIds.push(traceId);
             
             // Handle encryption if enabled
             let payload = item.payload;
@@ -223,17 +248,18 @@ export const createOptimizedQueueManager = (pool, resourceCache, eventManager) =
             encryptedFlags.push(isEncrypted);
           }
           
-          // Batch insert messages (no status fields)
+          // Batch insert messages with trace_id
           if (messageIds.length > 0) {
             const insertQuery = `
-              INSERT INTO queen.messages (id, transaction_id, partition_id, payload, is_encrypted)
-              SELECT * FROM UNNEST($1::uuid[], $2::uuid[], $3::uuid[], $4::jsonb[], $5::boolean[])
-              RETURNING id, transaction_id
+              INSERT INTO queen.messages (id, transaction_id, trace_id, partition_id, payload, is_encrypted)
+              SELECT * FROM UNNEST($1::uuid[], $2::varchar[], $3::uuid[], $4::uuid[], $5::jsonb[], $6::boolean[])
+              RETURNING id, transaction_id, trace_id
             `;
             
             const insertResult = await client.query(insertQuery, [
               messageIds,
               transactionIds,
+              traceIds,
               Array(messageIds.length).fill(partitionId),
               payloads,
               encryptedFlags
@@ -244,6 +270,7 @@ export const createOptimizedQueueManager = (pool, resourceCache, eventManager) =
               batchResults.push({
                 id: row.id,
                 transactionId: row.transaction_id,
+                traceId: row.trace_id,
                 status: 'queued'
               });
             }
@@ -327,19 +354,22 @@ export const createOptimizedQueueManager = (pool, resourceCache, eventManager) =
       let result;
       
       if (!consumerGroup) {
-        // QUEUE MODE: Competing consumers (consumer_group = NULL)
+        // QUEUE MODE: Use partition leasing for true FIFO
+        const actualConsumerGroup = '__QUEUE_MODE__';
+        
         if (partition) {
-          // Specific partition with queue mode
+          // Specific partition - simpler approach without complex CTEs
+          // For now, fall back to the original simpler logic until we can fix the CTE issues
           result = await client.query(`
             WITH available_messages AS (
-              SELECT m.id, m.transaction_id, m.payload, m.is_encrypted, m.created_at,
+              SELECT m.id, m.transaction_id, m.trace_id, m.payload, m.is_encrypted, m.created_at,
                      p.name as partition_name, q.name as queue_name, q.priority, 
                      q.lease_time, q.retry_limit, q.delayed_processing,
                      q.window_buffer, q.max_wait_time_seconds
               FROM queen.messages m
               JOIN queen.partitions p ON m.partition_id = p.id
               JOIN queen.queues q ON p.queue_id = q.id
-              LEFT JOIN queen.messages_status ms ON m.id = ms.message_id AND ms.consumer_group = '__QUEUE_MODE__'
+              LEFT JOIN queen.messages_status ms ON m.id = ms.message_id AND ms.consumer_group = $3
               WHERE q.name = $1 AND p.name = $2
                 AND (ms.id IS NULL OR ms.status IN ('pending', 'failed'))
                 AND m.created_at <= NOW() - INTERVAL '1 second' * q.delayed_processing
@@ -351,48 +381,43 @@ export const createOptimizedQueueManager = (pool, resourceCache, eventManager) =
                     AND m2.created_at > NOW() - INTERVAL '1 second' * q.window_buffer
                 ))
               ORDER BY m.created_at ASC
-              LIMIT $3
+              LIMIT $4
               FOR UPDATE OF m SKIP LOCKED
             )
             INSERT INTO queen.messages_status (message_id, consumer_group, status, lease_expires_at, processing_at, worker_id, retry_count)
             SELECT 
               id, 
-              '__QUEUE_MODE__', 
+              $3, 
               'processing', 
               NOW() + INTERVAL '1 second' * lease_time, 
               NOW(), 
-              $4,
+              $5,
               0
             FROM available_messages
-            ON CONFLICT (message_id, consumer_group) 
-            DO UPDATE SET 
-              status = 'processing',
-              lease_expires_at = EXCLUDED.lease_expires_at,
-              processing_at = EXCLUDED.processing_at,
-              worker_id = EXCLUDED.worker_id,
-              retry_count = queen.messages_status.retry_count
+            ON CONFLICT (message_id, consumer_group) DO NOTHING
             RETURNING message_id,
-              (SELECT transaction_id FROM available_messages WHERE id = message_id),
-              (SELECT payload FROM available_messages WHERE id = message_id),
-              (SELECT is_encrypted FROM available_messages WHERE id = message_id),
-              (SELECT created_at FROM available_messages WHERE id = message_id),
-              (SELECT partition_name FROM available_messages WHERE id = message_id),
-              (SELECT queue_name FROM available_messages WHERE id = message_id),
-              (SELECT priority FROM available_messages WHERE id = message_id),
+              (SELECT transaction_id FROM queen.messages WHERE id = message_id),
+              (SELECT trace_id FROM queen.messages WHERE id = message_id),
+              (SELECT payload FROM queen.messages WHERE id = message_id),
+              (SELECT is_encrypted FROM queen.messages WHERE id = message_id),
+              (SELECT created_at FROM queen.messages WHERE id = message_id),
+              (SELECT p.name FROM queen.messages m2 JOIN queen.partitions p ON m2.partition_id = p.id WHERE m2.id = message_id) as partition_name,
+              $1 as queue_name,
+              (SELECT priority FROM queen.queues WHERE name = $1) as priority,
               retry_count
-          `, [queue, partition, batch, config.WORKER_ID]);
+          `, [queue, partition, actualConsumerGroup, batch, config.WORKER_ID]);
         } else {
-          // Any partition with queue mode
+          // Any partition - simpler approach for now
           result = await client.query(`
             WITH available_messages AS (
-              SELECT m.id, m.transaction_id, m.payload, m.is_encrypted, m.created_at,
+              SELECT m.id, m.transaction_id, m.trace_id, m.payload, m.is_encrypted, m.created_at,
                      p.name as partition_name, q.name as queue_name, q.priority, 
                      q.lease_time, q.retry_limit, q.delayed_processing,
                      q.window_buffer, q.max_wait_time_seconds
               FROM queen.messages m
               JOIN queen.partitions p ON m.partition_id = p.id
               JOIN queen.queues q ON p.queue_id = q.id
-              LEFT JOIN queen.messages_status ms ON m.id = ms.message_id AND ms.consumer_group = '__QUEUE_MODE__'
+              LEFT JOIN queen.messages_status ms ON m.id = ms.message_id AND ms.consumer_group = $2
               WHERE q.name = $1
                 AND (ms.id IS NULL OR ms.status IN ('pending', 'failed'))
                 AND m.created_at <= NOW() - INTERVAL '1 second' * q.delayed_processing
@@ -404,36 +429,31 @@ export const createOptimizedQueueManager = (pool, resourceCache, eventManager) =
                     AND m2.created_at > NOW() - INTERVAL '1 second' * q.window_buffer
                 ))
               ORDER BY q.priority DESC, m.created_at ASC
-              LIMIT $2
+              LIMIT $3
               FOR UPDATE OF m SKIP LOCKED
             )
             INSERT INTO queen.messages_status (message_id, consumer_group, status, lease_expires_at, processing_at, worker_id, retry_count)
             SELECT 
               id, 
-              '__QUEUE_MODE__', 
+              $2, 
               'processing', 
               NOW() + INTERVAL '1 second' * lease_time, 
               NOW(), 
-              $3,
+              $4,
               0
             FROM available_messages
-            ON CONFLICT (message_id, consumer_group) 
-            DO UPDATE SET 
-              status = 'processing',
-              lease_expires_at = EXCLUDED.lease_expires_at,
-              processing_at = EXCLUDED.processing_at,
-              worker_id = EXCLUDED.worker_id,
-              retry_count = queen.messages_status.retry_count
+            ON CONFLICT (message_id, consumer_group) DO NOTHING
             RETURNING message_id,
-              (SELECT transaction_id FROM available_messages WHERE id = message_id),
-              (SELECT payload FROM available_messages WHERE id = message_id),
-              (SELECT is_encrypted FROM available_messages WHERE id = message_id),
-              (SELECT created_at FROM available_messages WHERE id = message_id),
-              (SELECT p.name FROM queen.messages m2 JOIN queen.partitions p ON m2.partition_id = p.id WHERE m2.id = message_id),
+              (SELECT transaction_id FROM queen.messages WHERE id = message_id),
+              (SELECT trace_id FROM queen.messages WHERE id = message_id),
+              (SELECT payload FROM queen.messages WHERE id = message_id),
+              (SELECT is_encrypted FROM queen.messages WHERE id = message_id),
+              (SELECT created_at FROM queen.messages WHERE id = message_id),
+              (SELECT p.name FROM queen.messages m2 JOIN queen.partitions p ON m2.partition_id = p.id WHERE m2.id = message_id) as partition_name,
               $1 as queue_name,
-              (SELECT priority FROM queen.queues WHERE name = $1),
+              (SELECT priority FROM queen.queues WHERE name = $1) as priority,
               retry_count
-          `, [queue, batch, config.WORKER_ID]);
+          `, [queue, actualConsumerGroup, batch, config.WORKER_ID]);
         }
       } else {
         // BUS MODE: Consumer group specified
@@ -454,7 +474,8 @@ export const createOptimizedQueueManager = (pool, resourceCache, eventManager) =
           // Specific partition with consumer group
           result = await client.query(`
             WITH available_messages AS (
-              SELECT m.*, p.name as partition_name, q.name as queue_name,
+              SELECT m.id, m.transaction_id, m.trace_id, m.payload, m.is_encrypted, m.created_at,
+                     p.name as partition_name, q.name as queue_name,
                      q.priority, q.lease_time, q.retry_limit, q.delayed_processing,
                      q.window_buffer, q.max_wait_time_seconds
               FROM queen.messages m
@@ -483,19 +504,21 @@ export const createOptimizedQueueManager = (pool, resourceCache, eventManager) =
             FROM available_messages
             RETURNING message_id,
               (SELECT transaction_id FROM queen.messages WHERE id = message_id),
+              (SELECT trace_id FROM queen.messages WHERE id = message_id),
               (SELECT payload FROM queen.messages WHERE id = message_id),
               (SELECT is_encrypted FROM queen.messages WHERE id = message_id),
               (SELECT created_at FROM queen.messages WHERE id = message_id),
-              (SELECT partition_name FROM available_messages WHERE id = message_id LIMIT 1),
-              (SELECT queue_name FROM available_messages WHERE id = message_id LIMIT 1),
-              (SELECT priority FROM available_messages WHERE id = message_id LIMIT 1),
+              (SELECT p.name FROM queen.messages m2 JOIN queen.partitions p ON m2.partition_id = p.id WHERE m2.id = message_id) as partition_name,
+              $1 as queue_name,
+              (SELECT priority FROM queen.queues WHERE name = $1) as priority,
               retry_count
           `, [queue, partition, batch, subscriptionStart, consumerGroup, config.WORKER_ID]);
         } else {
           // Any partition with consumer group
           result = await client.query(`
             WITH available_messages AS (
-              SELECT m.*, p.name as partition_name, q.name as queue_name,
+              SELECT m.id, m.transaction_id, m.trace_id, m.payload, m.is_encrypted, m.created_at,
+                     p.name as partition_name, q.name as queue_name,
                      q.priority, q.lease_time, q.retry_limit, q.delayed_processing,
                      q.window_buffer, q.max_wait_time_seconds
               FROM queen.messages m
@@ -524,6 +547,7 @@ export const createOptimizedQueueManager = (pool, resourceCache, eventManager) =
             FROM available_messages
             RETURNING message_id,
               (SELECT transaction_id FROM queen.messages WHERE id = message_id),
+              (SELECT trace_id FROM queen.messages WHERE id = message_id),
               (SELECT payload FROM queen.messages WHERE id = message_id),
               (SELECT is_encrypted FROM queen.messages WHERE id = message_id),
               (SELECT created_at FROM queen.messages WHERE id = message_id),
@@ -570,6 +594,7 @@ export const createOptimizedQueueManager = (pool, resourceCache, eventManager) =
           return {
             id: row.message_id,
             transactionId: row.transaction_id,
+            traceId: row.trace_id,
             queue: row.queue_name,
             partition: row.partition_name,
             data: decryptedPayload,
@@ -584,14 +609,7 @@ export const createOptimizedQueueManager = (pool, resourceCache, eventManager) =
       
       // Log pop operations
       if (messages.length > 0) {
-        const logInfo = messages.map(m => ({
-          id: m.id,
-          transactionId: m.transactionId,
-          queue: m.queue,
-          partition: m.partition,
-          consumerGroup: m.consumerGroup
-        }));
-        log(`${LogTypes.POP} | Count: ${messages.length} | ConsumerGroup: ${consumerGroup || 'QUEUE_MODE'} | Messages: ${JSON.stringify(logInfo)}`);
+        log(`${LogTypes.POP} | Count: ${messages.length} | ConsumerGroup: ${consumerGroup || 'QUEUE_MODE'}`);
       }
       
       return { messages };
@@ -644,7 +662,8 @@ export const createOptimizedQueueManager = (pool, resourceCache, eventManager) =
       log(`DEBUG: Found message for ack with retry_count=${messageStatus.retry_count}, status=${messageStatus.status}, dlq=${messageStatus.dlq_after_max_retries}, limit=${messageStatus.retry_limit}`);
       
       if (status === 'completed') {
-        // Mark as completed
+        // Mark as completed and release partition lease
+        const actualConsumerGroup = consumerGroup || '__QUEUE_MODE__';
         const updateParams = consumerGroup 
           ? [transactionId, consumerGroup]
           : [transactionId];
@@ -664,6 +683,33 @@ export const createOptimizedQueueManager = (pool, resourceCache, eventManager) =
                AND ms.consumer_group = '__QUEUE_MODE__'`;
         
         await client.query(updateQuery, updateParams);
+        
+        // Release partition lease if this was the last message in the batch
+        const releaseQuery = `
+          WITH message_partition AS (
+            SELECT m.partition_id
+            FROM queen.messages m
+            WHERE m.transaction_id = $1
+          )
+          UPDATE queen.partition_leases pl
+          SET released_at = NOW()
+          FROM message_partition mp
+          WHERE pl.partition_id = mp.partition_id
+            AND pl.consumer_group = $2
+            AND pl.released_at IS NULL
+            AND EXISTS (
+              SELECT 1 
+              WHERE NOT EXISTS (
+                SELECT 1 
+                FROM queen.messages_status ms
+                JOIN queen.messages m2 ON ms.message_id = m2.id
+                WHERE m2.partition_id = mp.partition_id
+                  AND ms.consumer_group = $2
+                  AND ms.status = 'processing'
+              )
+            )`;
+        
+        await client.query(releaseQuery, [transactionId, actualConsumerGroup]);
         
         log(`${LogTypes.ACK} | TransactionId: ${transactionId} | Status: completed | ConsumerGroup: ${consumerGroup || 'QUEUE_MODE'}`);
       } else if (status === 'failed') {
@@ -758,23 +804,48 @@ export const createOptimizedQueueManager = (pool, resourceCache, eventManager) =
       // Process completed messages
       if (grouped.completed.length > 0) {
         const ids = grouped.completed.map(a => a.transactionId);
+        const actualConsumerGroup = consumerGroup || '__QUEUE_MODE__';
         
         const updateQuery = consumerGroup
           ? `UPDATE queen.messages_status ms
              SET status = 'completed', completed_at = NOW()
              FROM queen.messages m
              WHERE ms.message_id = m.id 
-               AND m.transaction_id = ANY($1::uuid[])
+               AND m.transaction_id = ANY($1::varchar[])
                AND ms.consumer_group = $2`
           : `UPDATE queen.messages_status ms
              SET status = 'completed', completed_at = NOW()
              FROM queen.messages m
              WHERE ms.message_id = m.id 
-               AND m.transaction_id = ANY($1::uuid[])
+               AND m.transaction_id = ANY($1::varchar[])
                AND ms.consumer_group = '__QUEUE_MODE__'`;
         
         const params = consumerGroup ? [ids, consumerGroup] : [ids];
         await client.query(updateQuery, params);
+        
+        // Release partition leases for partitions with no more processing messages
+        const releaseQuery = `
+          WITH affected_partitions AS (
+            SELECT DISTINCT m.partition_id
+            FROM queen.messages m
+            WHERE m.transaction_id = ANY($1::varchar[])
+          )
+          UPDATE queen.partition_leases pl
+          SET released_at = NOW()
+          FROM affected_partitions ap
+          WHERE pl.partition_id = ap.partition_id
+            AND pl.consumer_group = $2
+            AND pl.released_at IS NULL
+            AND NOT EXISTS (
+              SELECT 1 
+              FROM queen.messages_status ms
+              JOIN queen.messages m2 ON ms.message_id = m2.id
+              WHERE m2.partition_id = ap.partition_id
+                AND ms.consumer_group = $2
+                AND ms.status = 'processing'
+            )`;
+        
+        await client.query(releaseQuery, [ids, actualConsumerGroup]);
         
         log(`${LogTypes.ACK_BATCH} | Status: completed | Count: ${ids.length} | ConsumerGroup: ${consumerGroup || 'QUEUE_MODE'} | TransactionIds: [${ids.join(', ')}]`);
         
@@ -793,12 +864,46 @@ export const createOptimizedQueueManager = (pool, resourceCache, eventManager) =
     return results;
   };
   
-  // Reclaim expired leases (now per consumer group)
+  // Reclaim expired leases (now includes partition leases)
   const reclaimExpiredLeases = async () => {
     return withTransaction(pool, async (client) => {
+      // First, handle expired partition leases
+      const partitionLeaseResult = await client.query(
+        `WITH expired_leases AS (
+          UPDATE queen.partition_leases
+          SET released_at = NOW()
+          WHERE lease_expires_at < NOW()
+            AND released_at IS NULL
+          RETURNING partition_id, consumer_group, message_batch
+        )
+        -- Reset message status for messages in expired leases
+        UPDATE queen.messages_status ms
+        SET status = 'pending',
+            retry_count = COALESCE(retry_count, 0) + 1,
+            failed_at = NOW(),
+            error_message = 'Partition lease expired',
+            lease_expires_at = NULL,
+            worker_id = NULL,
+            processing_at = NULL
+        FROM expired_leases el
+        WHERE ms.message_id = ANY(
+          SELECT jsonb_array_elements_text(el.message_batch)::uuid
+        )
+        AND ms.consumer_group = el.consumer_group
+        RETURNING ms.message_id`
+      );
+      
+      if (partitionLeaseResult.rows.length > 0) {
+        log(`${LogTypes.RECLAIM} | Expired partition leases reclaimed | Message count: ${partitionLeaseResult.rows.length}`);
+      }
+      
+      // Then handle individual message lease expiration
       const result = await client.query(
         `UPDATE queen.messages_status 
-         SET status = 'pending', lease_expires_at = NULL 
+         SET status = 'pending', 
+             lease_expires_at = NULL,
+             worker_id = NULL,
+             processing_at = NULL
          WHERE status = 'processing' 
            AND lease_expires_at < NOW()
          RETURNING message_id, consumer_group`
@@ -996,7 +1101,8 @@ export const createOptimizedQueueManager = (pool, resourceCache, eventManager) =
         // Build query for namespace/task filtering with new schema
         let query = `
           WITH available_messages AS (
-            SELECT m.*, p.name as partition_name, q.name as queue_name,
+            SELECT m.id, m.transaction_id, m.trace_id, m.payload, m.is_encrypted, m.created_at,
+                   p.name as partition_name, q.name as queue_name,
                    q.priority, q.lease_time, q.retry_limit, q.delayed_processing,
                    q.window_buffer, q.max_wait_time_seconds, q.namespace, q.task
             FROM queen.messages m
@@ -1039,6 +1145,7 @@ export const createOptimizedQueueManager = (pool, resourceCache, eventManager) =
             retry_count = queen.messages_status.retry_count + 1
           RETURNING message_id,
             (SELECT transaction_id FROM queen.messages WHERE id = message_id),
+            (SELECT trace_id FROM queen.messages WHERE id = message_id),
             (SELECT payload FROM queen.messages WHERE id = message_id),
             (SELECT is_encrypted FROM queen.messages WHERE id = message_id),
             (SELECT created_at FROM queen.messages WHERE id = message_id),
@@ -1073,6 +1180,7 @@ export const createOptimizedQueueManager = (pool, resourceCache, eventManager) =
             return {
               id: row.message_id,
               transactionId: row.transaction_id,
+              traceId: row.trace_id,
               queue: row.queue_name,
               partition: row.partition_name,
               data: decryptedPayload,
@@ -1124,7 +1232,8 @@ export const createOptimizedQueueManager = (pool, resourceCache, eventManager) =
           retentionEnabled: 'retention_enabled',
           priority: 'priority',
           encryptionEnabled: 'encryption_enabled',
-          maxWaitTimeSeconds: 'max_wait_time_seconds'
+          maxWaitTimeSeconds: 'max_wait_time_seconds',
+          maxQueueSize: 'max_queue_size'
         };
         
         // Process each option
