@@ -1,7 +1,7 @@
 -- Queen Message Queue Schema V2
 -- Structure: Queues → Partitions → Messages
 
-DROP SCHEMA IF EXISTS queen CASCADE;
+-- Create schema only if it doesn't exist (preserves existing data)
 CREATE SCHEMA IF NOT EXISTS queen;
 
 -- Queues table (top level, with all configuration options)

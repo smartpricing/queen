@@ -22,10 +22,23 @@ export const createPool = () => {
 
 // Initialize database schema
 export const initDatabase = async (pool) => {
-  const schemaPath = path.join(__dirname, 'schema-v2.sql');
-  const schema = fs.readFileSync(schemaPath, 'utf8');
-  
   try {
+    // Check if the queen schema already exists
+    const schemaCheck = await pool.query(`
+      SELECT schema_name 
+      FROM information_schema.schemata 
+      WHERE schema_name = 'queen'
+    `);
+    
+    if (schemaCheck.rows.length > 0) {
+      console.log('Database schema already exists, skipping initialization');
+      return;
+    }
+    
+    // Schema doesn't exist, create it
+    const schemaPath = path.join(__dirname, 'schema-v2.sql');
+    const schema = fs.readFileSync(schemaPath, 'utf8');
+    
     await pool.query(schema);
     console.log('Database schema V2 initialized');
   } catch (error) {
