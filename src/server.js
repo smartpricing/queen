@@ -1,5 +1,8 @@
 import uWS from 'uWebSockets.js';
 import pg from 'pg';
+import fs from 'fs';
+import path from 'path';
+import { fileURLToPath } from 'url';
 import { initDatabase } from './database/connection.js';
 import { createOptimizedQueueManager } from './managers/queueManagerOptimized.js';
 import { createResourceCache } from './managers/resourceCache.js';
@@ -12,6 +15,11 @@ import { createAnalyticsRoutes } from './routes/analytics.js';
 import { createMessagesRoutes } from './routes/messages.js';
 import { createResourcesRoutes } from './routes/resources.js';
 import { createWebSocketServer } from './websocket/wsServer.js';
+import { initEncryption } from './services/encryptionService.js';
+import { startRetentionJob } from './services/retentionService.js';
+import { startEvictionJob } from './services/evictionService.js';
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 const PORT = process.env.PORT || 6632;
 const HOST = process.env.HOST || '0.0.0.0';
@@ -54,8 +62,39 @@ const analyticsRoutes = createAnalyticsRoutes(queueManager);
 const messagesRoutes = createMessagesRoutes(pool, queueManager);
 const resourcesRoutes = createResourcesRoutes(pool);
 
-// Initialize database
-await initDatabase(pool);
+// Initialize database with migrations
+const initDatabaseWithMigrations = async () => {
+  // Run base schema
+  await initDatabase(pool);
+  
+  // Run extension migrations
+  const migrationPath = path.join(__dirname, '..', 'migrations', '001-extend-features.sql');
+  if (fs.existsSync(migrationPath)) {
+    const migration = fs.readFileSync(migrationPath, 'utf8');
+    try {
+      await pool.query(migration);
+      console.log('✅ Extension features migration applied');
+    } catch (error) {
+      if (!error.message.includes('already exists')) {
+        console.error('Migration error:', error);
+      }
+    }
+  }
+};
+
+await initDatabaseWithMigrations();
+
+// Initialize extended features
+console.log('\n🚀 Initializing Queen Services...');
+
+// 1. Encryption service
+const encryptionEnabled = initEncryption();
+
+// 2. Retention service
+const stopRetention = startRetentionJob(pool);
+
+// 3. Eviction service
+const stopEviction = startEvictionJob(pool, eventManager);
 
 // Background job for lease reclamation
 setInterval(async () => {
@@ -1050,8 +1089,13 @@ app.get('/metrics', (res, req) => {
 // Start server
 app.listen(HOST, PORT, (token) => {
   if (token) {
-    console.log(`Queen server listening on http://${HOST}:${PORT}`);
-    console.log(`WebSocket dashboard available at ws://${HOST}:${PORT}/ws/dashboard`);
+    console.log(`\n✅ Queen Server running at http://${HOST}:${PORT}`);
+    console.log(`📊 Features enabled:`);
+    console.log(`   - Encryption: ${encryptionEnabled ? '✅' : '❌ (set QUEEN_ENCRYPTION_KEY)'}`);
+    console.log(`   - Retention: ✅`);
+    console.log(`   - Eviction: ✅`);
+    console.log(`   - WebSocket Dashboard: ws://${HOST}:${PORT}/ws/dashboard`);
+    console.log(`\n🎯 Ready to process messages with high performance!`);
   } else {
     console.log(`Failed to start server on port ${PORT}`);
     process.exit(1);
@@ -1061,11 +1105,17 @@ app.listen(HOST, PORT, (token) => {
 // Graceful shutdown
 const shutdown = async (signal) => {
   console.log(`\n🛑 Received ${signal}, shutting down gracefully...`);
+  
+  // Stop background jobs
+  if (stopRetention) stopRetention();
+  if (stopEviction) stopEviction();
+  
   const uptime = (Date.now() - startTime) / 1000;
   if (messageCount > 0) {
     console.log(`📊 Final stats: ${messageCount} messages processed in ${uptime.toFixed(1)}s`);
     console.log(`   Average: ${(messageCount / uptime).toFixed(2)} messages/second`);
   }
+  
   await pool.end();
   process.exit(0);
 };

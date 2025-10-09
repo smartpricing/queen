@@ -65,8 +65,14 @@ node init-db.js
 ### Start the Server
 
 ```bash
+# Optional: Enable encryption
+export QUEEN_ENCRYPTION_KEY=$(openssl rand -hex 32)
+
 # Start the Queen server
 npm start
+# Or use the startup script
+./start.sh
+
 # Server starts on http://localhost:6632
 ```
 
@@ -814,6 +820,92 @@ export DB_IDLE_TIMEOUT=30000        // Connection idle timeout
 export DB_CONNECTION_TIMEOUT=2000   // Connection establishment timeout
 ```
 
+## 🔒 Enterprise Features
+
+Queen includes three powerful enterprise features for production deployments:
+
+### 1. Encryption
+Protect sensitive data with AES-256-GCM encryption at the queue level.
+
+**Setup:**
+```bash
+# Set encryption key (64 hex characters = 32 bytes)
+export QUEEN_ENCRYPTION_KEY=$(openssl rand -hex 32)
+```
+
+**Configuration:**
+```javascript
+await client.configure({
+  queue: 'sensitive-data',
+  options: {
+    encryptionEnabled: true
+  }
+});
+```
+
+### 2. Message Retention
+Automatically clean up old messages to prevent storage bloat.
+
+**Configuration:**
+```javascript
+await client.configure({
+  queue: 'temp-queue',
+  partition: 'batch',
+  options: {
+    retentionSeconds: 3600,          // Delete pending after 1 hour
+    completedRetentionSeconds: 300,  // Delete completed after 5 minutes
+    retentionEnabled: true
+  }
+});
+```
+
+**Environment:**
+```bash
+export RETENTION_INTERVAL=300000  # Cleanup interval in milliseconds
+```
+
+### 3. Message Eviction
+Enforce SLAs by automatically evicting messages that wait too long.
+
+**Configuration:**
+```javascript
+await client.configure({
+  queue: 'time-sensitive',
+  options: {
+    maxWaitTimeSeconds: 60  // Evict messages older than 1 minute
+  }
+});
+```
+
+**Environment:**
+```bash
+export EVICTION_INTERVAL=60000  # Check interval in milliseconds
+```
+
+### Combined Example
+```javascript
+await client.configure({
+  queue: 'production-queue',
+  partition: 'priority',
+  options: {
+    // Encryption
+    encryptionEnabled: true,
+    
+    // Retention
+    retentionSeconds: 86400,
+    completedRetentionSeconds: 3600,
+    retentionEnabled: true,
+    
+    // Eviction
+    maxWaitTimeSeconds: 600,
+    
+    // Standard options
+    priority: 10,
+    leaseTime: 300
+  }
+});
+```
+
 ## ⚙️ Configuration
 
 ### Environment Variables
@@ -834,18 +926,38 @@ DB_CONNECTION_TIMEOUT=2000
 # Server Configuration
 PORT=6632
 HOST=0.0.0.0
+
+# Encryption (Optional)
+QUEEN_ENCRYPTION_KEY=<64-hex-characters>  # Generate with: openssl rand -hex 32
+
+# Background Jobs (Optional)
+RETENTION_INTERVAL=300000  # Message retention check interval (ms)
+EVICTION_INTERVAL=60000    # Message eviction check interval (ms)
 ```
 
 ### Queue Options
 
 ```javascript
 {
+  // Standard Options
   "leaseTime": 300,           // Seconds before message lease expires
   "retryLimit": 3,            // Maximum retry attempts
   "priority": 0,              // Queue/partition priority (higher = first)
   "delayedProcessing": 0,     // Delay in seconds before message is available
   "windowBuffer": 0,          // Buffer time in seconds for batching
-  "dlqAfterMaxRetries": true  // Move to dead letter queue after max retries
+  "dlqAfterMaxRetries": true, // Move to dead letter queue after max retries
+  
+  // Encryption (Queue-level)
+  "encryptionEnabled": false,  // Enable AES-256-GCM encryption for this queue
+  
+  // Retention (Partition-level)
+  "retentionSeconds": 0,              // Delete pending messages after X seconds (0 = disabled)
+  "completedRetentionSeconds": 0,     // Delete completed/failed messages after X seconds
+  "partitionRetentionSeconds": 0,     // Delete empty partitions after X seconds
+  "retentionEnabled": false,          // Enable retention for this partition
+  
+  // Eviction (Queue-level)
+  "maxWaitTimeSeconds": 0     // Evict messages older than X seconds (0 = disabled)
 }
 ```
 
