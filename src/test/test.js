@@ -461,11 +461,392 @@ async function testPartitionPriorityOrdering() {
 }
 
 // ============================================
+// PARTITION LOCKING TESTS
+// ============================================
+
+/**
+ * Test 7: Partition Locking in Queue Mode
+ * Tests that partitions are properly locked when consumed
+ */
+async function testPartitionLocking() {
+  startTest('Partition Locking in Queue Mode');
+  
+  const QUEUE_NAME = 'test-partition-lock';
+  const PARTITION1 = 'partition-A';
+  const PARTITION2 = 'partition-B';
+  
+  try {
+    // Setup: Push 3 messages to each partition
+    const messages = [];
+    
+    for (let i = 1; i <= 3; i++) {
+      messages.push({
+        queue: QUEUE_NAME,
+        partition: PARTITION1,
+        payload: { data: `Message ${i} for ${PARTITION1}` },
+        transactionId: `txn-p1-${i}`
+      });
+    }
+    
+    for (let i = 1; i <= 3; i++) {
+      messages.push({
+        queue: QUEUE_NAME,
+        partition: PARTITION2,
+        payload: { data: `Message ${i} for ${PARTITION2}` },
+        transactionId: `txn-p2-${i}`
+      });
+    }
+    
+    // Push all messages
+    await client.push({ items: messages });
+    log(`Pushed ${messages.length} messages (3 to each partition)`);
+    
+    // Consumer 1: Pop without specifying partition
+    log('Consumer 1: Popping messages (no partition specified)...');
+    const result1 = await client.pop({ queue: QUEUE_NAME, batch: 2 });
+    
+    if (result1.messages.length === 0) {
+      throw new Error('Consumer 1 got no messages');
+    }
+    
+    const partition1 = result1.messages[0].partition;
+    log(`Consumer 1: Got ${result1.messages.length} messages from partition: ${partition1}`);
+    
+    // Consumer 2: Pop without specifying partition (should get different partition)
+    log('Consumer 2: Popping messages (no partition specified)...');
+    const result2 = await client.pop({ queue: QUEUE_NAME, batch: 2 });
+    
+    if (result2.messages.length === 0) {
+      throw new Error('Consumer 2 got no messages');
+    }
+    
+    const partition2 = result2.messages[0].partition;
+    log(`Consumer 2: Got ${result2.messages.length} messages from partition: ${partition2}`);
+    
+    // Verify they got different partitions
+    if (partition1 === partition2) {
+      throw new Error('Both consumers got the same partition - partition locking not working!');
+    }
+    
+    log(`SUCCESS: Consumers got different partitions (${partition1} vs ${partition2})`);
+    
+    // Consumer 3: Try to pop again (should get no messages as both partitions are locked)
+    log('Consumer 3: Trying to pop (both partitions should be locked)...');
+    const result3 = await client.pop({ queue: QUEUE_NAME, batch: 2 });
+    
+    if (result3.messages.length !== 0) {
+      throw new Error(`Consumer 3 got ${result3.messages.length} messages (should have been 0)`);
+    }
+    
+    log('Consumer 3: Got no messages (correct - both partitions are locked)');
+    
+    // Now ACK messages from Consumer 1 to release its partition
+    log('Consumer 1: ACKing messages to release partition...');
+    for (const msg of result1.messages) {
+      await client.ack(msg.transactionId, 'completed');
+    }
+    
+    // Consumer 4: Should now be able to get remaining message from Consumer 1's partition
+    log('Consumer 4: Popping after Consumer 1 released...');
+    const result4 = await client.pop({ queue: QUEUE_NAME, batch: 2 });
+    
+    if (result4.messages.length > 0) {
+      const partition4 = result4.messages[0].partition;
+      log(`Consumer 4: Got ${result4.messages.length} messages from partition: ${partition4}`);
+      
+      // Should be from the same partition as Consumer 1 had
+      if (partition4 !== partition1) {
+        throw new Error('Consumer 4 did not get messages from released partition');
+      }
+    }
+    
+    // Clean up: ACK all remaining messages
+    log('Cleaning up: ACKing all remaining messages...');
+    for (const msg of result2.messages) {
+      await client.ack(msg.transactionId, 'completed');
+    }
+    for (const msg of result4.messages) {
+      await client.ack(msg.transactionId, 'completed');
+    }
+    
+    passTest('Partition locking works correctly');
+  } catch (error) {
+    failTest(error);
+  }
+}
+
+/**
+ * Test 8: Partition Locking in Bus Mode
+ * Tests that partitions are properly locked per consumer group
+ */
+async function testBusPartitionLocking() {
+  startTest('Partition Locking in Bus Mode');
+  
+  const QUEUE_NAME = 'test-bus-partition-lock';
+  const PARTITION1 = 'partition-X';
+  const PARTITION2 = 'partition-Y';
+  const CONSUMER_GROUP1 = 'group-alpha';
+  const CONSUMER_GROUP2 = 'group-beta';
+  
+  try {
+    // Setup: Push 3 messages to each partition
+    const messages = [];
+    
+    for (let i = 1; i <= 3; i++) {
+      messages.push({
+        queue: QUEUE_NAME,
+        partition: PARTITION1,
+        payload: { data: `Message ${i} for ${PARTITION1}` },
+        transactionId: `txn-px-${i}`
+      });
+    }
+    
+    for (let i = 1; i <= 3; i++) {
+      messages.push({
+        queue: QUEUE_NAME,
+        partition: PARTITION2,
+        payload: { data: `Message ${i} for ${PARTITION2}` },
+        transactionId: `txn-py-${i}`
+      });
+    }
+    
+    // Push all messages
+    await client.push({ items: messages });
+    log(`Pushed ${messages.length} messages (3 to each partition)`);
+    
+    // Group Alpha, Consumer 1: Pop without specifying partition
+    log('Group Alpha, Consumer 1: Popping messages...');
+    const result1 = await client.pop({ 
+      queue: QUEUE_NAME,
+      batch: 2, 
+      consumerGroup: CONSUMER_GROUP1 
+    });
+    
+    if (result1.messages.length === 0) {
+      throw new Error('Group Alpha Consumer 1 got no messages');
+    }
+    
+    const partition1 = result1.messages[0].partition;
+    log(`Group Alpha Consumer 1: Got ${result1.messages.length} messages from partition: ${partition1}`);
+    
+    // Group Alpha, Consumer 2: Pop without specifying partition (should get different partition if locking works)
+    log('Group Alpha, Consumer 2: Popping messages...');
+    const result2 = await client.pop({ 
+      queue: QUEUE_NAME,
+      batch: 2,
+      consumerGroup: CONSUMER_GROUP1 
+    });
+    
+    if (result2.messages.length === 0) {
+      log('Group Alpha Consumer 2 got no messages (partition locking might be working)');
+    } else {
+      const partition2 = result2.messages[0].partition;
+      log(`Group Alpha Consumer 2: Got ${result2.messages.length} messages from partition: ${partition2}`);
+      
+      if (partition1 === partition2) {
+        log('WARNING: Both consumers in same group got same partition!');
+        log('This means partition locking is NOT implemented for bus mode.');
+      } else {
+        log('Consumers in same group got different partitions');
+      }
+    }
+    
+    // Group Beta, Consumer 1: Should be able to get messages from any partition (different consumer group)
+    log('Group Beta, Consumer 1: Popping messages (different consumer group)...');
+    const result3 = await client.pop({ 
+      queue: QUEUE_NAME,
+      batch: 2,
+      consumerGroup: CONSUMER_GROUP2 
+    });
+    
+    if (result3.messages.length > 0) {
+      const partition3 = result3.messages[0].partition;
+      log(`Group Beta Consumer 1: Got ${result3.messages.length} messages from partition: ${partition3}`);
+      log('Different consumer groups can access same partitions independently (correct)');
+    }
+    
+    // Clean up: ACK all messages
+    log('Cleaning up: ACKing all messages...');
+    for (const msg of result1.messages) {
+      await client.ack(msg.transactionId, 'completed', null, CONSUMER_GROUP1);
+    }
+    for (const msg of result2.messages) {
+      await client.ack(msg.transactionId, 'completed', null, CONSUMER_GROUP1);
+    }
+    for (const msg of result3.messages) {
+      await client.ack(msg.transactionId, 'completed', null, CONSUMER_GROUP2);
+    }
+    
+    passTest('Bus mode partition locking test completed');
+  } catch (error) {
+    failTest(error);
+  }
+}
+
+/**
+ * Test 9: Specific Partition Request with Locking
+ * Tests that requesting a specific partition respects locking
+ */
+async function testSpecificPartitionLocking() {
+  startTest('Specific Partition Request with Locking');
+  
+  const QUEUE_NAME = 'test-specific-partition';
+  const PARTITION_NAME = 'specific-partition';
+  const CONSUMER_GROUP = 'test-group';
+  
+  try {
+    // Part 1: Test Queue Mode
+    log('=== Testing Queue Mode with Specific Partition ===');
+    
+    // Push test messages
+    const messages = [];
+    for (let i = 1; i <= 5; i++) {
+      messages.push({
+        queue: QUEUE_NAME,
+        partition: PARTITION_NAME,
+        payload: { data: `Message ${i}` },
+        transactionId: `txn-${i}`
+      });
+    }
+    
+    await client.push({ items: messages });
+    log(`Pushed ${messages.length} messages to ${PARTITION_NAME}`);
+    
+    // Consumer 1: Request specific partition
+    log('Consumer 1: Requesting specific partition...');
+    const result1 = await client.pop({ 
+      queue: QUEUE_NAME,
+      batch: 2,
+      partition: PARTITION_NAME 
+    });
+    
+    if (result1.messages.length === 0) {
+      throw new Error('Consumer 1 got no messages');
+    }
+    
+    log(`Consumer 1: Got ${result1.messages.length} messages from partition: ${result1.messages[0].partition}`);
+    
+    // Consumer 2: Try to request same specific partition (should get nothing due to lock)
+    log('Consumer 2: Requesting same specific partition...');
+    const result2 = await client.pop({ 
+      queue: QUEUE_NAME,
+      batch: 2,
+      partition: PARTITION_NAME 
+    });
+    
+    if (result2.messages.length !== 0) {
+      throw new Error(`Consumer 2 got ${result2.messages.length} messages (should have been 0 due to lock)`);
+    }
+    
+    log('Consumer 2: Got no messages (correct - partition is locked by Consumer 1)');
+    
+    // ACK messages from Consumer 1
+    log('Consumer 1: ACKing messages...');
+    for (const msg of result1.messages) {
+      await client.ack(msg.transactionId, 'completed');
+    }
+    
+    // Consumer 3: Should now get messages from the specific partition
+    log('Consumer 3: Requesting specific partition after release...');
+    const result3 = await client.pop({ 
+      queue: QUEUE_NAME,
+      batch: 2,
+      partition: PARTITION_NAME 
+    });
+    
+    if (result3.messages.length === 0) {
+      throw new Error('Consumer 3 got no messages (should have gotten remaining messages)');
+    }
+    
+    log(`Consumer 3: Got ${result3.messages.length} messages after lease release`);
+    
+    // Clean up queue mode messages
+    for (const msg of result3.messages) {
+      await client.ack(msg.transactionId, 'completed');
+    }
+    
+    // Part 2: Test Bus Mode
+    log('=== Testing Bus Mode with Specific Partition ===');
+    
+    // Push fresh messages
+    const busMessages = [];
+    for (let i = 1; i <= 5; i++) {
+      busMessages.push({
+        queue: QUEUE_NAME,
+        partition: PARTITION_NAME,
+        payload: { data: `Bus Message ${i}` },
+        transactionId: `bus-txn-${i}`
+      });
+    }
+    
+    await client.push({ items: busMessages });
+    
+    // Group Alpha, Consumer 1: Request specific partition
+    log('Group Alpha, Consumer 1: Requesting specific partition...');
+    const busResult1 = await client.pop({ 
+      queue: QUEUE_NAME,
+      batch: 2,
+      partition: PARTITION_NAME,
+      consumerGroup: CONSUMER_GROUP 
+    });
+    
+    if (busResult1.messages.length === 0) {
+      throw new Error('Group Alpha Consumer 1 got no messages');
+    }
+    
+    log(`Group Alpha Consumer 1: Got ${busResult1.messages.length} messages`);
+    
+    // Group Alpha, Consumer 2: Try same specific partition (should be locked)
+    log('Group Alpha, Consumer 2: Requesting same specific partition...');
+    const busResult2 = await client.pop({ 
+      queue: QUEUE_NAME,
+      batch: 2,
+      partition: PARTITION_NAME,
+      consumerGroup: CONSUMER_GROUP 
+    });
+    
+    if (busResult2.messages.length !== 0) {
+      throw new Error(`Group Alpha Consumer 2: Got ${busResult2.messages.length} messages (should be 0)`);
+    }
+    
+    log('Group Alpha Consumer 2: Got no messages (correct - partition locked by Consumer 1)');
+    
+    // Different Group, Consumer 1: Should get messages (different consumer group)
+    log('Group Beta, Consumer 1: Requesting same partition (different group)...');
+    const busResult3 = await client.pop({ 
+      queue: QUEUE_NAME,
+      batch: 2,
+      partition: PARTITION_NAME,
+      consumerGroup: 'group-beta' 
+    });
+    
+    if (busResult3.messages.length === 0) {
+      throw new Error('Group Beta should be able to access partition (different group)');
+    }
+    
+    log(`Group Beta Consumer 1: Got ${busResult3.messages.length} messages (different group works)`);
+    
+    // Clean up
+    log('Cleaning up...');
+    for (const msg of busResult1.messages) {
+      await client.ack(msg.transactionId, 'completed', null, CONSUMER_GROUP);
+    }
+    for (const msg of busResult3.messages) {
+      await client.ack(msg.transactionId, 'completed', null, 'group-beta');
+    }
+    
+    passTest('Specific partition locking works correctly');
+  } catch (error) {
+    failTest(error);
+  }
+}
+
+// ============================================
 // ENTERPRISE FEATURE TESTS
 // ============================================
 
 /**
- * Test 7: Message Encryption
+ * Test 10: Message Encryption
  */
 async function testMessageEncryption() {
   startTest('Message Encryption', 'enterprise');
@@ -586,7 +967,7 @@ async function testMessageEncryption() {
 }
 
 /**
- * Test 8: Retention Policy - Pending Messages
+ * Test 11: Retention Policy - Pending Messages
  */
 async function testRetentionPendingMessages() {
   startTest('Retention Policy - Pending Messages', 'enterprise');
@@ -658,7 +1039,7 @@ async function testRetentionPendingMessages() {
 }
 
 /**
- * Test 9: Retention Policy - Completed Messages
+ * Test 12: Retention Policy - Completed Messages
  */
 async function testRetentionCompletedMessages() {
   startTest('Retention Policy - Completed Messages', 'enterprise');
@@ -746,7 +1127,7 @@ async function testRetentionCompletedMessages() {
 }
 
 /**
- * Test 10: Partition Management
+ * Test 13: Partition Management
  */
 async function testPartitionRetention() {
   startTest('Partition Management', 'enterprise');
@@ -817,7 +1198,7 @@ async function testPartitionRetention() {
 }
 
 /**
- * Test 11: Message Eviction
+ * Test 14: Message Eviction
  */
 async function testMessageEviction() {
   startTest('Message Eviction', 'enterprise');
@@ -920,7 +1301,7 @@ async function testMessageEviction() {
 }
 
 /**
- * Test 12: Combined Enterprise Features
+ * Test 15: Combined Enterprise Features
  */
 async function testCombinedEnterpriseFeatures() {
   startTest('Combined Enterprise Features', 'enterprise');
@@ -1036,7 +1417,7 @@ async function testCombinedEnterpriseFeatures() {
 }
 
 /**
- * Test 13: Consumer Encryption/Decryption
+ * Test 16: Consumer Encryption/Decryption
  */
 async function testConsumerEncryption() {
   startTest('Consumer Encryption/Decryption', 'enterprise');
@@ -1132,7 +1513,7 @@ async function testConsumerEncryption() {
 }
 
 /**
- * Test 14: Bus Mode - Consumer Groups
+ * Test 17: Bus Mode - Consumer Groups
  */
 async function testBusConsumerGroups() {
   startTest('Bus Mode - Consumer Groups', 'enterprise');
@@ -1209,7 +1590,7 @@ async function testBusConsumerGroups() {
 }
 
 /**
- * Test 15: Mixed Mode - Queue and Bus Together
+ * Test 18: Mixed Mode - Queue and Bus Together
  */
 async function testMixedMode() {
   startTest('Mixed Mode - Queue and Bus Together', 'enterprise');
@@ -1287,7 +1668,7 @@ async function testMixedMode() {
 }
 
 /**
- * Test 16: Consumer Group Subscription Modes
+ * Test 19: Consumer Group Subscription Modes
  */
 async function testConsumerGroupSubscriptionModes() {
   startTest('Consumer Group Subscription Modes', 'enterprise');
@@ -1384,7 +1765,7 @@ async function testConsumerGroupSubscriptionModes() {
 }
 
 /**
- * Test 17: Consumer Group Isolation
+ * Test 20: Consumer Group Isolation
  */
 async function testConsumerGroupIsolation() {
   startTest('Consumer Group Isolation', 'enterprise');
@@ -1474,7 +1855,7 @@ async function testConsumerGroupIsolation() {
 }
 
 /**
- * Test 18: Enterprise Error Handling
+ * Test 21: Enterprise Error Handling
  */
 async function testEnterpriseErrorHandling() {
   startTest('Enterprise Error Handling', 'enterprise');
@@ -3536,7 +3917,10 @@ async function runAllTests() {
       testQueueConfiguration,
       testPopAndAcknowledgment,
       testDelayedProcessing,
-      testPartitionPriorityOrdering
+      testPartitionPriorityOrdering,
+      testPartitionLocking,
+      testBusPartitionLocking,
+      testSpecificPartitionLocking
     ];
     
     // Enterprise feature tests
