@@ -1211,21 +1211,25 @@ const popMessages = async (scope, options = {}) => {
     getQueueLag,
     // Additional functions for compatibility
     popMessagesWithFilters: async (filters, options = {}) => {
-      const { namespace, task } = filters;
+      const { namespace, task, consumerGroup } = filters;
       const { wait = false, timeout = config.QUEUE.DEFAULT_TIMEOUT, batch = config.QUEUE.DEFAULT_BATCH_SIZE } = options;
       
       return withTransaction(pool, async (client) => {
+        // Determine the actual consumer group to use
+        const actualConsumerGroup = consumerGroup || '__QUEUE_MODE__';
+        
         // Build query for namespace/task filtering with new schema
+        // First, select messages and also get partition info for locking
         let query = `
           WITH available_messages AS (
             SELECT m.id, m.transaction_id, m.trace_id, m.payload, m.is_encrypted, m.created_at,
-                   p.name as partition_name, q.name as queue_name,
+                   p.id as partition_id, p.name as partition_name, q.name as queue_name,
                    q.priority, q.lease_time, q.retry_limit, q.delayed_processing,
                    q.window_buffer, q.max_wait_time_seconds, q.namespace, q.task
             FROM queen.messages m
             JOIN queen.partitions p ON m.partition_id = p.id
             JOIN queen.queues q ON p.queue_id = q.id
-            LEFT JOIN queen.messages_status ms ON m.id = ms.message_id AND ms.consumer_group = '__QUEUE_MODE__'
+            LEFT JOIN queen.messages_status ms ON m.id = ms.message_id AND ms.consumer_group = $1
             WHERE (ms.id IS NULL OR ms.status = 'pending')
               AND m.created_at <= NOW() - INTERVAL '1 second' * q.delayed_processing
               AND (q.max_wait_time_seconds = 0 OR 
@@ -1235,9 +1239,17 @@ const popMessages = async (scope, options = {}) => {
                 WHERE m2.partition_id = p.id 
                   AND m2.created_at > NOW() - INTERVAL '1 second' * q.window_buffer
               ))
+              AND NOT EXISTS (
+                -- Check for active partition leases
+                SELECT 1 FROM queen.partition_leases pl
+                WHERE pl.partition_id = p.id
+                  AND pl.consumer_group = $1
+                  AND pl.released_at IS NULL
+                  AND pl.lease_expires_at > NOW()
+              )
         `;
         
-        const params = [];
+        const params = [actualConsumerGroup];
         if (namespace) {
           params.push(namespace);
           query += ` AND q.namespace = $${params.length}`;
@@ -1251,7 +1263,7 @@ const popMessages = async (scope, options = {}) => {
         query += ` ORDER BY q.priority DESC, m.created_at ASC LIMIT $${params.length} FOR UPDATE OF m SKIP LOCKED`;
         query += `)
           INSERT INTO queen.messages_status (message_id, consumer_group, status, lease_expires_at, processing_at, worker_id)
-          SELECT id, '__QUEUE_MODE__', 'processing', NOW() + INTERVAL '1 second' * lease_time, NOW(), $${params.length + 1}
+          SELECT id, $1, 'processing', NOW() + INTERVAL '1 second' * lease_time, NOW(), $${params.length + 1}
           FROM available_messages
           ON CONFLICT (message_id, consumer_group) 
           DO UPDATE SET 
@@ -1266,14 +1278,37 @@ const popMessages = async (scope, options = {}) => {
             (SELECT payload FROM queen.messages WHERE id = message_id),
             (SELECT is_encrypted FROM queen.messages WHERE id = message_id),
             (SELECT created_at FROM queen.messages WHERE id = message_id),
-            (SELECT p.name FROM queen.messages m2 JOIN queen.partitions p ON m2.partition_id = p.id WHERE m2.id = message_id),
+            (SELECT p.id FROM queen.messages m2 JOIN queen.partitions p ON m2.partition_id = p.id WHERE m2.id = message_id) as partition_id,
+            (SELECT p.name FROM queen.messages m2 JOIN queen.partitions p ON m2.partition_id = p.id WHERE m2.id = message_id) as partition_name,
             (SELECT q.name FROM queen.messages m2 JOIN queen.partitions p ON m2.partition_id = p.id JOIN queen.queues q ON p.queue_id = q.id WHERE m2.id = message_id) as queue_name,
             (SELECT q.priority FROM queen.messages m2 JOIN queen.partitions p ON m2.partition_id = p.id JOIN queen.queues q ON p.queue_id = q.id WHERE m2.id = message_id) as priority,
+            (SELECT q.lease_time FROM queen.messages m2 JOIN queen.partitions p ON m2.partition_id = p.id JOIN queen.queues q ON p.queue_id = q.id WHERE m2.id = message_id) as lease_time,
             retry_count
         `;
         
         params.push(config.WORKER_ID);
         const result = await client.query(query, params);
+        
+        // Lock all partitions that we got messages from
+        if (result.rows.length > 0) {
+          const partitionIds = [...new Set(result.rows.map(r => r.partition_id))];
+          const leaseTime = Math.max(...result.rows.map(r => r.lease_time || 30));
+          
+          // Acquire partition leases for all partitions we got messages from
+          for (const partitionId of partitionIds) {
+            await client.query(`
+              INSERT INTO queen.partition_leases (
+                partition_id, 
+                consumer_group, 
+                lease_expires_at
+              ) VALUES ($1, $2, NOW() + INTERVAL '1 second' * $3)
+              ON CONFLICT (partition_id, consumer_group) 
+              DO UPDATE SET 
+                lease_expires_at = EXCLUDED.lease_expires_at,
+                released_at = NULL
+            `, [partitionId, actualConsumerGroup, leaseTime]);
+          }
+        }
         
         if (result.rows.length === 0 && wait) {
           // For namespace/task filtering, we can't easily wait on specific queue paths

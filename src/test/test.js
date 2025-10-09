@@ -841,12 +841,232 @@ async function testSpecificPartitionLocking() {
   }
 }
 
+/**
+ * Test 10: Namespace/Task Filtering with Partition Locking
+ * Tests that namespace/task filtering properly locks partitions
+ */
+async function testNamespaceTaskFiltering() {
+  startTest('Namespace/Task Filtering with Partition Locking');
+  
+  try {
+    // Setup: Create multiple queues with same namespace but different tasks
+    const namespace = 'test-namespace';
+    const queues = [
+      { name: 'queue-task-1', task: 'process', partition: 'p1' },
+      { name: 'queue-task-2', task: 'process', partition: 'p2' },
+      { name: 'queue-task-3', task: 'analyze', partition: 'p3' }
+    ];
+    
+    // Configure queues with namespace and task
+    for (const q of queues) {
+      // Configure queue with namespace and task
+      await client.configure({
+        queue: q.name,
+        namespace: namespace,
+        task: q.task,
+        options: { leaseTime: 30 }
+      });
+      // Push messages to each queue
+      await client.push({
+        items: [
+          {
+            queue: q.name,
+            partition: q.partition,
+            payload: { data: `Message for ${q.name}` },
+            transactionId: `txn-${q.name}-1`
+          },
+          {
+            queue: q.name,
+            partition: q.partition,
+            payload: { data: `Message 2 for ${q.name}` },
+            transactionId: `txn-${q.name}-2`
+          }
+        ]
+      });
+    }
+    
+    log('Pushed messages to 3 queues with namespace/task metadata');
+    
+    // Test 1: Pop by namespace only (should get messages from all queues)
+    log('Consumer 1: Popping by namespace only...');
+    const result1 = await client.pop({
+      namespace: namespace
+    }, { batch: 3 });
+    
+    if (result1.messages.length === 0) {
+      throw new Error('Consumer 1 got no messages');
+    }
+    
+    log(`Consumer 1: Got ${result1.messages.length} messages from namespace ${namespace}`);
+    const partitions1 = [...new Set(result1.messages.map(m => m.partition))];
+    log(`Consumer 1: Locked partitions: ${partitions1.join(', ')}`);
+    
+    // Test 2: Another consumer tries to pop from same namespace (should get from unlocked partitions only)
+    log('Consumer 2: Trying to pop from same namespace...');
+    const result2 = await client.pop({
+      namespace: namespace
+    }, { batch: 3 });
+    
+    if (result2.messages.length > 0) {
+      const partitions2 = [...new Set(result2.messages.map(m => m.partition))];
+      log(`Consumer 2: Got ${result2.messages.length} messages from partitions: ${partitions2.join(', ')}`);
+      
+      // Verify no overlap in partitions
+      const overlap = partitions1.filter(p => partitions2.includes(p));
+      if (overlap.length > 0) {
+        throw new Error(`Partition locking failed! Both consumers got partition(s): ${overlap.join(', ')}`);
+      }
+      log('SUCCESS: No partition overlap between consumers');
+    } else {
+      log('Consumer 2: Got no messages (all partitions locked)');
+    }
+    
+    // Test 3: Pop by specific task (should only get from matching queues)
+    log('Consumer 3: Popping by specific task "analyze"...');
+    const result3 = await client.pop({
+      namespace: namespace,
+      task: 'analyze'
+    }, { batch: 2 });
+    
+    if (result3.messages.length > 0) {
+      log(`Consumer 3: Got ${result3.messages.length} messages for task "analyze"`);
+      // Verify all messages are from the analyze task
+      const allAnalyze = result3.messages.every(m => m.queue === 'queue-task-3');
+      if (!allAnalyze) {
+        throw new Error('Got messages from wrong task!');
+      }
+    }
+    
+    // Clean up: ACK all messages
+    for (const msg of [...result1.messages, ...result2.messages, ...result3.messages]) {
+      await client.ack(msg.transactionId, 'completed');
+    }
+    
+    passTest('Namespace/Task filtering with partition locking works correctly');
+  } catch (error) {
+    failTest(error);
+  }
+}
+
+/**
+ * Test 11: Namespace/Task Filtering in Bus Mode
+ * Tests that namespace/task filtering works with consumer groups
+ */
+async function testNamespaceTaskBusMode() {
+  startTest('Namespace/Task Filtering in Bus Mode');
+  
+  try {
+    const namespace = 'bus-namespace';
+    const task = 'bus-task';
+    const queues = [
+      { name: 'bus-queue-1', partition: 'bus-p1' },
+      { name: 'bus-queue-2', partition: 'bus-p2' }
+    ];
+    
+    // Setup queues and push messages
+    for (const q of queues) {
+      // Configure queue with namespace and task
+      await client.configure({
+        queue: q.name,
+        namespace: namespace,
+        task: task,
+        options: { leaseTime: 30 }
+      });
+      await client.push({
+        items: [
+          {
+            queue: q.name,
+            partition: q.partition,
+            payload: { data: `Bus message for ${q.name}` },
+            transactionId: `bus-txn-${q.name}-1`
+          },
+          {
+            queue: q.name,
+            partition: q.partition,
+            payload: { data: `Bus message 2 for ${q.name}` },
+            transactionId: `bus-txn-${q.name}-2`
+          }
+        ]
+      });
+    }
+    
+    log('Pushed messages to 2 queues for bus mode testing');
+    
+    // Test 1: Consumer Group A pops messages
+    log('Group A, Consumer 1: Popping with namespace/task filter...');
+    const resultA1 = await client.pop({
+      namespace: namespace,
+      task: task,
+      consumerGroup: 'group-a'
+    }, { batch: 2 });
+    
+    if (resultA1.messages.length === 0) {
+      throw new Error('Group A Consumer 1 got no messages');
+    }
+    
+    const partitionsA1 = [...new Set(resultA1.messages.map(m => m.partition))];
+    log(`Group A Consumer 1: Got ${resultA1.messages.length} messages from partitions: ${partitionsA1.join(', ')}`);
+    
+    // Test 2: Another consumer in Group A (should get from different partitions due to locking)
+    log('Group A, Consumer 2: Trying same namespace/task filter...');
+    const resultA2 = await client.pop({
+      namespace: namespace,
+      task: task,
+      consumerGroup: 'group-a'
+    }, { batch: 2 });
+    
+    if (resultA2.messages.length > 0) {
+      const partitionsA2 = [...new Set(resultA2.messages.map(m => m.partition))];
+      log(`Group A Consumer 2: Got ${resultA2.messages.length} messages from partitions: ${partitionsA2.join(', ')}`);
+      
+      // Check for partition overlap
+      const overlapA = partitionsA1.filter(p => partitionsA2.includes(p));
+      if (overlapA.length > 0) {
+        log(`WARNING: Partition overlap in same group: ${overlapA.join(', ')}`);
+      }
+    } else {
+      log('Group A Consumer 2: No messages (partitions locked by Consumer 1)');
+    }
+    
+    // Test 3: Consumer Group B (should be independent)
+    log('Group B, Consumer 1: Popping with same namespace/task filter...');
+    const resultB1 = await client.pop({
+      namespace: namespace,
+      task: task,
+      consumerGroup: 'group-b'
+    }, { batch: 2 });
+    
+    if (resultB1.messages.length > 0) {
+      const partitionsB1 = [...new Set(resultB1.messages.map(m => m.partition))];
+      log(`Group B Consumer 1: Got ${resultB1.messages.length} messages from partitions: ${partitionsB1.join(', ')}`);
+      log('SUCCESS: Different consumer groups can access same partitions independently');
+    } else {
+      throw new Error('Group B should be able to get messages (different consumer group)');
+    }
+    
+    // Clean up: ACK all messages
+    for (const msg of resultA1.messages) {
+      await client.ack(msg.transactionId, 'completed', null, 'group-a');
+    }
+    for (const msg of resultA2.messages) {
+      await client.ack(msg.transactionId, 'completed', null, 'group-a');
+    }
+    for (const msg of resultB1.messages) {
+      await client.ack(msg.transactionId, 'completed', null, 'group-b');
+    }
+    
+    passTest('Namespace/Task filtering in bus mode works correctly');
+  } catch (error) {
+    failTest(error);
+  }
+}
+
 // ============================================
 // ENTERPRISE FEATURE TESTS
 // ============================================
 
 /**
- * Test 10: Message Encryption
+ * Test 12: Message Encryption
  */
 async function testMessageEncryption() {
   startTest('Message Encryption', 'enterprise');
@@ -967,7 +1187,7 @@ async function testMessageEncryption() {
 }
 
 /**
- * Test 11: Retention Policy - Pending Messages
+ * Test 13: Retention Policy - Pending Messages
  */
 async function testRetentionPendingMessages() {
   startTest('Retention Policy - Pending Messages', 'enterprise');
@@ -1039,7 +1259,7 @@ async function testRetentionPendingMessages() {
 }
 
 /**
- * Test 12: Retention Policy - Completed Messages
+ * Test 14: Retention Policy - Completed Messages
  */
 async function testRetentionCompletedMessages() {
   startTest('Retention Policy - Completed Messages', 'enterprise');
@@ -1127,7 +1347,7 @@ async function testRetentionCompletedMessages() {
 }
 
 /**
- * Test 13: Partition Management
+ * Test 15: Partition Management
  */
 async function testPartitionRetention() {
   startTest('Partition Management', 'enterprise');
@@ -1198,7 +1418,7 @@ async function testPartitionRetention() {
 }
 
 /**
- * Test 14: Message Eviction
+ * Test 16: Message Eviction
  */
 async function testMessageEviction() {
   startTest('Message Eviction', 'enterprise');
@@ -1301,7 +1521,7 @@ async function testMessageEviction() {
 }
 
 /**
- * Test 15: Combined Enterprise Features
+ * Test 17: Combined Enterprise Features
  */
 async function testCombinedEnterpriseFeatures() {
   startTest('Combined Enterprise Features', 'enterprise');
@@ -1417,7 +1637,7 @@ async function testCombinedEnterpriseFeatures() {
 }
 
 /**
- * Test 16: Consumer Encryption/Decryption
+ * Test 18: Consumer Encryption/Decryption
  */
 async function testConsumerEncryption() {
   startTest('Consumer Encryption/Decryption', 'enterprise');
@@ -1513,7 +1733,7 @@ async function testConsumerEncryption() {
 }
 
 /**
- * Test 17: Bus Mode - Consumer Groups
+ * Test 19: Bus Mode - Consumer Groups
  */
 async function testBusConsumerGroups() {
   startTest('Bus Mode - Consumer Groups', 'enterprise');
@@ -1590,7 +1810,7 @@ async function testBusConsumerGroups() {
 }
 
 /**
- * Test 18: Mixed Mode - Queue and Bus Together
+ * Test 20: Mixed Mode - Queue and Bus Together
  */
 async function testMixedMode() {
   startTest('Mixed Mode - Queue and Bus Together', 'enterprise');
@@ -1668,7 +1888,7 @@ async function testMixedMode() {
 }
 
 /**
- * Test 19: Consumer Group Subscription Modes
+ * Test 21: Consumer Group Subscription Modes
  */
 async function testConsumerGroupSubscriptionModes() {
   startTest('Consumer Group Subscription Modes', 'enterprise');
@@ -1765,7 +1985,7 @@ async function testConsumerGroupSubscriptionModes() {
 }
 
 /**
- * Test 20: Consumer Group Isolation
+ * Test 22: Consumer Group Isolation
  */
 async function testConsumerGroupIsolation() {
   startTest('Consumer Group Isolation', 'enterprise');
@@ -1855,7 +2075,7 @@ async function testConsumerGroupIsolation() {
 }
 
 /**
- * Test 21: Enterprise Error Handling
+ * Test 23: Enterprise Error Handling
  */
 async function testEnterpriseErrorHandling() {
   startTest('Enterprise Error Handling', 'enterprise');
@@ -3920,7 +4140,9 @@ async function runAllTests() {
       testPartitionPriorityOrdering,
       testPartitionLocking,
       testBusPartitionLocking,
-      testSpecificPartitionLocking
+      testSpecificPartitionLocking,
+      testNamespaceTaskFiltering,
+      testNamespaceTaskBusMode
     ];
     
     // Enterprise feature tests
