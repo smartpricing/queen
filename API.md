@@ -208,23 +208,30 @@ Acknowledges multiple messages at once.
 
 ---
 
-### 4. Configure Partition
+### 4. Configure Queue
 **Endpoint:** `POST /api/v1/configure`
 
-Configures options for a queue partition.
+Configures options for a queue. All configuration is now at the queue level - partitions are simple FIFO containers.
 
 **Request Body:**
 ```json
 {
   "queue": "notifications",
-  "partition": "critical",  // Optional: defaults to "Default"
+  "partition": "critical",  // DEPRECATED: Ignored but accepted for backward compatibility
   "options": {
     "leaseTime": 600,       // Seconds before message lease expires
     "retryLimit": 5,        // Max retry attempts
-    "priority": 10,         // Partition priority (higher = processed first)
-    "maxSize": 10000,       // Max messages in partition
+    "priority": 10,         // Queue priority (higher = processed first)
+    "maxSize": 10000,       // Max messages in queue
     "ttl": 3600,           // Time to live in seconds
-    "dlqAfterMaxRetries": true  // Move to DLQ after max retries
+    "dlqAfterMaxRetries": true,  // Move to DLQ after max retries
+    "delayedProcessing": 0,      // Delay before messages are available (seconds)
+    "windowBuffer": 0,            // Buffer window for message processing (seconds)
+    "retentionSeconds": 0,       // Auto-delete pending messages after X seconds
+    "completedRetentionSeconds": 0, // Auto-delete completed messages after X seconds
+    "retentionEnabled": false,   // Enable retention policies
+    "encryptionEnabled": false,  // Enable message encryption
+    "maxWaitTimeSeconds": 0      // Max wait time for long polling
   }
 }
 ```
@@ -233,11 +240,12 @@ Configures options for a queue partition.
 ```json
 {
   "queue": "notifications",
-  "partition": "critical",
   "configured": true,
   "options": { /* all options with defaults filled */ }
 }
 ```
+
+**Note:** The `partition` parameter in the request is deprecated and ignored. All configuration now applies to the entire queue.
 
 ---
 

@@ -233,7 +233,6 @@ async function testQueueConfiguration() {
   try {
     const configResult = await client.configure({
       queue: 'test-config-queue',
-      partition: 'configured-partition',
       options: {
         leaseTime: 600,
         retryLimit: 5,
@@ -247,9 +246,8 @@ async function testQueueConfiguration() {
       throw new Error('Configuration failed');
     }
     
-    if (configResult.queue !== 'test-config-queue' || 
-        configResult.partition !== 'configured-partition') {
-      throw new Error('Configuration response has wrong queue/partition names');
+    if (configResult.queue !== 'test-config-queue') {
+      throw new Error('Configuration response has wrong queue name');
     }
     
     // Verify configuration was applied by checking database
@@ -497,7 +495,6 @@ async function testDelayedProcessing() {
     // Configure queue with delayed processing
     await client.configure({
       queue: 'test-delayed-queue',
-      partition: 'delayed-partition',
       options: {
         delayedProcessing: 2 // 2 seconds delay
       }
@@ -509,7 +506,6 @@ async function testDelayedProcessing() {
     await client.push({
       items: [{
         queue: 'test-delayed-queue',
-        partition: 'delayed-partition',
         payload: { message: 'Delayed message', sentAt: startTime }
       }]
     });
@@ -517,7 +513,6 @@ async function testDelayedProcessing() {
     // Try to pop immediately (should get nothing)
     const immediateResult = await client.pop({
       queue: 'test-delayed-queue',
-      partition: 'delayed-partition',
       batch: 1
     });
     
@@ -531,7 +526,6 @@ async function testDelayedProcessing() {
     // Try to pop again (should get the message now)
     const delayedResult = await client.pop({
       queue: 'test-delayed-queue',
-      partition: 'delayed-partition',
       batch: 1
     });
     
@@ -562,7 +556,6 @@ async function testWindowBuffer() {
     // Configure queue with window buffer
     await client.configure({
       queue: 'test-buffer-queue',
-      partition: 'buffer-partition',
       options: {
         windowBuffer: 2 // 2 seconds buffer
       }
@@ -572,7 +565,6 @@ async function testWindowBuffer() {
     await client.push({
       items: [{
         queue: 'test-buffer-queue',
-        partition: 'buffer-partition',
         payload: { message: 'First message', order: 1 }
       }]
     });
@@ -583,7 +575,6 @@ async function testWindowBuffer() {
     await client.push({
       items: [{
         queue: 'test-buffer-queue',
-        partition: 'buffer-partition',
         payload: { message: 'Second message', order: 2 }
       }]
     });
@@ -591,7 +582,6 @@ async function testWindowBuffer() {
     // Try to pop immediately (should get nothing due to buffer)
     const immediateResult = await client.pop({
       queue: 'test-buffer-queue',
-      partition: 'buffer-partition',
       batch: 2
     });
     
@@ -605,7 +595,6 @@ async function testWindowBuffer() {
     // Try to pop again (should get messages now)
     const bufferedResult = await client.pop({
       queue: 'test-buffer-queue',
-      partition: 'buffer-partition',
       batch: 2
     });
     

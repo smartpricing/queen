@@ -1,4 +1,5 @@
 import { generateUUID } from '../utils/uuid.js';
+import config from '../config.js';
 
 export const createWebSocketServer = (app, eventManager) => {
   const connections = new Map();
@@ -19,9 +20,9 @@ export const createWebSocketServer = (app, eventManager) => {
   
   // Setup WebSocket route
   app.ws('/ws/dashboard', {
-    compression: 0,
-    maxPayloadLength: 16 * 1024,
-    idleTimeout: 60,
+    compression: config.WEBSOCKET.COMPRESSION,
+    maxPayloadLength: config.WEBSOCKET.MAX_PAYLOAD_LENGTH,
+    idleTimeout: config.WEBSOCKET.IDLE_TIMEOUT,
     
     open: (ws) => {
       const connectionId = generateUUID();

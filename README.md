@@ -169,15 +169,14 @@ await client.push({
 
 The system supports two levels of priority:
 
-1. **Queue Priority**: When using namespace/task filters, higher priority queues are processed first
-2. **Partition Priority**: Within a queue, higher priority partitions are processed first
-3. **FIFO Within Partitions**: Messages within the same partition are always processed in order
+1. **Queue Priority**: Higher priority queues are processed first
+2. **FIFO Within Partitions**: Messages within the same partition are always processed in order
+3. **Partitions**: Partitions are now simple FIFO containers - all configuration is at the queue level
 
 ```javascript
-// Configure partition with priority
+// Configure queue with priority
 await client.configure({
   queue: 'orders',
-  partition: 'urgent',
   options: { priority: 10 } // Higher number = higher priority
 });
 ```
@@ -362,7 +361,6 @@ const client = createQueenClient({
 // Configure a queue
 await client.configure({
   queue: 'orders',
-  partition: 'high-priority',
   options: {
     priority: 10,
     leaseTime: 600,
@@ -615,16 +613,14 @@ ws.onmessage = (event) => {
 ### Basic Email Queue
 
 ```javascript
-// Configure email queue with priority partitions
+// Configure email queue with priority
 await client.configure({
-  queue: 'emails',
-  partition: 'urgent',
+  queue: 'emails-urgent',
   options: { priority: 10, leaseTime: 300 }
 });
 
 await client.configure({
-  queue: 'emails',
-  partition: 'normal',
+  queue: 'emails-normal',
   options: { priority: 5, leaseTime: 300 }
 });
 
@@ -655,7 +651,6 @@ const result = await client.pop({
 // Configure queue with delayed processing
 await client.configure({
   queue: 'scheduled-jobs',
-  partition: 'daily-reports',
   options: {
     delayedProcessing: 3600, // 1 hour delay
     priority: 5
@@ -684,7 +679,6 @@ await client.push({
 // Configure for batch processing
 await client.configure({
   queue: 'analytics',
-  partition: 'events',
   options: {
     windowBuffer: 60,  // Wait 60 seconds to batch messages
     priority: 3
@@ -740,7 +734,6 @@ const stopConsumer = client.consume({
 // Configure queue for high-throughput batch processing
 await client.configure({
   queue: 'data-processing',
-  partition: 'analytics',
   options: {
     priority: 5,
     leaseTime: 600, // 10 minutes for batch processing
@@ -850,7 +843,6 @@ Automatically clean up old messages to prevent storage bloat.
 ```javascript
 await client.configure({
   queue: 'temp-queue',
-  partition: 'batch',
   options: {
     retentionSeconds: 3600,          // Delete pending after 1 hour
     completedRetentionSeconds: 300,  // Delete completed after 5 minutes
@@ -886,7 +878,6 @@ export EVICTION_INTERVAL=60000  # Check interval in milliseconds
 ```javascript
 await client.configure({
   queue: 'production-queue',
-  partition: 'priority',
   options: {
     // Encryption
     encryptionEnabled: true,
@@ -910,29 +901,165 @@ await client.configure({
 
 ### Environment Variables
 
+All configuration values have sensible defaults and can be overridden using environment variables. Configuration is centralized in `src/config.js`.
+
+#### Server Configuration
+
 ```bash
-# Database Configuration
-PG_USER=postgres
-PG_HOST=localhost
-PG_DB=postgres
-PG_PASSWORD=postgres
-PG_PORT=5432
+# Server basics
+PORT=6632                      # Server port (default: 6632)
+HOST=0.0.0.0                   # Server host (default: 0.0.0.0)
+WORKER_ID=worker-1             # Worker identifier (default: worker-${process.pid})
+APP_NAME=queen-uws             # Application name for database connections
 
-# Performance Tuning
-DB_POOL_SIZE=20
-DB_IDLE_TIMEOUT=30000
-DB_CONNECTION_TIMEOUT=2000
+# CORS settings
+CORS_MAX_AGE=86400             # CORS max age in seconds (default: 86400 = 24 hours)
+CORS_ALLOWED_ORIGINS=*         # Allowed origins (default: *)
+CORS_ALLOWED_METHODS=GET,POST,PUT,DELETE,OPTIONS  # Allowed methods
+CORS_ALLOWED_HEADERS=Content-Type,Authorization   # Allowed headers
+```
 
-# Server Configuration
-PORT=6632
-HOST=0.0.0.0
+#### Database Configuration
 
-# Encryption (Optional)
-QUEEN_ENCRYPTION_KEY=<64-hex-characters>  # Generate with: openssl rand -hex 32
+```bash
+# Connection settings
+PG_USER=postgres               # PostgreSQL user (default: postgres)
+PG_HOST=localhost              # PostgreSQL host (default: localhost)
+PG_DB=postgres                 # PostgreSQL database (default: postgres)
+PG_PASSWORD=postgres           # PostgreSQL password (default: postgres)
+PG_PORT=5432                   # PostgreSQL port (default: 5432)
 
-# Background Jobs (Optional)
-RETENTION_INTERVAL=300000  # Message retention check interval (ms)
-EVICTION_INTERVAL=60000    # Message eviction check interval (ms)
+# Connection pool settings
+DB_POOL_SIZE=20                # Max pool size (default: 20)
+DB_IDLE_TIMEOUT=30000          # Idle connection timeout in ms (default: 30000)
+DB_CONNECTION_TIMEOUT=2000     # Connection timeout in ms (default: 2000)
+DB_STATEMENT_TIMEOUT=30000     # Statement timeout in ms (default: 30000)
+DB_QUERY_TIMEOUT=30000         # Query timeout in ms (default: 30000)
+DB_MAX_RETRIES=3               # Max retry attempts for queries (default: 3)
+```
+
+#### Queue Processing Configuration
+
+```bash
+# Pop operation defaults
+DEFAULT_TIMEOUT=30000          # Default pop timeout in ms (default: 30000)
+MAX_TIMEOUT=60000              # Maximum pop timeout in ms (default: 60000)
+DEFAULT_BATCH_SIZE=1           # Default batch size for pop (default: 1)
+BATCH_INSERT_SIZE=1000         # Batch size for bulk inserts (default: 1000)
+
+# Long polling
+QUEUE_POLL_INTERVAL=100        # Poll interval in ms (default: 100)
+QUEUE_POLL_INTERVAL_FILTERED=1000  # Poll interval for filtered pops (default: 1000)
+
+# Queue defaults
+DEFAULT_LEASE_TIME=300         # Default lease time in seconds (default: 300 = 5 minutes)
+DEFAULT_RETRY_LIMIT=3          # Default retry limit (default: 3)
+DEFAULT_RETRY_DELAY=1000       # Default retry delay in ms (default: 1000)
+DEFAULT_MAX_SIZE=10000         # Default max queue size (default: 10000)
+DEFAULT_TTL=3600               # Default TTL in seconds (default: 3600 = 1 hour)
+DEFAULT_PRIORITY=0             # Default queue priority (default: 0)
+DEFAULT_DELAYED_PROCESSING=0   # Default delayed processing in seconds (default: 0)
+DEFAULT_WINDOW_BUFFER=0        # Default window buffer in seconds (default: 0)
+
+# Dead Letter Queue
+DEFAULT_DLQ_ENABLED=false      # Enable DLQ by default (default: false)
+DEFAULT_DLQ_AFTER_MAX_RETRIES=false  # Move to DLQ after max retries (default: false)
+
+# Retention
+DEFAULT_RETENTION_SECONDS=0    # Default retention for all messages (default: 0 = disabled)
+DEFAULT_COMPLETED_RETENTION_SECONDS=0  # Retention for completed messages (default: 0)
+DEFAULT_RETENTION_ENABLED=false  # Enable retention by default (default: false)
+
+# Eviction
+DEFAULT_MAX_WAIT_TIME_SECONDS=0  # Max wait time before eviction (default: 0 = disabled)
+```
+
+#### Background Jobs Configuration
+
+```bash
+# Job intervals
+LEASE_RECLAIM_INTERVAL=5000    # Lease reclamation interval in ms (default: 5000)
+RETENTION_INTERVAL=300000      # Retention check interval in ms (default: 300000 = 5 minutes)
+RETENTION_BATCH_SIZE=1000      # Retention batch size (default: 1000)
+PARTITION_CLEANUP_DAYS=7       # Days before cleaning empty partitions (default: 7)
+EVICTION_INTERVAL=60000        # Eviction check interval in ms (default: 60000 = 1 minute)
+EVICTION_BATCH_SIZE=1000       # Eviction batch size (default: 1000)
+
+# WebSocket updates
+QUEUE_DEPTH_UPDATE_INTERVAL=5000    # Queue depth update interval (default: 5000)
+SYSTEM_STATS_UPDATE_INTERVAL=10000  # System stats update interval (default: 10000)
+```
+
+#### WebSocket Configuration
+
+```bash
+# WebSocket settings
+WS_COMPRESSION=0               # Compression level (default: 0 = disabled)
+WS_MAX_PAYLOAD_LENGTH=16384    # Max payload length in bytes (default: 16384 = 16KB)
+WS_IDLE_TIMEOUT=60             # Idle timeout in seconds (default: 60)
+WS_MAX_CONNECTIONS=1000        # Max concurrent connections (default: 1000)
+WS_HEARTBEAT_INTERVAL=30000    # Heartbeat interval in ms (default: 30000)
+```
+
+#### Encryption Configuration
+
+```bash
+# Encryption settings
+QUEEN_ENCRYPTION_KEY=<64-hex>  # 32-byte key as 64 hex characters
+                                # Generate with: openssl rand -hex 32
+                                # Required for encryption features
+```
+
+#### Client SDK Configuration
+
+```bash
+# Client defaults
+QUEEN_BASE_URL=http://localhost:6632  # Default server URL
+CLIENT_RETRY_ATTEMPTS=3        # Default retry attempts (default: 3)
+CLIENT_RETRY_DELAY=1000        # Default retry delay in ms (default: 1000)
+CLIENT_RETRY_BACKOFF=2         # Retry backoff multiplier (default: 2)
+CLIENT_POOL_SIZE=10            # Client connection pool size (default: 10)
+CLIENT_REQUEST_TIMEOUT=30000   # Request timeout in ms (default: 30000)
+```
+
+#### API Configuration
+
+```bash
+# Pagination
+API_DEFAULT_LIMIT=100          # Default page size (default: 100)
+API_MAX_LIMIT=1000             # Maximum page size (default: 1000)
+API_DEFAULT_OFFSET=0           # Default offset (default: 0)
+```
+
+#### Analytics Configuration
+
+```bash
+# Analytics settings
+ANALYTICS_RECENT_HOURS=24      # Hours to consider for recent stats (default: 24)
+ANALYTICS_MIN_COMPLETED=5      # Min completed messages for stats (default: 5)
+RECENT_MESSAGE_WINDOW=60       # Recent message window in seconds (default: 60)
+RELATED_MESSAGE_WINDOW=3600    # Related message window in seconds (default: 3600)
+MAX_RELATED_MESSAGES=10        # Max related messages to return (default: 10)
+```
+
+#### Monitoring Configuration
+
+```bash
+# Performance monitoring
+ENABLE_REQUEST_COUNTING=true   # Enable request counting (default: true)
+ENABLE_MESSAGE_COUNTING=true   # Enable message counting (default: true)
+METRICS_ENDPOINT_ENABLED=true  # Enable /metrics endpoint (default: true)
+HEALTH_CHECK_ENABLED=true      # Enable /health endpoint (default: true)
+```
+
+#### Logging Configuration
+
+```bash
+# Logging settings
+ENABLE_LOGGING=true            # Enable logging (default: true)
+LOG_LEVEL=info                 # Log level (default: info)
+LOG_FORMAT=json                # Log format (default: json)
+LOG_TIMESTAMP=true             # Include timestamps (default: true)
 ```
 
 ### Queue Options

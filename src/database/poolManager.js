@@ -5,27 +5,28 @@
  */
 
 import pg from 'pg';
+import appConfig from '../config.js';
 
 const { Pool } = pg;
 
 export class PoolManager {
   constructor(config) {
     this.config = {
-      user: process.env.PG_USER || 'postgres',
-      host: process.env.PG_HOST || 'localhost',
-      database: process.env.PG_DB || 'postgres',
-      password: process.env.PG_PASSWORD || 'postgres',
-      port: process.env.PG_PORT || 5432,
-      max: parseInt(process.env.DB_POOL_SIZE) || 20,
-      idleTimeoutMillis: parseInt(process.env.DB_IDLE_TIMEOUT) || 30000,
-      connectionTimeoutMillis: parseInt(process.env.DB_CONNECTION_TIMEOUT) || 2000,
+      user: appConfig.DATABASE.USER,
+      host: appConfig.DATABASE.HOST,
+      database: appConfig.DATABASE.DATABASE,
+      password: appConfig.DATABASE.PASSWORD,
+      port: appConfig.DATABASE.PORT,
+      max: appConfig.DATABASE.POOL_SIZE,
+      idleTimeoutMillis: appConfig.DATABASE.IDLE_TIMEOUT,
+      connectionTimeoutMillis: appConfig.DATABASE.CONNECTION_TIMEOUT,
       ...config
     };
     
     this.pool = new Pool(this.config);
     this.waitingQueue = [];
     this.activeConnections = 0;
-    this.maxRetries = 3;
+    this.maxRetries = appConfig.DATABASE.MAX_RETRIES;
     
     // Monitor pool events
     this.pool.on('connect', () => {

@@ -3,15 +3,17 @@ import { withTransaction } from '../database/connection.js';
 import { PoolManager } from '../database/poolManager.js';
 import * as encryption from '../services/encryptionService.js';
 import { evictOnPop } from '../services/evictionService.js';
+import { log, LogTypes } from '../utils/logger.js';
+import config from '../config.js';
 
 export const createOptimizedQueueManager = (pool, resourceCache, eventManager) => {
   
   // Batch size for database operations
-  const BATCH_INSERT_SIZE = 1000;
+  const BATCH_INSERT_SIZE = config.QUEUE.BATCH_INSERT_SIZE;
   
   // Create pool manager for better connection handling
   const poolManager = new PoolManager({
-    max: pool.options?.max || parseInt(process.env.DB_POOL_SIZE) || 20
+    max: pool.options?.max || config.DATABASE.POOL_SIZE
   });
   
   // Ensure queue and partition exist (with caching)
@@ -27,17 +29,20 @@ export const createOptimizedQueueManager = (pool, resourceCache, eventManager) =
        ON CONFLICT (name) DO UPDATE SET 
          namespace = CASE WHEN EXCLUDED.namespace IS NOT NULL THEN EXCLUDED.namespace ELSE queen.queues.namespace END,
          task = CASE WHEN EXCLUDED.task IS NOT NULL THEN EXCLUDED.task ELSE queen.queues.task END
-       RETURNING id, name, namespace, task, encryption_enabled, max_wait_time_seconds`,
+       RETURNING id, name, namespace, task, encryption_enabled, max_wait_time_seconds,
+                lease_time, retry_limit, retry_delay, max_size, ttl, dead_letter_queue,
+                dlq_after_max_retries, delayed_processing, window_buffer, retention_seconds,
+                completed_retention_seconds, retention_enabled, priority`,
       [queueName, namespace || null, task || null]
     );
     const queue = queueResult.rows[0];
     const queueId = queue.id;
     
-    // Insert or get partition
+    // Insert or get partition (no more options column)
     const partitionResult = await client.query(
       `INSERT INTO queen.partitions (queue_id, name) VALUES ($1, $2) 
        ON CONFLICT (queue_id, name) DO UPDATE SET name = EXCLUDED.name 
-       RETURNING id, options`,
+       RETURNING id`,
       [queueId, partitionName]
     );
     
@@ -45,7 +50,22 @@ export const createOptimizedQueueManager = (pool, resourceCache, eventManager) =
       queueId,
       queueName: queue.name,
       partitionId: partitionResult.rows[0].id,
-      partitionOptions: partitionResult.rows[0].options,
+      // All configuration now comes from queue level
+      queueConfig: {
+        leaseTime: queue.lease_time,
+        retryLimit: queue.retry_limit,
+        retryDelay: queue.retry_delay,
+        maxSize: queue.max_size,
+        ttl: queue.ttl,
+        deadLetterQueue: queue.dead_letter_queue,
+        dlqAfterMaxRetries: queue.dlq_after_max_retries,
+        delayedProcessing: queue.delayed_processing,
+        windowBuffer: queue.window_buffer,
+        retentionSeconds: queue.retention_seconds,
+        completedRetentionSeconds: queue.completed_retention_seconds,
+        retentionEnabled: queue.retention_enabled,
+        priority: queue.priority
+      },
       encryptionEnabled: queue.encryption_enabled,
       maxWaitTimeSeconds: queue.max_wait_time_seconds
     };
@@ -134,7 +154,7 @@ export const createOptimizedQueueManager = (pool, resourceCache, eventManager) =
                   finalPayload = await encryption.encryptPayload(item.payload);
                   isEncrypted = true;
                 } catch (error) {
-                  console.error('Encryption failed:', error);
+                  log('ERROR: Encryption failed:', error);
                   // Continue with unencrypted payload
                 }
               }
@@ -153,13 +173,18 @@ export const createOptimizedQueueManager = (pool, resourceCache, eventManager) =
             
             const insertResult = await client.query(insertQuery, params);
             
-            insertResult.rows.forEach(row => {
-              batchResults.push({
-                id: row.id,
-                transactionId: row.transaction_id,
-                status: 'queued'
-              });
+          insertResult.rows.forEach(row => {
+            batchResults.push({
+              id: row.id,
+              transactionId: row.transaction_id,
+              status: 'queued'
             });
+          });
+          
+          // Log successful push operations
+          if (insertResult.rows.length > 0) {
+            log(`${LogTypes.PUSH} | Queue: ${queueName} | Partition: ${partitionName} | Messages: ${insertResult.rows.length} | TransactionIds: [${insertResult.rows.map(r => r.transaction_id).join(', ')}]`);
+          }
             
             // Add any items that weren't inserted due to conflict
             const insertedTxIds = new Set(insertResult.rows.map(r => r.transaction_id));
@@ -199,7 +224,7 @@ export const createOptimizedQueueManager = (pool, resourceCache, eventManager) =
   // Pop messages from queue with optional partition
   const popMessages = async (scope, options = {}) => {
     const { queue, partition } = scope;
-    const { wait = false, timeout = 30000, batch = 1 } = options;
+    const { wait = false, timeout = config.QUEUE.DEFAULT_TIMEOUT, batch = config.QUEUE.DEFAULT_BATCH_SIZE } = options;
     
     return withTransaction(pool, async (client) => {
       // First, evict any expired messages
@@ -211,16 +236,22 @@ export const createOptimizedQueueManager = (pool, resourceCache, eventManager) =
         // Specific partition: use a simpler, more efficient query with delayed processing and windowBuffer support
         result = await client.query(`
           WITH partition_info AS (
-            SELECT p.id, p.name as partition_name, p.options, p.priority,
+            SELECT p.id, p.name as partition_name,
                    q.name as queue_name, q.max_wait_time_seconds,
-                   COALESCE((p.options->>'delayedProcessing')::int, 0) as delayed_processing,
-                   COALESCE((p.options->>'windowBuffer')::int, 0) as window_buffer
+                   q.delayed_processing, q.window_buffer, q.priority,
+                   q.lease_time, q.retry_limit, q.retry_delay, q.max_size,
+                   q.ttl, q.dead_letter_queue, q.dlq_after_max_retries,
+                   q.retention_seconds, q.completed_retention_seconds, q.retention_enabled
             FROM queen.partitions p
             JOIN queen.queues q ON p.queue_id = q.id
             WHERE q.name = $1 AND p.name = $2
             LIMIT 1
           )
-          SELECT m.*, m.is_encrypted, pi.partition_name, pi.queue_name, pi.options, pi.priority
+          SELECT m.*, m.is_encrypted, pi.partition_name, pi.queue_name, pi.priority,
+                 pi.lease_time, pi.retry_limit, pi.retry_delay, pi.max_size, pi.ttl,
+                 pi.dead_letter_queue, pi.dlq_after_max_retries, pi.delayed_processing,
+                 pi.window_buffer, pi.retention_seconds, pi.completed_retention_seconds,
+                 pi.retention_enabled
           FROM queen.messages m
           JOIN partition_info pi ON m.partition_id = pi.id
           WHERE m.status = 'pending'
@@ -240,23 +271,26 @@ export const createOptimizedQueueManager = (pool, resourceCache, eventManager) =
       } else {
         // Queue level: get from any partition in the queue with priority ordering, then FIFO within partition
         result = await client.query(`
-          SELECT m.*, m.is_encrypted, p.name as partition_name, q.name as queue_name, 
-                 p.options, p.priority, q.max_wait_time_seconds
+          SELECT m.*, m.is_encrypted, p.name as partition_name, q.name as queue_name,
+                 q.priority, q.max_wait_time_seconds, q.lease_time, q.retry_limit,
+                 q.retry_delay, q.max_size, q.ttl, q.dead_letter_queue,
+                 q.dlq_after_max_retries, q.delayed_processing, q.window_buffer,
+                 q.retention_seconds, q.completed_retention_seconds, q.retention_enabled
           FROM queen.messages m
           JOIN queen.partitions p ON m.partition_id = p.id
           JOIN queen.queues q ON p.queue_id = q.id
           WHERE q.name = $1
             AND m.status = 'pending'
-            AND m.created_at <= NOW() - INTERVAL '1 second' * COALESCE((p.options->>'delayedProcessing')::int, 0)
+            AND m.created_at <= NOW() - INTERVAL '1 second' * q.delayed_processing
             AND (q.max_wait_time_seconds = 0 OR 
                  m.created_at > NOW() - INTERVAL '1 second' * q.max_wait_time_seconds)
-            AND (COALESCE((p.options->>'windowBuffer')::int, 0) = 0 OR NOT EXISTS (
+            AND (q.window_buffer = 0 OR NOT EXISTS (
               SELECT 1 FROM queen.messages m2 
               WHERE m2.partition_id = p.id 
                 AND m2.status = 'pending'
-                AND m2.created_at > NOW() - INTERVAL '1 second' * COALESCE((p.options->>'windowBuffer')::int, 0)
+                AND m2.created_at > NOW() - INTERVAL '1 second' * q.window_buffer
             ))
-          ORDER BY p.priority DESC, m.created_at ASC
+          ORDER BY q.priority DESC, m.created_at ASC
           LIMIT $2
           FOR UPDATE OF m SKIP LOCKED
         `, [queue, batch]);
@@ -278,14 +312,14 @@ export const createOptimizedQueueManager = (pool, resourceCache, eventManager) =
         if (partition) {
           result = await client.query(`
             WITH partition_info AS (
-              SELECT p.id, p.name as partition_name, p.options, p.priority,
-                     q.name as queue_name
+              SELECT p.id, p.name as partition_name,
+                     q.name as queue_name, q.priority, q.lease_time
               FROM queen.partitions p
               JOIN queen.queues q ON p.queue_id = q.id
               WHERE q.name = $1 AND p.name = $2
               LIMIT 1
             )
-            SELECT m.*, pi.partition_name, pi.queue_name, pi.options, pi.priority
+            SELECT m.*, pi.partition_name, pi.queue_name, pi.priority, pi.lease_time
             FROM queen.messages m
             JOIN partition_info pi ON m.partition_id = pi.id
             WHERE m.status = 'pending'
@@ -296,13 +330,13 @@ export const createOptimizedQueueManager = (pool, resourceCache, eventManager) =
         } else {
           result = await client.query(`
             SELECT m.*, p.name as partition_name, q.name as queue_name,
-                   p.options, p.priority
+                   q.priority, q.lease_time
             FROM queen.messages m
             JOIN queen.partitions p ON m.partition_id = p.id
             JOIN queen.queues q ON p.queue_id = q.id
             WHERE q.name = $1
               AND m.status = 'pending'
-            ORDER BY p.priority DESC, m.created_at ASC
+            ORDER BY q.priority DESC, m.created_at ASC
             LIMIT $2
             FOR UPDATE OF m SKIP LOCKED
           `, [queue, batch]);
@@ -315,7 +349,8 @@ export const createOptimizedQueueManager = (pool, resourceCache, eventManager) =
       
       // Update status to processing
       const messageIds = result.rows.map(r => r.id);
-      const leaseTime = 300; // Default 5 minutes lease
+      // Use lease time from queue configuration
+      const leaseTime = result.rows[0]?.lease_time || config.QUEUE.DEFAULT_LEASE_TIME;
       
       await client.query(
         `UPDATE queen.messages 
@@ -338,7 +373,7 @@ export const createOptimizedQueueManager = (pool, resourceCache, eventManager) =
             try {
               decryptedPayload = await encryption.decryptPayload(row.payload);
             } catch (error) {
-              console.error('Decryption failed:', error);
+              log('ERROR: Decryption failed:', error);
               // Return encrypted payload if decryption fails
             }
           }
@@ -351,13 +386,24 @@ export const createOptimizedQueueManager = (pool, resourceCache, eventManager) =
             data: decryptedPayload,
             payload: decryptedPayload, // Also include as payload for compatibility
             retryCount: row.retry_count || 0,
-            priority: row.priority || 0, // partition priority
+            priority: row.priority || 0, // queue priority
             createdAt: row.created_at,
             lockedAt: row.locked_at,
-            options: row.options || {}
+            // Queue configuration is not sent to client, only used internally
           };
         })
       );
+      
+      // Log pop operations when messages are returned to client
+      if (messages.length > 0) {
+        const logInfo = messages.map(m => ({
+          transactionId: m.transactionId,
+          queue: m.queue,
+          partition: m.partition,
+          retryCount: m.retryCount
+        }));
+        log(`${LogTypes.POP} | Queue: ${scope.queue} | Partition: ${scope.partition || 'any'} | Count: ${messages.length} | Messages:`, logInfo);
+      }
       
       return { messages };
     });
@@ -366,22 +412,25 @@ export const createOptimizedQueueManager = (pool, resourceCache, eventManager) =
   // Pop with filters (namespace, task)
   const popMessagesWithFilters = async (filters, options = {}) => {
     const { namespace, task } = filters;
-    const { wait = false, timeout = 30000, batch = 1 } = options;
+    const { wait = false, timeout = config.QUEUE.DEFAULT_TIMEOUT, batch = config.QUEUE.DEFAULT_BATCH_SIZE } = options;
     
     return withTransaction(pool, async (client) => {
       let query = `
         SELECT m.*, m.is_encrypted, p.name as partition_name, q.name as queue_name,
-               p.options, p.priority as partition_priority, q.namespace, q.task, q.priority as queue_priority
+               q.namespace, q.task, q.priority, q.lease_time, q.retry_limit,
+               q.retry_delay, q.max_size, q.ttl, q.dead_letter_queue,
+               q.dlq_after_max_retries, q.delayed_processing, q.window_buffer,
+               q.retention_seconds, q.completed_retention_seconds, q.retention_enabled
         FROM queen.messages m
         JOIN queen.partitions p ON m.partition_id = p.id
         JOIN queen.queues q ON p.queue_id = q.id
         WHERE m.status = 'pending'
-          AND m.created_at <= NOW() - INTERVAL '1 second' * COALESCE((p.options->>'delayedProcessing')::int, 0)
-          AND (COALESCE((p.options->>'windowBuffer')::int, 0) = 0 OR NOT EXISTS (
+          AND m.created_at <= NOW() - INTERVAL '1 second' * q.delayed_processing
+          AND (q.window_buffer = 0 OR NOT EXISTS (
             SELECT 1 FROM queen.messages m2 
             WHERE m2.partition_id = p.id 
               AND m2.status = 'pending'
-              AND m2.created_at > NOW() - INTERVAL '1 second' * COALESCE((p.options->>'windowBuffer')::int, 0)
+              AND m2.created_at > NOW() - INTERVAL '1 second' * q.window_buffer
           ))
       `;
       
@@ -396,8 +445,8 @@ export const createOptimizedQueueManager = (pool, resourceCache, eventManager) =
       }
       
       params.push(batch);
-      // Priority-based ordering: highest queue priority first, then highest partition priority, then FIFO within partition
-      query += ` ORDER BY q.priority DESC, p.priority DESC, m.created_at ASC LIMIT $${params.length} FOR UPDATE OF m SKIP LOCKED`;
+      // Priority-based ordering: highest queue priority first, then FIFO within partition
+      query += ` ORDER BY q.priority DESC, m.created_at ASC LIMIT $${params.length} FOR UPDATE OF m SKIP LOCKED`;
       
       let result = await client.query(query, params);
       
@@ -405,7 +454,7 @@ export const createOptimizedQueueManager = (pool, resourceCache, eventManager) =
         // For filtered pops, we don't have a specific path to wait on
         // Just do simple timeout-based polling
         await client.query('COMMIT');
-        await new Promise(resolve => setTimeout(resolve, Math.min(1000, timeout)));
+        await new Promise(resolve => setTimeout(resolve, Math.min(config.QUEUE.POLL_INTERVAL_FILTERED, timeout)));
         
         await client.query('BEGIN');
         result = await client.query(query, params);
@@ -417,7 +466,8 @@ export const createOptimizedQueueManager = (pool, resourceCache, eventManager) =
       
       // Update status to processing
       const messageIds = result.rows.map(r => r.id);
-      const leaseTime = 300;
+      // Use lease time from queue configuration
+      const leaseTime = result.rows[0]?.lease_time || config.QUEUE.DEFAULT_LEASE_TIME;
       
       await client.query(
         `UPDATE queen.messages 
@@ -440,7 +490,7 @@ export const createOptimizedQueueManager = (pool, resourceCache, eventManager) =
             try {
               decryptedPayload = await encryption.decryptPayload(row.payload);
             } catch (error) {
-              console.error('Decryption failed:', error);
+              log('ERROR: Decryption failed:', error);
               // Return encrypted payload if decryption fails
             }
           }
@@ -454,14 +504,23 @@ export const createOptimizedQueueManager = (pool, resourceCache, eventManager) =
             task: row.task,
             data: decryptedPayload,
             retryCount: row.retry_count || 0,
-            priority: row.partition_priority || 0, // partition priority
-            queuePriority: row.queue_priority || 0, // queue priority
+            priority: row.priority || 0, // queue priority
             createdAt: row.created_at,
-            lockedAt: row.locked_at,
-            options: row.options || {}
+            lockedAt: row.locked_at
           };
         })
       );
+      
+      // Log pop operations with filters
+      if (messages.length > 0) {
+        const logInfo = messages.map(m => ({
+          transactionId: m.transactionId,
+          queue: m.queue,
+          partition: m.partition,
+          retryCount: m.retryCount
+        }));
+        log(`${LogTypes.POP_FILTERED} | Namespace: ${filters.namespace || 'any'} | Task: ${filters.task || 'any'} | Count: ${messages.length} | Messages:`, logInfo);
+      }
       
       return { messages };
     });
@@ -495,18 +554,21 @@ export const createOptimizedQueueManager = (pool, resourceCache, eventManager) =
         throw new Error(`Message not found: ${transactionId}`);
       }
       
+      // Log acknowledge operation
+      log(`${LogTypes.ACK} | TransactionId: ${transactionId} | Status: ${status} | Error: ${error || 'none'}`);
+      
       // Handle retry logic for failed messages
       if (status === 'failed') {
         const message = await client.query(
-          `SELECT m.*, p.options 
+          `SELECT m.*, q.retry_limit, q.dlq_after_max_retries 
            FROM queen.messages m
            JOIN queen.partitions p ON m.partition_id = p.id
+           JOIN queen.queues q ON p.queue_id = q.id
            WHERE m.id = $1`,
           [result.rows[0].id]
         );
         
-        const options = message.rows[0].options || {};
-        const maxRetries = options.retryLimit || 3;
+        const maxRetries = message.rows[0].retry_limit || config.QUEUE.DEFAULT_RETRY_LIMIT;
         const currentRetryCount = result.rows[0].retry_count;
         
         if (currentRetryCount < maxRetries) {
@@ -521,8 +583,9 @@ export const createOptimizedQueueManager = (pool, resourceCache, eventManager) =
             [result.rows[0].id]
           );
           
+          log(`${LogTypes.RETRY_SCHEDULED} | TransactionId: ${transactionId} | RetryCount: ${currentRetryCount}/${maxRetries}`);
           return { status: 'retry_scheduled', retryCount: currentRetryCount };
-        } else if (options.dlqAfterMaxRetries) {
+        } else if (message.rows[0].dlq_after_max_retries) {
           // Move to DLQ
           await client.query(
             `UPDATE queen.messages 
@@ -531,6 +594,7 @@ export const createOptimizedQueueManager = (pool, resourceCache, eventManager) =
             [result.rows[0].id]
           );
           
+          log(`${LogTypes.MOVED_TO_DLQ} | TransactionId: ${transactionId} | MaxRetries: ${maxRetries} exceeded`);
           return { status: 'moved_to_dlq' };
         }
       }
@@ -567,6 +631,9 @@ export const createOptimizedQueueManager = (pool, resourceCache, eventManager) =
           [ids]
         );
         
+        // Log batch acknowledge operations
+        log(`${LogTypes.ACK_BATCH} | Status: completed | Count: ${ids.length} | TransactionIds: [${ids.join(', ')}]`);
+        
         grouped.completed.forEach(ack => {
           results.push({ transactionId: ack.transactionId, status: 'completed' });
         });
@@ -582,10 +649,10 @@ export const createOptimizedQueueManager = (pool, resourceCache, eventManager) =
     return results;
   };
   
-  // Configure queue-level settings only (no partition creation)
-  const configureQueueOnly = async (queueName, namespace = null, task = null, queueOptions = {}) => {
+  // Configure queue settings (queue-level only, partitions are just FIFO containers now)
+  const configureQueue = async (queueName, options = {}, namespace = null, task = null) => {
     return withTransaction(pool, async (client) => {
-      // Only create/update the queue, no partition creation
+      // First create/update the queue with namespace and task
       const queueResult = await client.query(
         `INSERT INTO queen.queues (name, namespace, task) VALUES ($1, $2, $3) 
          ON CONFLICT (name) DO UPDATE SET 
@@ -595,99 +662,64 @@ export const createOptimizedQueueManager = (pool, resourceCache, eventManager) =
         [queueName, namespace || null, task || null]
       );
       
-      // Update queue-level settings if provided
-      if (queueOptions.encryptionEnabled !== undefined || queueOptions.maxWaitTimeSeconds !== undefined) {
-        const updates = [];
-        const params = [];
-        let paramIndex = 1;
-        
-        if (queueOptions.encryptionEnabled !== undefined) {
-          updates.push(`encryption_enabled = $${paramIndex}`);
-          params.push(!!queueOptions.encryptionEnabled);
+      // Build update query for all configuration options
+      const updates = [];
+      const params = [];
+      let paramIndex = 1;
+      
+      // Map options to database columns
+      const optionMappings = {
+        leaseTime: 'lease_time',
+        retryLimit: 'retry_limit',
+        retryDelay: 'retry_delay',
+        maxSize: 'max_size',
+        ttl: 'ttl',
+        deadLetterQueue: 'dead_letter_queue',
+        dlqAfterMaxRetries: 'dlq_after_max_retries',
+        delayedProcessing: 'delayed_processing',
+        windowBuffer: 'window_buffer',
+        retentionSeconds: 'retention_seconds',
+        completedRetentionSeconds: 'completed_retention_seconds',
+        retentionEnabled: 'retention_enabled',
+        priority: 'priority',
+        encryptionEnabled: 'encryption_enabled',
+        maxWaitTimeSeconds: 'max_wait_time_seconds'
+      };
+      
+      // Process each option
+      for (const [optionKey, columnName] of Object.entries(optionMappings)) {
+        if (options[optionKey] !== undefined) {
+          updates.push(`${columnName} = $${paramIndex}`);
+          
+          // Handle different data types
+          if (typeof options[optionKey] === 'boolean') {
+            params.push(!!options[optionKey]);
+          } else if (typeof options[optionKey] === 'number' || !isNaN(options[optionKey])) {
+            params.push(parseInt(options[optionKey]) || 0);
+          } else {
+            params.push(options[optionKey]);
+          }
+          
           paramIndex++;
-        }
-        
-        if (queueOptions.maxWaitTimeSeconds !== undefined) {
-          updates.push(`max_wait_time_seconds = $${paramIndex}`);
-          params.push(parseInt(queueOptions.maxWaitTimeSeconds) || 0);
-          paramIndex++;
-        }
-        
-        if (updates.length > 0) {
-          params.push(queueName);
-          const updateQuery = `UPDATE queen.queues SET ${updates.join(', ')} WHERE name = $${paramIndex}`;
-          await client.query(updateQuery, params);
         }
       }
+      
+      // Apply updates if any
+      if (updates.length > 0) {
+        params.push(queueName);
+        const updateQuery = `UPDATE queen.queues SET ${updates.join(', ')} WHERE name = $${paramIndex}`;
+        await client.query(updateQuery, params);
+      }
+      
+      // Invalidate cache for all partitions of this queue
+      resourceCache.invalidateQueue(queueName);
       
       return { 
         queue: queueName, 
         namespace: queueResult.rows[0].namespace, 
-        task: queueResult.rows[0].task 
+        task: queueResult.rows[0].task,
+        options
       };
-    });
-  };
-
-  // Configure partition options
-  const configureQueue = async (queueName, partitionName = 'Default', options = {}, namespace = null, task = null) => {
-    return withTransaction(pool, async (client) => {
-      // First ensure the queue and partition exist
-      const resources = await ensureResources(client, queueName, partitionName, namespace, task);
-      
-      // Then update queue-level settings if provided
-      if (options.encryptionEnabled !== undefined || options.maxWaitTimeSeconds !== undefined) {
-        const updates = [];
-        const params = [];
-        let paramIndex = 1;
-        
-        if (options.encryptionEnabled !== undefined) {
-          updates.push(`encryption_enabled = $${paramIndex}`);
-          params.push(!!options.encryptionEnabled); // Ensure boolean
-          paramIndex++;
-        }
-        
-        if (options.maxWaitTimeSeconds !== undefined) {
-          updates.push(`max_wait_time_seconds = $${paramIndex}`);
-          params.push(parseInt(options.maxWaitTimeSeconds) || 0);
-          paramIndex++;
-        }
-        
-        if (updates.length > 0) {
-          params.push(queueName);
-          const updateQuery = `UPDATE queen.queues SET ${updates.join(', ')} WHERE name = $${paramIndex}`;
-          await client.query(updateQuery, params);
-        }
-      }
-      
-      // Prepare partition options with new retention settings
-      const partitionOptions = {
-        leaseTime: options.leaseTime || 300,
-        maxSize: options.maxSize || 10000,
-        ttl: options.ttl || 3600,
-        retryLimit: options.retryLimit || 3,
-        retryDelay: options.retryDelay || 1000,
-        deadLetterQueue: options.deadLetterQueue || false,
-        dlqAfterMaxRetries: options.dlqAfterMaxRetries || false,
-        priority: options.priority || 0,
-        delayedProcessing: options.delayedProcessing || 0,
-        windowBuffer: options.windowBuffer || 0,
-        // New retention options
-        retentionSeconds: options.retentionSeconds || 0,
-        completedRetentionSeconds: options.completedRetentionSeconds || 0,
-        partitionRetentionSeconds: options.partitionRetentionSeconds || 0,
-        retentionEnabled: options.retentionEnabled || false
-      };
-      
-      // Update partition with all options
-      await client.query(
-        `UPDATE queen.partitions SET options = $1, priority = $2 WHERE id = $3`,
-        [JSON.stringify(partitionOptions), partitionOptions.priority, resources.partitionId]
-      );
-      
-      // Invalidate cache
-      resourceCache.invalidate(queueName, partitionName);
-      
-      return { queue: queueName, partition: partitionName, namespace, task, options };
     });
   };
   
@@ -763,8 +795,13 @@ export const createOptimizedQueueManager = (pool, resourceCache, eventManager) =
            worker_id = NULL
        WHERE status = 'processing' 
          AND lease_expires_at < NOW()
-       RETURNING id`
+       RETURNING id, transaction_id`
     );
+    
+    if (result.rowCount > 0) {
+      const transactionIds = result.rows.map(r => r.transaction_id);
+      log(`${LogTypes.LEASE_EXPIRED} | Count: ${result.rowCount} | TransactionIds: [${transactionIds.join(', ')}]`);
+    }
     
     return result.rowCount;
   };
@@ -918,7 +955,6 @@ export const createOptimizedQueueManager = (pool, resourceCache, eventManager) =
     acknowledgeMessage,
     acknowledgeMessages,
     configureQueue,
-    configureQueueOnly,
     getQueueStats,
     getQueueLag,
     reclaimExpiredLeases

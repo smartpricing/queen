@@ -87,7 +87,6 @@ async function testQueueConfiguration() {
   try {
     const result = await client.configure({
       queue: 'core-test-config',
-      partition: 'configured-partition',
       options: {
         leaseTime: 600,
         retryLimit: 5,
@@ -173,7 +172,6 @@ async function testDelayedProcessing() {
     // Configure queue with delay
     await client.configure({
       queue: 'core-test-delayed',
-      partition: 'delayed-partition',
       options: {
         delayedProcessing: 2 // 2 seconds delay
       }
@@ -185,7 +183,6 @@ async function testDelayedProcessing() {
     await client.push({
       items: [{
         queue: 'core-test-delayed',
-        partition: 'delayed-partition',
         payload: { message: 'Delayed message', sentAt: startTime }
       }]
     });
@@ -193,7 +190,6 @@ async function testDelayedProcessing() {
     // Try to pop immediately (should get nothing)
     const immediateResult = await client.pop({
       queue: 'core-test-delayed',
-      partition: 'delayed-partition',
       batch: 1
     });
     
@@ -207,7 +203,6 @@ async function testDelayedProcessing() {
     // Try to pop again (should get the message now)
     const delayedResult = await client.pop({
       queue: 'core-test-delayed',
-      partition: 'delayed-partition',
       batch: 1
     });
     

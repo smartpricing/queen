@@ -1,4 +1,6 @@
-export const withRetry = async (fn, attempts = 3, delay = 1000, backoff = 2) => {
+import config from '../../config.js';
+
+export const withRetry = async (fn, attempts = config.CLIENT.DEFAULT_RETRY_ATTEMPTS, delay = config.CLIENT.DEFAULT_RETRY_DELAY, backoff = config.CLIENT.DEFAULT_RETRY_BACKOFF) => {
   let lastError;
   
   for (let i = 0; i < attempts; i++) {
@@ -24,9 +26,9 @@ export const withRetry = async (fn, attempts = 3, delay = 1000, backoff = 2) => 
 
 export const createRetryableFunction = (fn, options = {}) => {
   const {
-    attempts = 3,
-    delay = 1000,
-    backoff = 2
+    attempts = config.CLIENT.DEFAULT_RETRY_ATTEMPTS,
+    delay = config.CLIENT.DEFAULT_RETRY_DELAY,
+    backoff = config.CLIENT.DEFAULT_RETRY_BACKOFF
   } = options;
   
   return (...args) => withRetry(() => fn(...args), attempts, delay, backoff);

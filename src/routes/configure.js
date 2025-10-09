@@ -6,56 +6,41 @@ export const createConfigureRoute = (queueManager) => {
       throw new Error('queue is required');
     }
     
-    if (partition) {
-      // Partition specified - configure partition with options
-      const validOptions = {
-        leaseTime: options.leaseTime || 300,
-        maxSize: options.maxSize || 10000,
-        ttl: options.ttl || 3600,
-        retryLimit: options.retryLimit || 3,
-        retryDelay: options.retryDelay || 1000,
-        deadLetterQueue: options.deadLetterQueue || false,
-        dlqAfterMaxRetries: options.dlqAfterMaxRetries || false,
-        priority: options.priority || 0,
-        delayedProcessing: options.delayedProcessing || 0,
-        windowBuffer: options.windowBuffer || 0,
-        // New retention options
-        retentionSeconds: options.retentionSeconds || 0,
-        completedRetentionSeconds: options.completedRetentionSeconds || 0,
-        partitionRetentionSeconds: options.partitionRetentionSeconds || 0,
-        retentionEnabled: options.retentionEnabled || false,
-        // Queue-level options passed through
-        encryptionEnabled: options.encryptionEnabled,
-        maxWaitTimeSeconds: options.maxWaitTimeSeconds
-      };
-      
-      const result = await queueManager.configureQueue(queue, partition, validOptions, namespace, task);
-      
-      return {
-        queue,
+    // Note: partition parameter is now ignored but still accepted for backward compatibility
+    // All configuration is at queue level now
+    
+    const validOptions = {
+      leaseTime: options.leaseTime || 300,
+      maxSize: options.maxSize || 10000,
+      ttl: options.ttl || 3600,
+      retryLimit: options.retryLimit || 3,
+      retryDelay: options.retryDelay || 1000,
+      deadLetterQueue: options.deadLetterQueue || false,
+      dlqAfterMaxRetries: options.dlqAfterMaxRetries || false,
+      priority: options.priority || 0,
+      delayedProcessing: options.delayedProcessing || 0,
+      windowBuffer: options.windowBuffer || 0,
+      retentionSeconds: options.retentionSeconds || 0,
+      completedRetentionSeconds: options.completedRetentionSeconds || 0,
+      retentionEnabled: options.retentionEnabled || false,
+      encryptionEnabled: options.encryptionEnabled,
+      maxWaitTimeSeconds: options.maxWaitTimeSeconds
+    };
+    
+    // Call the new queue-only configuration method
+    const result = await queueManager.configureQueue(queue, validOptions, namespace, task);
+    
+    return {
+      queue,
+      namespace: result.namespace,
+      task: result.task,
+      configured: true,
+      options: result.options,
+      // Include partition in response for backward compatibility but mark as deprecated
+      ...(partition && { 
         partition,
-        namespace,
-        task,
-        configured: true,
-        options: result.options
-      };
-    } else {
-      // No partition specified - only configure queue-level settings
-      const result = await queueManager.configureQueueOnly(queue, namespace, task, {
-        encryptionEnabled: options.encryptionEnabled,
-        maxWaitTimeSeconds: options.maxWaitTimeSeconds
-      });
-      
-      return {
-        queue,
-        namespace,
-        task,
-        configured: true,
-        options: {
-          encryptionEnabled: options.encryptionEnabled,
-          maxWaitTimeSeconds: options.maxWaitTimeSeconds
-        }
-      };
-    }
+        _deprecation_notice: 'Partition-level configuration is deprecated. All configuration is now at queue level.'
+      })
+    };
   };
 };

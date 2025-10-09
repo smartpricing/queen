@@ -9,7 +9,7 @@ const client = createQueenClient({
 // Configure a queue with delayed processing
 await client.configure({
     queue: 'htmls-delayed-02',
-    partition: 'html-02',  // Use 'Default' instead of 0
+    // partition parameter removed - all config is queue-level now
     options: {
       windowBuffer: 10,
       //delayedProcessing: 10,  // Don't process messages until 60 seconds old

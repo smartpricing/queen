@@ -1,74 +1,76 @@
 // Functional retention service for message cleanup
+import { log, LogTypes } from '../utils/logger.js';
+import config from '../config.js';
 
-const RETENTION_INTERVAL = parseInt(process.env.RETENTION_INTERVAL) || 300000; // 5 minutes
+const RETENTION_INTERVAL = config.JOBS.RETENTION_INTERVAL;
 
-// Apply retention policy to a single partition
-const retentionPartition = async (client, partition) => {
+// Apply retention policy to a single queue
+const retentionQueue = async (client, queue) => {
   const { 
-    retentionSeconds = 0,
-    completedRetentionSeconds = 0,
-    retentionEnabled = false 
-  } = partition.options || {};
+    retention_seconds: retentionSeconds = 0,
+    completed_retention_seconds: completedRetentionSeconds = 0,
+    retention_enabled: retentionEnabled = false 
+  } = queue;
   
   if (!retentionEnabled) return 0;
   
   let totalDeleted = 0;
   
-  // Delete old pending messages
+  // Delete old pending messages from all partitions in this queue
   if (retentionSeconds > 0) {
     const result = await client.query(`
       DELETE FROM queen.messages
-      WHERE partition_id = $1
+      WHERE partition_id IN (
+        SELECT id FROM queen.partitions WHERE queue_id = $1
+      )
         AND status = 'pending'
         AND created_at < NOW() - INTERVAL '1 second' * $2
       RETURNING id
-    `, [partition.id, retentionSeconds]);
+    `, [queue.id, retentionSeconds]);
     
     totalDeleted += result.rowCount || 0;
   }
   
-  // Delete completed/failed/evicted messages
+  // Delete completed/failed/evicted messages from all partitions in this queue
   if (completedRetentionSeconds > 0) {
     const result = await client.query(`
       DELETE FROM queen.messages
-      WHERE partition_id = $1
+      WHERE partition_id IN (
+        SELECT id FROM queen.partitions WHERE queue_id = $1
+      )
         AND status IN ('completed', 'failed', 'evicted')
         AND COALESCE(completed_at, failed_at, created_at) < NOW() - INTERVAL '1 second' * $2
       RETURNING id
-    `, [partition.id, completedRetentionSeconds]);
+    `, [queue.id, completedRetentionSeconds]);
     
     totalDeleted += result.rowCount || 0;
   }
   
   // Log retention if messages were deleted
   if (totalDeleted > 0) {
-    await client.query(`
-      INSERT INTO queen.retention_history (partition_id, messages_deleted, retention_type)
-      VALUES ($1, $2, 'retention')
-    `, [partition.id, totalDeleted]);
-    
-    console.log(`🗑️  Retained ${totalDeleted} messages from ${partition.queue_name}/${partition.name}`);
+    // Note: We might need to update retention_history table to use queue_id instead
+    log(`${LogTypes.RETENTION} | Queue: ${queue.name} | Count: ${totalDeleted} | RetentionSeconds: ${retentionSeconds} | CompletedRetentionSeconds: ${completedRetentionSeconds}`);
   }
   
   return totalDeleted;
 };
 
-// Clean up empty partitions
+// Clean up empty partitions (no longer based on partition-level config)
 const cleanupEmptyPartitions = async (client) => {
+  // For now, we keep Default partitions and only clean up truly empty non-default partitions
+  // that haven't had activity for a long time (e.g., 7 days)
   const result = await client.query(`
     DELETE FROM queen.partitions p
     WHERE p.name != 'Default'
-      AND (p.options->>'partitionRetentionSeconds')::int > 0
-      AND (p.options->>'retentionEnabled')::boolean = true
       AND NOT EXISTS (
         SELECT 1 FROM queen.messages m WHERE m.partition_id = p.id
       )
-      AND p.last_activity < NOW() - INTERVAL '1 second' * (p.options->>'partitionRetentionSeconds')::int
+      AND p.last_activity < NOW() - INTERVAL '7 days'
     RETURNING id, name
   `);
   
   if (result.rowCount > 0) {
-    console.log(`🗑️  Deleted ${result.rowCount} empty partitions`);
+    log(`🗑️  Deleted ${result.rowCount} empty partitions`);
   }
   
   return result.rowCount;
@@ -79,17 +81,17 @@ const performRetention = async (pool) => {
   const client = await pool.connect();
   
   try {
-    // Get partitions with retention enabled
-    const partitionsResult = await client.query(`
-      SELECT p.id, p.name, p.options, q.name as queue_name
-      FROM queen.partitions p
-      JOIN queen.queues q ON p.queue_id = q.id
-      WHERE (p.options->>'retentionEnabled')::boolean = true
+    // Get queues with retention enabled
+    const queuesResult = await client.query(`
+      SELECT q.id, q.name, q.retention_enabled, q.retention_seconds, 
+             q.completed_retention_seconds
+      FROM queen.queues q
+      WHERE q.retention_enabled = true
     `);
     
     let totalDeleted = 0;
-    for (const partition of partitionsResult.rows) {
-      totalDeleted += await retentionPartition(client, partition);
+    for (const queue of queuesResult.rows) {
+      totalDeleted += await retentionQueue(client, queue);
     }
     
     // Cleanup empty partitions
@@ -97,7 +99,7 @@ const performRetention = async (pool) => {
     
     return totalDeleted;
   } catch (error) {
-    console.error('Retention error:', error);
+    log('Retention error:', error);
     return 0;
   } finally {
     client.release();
@@ -110,16 +112,16 @@ export const startRetentionJob = (pool) => {
     try {
       await performRetention(pool);
     } catch (error) {
-      console.error('Retention job error:', error);
+      log('Retention job error:', error);
     }
   }, RETENTION_INTERVAL);
   
-  console.log(`♻️  Retention job started (interval: ${RETENTION_INTERVAL}ms)`);
+  log(`♻️  Retention job started (interval: ${RETENTION_INTERVAL}ms)`);
   
   // Return cleanup function
   return () => {
     clearInterval(intervalId);
-    console.log('Retention job stopped');
+    log('Retention job stopped');
   };
 };
 

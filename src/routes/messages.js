@@ -1,8 +1,11 @@
+import { log, LogTypes } from '../utils/logger.js';
+import config from '../config.js';
+
 export const createMessagesRoutes = (pool, queueManager) => {
   
   // List messages with filters
   const listMessages = async (filters = {}) => {
-    const { queue, partition, namespace, task, status, limit = 100, offset = 0 } = filters;
+    const { queue, partition, namespace, task, status, limit = config.API.DEFAULT_LIMIT, offset = config.API.DEFAULT_OFFSET } = filters;
     
     let query = `
       SELECT 
@@ -94,7 +97,11 @@ export const createMessagesRoutes = (pool, queueManager) => {
         p.name as partition_name,
         q.namespace,
         q.task,
-        p.options as partition_options
+        q.lease_time,
+        q.retry_limit,
+        q.retry_delay,
+        q.ttl,
+        q.priority
       FROM queen.messages m
       JOIN queen.partitions p ON p.id = m.partition_id
       JOIN queen.queues q ON q.id = p.queue_id
@@ -124,7 +131,13 @@ export const createMessagesRoutes = (pool, queueManager) => {
       errorMessage: row.error_message,
       retryCount: row.retry_count,
       leaseExpiresAt: row.lease_expires_at,
-      partitionOptions: row.partition_options
+      queueConfig: {
+        leaseTime: row.lease_time,
+        retryLimit: row.retry_limit,
+        retryDelay: row.retry_delay,
+        ttl: row.ttl,
+        priority: row.priority
+      }
     };
   };
   
@@ -140,6 +153,7 @@ export const createMessagesRoutes = (pool, queueManager) => {
       throw new Error('Message not found');
     }
     
+    log(`${LogTypes.DELETE} | TransactionId: ${transactionId} | MessageId: ${result.rows[0].id}`);
     return { deleted: true, transactionId };
   };
   
@@ -156,13 +170,14 @@ export const createMessagesRoutes = (pool, queueManager) => {
         error_message = NULL
       WHERE transaction_id = $1 
         AND status IN ('failed', 'dead_letter')
-      RETURNING id
+      RETURNING id, retry_count
     `, [transactionId]);
     
     if (result.rows.length === 0) {
       throw new Error('Message not found or not in failed state');
     }
     
+    log(`${LogTypes.RETRY} | TransactionId: ${transactionId} | NewRetryCount: ${result.rows[0].retry_count}`);
     return { retried: true, transactionId };
   };
   
@@ -182,6 +197,7 @@ export const createMessagesRoutes = (pool, queueManager) => {
       throw new Error('Message not found or not in failed state');
     }
     
+    log(`${LogTypes.MANUAL_DLQ} | TransactionId: ${transactionId} | MessageId: ${result.rows[0].id}`);
     return { movedToDLQ: true, transactionId };
   };
   
@@ -213,7 +229,7 @@ export const createMessagesRoutes = (pool, queueManager) => {
         AND m.created_at BETWEEN $3::timestamp - INTERVAL '1 hour' 
                             AND $3::timestamp + INTERVAL '1 hour'
       ORDER BY ABS(EXTRACT(EPOCH FROM (m.created_at - $3::timestamp)))
-      LIMIT 10
+      LIMIT ${config.ANALYTICS.MAX_RELATED_MESSAGES}
     `, [partition_id, transactionId, created_at]);
     
     return result.rows.map(row => ({
@@ -259,9 +275,12 @@ export const createMessagesRoutes = (pool, queueManager) => {
     
     const result = await pool.query(query, params);
     
+    const clearedCount = result.rowCount || 0;
+    log(`${LogTypes.CLEAR_QUEUE} | Queue: ${queue} | Partition: ${partition || 'all'} | Count: ${clearedCount} messages deleted`);
+    
     return { 
       cleared: true, 
-      count: result.rowCount,
+      count: clearedCount,
       queue,
       partition: partition || 'all'
     };

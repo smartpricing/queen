@@ -45,11 +45,11 @@ async function main() {
   }
   console.log('');
 
-  // Configure the queue partition
+  // Configure the queue
   try {
     await client.configure({
       queue: queue,
-      partition: partition || 'Default',
+      // partition parameter removed - all config is queue-level now
       options: {
         retryLimit: 3,
         retryDelay: 1000,
@@ -57,7 +57,7 @@ async function main() {
         leaseTime: 300
       }
     });
-    console.log('✅ Queue/partition configured successfully\n');
+    console.log('✅ Queue configured successfully\n');
   } catch (error) {
     console.log('⚠️  Queue configuration failed (may already exist):', error.message, '\n');
   }

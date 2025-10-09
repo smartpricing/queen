@@ -36,6 +36,15 @@ export const createResourceCache = () => {
     }
   };
   
+  const invalidateQueue = (queue) => {
+    // Clear all partitions for this queue when queue config changes
+    for (const key of cache.keys()) {
+      if (key.startsWith(`${queue}:`)) {
+        cache.delete(key);
+      }
+    }
+  };
+  
   // Cleanup old entries periodically
   setInterval(() => {
     const now = Date.now();
@@ -49,6 +58,7 @@ export const createResourceCache = () => {
   return {
     checkResource,
     cacheResource,
-    invalidate
+    invalidate,
+    invalidateQueue
   };
 };

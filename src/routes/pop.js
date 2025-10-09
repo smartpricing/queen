@@ -1,7 +1,9 @@
+import config from '../config.js';
+
 export const createPopRoute = (queueManager, eventManager) => {
   return async (scope, options = {}) => {
-    const { wait = false, timeout = 30000, batch = 1 } = options;
-    const maxTimeout = 60000;
+    const { wait = false, timeout = config.QUEUE.DEFAULT_TIMEOUT, batch = config.QUEUE.DEFAULT_BATCH_SIZE } = options;
+    const maxTimeout = config.QUEUE.MAX_TIMEOUT;
     const effectiveTimeout = Math.min(timeout, maxTimeout);
     
     // Handle different pop scenarios
@@ -15,7 +17,7 @@ export const createPopRoute = (queueManager, eventManager) => {
       
       // Simple polling for filtered pops (no specific queue path to wait on)
       const startTime = Date.now();
-      const pollInterval = Math.min(1000, effectiveTimeout / 10);
+      const pollInterval = Math.min(config.QUEUE.POLL_INTERVAL_FILTERED, effectiveTimeout / 10);
       
       while (Date.now() - startTime < effectiveTimeout) {
         await new Promise(resolve => setTimeout(resolve, pollInterval));
@@ -41,7 +43,7 @@ export const createPopRoute = (queueManager, eventManager) => {
       : scope.queue;
     
     const startTime = Date.now();
-    const pollInterval = Math.min(100, effectiveTimeout / 10);
+    const pollInterval = Math.min(config.QUEUE.POLL_INTERVAL, effectiveTimeout / 10);
     
     while (Date.now() - startTime < effectiveTimeout) {
       // Wait for message notification or short timeout

@@ -3,6 +3,7 @@ import pg from 'pg';
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
+import config from './config.js';
 import { initDatabase } from './database/connection.js';
 import { createOptimizedQueueManager } from './managers/queueManagerOptimized.js';
 import { createResourceCache } from './managers/resourceCache.js';
@@ -18,11 +19,12 @@ import { createWebSocketServer } from './websocket/wsServer.js';
 import { initEncryption } from './services/encryptionService.js';
 import { startRetentionJob } from './services/retentionService.js';
 import { startEvictionJob } from './services/evictionService.js';
+import { log } from './utils/logger.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
-const PORT = process.env.PORT || 6632;
-const HOST = process.env.HOST || '0.0.0.0';
+const PORT = config.SERVER.PORT;
+const HOST = config.SERVER.HOST;
 
 // Performance monitoring
 let requestCount = 0;
@@ -32,22 +34,18 @@ const startTime = Date.now();
 // Create optimized connection pool
 const { Pool } = pg;
 const createOptimizedPool = () => {
-  const poolSize = parseInt(process.env.DB_POOL_SIZE) || 20;
-  const idleTimeout = parseInt(process.env.DB_IDLE_TIMEOUT) || 30000;
-  const connectionTimeout = parseInt(process.env.DB_CONNECTION_TIMEOUT) || 2000;
-  
   return new Pool({
-    user: process.env.PG_USER || 'postgres',
-    host: process.env.PG_HOST || 'localhost',
-    database: process.env.PG_DB || 'postgres',
-    password: process.env.PG_PASSWORD || 'postgres',
-    port: process.env.PG_PORT || 5432,
-    max: poolSize,
-    idleTimeoutMillis: idleTimeout,
-    connectionTimeoutMillis: connectionTimeout,
-    statement_timeout: 30000,
-    query_timeout: 30000,
-    application_name: 'queen-uws'
+    user: config.DATABASE.USER,
+    host: config.DATABASE.HOST,
+    database: config.DATABASE.DATABASE,
+    password: config.DATABASE.PASSWORD,
+    port: config.DATABASE.PORT,
+    max: config.DATABASE.POOL_SIZE,
+    idleTimeoutMillis: config.DATABASE.IDLE_TIMEOUT,
+    connectionTimeoutMillis: config.DATABASE.CONNECTION_TIMEOUT,
+    statement_timeout: config.DATABASE.STATEMENT_TIMEOUT,
+    query_timeout: config.DATABASE.QUERY_TIMEOUT,
+    application_name: config.SERVER.APPLICATION_NAME
   });
 };
 
@@ -73,10 +71,10 @@ const initDatabaseWithMigrations = async () => {
     const migration = fs.readFileSync(migrationPath, 'utf8');
     try {
       await pool.query(migration);
-      console.log('✅ Extension features migration applied');
+      log('✅ Extension features migration applied');
     } catch (error) {
       if (!error.message.includes('already exists')) {
-        console.error('Migration error:', error);
+        log('Migration error:', error);
       }
     }
   }
@@ -85,7 +83,7 @@ const initDatabaseWithMigrations = async () => {
 await initDatabaseWithMigrations();
 
 // Initialize extended features
-console.log('\n🚀 Initializing Queen Services...');
+log('🚀 Initializing Queen Services...');
 
 // 1. Encryption service
 const encryptionEnabled = initEncryption();
@@ -101,12 +99,12 @@ setInterval(async () => {
   try {
     const reclaimed = await queueManager.reclaimExpiredLeases();
     if (reclaimed > 0) {
-      console.log(`Reclaimed ${reclaimed} expired leases`);
+      log(`Reclaimed ${reclaimed} expired leases`);
     }
   } catch (error) {
-    console.error('Error reclaiming leases:', error);
+    log('Error reclaiming leases:', error);
   }
-}, 5000); // Check every 5 seconds
+}, config.JOBS.LEASE_RECLAIM_INTERVAL);
 
 // Create server
 const app = uWS.App();
@@ -117,19 +115,19 @@ const wsServer = createWebSocketServer(app, eventManager);
 // Background job for queue depth updates
 setInterval(async () => {
   await wsServer.updateQueueDepths(queueManager);
-}, 5000);
+}, config.JOBS.QUEUE_DEPTH_UPDATE_INTERVAL);
 
 // Background job for system stats
 setInterval(async () => {
   await wsServer.sendSystemStats(pool);
-}, 10000);
+}, config.JOBS.SYSTEM_STATS_UPDATE_INTERVAL);
 
 // CORS headers helper
 const setCorsHeaders = (res) => {
-  res.writeHeader('Access-Control-Allow-Origin', '*');
-  res.writeHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
-  res.writeHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
-  res.writeHeader('Access-Control-Max-Age', '86400');
+  res.writeHeader('Access-Control-Allow-Origin', config.API.CORS_ALLOWED_ORIGINS);
+  res.writeHeader('Access-Control-Allow-Methods', config.API.CORS_ALLOWED_METHODS);
+  res.writeHeader('Access-Control-Allow-Headers', config.API.CORS_ALLOWED_HEADERS);
+  res.writeHeader('Access-Control-Max-Age', config.API.CORS_MAX_AGE.toString());
 };
 
 // Helper to read JSON body
@@ -147,7 +145,7 @@ const readJson = (res, cb, abortedRef) => {
         }
       } catch (e) {
         if (abortedRef && abortedRef.aborted) return;
-        res.writeStatus('400').end(JSON.stringify({ error: 'Invalid JSON' }));
+        res.writeStatus(config.HTTP_STATUS.BAD_REQUEST.toString()).end(JSON.stringify({ error: 'Invalid JSON' }));
         return;
       }
       cb(json);
@@ -164,12 +162,12 @@ const readJson = (res, cb, abortedRef) => {
 // Handle OPTIONS requests for CORS preflight
 app.options('/*', (res, req) => {
   res.onAborted(() => {
-    console.log('OPTIONS request aborted');
+    log('OPTIONS request aborted');
   });
   
   res.cork(() => {
     setCorsHeaders(res);
-    res.writeStatus('204').end();
+    res.writeStatus(config.HTTP_STATUS.NO_CONTENT.toString()).end();
   });
 });
 
@@ -178,7 +176,7 @@ app.post('/api/v1/configure', (res, req) => {
   const abortedRef = { aborted: false };
   res.onAborted(() => {
     abortedRef.aborted = true;
-    console.log('Configure request aborted');
+    log('Configure request aborted');
   });
   
   readJson(res, async (body) => {
@@ -189,14 +187,14 @@ app.post('/api/v1/configure', (res, req) => {
       eventManager.emit('queue.created', result);
       res.cork(() => {
         setCorsHeaders(res);
-        res.writeStatus('201').end(JSON.stringify(result));
+        res.writeStatus(config.HTTP_STATUS.CREATED.toString()).end(JSON.stringify(result));
       });
     } catch (error) {
       if (abortedRef.aborted) return;
-      console.error('Configure error:', error);
+      log('Configure error:', error);
       res.cork(() => {
         setCorsHeaders(res);
-        res.writeStatus('500').end(JSON.stringify({ error: error.message }));
+        res.writeStatus(config.HTTP_STATUS.INTERNAL_SERVER_ERROR.toString()).end(JSON.stringify({ error: error.message }));
       });
     }
   }, abortedRef);
@@ -207,7 +205,7 @@ app.post('/api/v1/push', (res, req) => {
   const abortedRef = { aborted: false };
   res.onAborted(() => {
     abortedRef.aborted = true;
-    console.log('Push request aborted');
+    log('Push request aborted');
   });
   
   readJson(res, async (body) => {
@@ -239,14 +237,14 @@ app.post('/api/v1/push', (res, req) => {
       
       res.cork(() => {
         setCorsHeaders(res);
-        res.writeStatus('201').end(JSON.stringify(result));
+        res.writeStatus(config.HTTP_STATUS.CREATED.toString()).end(JSON.stringify(result));
       });
     } catch (error) {
       if (abortedRef.aborted) return;
-      console.error('Push error:', error);
+      log('Push error:', error);
       res.cork(() => {
         setCorsHeaders(res);
-        res.writeStatus('500').end(JSON.stringify({ error: error.message }));
+        res.writeStatus(config.HTTP_STATUS.INTERNAL_SERVER_ERROR.toString()).end(JSON.stringify({ error: error.message }));
       });
     }
   }, abortedRef);
@@ -261,15 +259,15 @@ app.get('/api/v1/pop/queue/:queue/partition/:partition', (res, req) => {
   let aborted = false;
   res.onAborted(() => {
     aborted = true;
-    console.log('Pop request aborted');
+    log('Pop request aborted');
   });
   
   createPopRoute(queueManager, eventManager)(
     { queue, partition },
     {
       wait: query.get('wait') === 'true',
-      timeout: parseInt(query.get('timeout') || '30000'),
-      batch: parseInt(query.get('batch') || '1')
+      timeout: parseInt(query.get('timeout') || config.QUEUE.DEFAULT_TIMEOUT.toString()),
+      batch: parseInt(query.get('batch') || config.QUEUE.DEFAULT_BATCH_SIZE.toString())
     }
   ).then(result => {
     if (aborted) return;
@@ -287,17 +285,17 @@ app.get('/api/v1/pop/queue/:queue/partition/:partition', (res, req) => {
     res.cork(() => {
       setCorsHeaders(res);
       if (result.messages.length > 0) {
-        res.writeStatus('200').end(JSON.stringify(result));
+        res.writeStatus(config.HTTP_STATUS.OK.toString()).end(JSON.stringify(result));
       } else {
-        res.writeStatus('204').end();
+        res.writeStatus(config.HTTP_STATUS.NO_CONTENT.toString()).end();
       }
     });
   }).catch(error => {
     if (aborted) return;
-    console.error('Pop error:', error);
+    log('Pop error:', error);
     res.cork(() => {
       setCorsHeaders(res);
-      res.writeStatus('500').end(JSON.stringify({ error: error.message }));
+      res.writeStatus(config.HTTP_STATUS.INTERNAL_SERVER_ERROR.toString()).end(JSON.stringify({ error: error.message }));
     });
   });
 });
@@ -309,15 +307,15 @@ app.get('/api/v1/pop/queue/:queue', (res, req) => {
   let aborted = false;
   res.onAborted(() => {
     aborted = true;
-    console.log('Pop request aborted');
+    log('Pop request aborted');
   });
   
   createPopRoute(queueManager, eventManager)(
     { queue },
     {
       wait: query.get('wait') === 'true',
-      timeout: parseInt(query.get('timeout') || '30000'),
-      batch: parseInt(query.get('batch') || '1')
+      timeout: parseInt(query.get('timeout') || config.QUEUE.DEFAULT_TIMEOUT.toString()),
+      batch: parseInt(query.get('batch') || config.QUEUE.DEFAULT_BATCH_SIZE.toString())
     }
   ).then(result => {
     if (aborted) return;
@@ -334,17 +332,17 @@ app.get('/api/v1/pop/queue/:queue', (res, req) => {
     res.cork(() => {
       setCorsHeaders(res);
       if (result.messages.length > 0) {
-        res.writeStatus('200').end(JSON.stringify(result));
+        res.writeStatus(config.HTTP_STATUS.OK.toString()).end(JSON.stringify(result));
       } else {
-        res.writeStatus('204').end();
+        res.writeStatus(config.HTTP_STATUS.NO_CONTENT.toString()).end();
       }
     });
   }).catch(error => {
     if (aborted) return;
-    console.error('Pop error:', error);
+    log('Pop error:', error);
     res.cork(() => {
       setCorsHeaders(res);
-      res.writeStatus('500').end(JSON.stringify({ error: error.message }));
+      res.writeStatus(config.HTTP_STATUS.INTERNAL_SERVER_ERROR.toString()).end(JSON.stringify({ error: error.message }));
     });
   });
 });
@@ -358,15 +356,15 @@ app.get('/api/v1/pop', (res, req) => {
   let aborted = false;
   res.onAborted(() => {
     aborted = true;
-    console.log('Pop request aborted');
+    log('Pop request aborted');
   });
   
   createPopRoute(queueManager, eventManager)(
     { namespace, task },
     {
       wait: query.get('wait') === 'true',
-      timeout: parseInt(query.get('timeout') || '30000'),
-      batch: parseInt(query.get('batch') || '1')
+      timeout: parseInt(query.get('timeout') || config.QUEUE.DEFAULT_TIMEOUT.toString()),
+      batch: parseInt(query.get('batch') || config.QUEUE.DEFAULT_BATCH_SIZE.toString())
     }
   ).then(result => {
     if (aborted) return;
@@ -383,17 +381,17 @@ app.get('/api/v1/pop', (res, req) => {
     res.cork(() => {
       setCorsHeaders(res);
       if (result.messages.length > 0) {
-        res.writeStatus('200').end(JSON.stringify(result));
+        res.writeStatus(config.HTTP_STATUS.OK.toString()).end(JSON.stringify(result));
       } else {
-        res.writeStatus('204').end();
+        res.writeStatus(config.HTTP_STATUS.NO_CONTENT.toString()).end();
       }
     });
   }).catch(error => {
     if (aborted) return;
-    console.error('Pop error:', error);
+    log('Pop error:', error);
     res.cork(() => {
       setCorsHeaders(res);
-      res.writeStatus('500').end(JSON.stringify({ error: error.message }));
+      res.writeStatus(config.HTTP_STATUS.INTERNAL_SERVER_ERROR.toString()).end(JSON.stringify({ error: error.message }));
     });
   });
 });
@@ -403,7 +401,7 @@ app.post('/api/v1/ack', (res, req) => {
   const abortedRef = { aborted: false };
   res.onAborted(() => {
     abortedRef.aborted = true;
-    console.log('ACK request aborted');
+    log('ACK request aborted');
   });
   
   readJson(res, async (body) => {
@@ -426,14 +424,14 @@ app.post('/api/v1/ack', (res, req) => {
       
       res.cork(() => {
         setCorsHeaders(res);
-        res.writeStatus('200').end(JSON.stringify(result));
+        res.writeStatus(config.HTTP_STATUS.OK.toString()).end(JSON.stringify(result));
       });
     } catch (error) {
       if (abortedRef.aborted) return;
-      console.error('ACK error:', error);
+      log('ACK error:', error);
       res.cork(() => {
         setCorsHeaders(res);
-        res.writeStatus('500').end(JSON.stringify({ error: error.message }));
+        res.writeStatus(config.HTTP_STATUS.INTERNAL_SERVER_ERROR.toString()).end(JSON.stringify({ error: error.message }));
       });
     }
   }, abortedRef);
@@ -444,7 +442,7 @@ app.post('/api/v1/ack/batch', (res, req) => {
   const abortedRef = { aborted: false };
   res.onAborted(() => {
     abortedRef.aborted = true;
-    console.log('Batch ACK request aborted');
+    log('Batch ACK request aborted');
   });
   
   readJson(res, async (body) => {
@@ -469,17 +467,17 @@ app.post('/api/v1/ack/batch', (res, req) => {
       
       res.cork(() => {
         setCorsHeaders(res);
-        res.writeStatus('200').end(JSON.stringify({
+        res.writeStatus(config.HTTP_STATUS.OK.toString()).end(JSON.stringify({
           processed: results.length,
           results
         }));
       });
     } catch (error) {
       if (abortedRef.aborted) return;
-      console.error('Batch ACK error:', error);
+      log('Batch ACK error:', error);
       res.cork(() => {
         setCorsHeaders(res);
-        res.writeStatus('500').end(JSON.stringify({ error: error.message }));
+        res.writeStatus(config.HTTP_STATUS.INTERNAL_SERVER_ERROR.toString()).end(JSON.stringify({ error: error.message }));
       });
     }
   }, abortedRef);
@@ -490,21 +488,21 @@ app.get('/api/v1/analytics/queues', (res, req) => {
   let aborted = false;
   res.onAborted(() => {
     aborted = true;
-    console.log('Analytics request aborted');
+    log('Analytics request aborted');
   });
   
   analyticsRoutes.getQueues().then(result => {
     if (aborted) return;
     res.cork(() => {
       setCorsHeaders(res);
-      res.writeStatus('200').end(JSON.stringify(result));
+      res.writeStatus(config.HTTP_STATUS.OK.toString()).end(JSON.stringify(result));
     });
   }).catch(error => {
     if (aborted) return;
-    console.error('Analytics error:', error);
+    log('Analytics error:', error);
     res.cork(() => {
       setCorsHeaders(res);
-      res.writeStatus('500').end(JSON.stringify({ error: error.message }));
+      res.writeStatus(config.HTTP_STATUS.INTERNAL_SERVER_ERROR.toString()).end(JSON.stringify({ error: error.message }));
     });
   });
 });
@@ -515,21 +513,21 @@ app.get('/api/v1/analytics/queue/:queue', (res, req) => {
   let aborted = false;
   res.onAborted(() => {
     aborted = true;
-    console.log('Analytics request aborted');
+    log('Analytics request aborted');
   });
   
   analyticsRoutes.getQueueStats(queue).then(result => {
     if (aborted) return;
     res.cork(() => {
       setCorsHeaders(res);
-      res.writeStatus('200').end(JSON.stringify(result));
+      res.writeStatus(config.HTTP_STATUS.OK.toString()).end(JSON.stringify(result));
     });
   }).catch(error => {
     if (aborted) return;
-    console.error('Analytics error:', error);
+    log('Analytics error:', error);
     res.cork(() => {
       setCorsHeaders(res);
-      res.writeStatus('500').end(JSON.stringify({ error: error.message }));
+      res.writeStatus(config.HTTP_STATUS.INTERNAL_SERVER_ERROR.toString()).end(JSON.stringify({ error: error.message }));
     });
   });
 });
@@ -543,7 +541,7 @@ app.get('/api/v1/analytics', (res, req) => {
   let aborted = false;
   res.onAborted(() => {
     aborted = true;
-    console.log('Analytics request aborted');
+    log('Analytics request aborted');
   });
   
   const getStats = namespace 
@@ -556,14 +554,14 @@ app.get('/api/v1/analytics', (res, req) => {
     if (aborted) return;
     res.cork(() => {
       setCorsHeaders(res);
-      res.writeStatus('200').end(JSON.stringify(result));
+      res.writeStatus(config.HTTP_STATUS.OK.toString()).end(JSON.stringify(result));
     });
   }).catch(error => {
     if (aborted) return;
-    console.error('Analytics error:', error);
+    log('Analytics error:', error);
     res.cork(() => {
       setCorsHeaders(res);
-      res.writeStatus('500').end(JSON.stringify({ error: error.message }));
+      res.writeStatus(config.HTTP_STATUS.INTERNAL_SERVER_ERROR.toString()).end(JSON.stringify({ error: error.message }));
     });
   });
 });
@@ -572,21 +570,21 @@ app.get('/api/v1/analytics/queue-depths', (res, req) => {
   let aborted = false;
   res.onAborted(() => {
     aborted = true;
-    console.log('Analytics request aborted');
+    log('Analytics request aborted');
   });
   
   analyticsRoutes.getQueueDepths().then(result => {
     if (aborted) return;
     res.cork(() => {
       setCorsHeaders(res);
-      res.writeStatus('200').end(JSON.stringify(result));
+      res.writeStatus(config.HTTP_STATUS.OK.toString()).end(JSON.stringify(result));
     });
   }).catch(error => {
     if (aborted) return;
-    console.error('Analytics error:', error);
+    log('Analytics error:', error);
     res.cork(() => {
       setCorsHeaders(res);
-      res.writeStatus('500').end(JSON.stringify({ error: error.message }));
+      res.writeStatus(config.HTTP_STATUS.INTERNAL_SERVER_ERROR.toString()).end(JSON.stringify({ error: error.message }));
     });
   });
 });
@@ -595,21 +593,21 @@ app.get('/api/v1/analytics/throughput', (res, req) => {
   let aborted = false;
   res.onAborted(() => {
     aborted = true;
-    console.log('Analytics request aborted');
+    log('Analytics request aborted');
   });
   
   analyticsRoutes.getThroughput(pool).then(result => {
     if (aborted) return;
     res.cork(() => {
       setCorsHeaders(res);
-      res.writeStatus('200').end(JSON.stringify(result));
+      res.writeStatus(config.HTTP_STATUS.OK.toString()).end(JSON.stringify(result));
     });
   }).catch(error => {
     if (aborted) return;
-    console.error('Analytics error:', error);
+    log('Analytics error:', error);
     res.cork(() => {
       setCorsHeaders(res);
-      res.writeStatus('500').end(JSON.stringify({ error: error.message }));
+      res.writeStatus(config.HTTP_STATUS.INTERNAL_SERVER_ERROR.toString()).end(JSON.stringify({ error: error.message }));
     });
   });
 });
@@ -623,21 +621,21 @@ app.get('/api/v1/analytics/queue-lag', (res, req) => {
   let aborted = false;
   res.onAborted(() => {
     aborted = true;
-    console.log('Queue lag request aborted');
+    log('Queue lag request aborted');
   });
   
   analyticsRoutes.getQueueLag({ queue, namespace, task }).then(result => {
     if (aborted) return;
     res.cork(() => {
       setCorsHeaders(res);
-      res.writeStatus('200').end(JSON.stringify(result));
+      res.writeStatus(config.HTTP_STATUS.OK.toString()).end(JSON.stringify(result));
     });
   }).catch(error => {
     if (aborted) return;
-    console.error('Queue lag error:', error);
+    log('Queue lag error:', error);
     res.cork(() => {
       setCorsHeaders(res);
-      res.writeStatus('500').end(JSON.stringify({ error: error.message }));
+      res.writeStatus(config.HTTP_STATUS.INTERNAL_SERVER_ERROR.toString()).end(JSON.stringify({ error: error.message }));
     });
   });
 });
@@ -652,21 +650,21 @@ app.get('/api/v1/analytics/queue-stats', (res, req) => {
   let aborted = false;
   res.onAborted(() => {
     aborted = true;
-    console.log('Queue stats request aborted');
+    log('Queue stats request aborted');
   });
   
   queueManager.getQueueStats({ queue, namespace, task }).then(result => {
     if (aborted) return;
     res.cork(() => {
       setCorsHeaders(res);
-      res.writeStatus('200').end(JSON.stringify(result));
+      res.writeStatus(config.HTTP_STATUS.OK.toString()).end(JSON.stringify(result));
     });
   }).catch(error => {
     if (aborted) return;
-    console.error('Queue stats error:', error);
+    log('Queue stats error:', error);
     res.cork(() => {
       setCorsHeaders(res);
-      res.writeStatus('500').end(JSON.stringify({ error: error.message }));
+      res.writeStatus(config.HTTP_STATUS.INTERNAL_SERVER_ERROR.toString()).end(JSON.stringify({ error: error.message }));
     });
   });
 });
@@ -678,7 +676,7 @@ app.get('/api/v1/messages', (res, req) => {
   let aborted = false;
   res.onAborted(() => {
     aborted = true;
-    console.log('Messages list request aborted');
+    log('Messages list request aborted');
   });
   
   const filters = {
@@ -686,22 +684,22 @@ app.get('/api/v1/messages', (res, req) => {
     task: query.get('task'),
     queue: query.get('queue'),
     status: query.get('status'),
-    limit: parseInt(query.get('limit') || '100'),
-    offset: parseInt(query.get('offset') || '0')
+    limit: parseInt(query.get('limit') || config.API.DEFAULT_LIMIT.toString()),
+    offset: parseInt(query.get('offset') || config.API.DEFAULT_OFFSET.toString())
   };
   
   messagesRoutes.listMessages(filters).then(result => {
     if (aborted) return;
     res.cork(() => {
       setCorsHeaders(res);
-      res.writeStatus('200').end(JSON.stringify({ messages: result }));
+      res.writeStatus(config.HTTP_STATUS.OK.toString()).end(JSON.stringify({ messages: result }));
     });
   }).catch(error => {
     if (aborted) return;
-    console.error('List messages error:', error);
+    log('List messages error:', error);
     res.cork(() => {
       setCorsHeaders(res);
-      res.writeStatus('500').end(JSON.stringify({ error: error.message }));
+      res.writeStatus(config.HTTP_STATUS.INTERNAL_SERVER_ERROR.toString()).end(JSON.stringify({ error: error.message }));
     });
   });
 });
@@ -712,21 +710,21 @@ app.get('/api/v1/messages/:transactionId', (res, req) => {
   let aborted = false;
   res.onAborted(() => {
     aborted = true;
-    console.log('Get message request aborted');
+    log('Get message request aborted');
   });
   
   messagesRoutes.getMessage(transactionId).then(result => {
     if (aborted) return;
     res.cork(() => {
       setCorsHeaders(res);
-      res.writeStatus('200').end(JSON.stringify(result));
+      res.writeStatus(config.HTTP_STATUS.OK.toString()).end(JSON.stringify(result));
     });
   }).catch(error => {
     if (aborted) return;
-    console.error('Get message error:', error);
+    log('Get message error:', error);
     res.cork(() => {
       setCorsHeaders(res);
-      res.writeStatus(error.message === 'Message not found' ? '404' : '500')
+      res.writeStatus(error.message === 'Message not found' ? config.HTTP_STATUS.NOT_FOUND.toString() : config.HTTP_STATUS.INTERNAL_SERVER_ERROR.toString())
         .end(JSON.stringify({ error: error.message }));
     });
   });
@@ -738,21 +736,21 @@ app.del('/api/v1/messages/:transactionId', (res, req) => {
   let aborted = false;
   res.onAborted(() => {
     aborted = true;
-    console.log('Delete message request aborted');
+    log('Delete message request aborted');
   });
   
   messagesRoutes.deleteMessage(transactionId).then(result => {
     if (aborted) return;
     res.cork(() => {
       setCorsHeaders(res);
-      res.writeStatus('200').end(JSON.stringify(result));
+      res.writeStatus(config.HTTP_STATUS.OK.toString()).end(JSON.stringify(result));
     });
   }).catch(error => {
     if (aborted) return;
-    console.error('Delete message error:', error);
+    log('Delete message error:', error);
     res.cork(() => {
       setCorsHeaders(res);
-      res.writeStatus(error.message === 'Message not found' ? '404' : '500')
+      res.writeStatus(error.message === 'Message not found' ? config.HTTP_STATUS.NOT_FOUND.toString() : config.HTTP_STATUS.INTERNAL_SERVER_ERROR.toString())
         .end(JSON.stringify({ error: error.message }));
     });
   });
@@ -764,21 +762,21 @@ app.post('/api/v1/messages/:transactionId/retry', (res, req) => {
   let aborted = false;
   res.onAborted(() => {
     aborted = true;
-    console.log('Retry message request aborted');
+    log('Retry message request aborted');
   });
   
   messagesRoutes.retryMessage(transactionId).then(result => {
     if (aborted) return;
     res.cork(() => {
       setCorsHeaders(res);
-      res.writeStatus('200').end(JSON.stringify(result));
+      res.writeStatus(config.HTTP_STATUS.OK.toString()).end(JSON.stringify(result));
     });
   }).catch(error => {
     if (aborted) return;
-    console.error('Retry message error:', error);
+    log('Retry message error:', error);
     res.cork(() => {
       setCorsHeaders(res);
-      res.writeStatus('500').end(JSON.stringify({ error: error.message }));
+      res.writeStatus(config.HTTP_STATUS.INTERNAL_SERVER_ERROR.toString()).end(JSON.stringify({ error: error.message }));
     });
   });
 });
@@ -789,21 +787,21 @@ app.post('/api/v1/messages/:transactionId/dlq', (res, req) => {
   let aborted = false;
   res.onAborted(() => {
     aborted = true;
-    console.log('Move to DLQ request aborted');
+    log('Move to DLQ request aborted');
   });
   
   messagesRoutes.moveToDLQ(transactionId).then(result => {
     if (aborted) return;
     res.cork(() => {
       setCorsHeaders(res);
-      res.writeStatus('200').end(JSON.stringify(result));
+      res.writeStatus(config.HTTP_STATUS.OK.toString()).end(JSON.stringify(result));
     });
   }).catch(error => {
     if (aborted) return;
-    console.error('Move to DLQ error:', error);
+    log('Move to DLQ error:', error);
     res.cork(() => {
       setCorsHeaders(res);
-      res.writeStatus('500').end(JSON.stringify({ error: error.message }));
+      res.writeStatus(config.HTTP_STATUS.INTERNAL_SERVER_ERROR.toString()).end(JSON.stringify({ error: error.message }));
     });
   });
 });
@@ -814,21 +812,21 @@ app.get('/api/v1/messages/:transactionId/related', (res, req) => {
   let aborted = false;
   res.onAborted(() => {
     aborted = true;
-    console.log('Get related messages request aborted');
+    log('Get related messages request aborted');
   });
   
   messagesRoutes.getRelatedMessages(transactionId).then(result => {
     if (aborted) return;
     res.cork(() => {
       setCorsHeaders(res);
-      res.writeStatus('200').end(JSON.stringify({ messages: result }));
+      res.writeStatus(config.HTTP_STATUS.OK.toString()).end(JSON.stringify({ messages: result }));
     });
   }).catch(error => {
     if (aborted) return;
-    console.error('Get related messages error:', error);
+    log('Get related messages error:', error);
     res.cork(() => {
       setCorsHeaders(res);
-      res.writeStatus('500').end(JSON.stringify({ error: error.message }));
+      res.writeStatus(config.HTTP_STATUS.INTERNAL_SERVER_ERROR.toString()).end(JSON.stringify({ error: error.message }));
     });
   });
 });
@@ -841,21 +839,21 @@ app.del('/api/v1/queues/:queue/clear', (res, req) => {
   let aborted = false;
   res.onAborted(() => {
     aborted = true;
-    console.log('Clear queue request aborted');
+    log('Clear queue request aborted');
   });
   
   messagesRoutes.clearQueue(queue, partition).then(result => {
     if (aborted) return;
     res.cork(() => {
       setCorsHeaders(res);
-      res.writeStatus('200').end(JSON.stringify(result));
+      res.writeStatus(config.HTTP_STATUS.OK.toString()).end(JSON.stringify(result));
     });
   }).catch(error => {
     if (aborted) return;
-    console.error('Clear queue error:', error);
+    log('Clear queue error:', error);
     res.cork(() => {
       setCorsHeaders(res);
-      res.writeStatus('500').end(JSON.stringify({ error: error.message }));
+      res.writeStatus(config.HTTP_STATUS.INTERNAL_SERVER_ERROR.toString()).end(JSON.stringify({ error: error.message }));
     });
   });
 });
@@ -869,21 +867,21 @@ app.get('/api/v1/resources/queues', (res, req) => {
   let aborted = false;
   res.onAborted(() => {
     aborted = true;
-    console.log('Get queues request aborted');
+    log('Get queues request aborted');
   });
   
   resourcesRoutes.getQueues({ namespace, task }).then(result => {
     if (aborted) return;
     res.cork(() => {
       setCorsHeaders(res);
-      res.writeStatus('200').end(JSON.stringify({ queues: result }));
+      res.writeStatus(config.HTTP_STATUS.OK.toString()).end(JSON.stringify({ queues: result }));
     });
   }).catch(error => {
     if (aborted) return;
-    console.error('Get queues error:', error);
+    log('Get queues error:', error);
     res.cork(() => {
       setCorsHeaders(res);
-      res.writeStatus('500').end(JSON.stringify({ error: error.message }));
+      res.writeStatus(config.HTTP_STATUS.INTERNAL_SERVER_ERROR.toString()).end(JSON.stringify({ error: error.message }));
     });
   });
 });
@@ -894,21 +892,21 @@ app.get('/api/v1/resources/queues/:queue', (res, req) => {
   let aborted = false;
   res.onAborted(() => {
     aborted = true;
-    console.log('Get queue request aborted');
+    log('Get queue request aborted');
   });
   
   resourcesRoutes.getQueue(queue).then(result => {
     if (aborted) return;
     res.cork(() => {
       setCorsHeaders(res);
-      res.writeStatus('200').end(JSON.stringify(result));
+      res.writeStatus(config.HTTP_STATUS.OK.toString()).end(JSON.stringify(result));
     });
   }).catch(error => {
     if (aborted) return;
-    console.error('Get queue error:', error);
+    log('Get queue error:', error);
     res.cork(() => {
       setCorsHeaders(res);
-      res.writeStatus(error.message === 'Queue not found' ? '404' : '500')
+      res.writeStatus(error.message === 'Queue not found' ? config.HTTP_STATUS.NOT_FOUND.toString() : config.HTTP_STATUS.INTERNAL_SERVER_ERROR.toString())
         .end(JSON.stringify({ error: error.message }));
     });
   });
@@ -922,21 +920,21 @@ app.get('/api/v1/resources/partitions', (res, req) => {
   let aborted = false;
   res.onAborted(() => {
     aborted = true;
-    console.log('Get partitions request aborted');
+    log('Get partitions request aborted');
   });
   
   resourcesRoutes.getPartitions({ queue, minDepth: minDepth ? parseInt(minDepth) : null }).then(result => {
     if (aborted) return;
     res.cork(() => {
       setCorsHeaders(res);
-      res.writeStatus('200').end(JSON.stringify({ partitions: result }));
+      res.writeStatus(config.HTTP_STATUS.OK.toString()).end(JSON.stringify({ partitions: result }));
     });
   }).catch(error => {
     if (aborted) return;
-    console.error('Get partitions error:', error);
+    log('Get partitions error:', error);
     res.cork(() => {
       setCorsHeaders(res);
-      res.writeStatus('500').end(JSON.stringify({ error: error.message }));
+      res.writeStatus(config.HTTP_STATUS.INTERNAL_SERVER_ERROR.toString()).end(JSON.stringify({ error: error.message }));
     });
   });
 });
@@ -945,21 +943,21 @@ app.get('/api/v1/resources/namespaces', (res, req) => {
   let aborted = false;
   res.onAborted(() => {
     aborted = true;
-    console.log('Get namespaces request aborted');
+    log('Get namespaces request aborted');
   });
   
   resourcesRoutes.getNamespaces().then(result => {
     if (aborted) return;
     res.cork(() => {
       setCorsHeaders(res);
-      res.writeStatus('200').end(JSON.stringify({ namespaces: result }));
+      res.writeStatus(config.HTTP_STATUS.OK.toString()).end(JSON.stringify({ namespaces: result }));
     });
   }).catch(error => {
     if (aborted) return;
-    console.error('Get namespaces error:', error);
+    log('Get namespaces error:', error);
     res.cork(() => {
       setCorsHeaders(res);
-      res.writeStatus('500').end(JSON.stringify({ error: error.message }));
+      res.writeStatus(config.HTTP_STATUS.INTERNAL_SERVER_ERROR.toString()).end(JSON.stringify({ error: error.message }));
     });
   });
 });
@@ -968,21 +966,21 @@ app.get('/api/v1/resources/tasks', (res, req) => {
   let aborted = false;
   res.onAborted(() => {
     aborted = true;
-    console.log('Get tasks request aborted');
+    log('Get tasks request aborted');
   });
   
   resourcesRoutes.getTasks().then(result => {
     if (aborted) return;
     res.cork(() => {
       setCorsHeaders(res);
-      res.writeStatus('200').end(JSON.stringify({ tasks: result }));
+      res.writeStatus(config.HTTP_STATUS.OK.toString()).end(JSON.stringify({ tasks: result }));
     });
   }).catch(error => {
     if (aborted) return;
-    console.error('Get tasks error:', error);
+    log('Get tasks error:', error);
     res.cork(() => {
       setCorsHeaders(res);
-      res.writeStatus('500').end(JSON.stringify({ error: error.message }));
+      res.writeStatus(config.HTTP_STATUS.INTERNAL_SERVER_ERROR.toString()).end(JSON.stringify({ error: error.message }));
     });
   });
 });
@@ -991,21 +989,21 @@ app.get('/api/v1/resources/overview', (res, req) => {
   let aborted = false;
   res.onAborted(() => {
     aborted = true;
-    console.log('Get overview request aborted');
+    log('Get overview request aborted');
   });
   
   resourcesRoutes.getSystemOverview().then(result => {
     if (aborted) return;
     res.cork(() => {
       setCorsHeaders(res);
-      res.writeStatus('200').end(JSON.stringify(result));
+      res.writeStatus(config.HTTP_STATUS.OK.toString()).end(JSON.stringify(result));
     });
   }).catch(error => {
     if (aborted) return;
-    console.error('Get overview error:', error);
+    log('Get overview error:', error);
     res.cork(() => {
       setCorsHeaders(res);
-      res.writeStatus('500').end(JSON.stringify({ error: error.message }));
+      res.writeStatus(config.HTTP_STATUS.INTERNAL_SERVER_ERROR.toString()).end(JSON.stringify({ error: error.message }));
     });
   });
 });
@@ -1015,7 +1013,7 @@ app.get('/health', async (res, req) => {
   let aborted = false;
   res.onAborted(() => {
     aborted = true;
-    console.log('Health check aborted');
+    log('Health check aborted');
   });
   
   try {
@@ -1025,7 +1023,7 @@ app.get('/health', async (res, req) => {
     const uptime = (Date.now() - startTime) / 1000;
     res.cork(() => {
       setCorsHeaders(res);
-      res.writeStatus('200').end(JSON.stringify({ 
+      res.writeStatus(config.HTTP_STATUS.OK.toString()).end(JSON.stringify({ 
         status: 'healthy',
         uptime: `${Math.floor(uptime)}s`,
         connections: wsServer.getConnectionCount(),
@@ -1046,7 +1044,7 @@ app.get('/health', async (res, req) => {
     if (aborted) return;
     res.cork(() => {
       setCorsHeaders(res);
-      res.writeStatus('503').end(JSON.stringify({ 
+      res.writeStatus(config.HTTP_STATUS.SERVICE_UNAVAILABLE.toString()).end(JSON.stringify({ 
         status: 'unhealthy',
         error: error.message
       }));
@@ -1057,7 +1055,7 @@ app.get('/health', async (res, req) => {
 // Metrics endpoint for performance monitoring
 app.get('/metrics', (res, req) => {
   res.onAborted(() => {
-    console.log('Metrics request aborted');
+    log('Metrics request aborted');
   });
   
   const uptime = (Date.now() - startTime) / 1000;
@@ -1082,29 +1080,29 @@ app.get('/metrics', (res, req) => {
   
   res.cork(() => {
     setCorsHeaders(res);
-    res.writeStatus('200').end(JSON.stringify(metrics));
+    res.writeStatus(config.HTTP_STATUS.OK.toString()).end(JSON.stringify(metrics));
   });
 });
 
 // Start server
 app.listen(HOST, PORT, (token) => {
   if (token) {
-    console.log(`\n✅ Queen Server running at http://${HOST}:${PORT}`);
-    console.log(`📊 Features enabled:`);
-    console.log(`   - Encryption: ${encryptionEnabled ? '✅' : '❌ (set QUEEN_ENCRYPTION_KEY)'}`);
-    console.log(`   - Retention: ✅`);
-    console.log(`   - Eviction: ✅`);
-    console.log(`   - WebSocket Dashboard: ws://${HOST}:${PORT}/ws/dashboard`);
-    console.log(`\n🎯 Ready to process messages with high performance!`);
+    log(`✅ Queen Server running at http://${HOST}:${PORT}`);
+    log(`📊 Features enabled:`);
+    log(`   - Encryption: ${encryptionEnabled ? '✅' : '❌ (set QUEEN_ENCRYPTION_KEY)'}`);
+    log(`   - Retention: ✅`);
+    log(`   - Eviction: ✅`);
+    log(`   - WebSocket Dashboard: ws://${HOST}:${PORT}/ws/dashboard`);
+    log(`🎯 Ready to process messages with high performance!`);
   } else {
-    console.log(`Failed to start server on port ${PORT}`);
+    log(`Failed to start server on port ${PORT}`);
     process.exit(1);
   }
 });
 
 // Graceful shutdown
 const shutdown = async (signal) => {
-  console.log(`\n🛑 Received ${signal}, shutting down gracefully...`);
+  log(`\n🛑 Received ${signal}, shutting down gracefully...`);
   
   // Stop background jobs
   if (stopRetention) stopRetention();
@@ -1112,8 +1110,8 @@ const shutdown = async (signal) => {
   
   const uptime = (Date.now() - startTime) / 1000;
   if (messageCount > 0) {
-    console.log(`📊 Final stats: ${messageCount} messages processed in ${uptime.toFixed(1)}s`);
-    console.log(`   Average: ${(messageCount / uptime).toFixed(2)} messages/second`);
+    log(`📊 Final stats: ${messageCount} messages processed in ${uptime.toFixed(1)}s`);
+    log(`   Average: ${(messageCount / uptime).toFixed(2)} messages/second`);
   }
   
   await pool.end();

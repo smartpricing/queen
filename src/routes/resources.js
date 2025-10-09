@@ -71,13 +71,11 @@ export const createResourcesRoutes = (pool) => {
     
     const queue = queueResult.rows[0];
     
-    // Get partitions with stats
+    // Get partitions with stats (partitions no longer have options or priority)
     const partitionsResult = await pool.query(`
       SELECT 
         p.id,
         p.name,
-        p.priority,
-        p.options,
         p.created_at,
         COUNT(DISTINCT m.id) as message_count,
         COUNT(DISTINCT CASE WHEN m.status = 'pending' THEN m.id END) as pending,
@@ -90,15 +88,13 @@ export const createResourcesRoutes = (pool) => {
       FROM queen.partitions p
       LEFT JOIN queen.messages m ON m.partition_id = p.id
       WHERE p.queue_id = $1
-      GROUP BY p.id, p.name, p.priority, p.options, p.created_at
-      ORDER BY p.priority DESC, p.name
+      GROUP BY p.id, p.name, p.created_at
+      ORDER BY p.name
     `, [queue.id]);
     
     const partitions = partitionsResult.rows.map(row => ({
       id: row.id,
       name: row.name,
-      priority: row.priority,
-      options: row.options,
       createdAt: row.created_at,
       stats: {
         total: parseInt(row.message_count),
@@ -148,12 +144,11 @@ export const createResourcesRoutes = (pool) => {
       SELECT 
         p.id,
         p.name as partition_name,
-        p.priority,
-        p.options,
         p.created_at,
         q.name as queue_name,
         q.namespace,
         q.task,
+        q.priority,
         COUNT(DISTINCT CASE WHEN m.status = 'pending' THEN m.id END) as pending,
         COUNT(DISTINCT CASE WHEN m.status = 'processing' THEN m.id END) as processing,
         COUNT(DISTINCT m.id) as total
@@ -169,15 +164,15 @@ export const createResourcesRoutes = (pool) => {
       query += ` AND q.name = $${params.length}`;
     }
     
-    query += ` GROUP BY p.id, p.name, p.priority, p.options, p.created_at, 
-                        q.name, q.namespace, q.task`;
+    query += ` GROUP BY p.id, p.name, p.created_at, 
+                        q.name, q.namespace, q.task, q.priority`;
     
     if (minDepth) {
       params.push(minDepth);
       query += ` HAVING COUNT(DISTINCT CASE WHEN m.status = 'pending' THEN m.id END) >= $${params.length}`;
     }
     
-    query += ` ORDER BY q.name, p.priority DESC, p.name`;
+    query += ` ORDER BY q.name, q.priority DESC, p.name`;
     
     const result = await pool.query(query, params);
     
@@ -187,8 +182,7 @@ export const createResourcesRoutes = (pool) => {
       queue: row.queue_name,
       namespace: row.namespace,
       task: row.task,
-      priority: row.priority,
-      options: row.options,
+      queuePriority: row.priority, // Priority is now at queue level
       createdAt: row.created_at,
       depth: parseInt(row.pending),
       processing: parseInt(row.processing),

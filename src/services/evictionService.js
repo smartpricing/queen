@@ -1,6 +1,8 @@
 // Functional eviction service for stale messages
+import { log, LogTypes } from '../utils/logger.js';
+import config from '../config.js';
 
-const EVICTION_INTERVAL = parseInt(process.env.EVICTION_INTERVAL) || 60000; // 1 minute
+const EVICTION_INTERVAL = config.JOBS.EVICTION_INTERVAL;
 
 // Evict messages that exceeded max wait time for a queue
 const evictMessages = async (client, queueName, maxWaitTimeSeconds) => {
@@ -40,7 +42,7 @@ export const evictOnPop = async (client, queueName) => {
   const evictedCount = await evictMessages(client, queueName, maxWaitTimeSeconds);
   
   if (evictedCount > 0) {
-    console.log(`⏰ Evicted ${evictedCount} messages from queue ${queueName}`);
+    log(`${LogTypes.EVICTION} | Queue: ${queueName} | Count: ${evictedCount} | MaxWaitTime: ${maxWaitTimeSeconds}s`);
     
     // Log to retention history (reusing the table)
     await client.query(`
@@ -73,7 +75,7 @@ const performEviction = async (pool) => {
       );
       
       if (evicted > 0) {
-        console.log(`⏰ Evicted ${evicted} messages from ${queue.name}`);
+        log(`${LogTypes.EVICTION} | Queue: ${queue.name} | Count: ${evicted} | MaxWaitTime: ${queue.max_wait_time_seconds}s`);
         totalEvicted += evicted;
       }
     }
@@ -87,7 +89,7 @@ const performEviction = async (pool) => {
     
     return totalEvicted;
   } catch (error) {
-    console.error('Eviction error:', error);
+    log('Eviction error:', error);
     return 0;
   } finally {
     client.release();
@@ -103,16 +105,16 @@ export const startEvictionJob = (pool, eventManager) => {
         eventManager.emit('messages:evicted', { count: evicted });
       }
     } catch (error) {
-      console.error('Eviction job error:', error);
+      log('Eviction job error:', error);
     }
   }, EVICTION_INTERVAL);
   
-  console.log(`⏰ Eviction job started (interval: ${EVICTION_INTERVAL}ms)`);
+  log(`⏰ Eviction job started (interval: ${EVICTION_INTERVAL}ms)`);
   
   // Return cleanup function
   return () => {
     clearInterval(intervalId);
-    console.log('Eviction job stopped');
+    log('Eviction job stopped');
   };
 };
 

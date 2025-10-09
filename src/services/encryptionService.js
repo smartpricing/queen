@@ -1,4 +1,5 @@
 import crypto from 'crypto';
+import { log } from '../utils/logger.js';
 
 const ALGORITHM = 'aes-256-gcm';
 const KEY_ENV = 'QUEEN_ENCRYPTION_KEY';
@@ -11,12 +12,12 @@ const getKey = () => {
   try {
     const key = Buffer.from(keyHex, 'hex');
     if (key.length !== 32) {
-      console.error(`${KEY_ENV} must be 32 bytes (64 hex characters)`);
+      log(`ERROR: ${KEY_ENV} must be 32 bytes (64 hex characters)`);
       return null;
     }
     return key;
   } catch (error) {
-    console.error(`Invalid ${KEY_ENV} format:`, error.message);
+    log(`ERROR: Invalid ${KEY_ENV} format:`, error.message);
     return null;
   }
 };
@@ -73,9 +74,9 @@ export const isEncryptionEnabled = () => {
 export const initEncryption = () => {
   const enabled = isEncryptionEnabled();
   if (enabled) {
-    console.log('✅ Encryption service initialized');
+    log('✅ Encryption service initialized');
   } else {
-    console.log('⚠️  Encryption service disabled (QUEEN_ENCRYPTION_KEY not set)');
+    log('⚠️  Encryption service disabled (QUEEN_ENCRYPTION_KEY not set)');
   }
   return enabled;
 };

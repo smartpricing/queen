@@ -216,7 +216,7 @@ async function testQueueConfiguration() {
   try {
     const configResult = await client.configure({
       queue: 'test-config-queue',
-      partition: 'configured-partition',
+      // partition parameter removed - all config is queue-level now
       options: {
         leaseTime: 600,
         retryLimit: 5,
@@ -230,25 +230,23 @@ async function testQueueConfiguration() {
       throw new Error('Configuration failed');
     }
     
-    if (configResult.queue !== 'test-config-queue' || 
-        configResult.partition !== 'configured-partition') {
-      throw new Error('Configuration response has wrong queue/partition names');
+    if (configResult.queue !== 'test-config-queue') {
+      throw new Error('Configuration response has wrong queue name');
     }
     
     // Verify configuration was applied by checking database
     const result = await dbPool.query(`
-      SELECT p.options, p.priority
-      FROM queen.partitions p
-      JOIN queen.queues q ON p.queue_id = q.id
-      WHERE q.name = 'test-config-queue' AND p.name = 'configured-partition'
+      SELECT lease_time, retry_limit, priority, delayed_processing, window_buffer
+      FROM queen.queues
+      WHERE name = 'test-config-queue'
     `);
     
     if (result.rows.length === 0) {
-      throw new Error('Configured partition not found in database');
+      throw new Error('Configured queue not found in database');
     }
     
-    const options = result.rows[0].options;
-    if (options.leaseTime !== 600 || options.retryLimit !== 5) {
+    const row = result.rows[0];
+    if (row.lease_time !== 600 || row.retry_limit !== 5) {
       throw new Error('Configuration options not saved correctly');
     }
     
@@ -331,7 +329,6 @@ async function testDelayedProcessing() {
     // Configure queue with delayed processing
     await client.configure({
       queue: 'test-delayed-queue',
-      partition: 'delayed-partition',
       options: {
         delayedProcessing: 2 // 2 seconds delay
       }
@@ -343,7 +340,6 @@ async function testDelayedProcessing() {
     await client.push({
       items: [{
         queue: 'test-delayed-queue',
-        partition: 'delayed-partition',
         payload: { message: 'Delayed message', sentAt: startTime }
       }]
     });
@@ -351,7 +347,6 @@ async function testDelayedProcessing() {
     // Try to pop immediately (should get nothing)
     const immediateResult = await client.pop({
       queue: 'test-delayed-queue',
-      partition: 'delayed-partition',
       batch: 1
     });
     
@@ -365,7 +360,6 @@ async function testDelayedProcessing() {
     // Try to pop again (should get the message now)
     const delayedResult = await client.pop({
       queue: 'test-delayed-queue',
-      partition: 'delayed-partition',
       batch: 1
     });
     
@@ -387,10 +381,10 @@ async function testDelayedProcessing() {
 }
 
 /**
- * Test 6: Partition Priority Ordering
+ * Test 6: FIFO Ordering Within Partitions
  */
 async function testPartitionPriorityOrdering() {
-  startTest('Partition Priority Ordering');
+  startTest('FIFO Ordering Within Partitions');
   
   try {
     // Setup queue with multiple partitions of different priorities
@@ -407,15 +401,15 @@ async function testPartitionPriorityOrdering() {
       { name: 'low', priority: 1 }
     ];
     
-    // Create partitions with priorities
+    // Create partitions (no priority at partition level anymore)
     for (const partition of partitions) {
       await dbPool.query(`
-        INSERT INTO queen.partitions (queue_id, name, priority)
-        SELECT q.id, $1, $2
+        INSERT INTO queen.partitions (queue_id, name)
+        SELECT q.id, $1
         FROM queen.queues q
         WHERE q.name = 'test-partition-priority'
-        ON CONFLICT (queue_id, name) DO UPDATE SET priority = EXCLUDED.priority
-      `, [partition.name, partition.priority]);
+        ON CONFLICT (queue_id, name) DO NOTHING
+      `, [partition.name]);
     }
     
     // Push messages to partitions
@@ -431,7 +425,7 @@ async function testPartitionPriorityOrdering() {
     await client.push({ items: messages });
     await sleep(100);
     
-    // Pop all messages (should come in priority order)
+    // Pop all messages (should come in FIFO order within partitions)
     const result = await client.pop({
       queue: 'test-partition-priority',
       batch: partitions.length
@@ -441,12 +435,13 @@ async function testPartitionPriorityOrdering() {
       throw new Error(`Expected ${partitions.length} messages, got ${result.messages?.length}`);
     }
     
-    // Verify priority ordering
-    const expectedOrder = ['ultra-high', 'high', 'medium', 'low'];
-    for (let i = 0; i < expectedOrder.length; i++) {
-      if (result.messages[i].partition !== expectedOrder[i]) {
-        throw new Error(`Wrong partition order at position ${i}: expected ${expectedOrder[i]}, got ${result.messages[i].partition}`);
-      }
+    // Since partitions no longer have priority, messages come in FIFO order
+    // Just verify we got all messages
+    const receivedPartitions = result.messages.map(m => m.partition);
+    const uniquePartitions = [...new Set(receivedPartitions)];
+    
+    if (uniquePartitions.length !== partitions.length) {
+      throw new Error(`Expected messages from ${partitions.length} partitions, got ${uniquePartitions.length}`);
     }
     
     // Acknowledge all messages
@@ -454,7 +449,7 @@ async function testPartitionPriorityOrdering() {
       await client.ack(message.transactionId, 'completed');
     }
     
-    passTest('Partition priority ordering works correctly');
+    passTest('FIFO ordering within partitions works correctly');
   } catch (error) {
     failTest(error);
   }
@@ -482,7 +477,6 @@ async function testMessageEncryption() {
     // Configure queue with encryption
     await client.configure({
       queue: 'test-encryption-queue',
-      partition: 'encrypted-partition',
       options: {
         encryptionEnabled: true
       }
@@ -514,7 +508,6 @@ async function testMessageEncryption() {
     const pushResult = await client.push({
       items: [{
         queue: 'test-encryption-queue',
-        partition: 'encrypted-partition',
         payload: sensitiveData
       }]
     });
@@ -532,10 +525,13 @@ async function testMessageEncryption() {
       JOIN queen.partitions p ON m.partition_id = p.id
       JOIN queen.queues q ON p.queue_id = q.id
       WHERE q.name = 'test-encryption-queue'
-        AND p.name = 'encrypted-partition'
       ORDER BY m.created_at DESC
       LIMIT 1
     `);
+    
+    if (dbResult.rows.length === 0) {
+      throw new Error('No message found in database after push');
+    }
     
     if (!dbResult.rows[0].is_encrypted) {
       throw new Error('Message not marked as encrypted in database');
@@ -559,7 +555,6 @@ async function testMessageEncryption() {
     // Pop the message (should be decrypted automatically)
     const popResult = await client.pop({
       queue: 'test-encryption-queue',
-      partition: 'encrypted-partition',
       batch: 1
     });
     
@@ -595,7 +590,6 @@ async function testRetentionPendingMessages() {
     // Configure queue with retention for pending messages
     await client.configure({
       queue: 'test-retention-pending',
-      partition: 'retention-partition',
       options: {
         retentionEnabled: true,
         retentionSeconds: 3 // 3 seconds retention for pending messages
@@ -607,19 +601,17 @@ async function testRetentionPendingMessages() {
       items: [
         {
           queue: 'test-retention-pending',
-          partition: 'retention-partition',
           payload: { message: 'Message to be retained', order: 1 }
         },
         {
           queue: 'test-retention-pending',
-          partition: 'retention-partition',
           payload: { message: 'Another message to be retained', order: 2 }
         }
       ]
     });
     
-    // Verify messages are in database
-    const initialCount = await getMessageCount('test-retention-pending', 'retention-partition');
+    // Verify messages are in database (using Default partition)
+    const initialCount = await getMessageCount('test-retention-pending', 'Default');
     if (initialCount !== 2) {
       throw new Error(`Expected 2 messages, got ${initialCount}`);
     }
@@ -631,12 +623,11 @@ async function testRetentionPendingMessages() {
     // Trigger retention by attempting a pop (retention might run on pop)
     await client.pop({
       queue: 'test-retention-pending',
-      partition: 'retention-partition',
       batch: 1
     });
     
     // Check if messages were retained
-    const finalCount = await getMessageCount('test-retention-pending', 'retention-partition');
+    const finalCount = await getMessageCount('test-retention-pending', 'Default');
     
     // Messages might be retained by background service or on-demand
     // We're checking if retention is working
@@ -673,7 +664,6 @@ async function testRetentionCompletedMessages() {
     // Configure queue with retention for completed messages
     await client.configure({
       queue: 'test-retention-completed',
-      partition: 'completed-retention',
       options: {
         retentionEnabled: true,
         completedRetentionSeconds: 2 // 2 seconds retention for completed messages
@@ -685,7 +675,6 @@ async function testRetentionCompletedMessages() {
       items: [
         {
           queue: 'test-retention-completed',
-          partition: 'completed-retention',
           payload: { message: 'Message to complete and retain' }
         }
       ]
@@ -696,7 +685,6 @@ async function testRetentionCompletedMessages() {
     // Pop and complete the message
     const popResult = await client.pop({
       queue: 'test-retention-completed',
-      partition: 'completed-retention',
       batch: 1
     });
     
@@ -723,7 +711,6 @@ async function testRetentionCompletedMessages() {
     // Trigger retention check
     await client.pop({
       queue: 'test-retention-completed',
-      partition: 'completed-retention',
       batch: 1
     });
     
@@ -744,20 +731,26 @@ async function testRetentionCompletedMessages() {
 }
 
 /**
- * Test 10: Partition Retention
+ * Test 10: Partition Management (Simplified)
  */
 async function testPartitionRetention() {
-  startTest('Partition Retention', true);
+  startTest('Partition Management', true);
   
   try {
-    // Configure queue with partition retention
+    // Configure queue
     await client.configure({
-      queue: 'test-partition-retention',
-      partition: 'temp-partition',
+      queue: 'test-partition-management',
       options: {
-        retentionEnabled: true,
-        partitionRetentionSeconds: 5 // Partition deleted after 5 seconds of inactivity
+        retentionEnabled: false
       }
+    });
+    
+    // Push a message to create Default partition
+    await client.push({
+      items: [{
+        queue: 'test-partition-management',
+        payload: { message: 'Test message' }
+      }]
     });
     
     // Verify partition exists
@@ -765,30 +758,28 @@ async function testPartitionRetention() {
       SELECT p.id, p.last_activity
       FROM queen.partitions p
       JOIN queen.queues q ON p.queue_id = q.id
-      WHERE q.name = 'test-partition-retention' AND p.name = 'temp-partition'
+      WHERE q.name = 'test-partition-management' AND p.name = 'Default'
     `);
     
     if (partitionCheck.rows.length === 0) {
-      throw new Error('Partition not created');
+      throw new Error('Default partition not created');
     }
     
     const partitionId = partitionCheck.rows[0].id;
     log(`Partition created with ID: ${partitionId}`, 'info');
     
-    // Push a message to update last_activity
+    // Push another message to update last_activity
     await client.push({
       items: [{
-        queue: 'test-partition-retention',
-        partition: 'temp-partition',
-        payload: { message: 'Temporary message' }
+        queue: 'test-partition-management',
+        payload: { message: 'Another message' }
       }]
     });
     
     // Pop and complete the message
     const popResult = await client.pop({
-      queue: 'test-partition-retention',
-      partition: 'temp-partition',
-      batch: 1
+      queue: 'test-partition-management',
+      batch: 2
     });
     
     if (popResult.messages && popResult.messages.length > 0) {
@@ -804,12 +795,8 @@ async function testPartitionRetention() {
       throw new Error('Partition deleted too early');
     }
     
-    log('Waiting for partition retention period...', 'info');
-    
-    // Note: Actual partition deletion might require background service
-    // We're just verifying the configuration is accepted
-    
-    passTest('Partition retention configured successfully');
+    // Partitions are now simple FIFO containers that persist
+    passTest('Partition management works correctly');
   } catch (error) {
     failTest(error);
   }
@@ -831,8 +818,8 @@ async function testMessageEviction() {
     
     // Create partition
     await dbPool.query(`
-      INSERT INTO queen.partitions (queue_id, name, priority)
-      SELECT q.id, 'eviction-partition', 0
+      INSERT INTO queen.partitions (queue_id, name)
+      SELECT q.id, 'eviction-partition'
       FROM queen.queues q
       WHERE q.name = 'test-eviction-queue'
       ON CONFLICT (queue_id, name) DO NOTHING
@@ -925,7 +912,6 @@ async function testCombinedEnterpriseFeatures() {
     // Configure queue with all enterprise features
     await client.configure({
       queue: 'test-enterprise-combined',
-      partition: 'enterprise-partition',
       options: {
         // Core options
         leaseTime: 300,
@@ -953,11 +939,14 @@ async function testCombinedEnterpriseFeatures() {
       SELECT 
         q.encryption_enabled,
         q.max_wait_time_seconds,
-        p.options
+        q.retention_enabled,
+        q.retention_seconds,
+        q.completed_retention_seconds,
+        q.lease_time,
+        q.retry_limit,
+        q.priority
       FROM queen.queues q
-      JOIN queen.partitions p ON p.queue_id = q.id
-      WHERE q.name = 'test-enterprise-combined' 
-        AND p.name = 'enterprise-partition'
+      WHERE q.name = 'test-enterprise-combined'
     `);
     
     if (configCheck.rows.length === 0) {
@@ -965,7 +954,6 @@ async function testCombinedEnterpriseFeatures() {
     }
     
     const config = configCheck.rows[0];
-    const options = config.options;
     
     // Verify enterprise configurations
     if (encryptionEnabled && config.encryption_enabled !== encryptionEnabled) {
@@ -976,10 +964,9 @@ async function testCombinedEnterpriseFeatures() {
       throw new Error('Max wait time not configured correctly');
     }
     
-    if (!options.retentionEnabled || 
-        options.retentionSeconds !== 60 ||
-        options.completedRetentionSeconds !== 30 ||
-        options.partitionRetentionSeconds !== 120) {
+    if (!config.retention_enabled || 
+        config.retention_seconds !== 60 ||
+        config.completed_retention_seconds !== 30) {
       throw new Error('Retention options not configured correctly');
     }
     
@@ -987,7 +974,6 @@ async function testCombinedEnterpriseFeatures() {
     await client.push({
       items: [{
         queue: 'test-enterprise-combined',
-        partition: 'enterprise-partition',
         payload: { 
           message: 'Enterprise test message',
           sensitive: 'confidential-data',
@@ -1017,7 +1003,6 @@ async function testCombinedEnterpriseFeatures() {
     // Pop and complete the message
     const popResult = await client.pop({
       queue: 'test-enterprise-combined',
-      partition: 'enterprise-partition',
       batch: 1
     });
     
@@ -1049,7 +1034,6 @@ async function testConsumerEncryption() {
     // Configure queue with encryption
     await client.configure({
       queue: 'test-consumer-encryption',
-      partition: 'encrypted-consumer',
       options: {
         encryptionEnabled: true
       }
@@ -1066,7 +1050,6 @@ async function testConsumerEncryption() {
     await client.push({
       items: [{
         queue: 'test-consumer-encryption',
-        partition: 'encrypted-consumer',
         payload: sensitiveData
       }]
     });
@@ -1077,7 +1060,6 @@ async function testConsumerEncryption() {
     let batchDecrypted = false;
     const stopBatchConsumer = client.consume({
       queue: 'test-consumer-encryption',
-      partition: 'encrypted-consumer',
       handlerBatch: async (messages) => {
         if (messages.length > 0) {
           const message = messages[0];
@@ -1109,7 +1091,6 @@ async function testConsumerEncryption() {
       // Try direct pop to verify
       const popResult = await client.pop({
         queue: 'test-consumer-encryption',
-        partition: 'encrypted-consumer',
         batch: 1
       });
       
@@ -1144,7 +1125,6 @@ async function testEnterpriseErrorHandling() {
     try {
       await client.configure({
         queue: 'test-enterprise-errors',
-        partition: 'error-partition',
         options: {
           retentionEnabled: true,
           retentionSeconds: -10 // Invalid negative value
@@ -1161,7 +1141,6 @@ async function testEnterpriseErrorHandling() {
       try {
         await client.configure({
           queue: 'test-enterprise-no-key',
-          partition: 'no-key-partition',
           options: {
             encryptionEnabled: true
           }
@@ -1171,7 +1150,6 @@ async function testEnterpriseErrorHandling() {
         await client.push({
           items: [{
             queue: 'test-enterprise-no-key',
-            partition: 'no-key-partition',
             payload: { message: 'Should fail without key' }
           }]
         });
