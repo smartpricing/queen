@@ -1,5 +1,71 @@
 <template>
   <div class="analytics-view">
+    <!-- Date/Time Filter Bar -->
+    <div class="filter-bar">
+      <div class="filter-group">
+        <label>Time Range:</label>
+        <Select 
+          v-model="selectedTimeRange" 
+          :options="timeRangeOptions" 
+          optionLabel="label" 
+          optionValue="value"
+          placeholder="Select time range"
+          @change="onTimeRangeChange"
+        />
+      </div>
+      <div class="filter-group" v-if="selectedTimeRange === 'custom'">
+        <label>From:</label>
+        <Calendar 
+          v-model="fromDateTime" 
+          showTime 
+          :showIcon="true"
+          dateFormat="yy-mm-dd"
+          placeholder="Start date/time"
+        />
+      </div>
+      <div class="filter-group" v-if="selectedTimeRange === 'custom'">
+        <label>To:</label>
+        <Calendar 
+          v-model="toDateTime" 
+          showTime 
+          :showIcon="true"
+          dateFormat="yy-mm-dd"
+          placeholder="End date/time"
+        />
+      </div>
+      <div class="filter-group">
+        <label>Queue:</label>
+        <Select 
+          v-model="selectedQueue" 
+          :options="queueOptions || []" 
+          optionLabel="label" 
+          optionValue="value"
+          placeholder="All queues"
+          :showClear="true"
+          @change="fetchAnalytics"
+        />
+      </div>
+      <div class="filter-group">
+        <label>Namespace:</label>
+        <Select 
+          v-model="selectedNamespace" 
+          :options="namespaceOptions || []" 
+          optionLabel="label" 
+          optionValue="value"
+          placeholder="All namespaces"
+          :showClear="true"
+          @change="fetchAnalytics"
+        />
+      </div>
+      <div class="filter-group">
+        <Button 
+          label="Apply Filters" 
+          icon="pi pi-filter"
+          @click="fetchAnalytics"
+          :loading="loading"
+        />
+      </div>
+    </div>
     <div class="analytics-grid">
       <div class="chart-container">
         <div class="chart-header">
@@ -53,6 +119,8 @@ import DataTable from 'primevue/datatable'
 import Column from 'primevue/column'
 import Button from 'primevue/button'
 import Tag from 'primevue/tag'
+import Select from 'primevue/select'
+import Calendar from 'primevue/calendar'
 import ThroughputChart from '../components/charts/ThroughputChart.vue'
 import QueueLagChart from '../components/charts/QueueLagChart.vue'
 import api from '../services/api.js'
@@ -60,6 +128,27 @@ import websocket from '../services/websocket.js'
 
 const toast = useToast()
 const loading = ref(false)
+
+// Filter state
+const selectedTimeRange = ref('1h')
+const fromDateTime = ref(null)
+const toDateTime = ref(null)
+const selectedQueue = ref(null)
+const selectedNamespace = ref(null)
+const selectedTask = ref(null)
+
+// Filter options
+const timeRangeOptions = ref([
+  { label: 'Last Hour', value: '1h' },
+  { label: 'Last 6 Hours', value: '6h' },
+  { label: 'Last 24 Hours', value: '24h' },
+  { label: 'Last 7 Days', value: '7d' },
+  { label: 'Last 30 Days', value: '30d' },
+  { label: 'Custom Range', value: 'custom' }
+])
+
+const queueOptions = ref([])
+const namespaceOptions = ref([])
 
 // Data
 const throughputData = ref({
@@ -254,13 +343,52 @@ const fetchAnalytics = async (silent = false) => {
       loading.value = true
     }
     
-    // Fetch throughput data
-    const throughput = await api.getThroughput()
+    // Build filter parameters
+    const filters = {}
+    
+    // Handle time range
+    if (selectedTimeRange.value === 'custom') {
+      if (fromDateTime.value) filters.fromDateTime = fromDateTime.value.toISOString()
+      if (toDateTime.value) filters.toDateTime = toDateTime.value.toISOString()
+    } else {
+      // Calculate from/to based on selected range
+      const now = new Date()
+      const from = new Date()
+      
+      switch (selectedTimeRange.value) {
+        case '1h':
+          from.setHours(from.getHours() - 1)
+          break
+        case '6h':
+          from.setHours(from.getHours() - 6)
+          break
+        case '24h':
+          from.setDate(from.getDate() - 1)
+          break
+        case '7d':
+          from.setDate(from.getDate() - 7)
+          break
+        case '30d':
+          from.setDate(from.getDate() - 30)
+          break
+      }
+      
+      filters.fromDateTime = from.toISOString()
+      filters.toDateTime = now.toISOString()
+    }
+    
+    // Add other filters
+    if (selectedQueue.value) filters.queue = selectedQueue.value
+    if (selectedNamespace.value) filters.namespace = selectedNamespace.value
+    if (selectedTask.value) filters.task = selectedTask.value
+    
+    // Fetch throughput data with filters
+    const throughput = await api.getThroughput(filters)
     processThroughputData(throughput?.throughput || [])
     
-    // Fetch real queue stats
+    // Fetch real queue stats with filters
     try {
-      const queueStatsData = await api.getQueueStats()
+      const queueStatsData = await api.getQueueStats(filters)
       if (queueStatsData && Array.isArray(queueStatsData) && queueStatsData.length > 0) {
         // Process the array of queue-partition data and aggregate by queue
         const queueMap = new Map()
@@ -461,7 +589,57 @@ const formatUptime = (seconds) => {
 
 let refreshInterval = null
 
+// Function to handle time range change
+const onTimeRangeChange = () => {
+  if (selectedTimeRange.value !== 'custom') {
+    fromDateTime.value = null
+    toDateTime.value = null
+    fetchAnalytics()
+  }
+}
+
+// Function to load filter options
+const loadFilterOptions = async () => {
+  try {
+    const [queues, namespaces] = await Promise.all([
+      api.getQueues(),
+      api.getNamespaces()
+    ])
+    
+    // Format queue options
+    if (queues?.queues && Array.isArray(queues.queues)) {
+      queueOptions.value = queues.queues.map(q => ({
+        label: q.queue || 'Unknown',
+        value: q.queue || ''
+      }))
+    } else {
+      queueOptions.value = []
+    }
+    
+    // Format namespace options - handle both array and object responses
+    if (namespaces) {
+      const namespaceList = Array.isArray(namespaces) ? namespaces : (namespaces.namespaces || [])
+      if (Array.isArray(namespaceList)) {
+        namespaceOptions.value = namespaceList.map(ns => ({
+          label: ns.namespace || 'Default',
+          value: ns.namespace || ''
+        }))
+      } else {
+        namespaceOptions.value = []
+      }
+    } else {
+      namespaceOptions.value = []
+    }
+  } catch (error) {
+    console.error('Failed to load filter options:', error)
+    // Ensure arrays are set even on error
+    queueOptions.value = []
+    namespaceOptions.value = []
+  }
+}
+
 onMounted(() => {
+  loadFilterOptions()
   fetchAnalytics()
   
   // Subscribe to WebSocket events for real-time updates
@@ -487,6 +665,63 @@ onUnmounted(() => {
 <style scoped>
 .analytics-view {
   padding: 0;
+}
+
+/* Filter Bar */
+.filter-bar {
+  display: flex;
+  gap: 1rem;
+  padding: 1rem;
+  background: linear-gradient(135deg, #1e1e2e 0%, #2a2a3e 100%);
+  border-radius: 12px;
+  margin-bottom: 1.5rem;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+}
+
+.filter-group {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  min-width: 150px;
+}
+
+.filter-group label {
+  font-size: 0.875rem;
+  color: #a0a0a0;
+  font-weight: 500;
+}
+
+.filter-group :deep(.p-select),
+.filter-group :deep(.p-calendar) {
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 8px;
+}
+
+.filter-group :deep(.p-select:hover),
+.filter-group :deep(.p-calendar:hover) {
+  border-color: rgba(236, 72, 153, 0.5);
+}
+
+.filter-group :deep(.p-select-label),
+.filter-group :deep(.p-inputtext) {
+  color: #ffffff;
+}
+
+.filter-group :deep(.p-button) {
+  background: linear-gradient(135deg, #ec4899 0%, #8b5cf6 100%);
+  border: none;
+  border-radius: 8px;
+  padding: 0.75rem 1.5rem;
+  font-weight: 500;
+  transition: all 0.3s ease;
+}
+
+.filter-group :deep(.p-button:hover) {
+  transform: translateY(-2px);
+  box-shadow: 0 4px 12px rgba(236, 72, 153, 0.3);
 }
 
 .analytics-grid {

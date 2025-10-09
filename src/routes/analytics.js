@@ -1,7 +1,15 @@
 export const createAnalyticsRoutes = (queueManager) => {
   
   const getQueues = async (filters = {}) => {
-    const stats = await queueManager.getQueueStats(filters);
+    // Extract and pass all filter parameters
+    const { fromDateTime, toDateTime, queue, namespace, task } = filters;
+    const stats = await queueManager.getQueueStats({ 
+      fromDateTime, 
+      toDateTime, 
+      queue, 
+      namespace, 
+      task 
+    });
     
     // Group by queue for aggregation
     const queueMap = new Map();
@@ -52,8 +60,13 @@ export const createAnalyticsRoutes = (queueManager) => {
     return { queues: Array.from(queueMap.values()) };
   };
   
-  const getQueueStats = async (queueName) => {
-    const stats = await queueManager.getQueueStats({ queue: queueName });
+  const getQueueStats = async (queueName, filters = {}) => {
+    const { fromDateTime, toDateTime } = filters;
+    const stats = await queueManager.getQueueStats({ 
+      queue: queueName,
+      fromDateTime,
+      toDateTime
+    });
     
     const totals = {
       pending: 0,
@@ -96,8 +109,13 @@ export const createAnalyticsRoutes = (queueManager) => {
     };
   };
   
-  const getNamespaceStats = async (namespace) => {
-    const stats = await queueManager.getQueueStats({ namespace });
+  const getNamespaceStats = async (namespace, filters = {}) => {
+    const { fromDateTime, toDateTime } = filters;
+    const stats = await queueManager.getQueueStats({ 
+      namespace,
+      fromDateTime,
+      toDateTime
+    });
     
     // Group by queue
     const queueMap = new Map();
@@ -166,8 +184,13 @@ export const createAnalyticsRoutes = (queueManager) => {
     };
   };
   
-  const getTaskStats = async (task) => {
-    const stats = await queueManager.getQueueStats({ task });
+  const getTaskStats = async (task, filters = {}) => {
+    const { fromDateTime, toDateTime } = filters;
+    const stats = await queueManager.getQueueStats({ 
+      task,
+      fromDateTime,
+      toDateTime
+    });
     
     // Group by queue
     const queueMap = new Map();
@@ -237,7 +260,14 @@ export const createAnalyticsRoutes = (queueManager) => {
   };
   
   const getQueueDepths = async (filters = {}) => {
-    const stats = await queueManager.getQueueStats(filters);
+    const { fromDateTime, toDateTime, queue, namespace, task } = filters;
+    const stats = await queueManager.getQueueStats({
+      fromDateTime,
+      toDateTime,
+      queue,
+      namespace,
+      task
+    });
     
     // Group by queue for aggregation
     const queueMap = new Map();
@@ -269,18 +299,59 @@ export const createAnalyticsRoutes = (queueManager) => {
     };
   };
   
-  const getThroughput = async (pool) => {
-    // Get comprehensive throughput metrics over the last hour
-    const timeWindow = '1 hour';
-    const minuteInterval = 60; // Number of minutes to fetch
+  const getThroughput = async (pool, filters = {}) => {
+    // Support custom time window or default to last hour
+    const { fromDateTime, toDateTime, queue, namespace, task } = filters;
+    
+    // Calculate time window based on provided dates or use defaults
+    let timeWindow = '1 hour';
+    let minuteInterval = 60; // Number of minutes to fetch
+    let startTime, endTime;
+    
+    if (fromDateTime && toDateTime) {
+      startTime = new Date(fromDateTime);
+      endTime = new Date(toDateTime);
+      const diffMs = endTime - startTime;
+      const diffMinutes = Math.floor(diffMs / (1000 * 60));
+      minuteInterval = Math.min(diffMinutes, 1440); // Cap at 24 hours worth of minutes
+      timeWindow = `${diffMinutes} minutes`;
+    } else {
+      startTime = new Date(Date.now() - 60 * 60 * 1000); // 1 hour ago
+      endTime = new Date();
+    }
+    
+    // Build filter conditions for queries
+    const filterConditions = [];
+    const filterParams = [];
+    let paramCounter = 1;
+    
+    if (queue) {
+      filterConditions.push(`q.name = $${paramCounter}`);
+      filterParams.push(queue);
+      paramCounter++;
+    }
+    if (namespace) {
+      filterConditions.push(`q.namespace = $${paramCounter}`);
+      filterParams.push(namespace);
+      paramCounter++;
+    }
+    if (task) {
+      filterConditions.push(`q.task = $${paramCounter}`);
+      filterParams.push(task);
+      paramCounter++;
+    }
+    
+    const whereClause = filterConditions.length > 0 
+      ? `AND ${filterConditions.join(' AND ')}` 
+      : '';
     
     try {
       // 1. Incoming messages (created/inserted)
       const incomingQuery = `
         WITH time_series AS (
           SELECT generate_series(
-            DATE_TRUNC('minute', NOW() - INTERVAL '${timeWindow}'),
-            DATE_TRUNC('minute', NOW()),
+            DATE_TRUNC('minute', $${paramCounter}::timestamp),
+            DATE_TRUNC('minute', $${paramCounter + 1}::timestamp),
             '1 minute'::interval
           ) AS minute
         )
@@ -290,7 +361,11 @@ export const createAnalyticsRoutes = (queueManager) => {
         FROM time_series ts
         LEFT JOIN queen.messages m ON 
           DATE_TRUNC('minute', m.created_at) = ts.minute
-          AND m.created_at >= NOW() - INTERVAL '${timeWindow}'
+          AND m.created_at >= $${paramCounter}::timestamp
+          AND m.created_at <= $${paramCounter + 1}::timestamp
+        ${whereClause ? `LEFT JOIN queen.partitions p ON m.partition_id = p.id
+        LEFT JOIN queen.queues q ON p.queue_id = q.id` : ''}
+        ${whereClause ? `WHERE 1=1 ${whereClause}` : ''}
         GROUP BY ts.minute
         ORDER BY ts.minute DESC
         LIMIT ${minuteInterval}
@@ -300,8 +375,8 @@ export const createAnalyticsRoutes = (queueManager) => {
       const completedQuery = `
         WITH time_series AS (
           SELECT generate_series(
-            DATE_TRUNC('minute', NOW() - INTERVAL '${timeWindow}'),
-            DATE_TRUNC('minute', NOW()),
+            DATE_TRUNC('minute', $${paramCounter}::timestamp),
+            DATE_TRUNC('minute', $${paramCounter + 1}::timestamp),
             '1 minute'::interval
           ) AS minute
         )
@@ -311,9 +386,14 @@ export const createAnalyticsRoutes = (queueManager) => {
         FROM time_series ts
         LEFT JOIN queen.messages_status ms ON 
           DATE_TRUNC('minute', ms.completed_at) = ts.minute
-          AND ms.completed_at >= NOW() - INTERVAL '${timeWindow}'
+          AND ms.completed_at >= $${paramCounter}::timestamp
+          AND ms.completed_at <= $${paramCounter + 1}::timestamp
           AND ms.status = 'completed'
           AND ms.consumer_group IS NULL
+        ${whereClause ? `LEFT JOIN queen.messages m ON ms.message_id = m.id
+        LEFT JOIN queen.partitions p ON m.partition_id = p.id
+        LEFT JOIN queen.queues q ON p.queue_id = q.id` : ''}
+        ${whereClause ? `WHERE 1=1 ${whereClause}` : ''}
         GROUP BY ts.minute
         ORDER BY ts.minute DESC
         LIMIT ${minuteInterval}
@@ -323,8 +403,8 @@ export const createAnalyticsRoutes = (queueManager) => {
       const processingQuery = `
         WITH time_series AS (
           SELECT generate_series(
-            DATE_TRUNC('minute', NOW() - INTERVAL '${timeWindow}'),
-            DATE_TRUNC('minute', NOW()),
+            DATE_TRUNC('minute', $${paramCounter}::timestamp),
+            DATE_TRUNC('minute', $${paramCounter + 1}::timestamp),
             '1 minute'::interval
           ) AS minute
         )
@@ -334,8 +414,13 @@ export const createAnalyticsRoutes = (queueManager) => {
         FROM time_series ts
         LEFT JOIN queen.messages_status ms ON 
           DATE_TRUNC('minute', ms.processing_at) = ts.minute
-          AND ms.processing_at >= NOW() - INTERVAL '${timeWindow}'
+          AND ms.processing_at >= $${paramCounter}::timestamp
+          AND ms.processing_at <= $${paramCounter + 1}::timestamp
           AND ms.consumer_group IS NULL
+        ${whereClause ? `LEFT JOIN queen.messages m ON ms.message_id = m.id
+        LEFT JOIN queen.partitions p ON m.partition_id = p.id
+        LEFT JOIN queen.queues q ON p.queue_id = q.id` : ''}
+        ${whereClause ? `WHERE 1=1 ${whereClause}` : ''}
         GROUP BY ts.minute
         ORDER BY ts.minute DESC
         LIMIT ${minuteInterval}
@@ -345,8 +430,8 @@ export const createAnalyticsRoutes = (queueManager) => {
       const failedQuery = `
         WITH time_series AS (
           SELECT generate_series(
-            DATE_TRUNC('minute', NOW() - INTERVAL '${timeWindow}'),
-            DATE_TRUNC('minute', NOW()),
+            DATE_TRUNC('minute', $${paramCounter}::timestamp),
+            DATE_TRUNC('minute', $${paramCounter + 1}::timestamp),
             '1 minute'::interval
           ) AS minute
         )
@@ -356,9 +441,14 @@ export const createAnalyticsRoutes = (queueManager) => {
         FROM time_series ts
         LEFT JOIN queen.messages_status ms ON 
           DATE_TRUNC('minute', ms.failed_at) = ts.minute
-          AND ms.failed_at >= NOW() - INTERVAL '${timeWindow}'
+          AND ms.failed_at >= $${paramCounter}::timestamp
+          AND ms.failed_at <= $${paramCounter + 1}::timestamp
           AND ms.status = 'failed'
           AND ms.consumer_group IS NULL
+        ${whereClause ? `LEFT JOIN queen.messages m ON ms.message_id = m.id
+        LEFT JOIN queen.partitions p ON m.partition_id = p.id
+        LEFT JOIN queen.queues q ON p.queue_id = q.id` : ''}
+        ${whereClause ? `WHERE 1=1 ${whereClause}` : ''}
         GROUP BY ts.minute
         ORDER BY ts.minute DESC
         LIMIT ${minuteInterval}
@@ -368,8 +458,8 @@ export const createAnalyticsRoutes = (queueManager) => {
       const deadLetterQuery = `
         WITH time_series AS (
           SELECT generate_series(
-            DATE_TRUNC('minute', NOW() - INTERVAL '${timeWindow}'),
-            DATE_TRUNC('minute', NOW()),
+            DATE_TRUNC('minute', $${paramCounter}::timestamp),
+            DATE_TRUNC('minute', $${paramCounter + 1}::timestamp),
             '1 minute'::interval
           ) AS minute
         )
@@ -379,9 +469,14 @@ export const createAnalyticsRoutes = (queueManager) => {
         FROM time_series ts
         LEFT JOIN queen.messages_status ms ON 
           DATE_TRUNC('minute', ms.failed_at) = ts.minute
-          AND ms.failed_at >= NOW() - INTERVAL '${timeWindow}'
+          AND ms.failed_at >= $${paramCounter}::timestamp
+          AND ms.failed_at <= $${paramCounter + 1}::timestamp
           AND ms.status = 'dead_letter'
           AND ms.consumer_group IS NULL
+        ${whereClause ? `LEFT JOIN queen.messages m ON ms.message_id = m.id
+        LEFT JOIN queen.partitions p ON m.partition_id = p.id
+        LEFT JOIN queen.queues q ON p.queue_id = q.id` : ''}
+        ${whereClause ? `WHERE 1=1 ${whereClause}` : ''}
         GROUP BY ts.minute
         ORDER BY ts.minute DESC
         LIMIT ${minuteInterval}
@@ -391,8 +486,8 @@ export const createAnalyticsRoutes = (queueManager) => {
       const lagQuery = `
         WITH time_series AS (
           SELECT generate_series(
-            DATE_TRUNC('minute', NOW() - INTERVAL '${timeWindow}'),
-            DATE_TRUNC('minute', NOW()),
+            DATE_TRUNC('minute', $${paramCounter}::timestamp),
+            DATE_TRUNC('minute', $${paramCounter + 1}::timestamp),
             '1 minute'::interval
           ) AS minute
         )
@@ -408,25 +503,32 @@ export const createAnalyticsRoutes = (queueManager) => {
         FROM time_series ts
         LEFT JOIN queen.messages_status ms ON 
           DATE_TRUNC('minute', ms.completed_at) = ts.minute
-          AND ms.completed_at >= NOW() - INTERVAL '${timeWindow}'
+          AND ms.completed_at >= $${paramCounter}::timestamp
+          AND ms.completed_at <= $${paramCounter + 1}::timestamp
           AND ms.status IN ('completed', 'failed')
           AND ms.completed_at IS NOT NULL
           AND ms.consumer_group IS NULL
         LEFT JOIN queen.messages m ON ms.message_id = m.id
           AND m.created_at IS NOT NULL
+        ${whereClause ? `LEFT JOIN queen.partitions p ON m.partition_id = p.id
+        LEFT JOIN queen.queues q ON p.queue_id = q.id` : ''}
+        ${whereClause ? `WHERE 1=1 ${whereClause}` : ''}
         GROUP BY ts.minute
         ORDER BY ts.minute DESC
         LIMIT ${minuteInterval}
       `;
       
+      // Prepare query parameters
+      const queryParams = [...filterParams, startTime, endTime];
+      
       // Execute all queries in parallel
       const [incoming, completed, processing, failed, deadLetter, lag] = await Promise.all([
-        pool.query(incomingQuery),
-        pool.query(completedQuery),
-        pool.query(processingQuery),
-        pool.query(failedQuery),
-        pool.query(deadLetterQuery),
-        pool.query(lagQuery)
+        pool.query(incomingQuery, queryParams),
+        pool.query(completedQuery, queryParams),
+        pool.query(processingQuery, queryParams),
+        pool.query(failedQuery, queryParams),
+        pool.query(deadLetterQuery, queryParams),
+        pool.query(lagQuery, queryParams)
       ]);
       
       // If we have no data at all in the last hour, get the last 10 minutes of actual data
@@ -596,7 +698,14 @@ export const createAnalyticsRoutes = (queueManager) => {
   };
   
   const getQueueLag = async (filters = {}) => {
-    const lagStats = await queueManager.getQueueLag(filters);
+    const { fromDateTime, toDateTime, queue, namespace, task } = filters;
+    const lagStats = await queueManager.getQueueLag({
+      fromDateTime,
+      toDateTime,
+      queue,
+      namespace,
+      task
+    });
     
     // Group by queue for aggregation
     const queueMap = new Map();

@@ -536,13 +536,20 @@ app.post('/api/v1/ack/batch', (res, req) => {
 
 // Analytics routes
 app.get('/api/v1/analytics/queues', (res, req) => {
+  const query = new URLSearchParams(req.getQuery());
+  const fromDateTime = query.get('fromDateTime');
+  const toDateTime = query.get('toDateTime');
+  const queue = query.get('queue');
+  const namespace = query.get('namespace');
+  const task = query.get('task');
+  
   let aborted = false;
   res.onAborted(() => {
     aborted = true;
     log('Analytics request aborted');
   });
   
-  analyticsRoutes.getQueues().then(result => {
+  analyticsRoutes.getQueues({ fromDateTime, toDateTime, queue, namespace, task }).then(result => {
     if (aborted) return;
     res.cork(() => {
       setCorsHeaders(res);
@@ -560,6 +567,9 @@ app.get('/api/v1/analytics/queues', (res, req) => {
 
 app.get('/api/v1/analytics/queue/:queue', (res, req) => {
   const queue = req.getParameter(0);
+  const query = new URLSearchParams(req.getQuery());
+  const fromDateTime = query.get('fromDateTime');
+  const toDateTime = query.get('toDateTime');
   
   let aborted = false;
   res.onAborted(() => {
@@ -567,7 +577,7 @@ app.get('/api/v1/analytics/queue/:queue', (res, req) => {
     log('Analytics request aborted');
   });
   
-  analyticsRoutes.getQueueStats(queue).then(result => {
+  analyticsRoutes.getQueueStats(queue, { fromDateTime, toDateTime }).then(result => {
     if (aborted) return;
     res.cork(() => {
       setCorsHeaders(res);
@@ -588,6 +598,9 @@ app.get('/api/v1/analytics', (res, req) => {
   const query = new URLSearchParams(req.getQuery());
   const namespace = query.get('namespace');
   const task = query.get('task');
+  const fromDateTime = query.get('fromDateTime');
+  const toDateTime = query.get('toDateTime');
+  const queue = query.get('queue');
   
   let aborted = false;
   res.onAborted(() => {
@@ -595,11 +608,12 @@ app.get('/api/v1/analytics', (res, req) => {
     log('Analytics request aborted');
   });
   
+  const filters = { fromDateTime, toDateTime };
   const getStats = namespace 
-    ? analyticsRoutes.getNamespaceStats(namespace)
+    ? analyticsRoutes.getNamespaceStats(namespace, filters)
     : task 
-    ? analyticsRoutes.getTaskStats(task)
-    : analyticsRoutes.getQueues();
+    ? analyticsRoutes.getTaskStats(task, filters)
+    : analyticsRoutes.getQueues({ ...filters, queue, namespace, task });
     
   getStats.then(result => {
     if (aborted) return;
@@ -618,13 +632,20 @@ app.get('/api/v1/analytics', (res, req) => {
 });
 
 app.get('/api/v1/analytics/queue-depths', (res, req) => {
+  const query = new URLSearchParams(req.getQuery());
+  const fromDateTime = query.get('fromDateTime');
+  const toDateTime = query.get('toDateTime');
+  const queue = query.get('queue');
+  const namespace = query.get('namespace');
+  const task = query.get('task');
+  
   let aborted = false;
   res.onAborted(() => {
     aborted = true;
     log('Analytics request aborted');
   });
   
-  analyticsRoutes.getQueueDepths().then(result => {
+  analyticsRoutes.getQueueDepths({ fromDateTime, toDateTime, queue, namespace, task }).then(result => {
     if (aborted) return;
     res.cork(() => {
       setCorsHeaders(res);
@@ -641,13 +662,20 @@ app.get('/api/v1/analytics/queue-depths', (res, req) => {
 });
 
 app.get('/api/v1/analytics/throughput', (res, req) => {
+  const query = new URLSearchParams(req.getQuery());
+  const fromDateTime = query.get('fromDateTime');
+  const toDateTime = query.get('toDateTime');
+  const queue = query.get('queue');
+  const namespace = query.get('namespace');
+  const task = query.get('task');
+  
   let aborted = false;
   res.onAborted(() => {
     aborted = true;
     log('Analytics request aborted');
   });
   
-  analyticsRoutes.getThroughput(pool).then(result => {
+  analyticsRoutes.getThroughput(pool, { fromDateTime, toDateTime, queue, namespace, task }).then(result => {
     if (aborted) return;
     res.cork(() => {
       setCorsHeaders(res);
@@ -668,6 +696,8 @@ app.get('/api/v1/analytics/queue-lag', (res, req) => {
   const queue = query.get('queue');
   const namespace = query.get('namespace');
   const task = query.get('task');
+  const fromDateTime = query.get('fromDateTime');
+  const toDateTime = query.get('toDateTime');
   
   let aborted = false;
   res.onAborted(() => {
@@ -675,7 +705,7 @@ app.get('/api/v1/analytics/queue-lag', (res, req) => {
     log('Queue lag request aborted');
   });
   
-  analyticsRoutes.getQueueLag({ queue, namespace, task }).then(result => {
+  analyticsRoutes.getQueueLag({ queue, namespace, task, fromDateTime, toDateTime }).then(result => {
     if (aborted) return;
     res.cork(() => {
       setCorsHeaders(res);
@@ -697,6 +727,8 @@ app.get('/api/v1/analytics/queue-stats', (res, req) => {
   const queue = query.get('queue');
   const namespace = query.get('namespace');
   const task = query.get('task');
+  const fromDateTime = query.get('fromDateTime');
+  const toDateTime = query.get('toDateTime');
   
   let aborted = false;
   res.onAborted(() => {
@@ -704,7 +736,7 @@ app.get('/api/v1/analytics/queue-stats', (res, req) => {
     log('Queue stats request aborted');
   });
   
-  queueManager.getQueueStats({ queue, namespace, task }).then(result => {
+  queueManager.getQueueStats({ queue, namespace, task, fromDateTime, toDateTime }).then(result => {
     if (aborted) return;
     res.cork(() => {
       setCorsHeaders(res);

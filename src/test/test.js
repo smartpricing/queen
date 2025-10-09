@@ -291,6 +291,7 @@ async function testPopAndAcknowledgment() {
     );
     
     if (!completeResult || !completeResult.acknowledgedAt) {
+      console.log('Complete ACK result:', completeResult);
       throw new Error('Failed to acknowledge message as completed');
     }
     
@@ -302,6 +303,8 @@ async function testPopAndAcknowledgment() {
     );
     
     if (!failResult || !failResult.acknowledgedAt) {
+      console.log('Fail ACK result:', failResult);
+      console.log('Transaction ID:', popResult.messages[1].transactionId);
       throw new Error('Failed to acknowledge message as failed');
     }
     
@@ -417,18 +420,28 @@ async function testPartitionPriorityOrdering() {
     await client.push({ items: messages });
     await sleep(100);
     
-    // Pop all messages
-    const result = await client.pop({
-      queue: 'test-partition-priority',
-      batch: partitions.length
-    });
+    // With partition locking, we need to pop from each partition separately
+    // or pop multiple times to get messages from different partitions
+    const allMessages = [];
     
-    if (!result.messages || result.messages.length !== partitions.length) {
-      throw new Error(`Expected ${partitions.length} messages, got ${result.messages?.length}`);
+    // Pop messages multiple times to get from different partitions
+    for (let i = 0; i < partitions.length; i++) {
+      const result = await client.pop({
+        queue: 'test-partition-priority',
+        batch: 1
+      });
+      
+      if (result.messages && result.messages.length > 0) {
+        allMessages.push(...result.messages);
+      }
+    }
+    
+    if (allMessages.length !== partitions.length) {
+      throw new Error(`Expected ${partitions.length} messages, got ${allMessages.length}`);
     }
     
     // Verify we got all messages
-    const receivedMessages = result.messages.map(m => m.payload.message);
+    const receivedMessages = allMessages.map(m => m.payload.message);
     const expectedMessages = messages.map(m => m.payload.message).sort();
     const actualMessages = receivedMessages.sort();
     
@@ -437,7 +450,7 @@ async function testPartitionPriorityOrdering() {
     }
     
     // Acknowledge all messages
-    for (const message of result.messages) {
+    for (const message of allMessages) {
       await client.ack(message.transactionId, 'completed');
     }
     
@@ -1305,6 +1318,11 @@ async function testConsumerGroupSubscriptionModes() {
       throw new Error(`All-messages group expected 3 messages, got ${allMessagesGroup.messages.length}`);
     }
     
+    // ACK messages to release partition lock for all-messages group
+    for (const msg of allMessagesGroup.messages) {
+      await client.ack(msg.transactionId, 'completed', null, 'all-messages');
+    }
+    
     // Group 2: New messages only (subscription mode = 'new')
     const newOnlyResult = await client.pop({
       queue,
@@ -1341,6 +1359,11 @@ async function testConsumerGroupSubscriptionModes() {
     
     if (allMessagesNew.messages.length !== 3) {
       throw new Error(`All-messages group expected 3 new messages, got ${allMessagesNew.messages.length}`);
+    }
+    
+    // ACK messages to release partition lock for all-messages group
+    for (const msg of allMessagesNew.messages) {
+      await client.ack(msg.transactionId, 'completed', null, 'all-messages');
     }
     
     // New-only group should also get the new messages
@@ -1392,12 +1415,12 @@ async function testConsumerGroupIsolation() {
       throw new Error(`Group1 expected 2 messages, got ${group1Result.messages.length}`);
     }
     
-    // Acknowledge messages for group1
+    // Acknowledge messages for group1 (but don't release the partition lock yet)
     for (const msg of group1Result.messages) {
       await client.ack(msg.transactionId, 'completed', null, 'group1');
     }
     
-    // Group 2: Should still be able to get all messages
+    // Group 2: Should still be able to get all messages (different consumer group can have its own partition lock)
     const group2Result = await client.pop({
       queue,
       consumerGroup: 'group2',
@@ -3426,8 +3449,9 @@ async function testMultipleConsumersSinglePartitionOrdering() {
       SELECT COUNT(*) as count FROM queen.messages m
       JOIN queen.partitions p ON m.partition_id = p.id
       JOIN queen.queues q ON p.queue_id = q.id
+      LEFT JOIN queen.messages_status ms ON m.id = ms.message_id AND ms.consumer_group = '__QUEUE_MODE__'
       WHERE q.name = $1 AND p.name = $2
-      AND m.status IN ('queued', 'processing', 'failed')
+      AND (ms.status IS NULL OR ms.status IN ('pending', 'processing', 'failed'))
     `;
     const remainingResult = await dbPool.query(remainingQuery, [queue, partition]);
     const remainingMessages = parseInt(remainingResult.rows[0].count);

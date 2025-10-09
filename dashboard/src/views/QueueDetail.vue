@@ -10,13 +10,24 @@
         />
         <h1>{{ queueName }}</h1>
       </div>
-      <Button 
-        label="Refresh" 
-        icon="pi pi-refresh" 
-        class="btn-primary"
-        @click="fetchQueueDetails"
-        :loading="loading"
-      />
+      <div class="header-actions">
+        <Select 
+          v-model="selectedTimeRange" 
+          :options="timeRangeOptions || []" 
+          optionLabel="label" 
+          optionValue="value"
+          placeholder="Time range"
+          @change="onTimeRangeChange"
+          class="time-filter"
+        />
+        <Button 
+          label="Refresh" 
+          icon="pi pi-refresh" 
+          class="btn-primary"
+          @click="fetchQueueDetails"
+          :loading="loading"
+        />
+      </div>
     </div>
 
     <!-- Queue Information Card -->
@@ -95,6 +106,7 @@ import { useToast } from 'primevue/usetoast'
 import DataTable from 'primevue/datatable'
 import Column from 'primevue/column'
 import Button from 'primevue/button'
+import Select from 'primevue/select'
 import ThroughputChart from '../components/charts/ThroughputChart.vue'
 import api from '../services/api.js'
 
@@ -103,6 +115,16 @@ const toast = useToast()
 const loading = ref(false)
 
 const queueName = computed(() => route.params.name || 'Unknown Queue')
+
+// Time range filter
+const selectedTimeRange = ref('1h')
+const timeRangeOptions = ref([
+  { label: 'Last Hour', value: '1h' },
+  { label: 'Last 6 Hours', value: '6h' },
+  { label: 'Last 24 Hours', value: '24h' },
+  { label: 'Last 7 Days', value: '7d' },
+  { label: 'Last 30 Days', value: '30d' }
+])
 
 const queueInfo = ref({
   namespace: null,
@@ -122,10 +144,36 @@ const fetchQueueDetails = async () => {
   try {
     loading.value = true
     
-    // Fetch real queue data from API
+    // Build time range filter
+    const filters = {}
+    const now = new Date()
+    const from = new Date()
+    
+    switch (selectedTimeRange.value) {
+      case '1h':
+        from.setHours(from.getHours() - 1)
+        break
+      case '6h':
+        from.setHours(from.getHours() - 6)
+        break
+      case '24h':
+        from.setDate(from.getDate() - 1)
+        break
+      case '7d':
+        from.setDate(from.getDate() - 7)
+        break
+      case '30d':
+        from.setDate(from.getDate() - 30)
+        break
+    }
+    
+    filters.fromDateTime = from.toISOString()
+    filters.toDateTime = now.toISOString()
+    
+    // Fetch real queue data from API with filters
     const [queueData, analyticsData, partitionData] = await Promise.all([
       api.getQueueDetail(queueName.value).catch(() => null),
-      api.getQueueAnalytics(queueName.value).catch(() => null),
+      api.getQueueAnalytics(queueName.value, filters).catch(() => null),
       api.getPartitions({ queue: queueName.value }).catch(() => null)
     ])
     
@@ -244,6 +292,11 @@ const formatDate = (dateString) => {
   return date.toLocaleString()
 }
 
+// Handle time range change
+const onTimeRangeChange = () => {
+  fetchQueueDetails()
+}
+
 // Watch for queue name changes
 watch(() => route.params.name, (newName) => {
   if (newName) {
@@ -266,6 +319,30 @@ onMounted(() => {
   justify-content: space-between;
   align-items: center;
   margin-bottom: 1.5rem;
+}
+
+.header-actions {
+  display: flex;
+  gap: 1rem;
+  align-items: center;
+}
+
+.time-filter {
+  min-width: 150px;
+}
+
+.time-filter :deep(.p-select) {
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 8px;
+}
+
+.time-filter :deep(.p-select:hover) {
+  border-color: rgba(236, 72, 153, 0.5);
+}
+
+.time-filter :deep(.p-select-label) {
+  color: #ffffff;
 }
 
 .header-info {

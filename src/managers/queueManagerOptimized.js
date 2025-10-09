@@ -4,6 +4,7 @@ import { PoolManager } from '../database/poolManager.js';
 import * as encryption from '../services/encryptionService.js';
 import { evictOnPop } from '../services/evictionService.js';
 import { log, LogTypes } from '../utils/logger.js';
+import { popMessagesV2 } from './popMessagesV2.js';
 import config from '../config.js';
 
 export const createOptimizedQueueManager = (pool, resourceCache, eventManager) => {
@@ -294,7 +295,7 @@ export const createOptimizedQueueManager = (pool, resourceCache, eventManager) =
   };
   
   // Pop messages with consumer group support
-  const popMessages = async (scope, options = {}) => {
+  /*const popMessages = async (scope, options = {}) => {
     const { queue, partition, consumerGroup } = scope;
     const { 
       wait = false, 
@@ -358,20 +359,95 @@ export const createOptimizedQueueManager = (pool, resourceCache, eventManager) =
         const actualConsumerGroup = '__QUEUE_MODE__';
         
         if (partition) {
-          // Specific partition - simpler approach without complex CTEs
-          // For now, fall back to the original simpler logic until we can fix the CTE issues
+          // Specific partition - WITH PARTITION LOCKING for consistency
           result = await client.query(`
-            WITH available_messages AS (
-              SELECT m.id, m.transaction_id, m.trace_id, m.payload, m.is_encrypted, m.created_at,
-                     p.name as partition_name, q.name as queue_name, q.priority, 
-                     q.lease_time, q.retry_limit, q.delayed_processing,
-                     q.window_buffer, q.max_wait_time_seconds
-              FROM queen.messages m
-              JOIN queen.partitions p ON m.partition_id = p.id
-              JOIN queen.queues q ON p.queue_id = q.id
-              LEFT JOIN queen.messages_status ms ON m.id = ms.message_id AND ms.consumer_group = $3
-              WHERE q.name = $1 AND p.name = $2
-                AND (ms.id IS NULL OR ms.status IN ('pending', 'failed'))
+            WITH params AS (
+              SELECT 
+                $1::VARCHAR(255) as queue_name,
+                $2::VARCHAR(255) as partition_name,
+                $3::VARCHAR(255) as consumer_group,
+                $4::INTEGER as batch_size,
+                $5::VARCHAR(255) as worker_id
+            ),
+            queue_config AS (
+              -- Get queue configuration
+              SELECT 
+                q.id as queue_id,
+                q.lease_time,
+                q.delayed_processing,
+                q.max_wait_time_seconds,
+                q.window_buffer
+              FROM queen.queues q
+              CROSS JOIN params
+              WHERE q.name = params.queue_name
+            ),
+            target_partition AS (
+              -- Get the specific partition requested
+              SELECT 
+                p.id,
+                p.name
+              FROM queen.partitions p
+              JOIN queue_config qc ON p.queue_id = qc.queue_id
+              CROSS JOIN params
+              WHERE p.name = params.partition_name
+            ),
+            acquire_lease AS (
+              -- Try to acquire or verify lease for the specific partition
+              INSERT INTO queen.partition_leases (
+                partition_id, 
+                consumer_group, 
+                lease_expires_at
+              )
+              SELECT 
+                tp.id,
+                params.consumer_group,
+                NOW() + INTERVAL '1 second' * (SELECT lease_time FROM queue_config)
+              FROM target_partition tp
+              CROSS JOIN params
+              WHERE NOT EXISTS (
+                -- Check if another consumer has an active lease
+                SELECT 1 FROM queen.partition_leases pl
+                WHERE pl.partition_id = tp.id 
+                  AND pl.consumer_group = params.consumer_group
+                  AND pl.released_at IS NULL
+                  AND pl.lease_expires_at > NOW()
+              )
+              ON CONFLICT (partition_id, consumer_group) 
+              DO UPDATE SET 
+                lease_expires_at = CASE 
+                  WHEN queen.partition_leases.released_at IS NOT NULL 
+                  THEN EXCLUDED.lease_expires_at  -- Reacquire released lease
+                  ELSE queen.partition_leases.lease_expires_at  -- Keep existing active lease
+                END,
+                released_at = CASE 
+                  WHEN queen.partition_leases.released_at IS NOT NULL 
+                  THEN NULL  -- Clear released_at when reacquiring
+                  ELSE queen.partition_leases.released_at
+                END
+              RETURNING partition_id, id as lease_id, lease_expires_at
+            ),
+            messages_to_process AS (
+              -- Get messages from the partition only if we have the lease
+              SELECT 
+                m.id,
+                m.transaction_id,
+                m.trace_id,
+                m.payload,
+                m.is_encrypted,
+                m.created_at,
+                p.name as partition_name,
+                q.name as queue_name,
+                q.priority,
+                al.lease_id,
+                al.lease_expires_at
+              FROM acquire_lease al
+              JOIN queen.messages m ON m.partition_id = al.partition_id
+              JOIN queen.partitions p ON p.id = al.partition_id
+              JOIN queen.queues q ON q.id = p.queue_id
+              CROSS JOIN params
+              LEFT JOIN queen.messages_status ms ON m.id = ms.message_id 
+                AND ms.consumer_group = params.consumer_group
+              WHERE (ms.id IS NULL OR ms.status IN ('pending', 'failed'))
                 AND m.created_at <= NOW() - INTERVAL '1 second' * q.delayed_processing
                 AND (q.max_wait_time_seconds = 0 OR 
                      m.created_at > NOW() - INTERVAL '1 second' * q.max_wait_time_seconds)
@@ -381,78 +457,212 @@ export const createOptimizedQueueManager = (pool, resourceCache, eventManager) =
                     AND m2.created_at > NOW() - INTERVAL '1 second' * q.window_buffer
                 ))
               ORDER BY m.created_at ASC
-              LIMIT $4
+              LIMIT (SELECT batch_size FROM params)
               FOR UPDATE OF m SKIP LOCKED
-            )
-            INSERT INTO queen.messages_status (message_id, consumer_group, status, lease_expires_at, processing_at, worker_id, retry_count)
+            ),
+            update_lease AS (
+              -- Store which messages are part of this lease
+              UPDATE queen.partition_leases
+              SET message_batch = (SELECT jsonb_agg(id) FROM messages_to_process)
+              WHERE id = (SELECT lease_id FROM messages_to_process LIMIT 1)
+            ),
+            insert_status AS (
+              -- Insert or update status records for the messages
+              INSERT INTO queen.messages_status (
+                message_id, 
+                consumer_group, 
+                status, 
+                lease_expires_at,
+                processing_at,
+                worker_id,
+                retry_count
+              )
             SELECT 
-              id, 
-              $3, 
+                mtp.id,
+                params.consumer_group,
               'processing', 
-              NOW() + INTERVAL '1 second' * lease_time, 
+                mtp.lease_expires_at,
               NOW(), 
-              $5,
+                params.worker_id,
               0
-            FROM available_messages
-            ON CONFLICT (message_id, consumer_group) DO NOTHING
-            RETURNING message_id,
-              (SELECT transaction_id FROM queen.messages WHERE id = message_id),
-              (SELECT trace_id FROM queen.messages WHERE id = message_id),
-              (SELECT payload FROM queen.messages WHERE id = message_id),
-              (SELECT is_encrypted FROM queen.messages WHERE id = message_id),
-              (SELECT created_at FROM queen.messages WHERE id = message_id),
-              (SELECT p.name FROM queen.messages m2 JOIN queen.partitions p ON m2.partition_id = p.id WHERE m2.id = message_id) as partition_name,
-              $1 as queue_name,
-              (SELECT priority FROM queen.queues WHERE name = $1) as priority,
-              retry_count
+              FROM messages_to_process mtp
+              CROSS JOIN params
+            ON CONFLICT (message_id, consumer_group) DO UPDATE SET
+              status = 'processing',
+              lease_expires_at = EXCLUDED.lease_expires_at,
+              processing_at = NOW(),
+              worker_id = EXCLUDED.worker_id
+              -- Keep existing retry_count when re-processing failed messages
+            )
+            -- Return the messages
+            SELECT 
+              id as message_id,
+              transaction_id,
+              trace_id,
+              payload,
+              is_encrypted,
+              created_at,
+              partition_name,
+              queue_name,
+              priority,
+              0 as retry_count
+            FROM messages_to_process
           `, [queue, partition, actualConsumerGroup, batch, config.WORKER_ID]);
         } else {
-          // Any partition - simpler approach for now
+          // Any partition - WITH PARTITION LOCKING for true FIFO
           result = await client.query(`
-            WITH available_messages AS (
-              SELECT m.id, m.transaction_id, m.trace_id, m.payload, m.is_encrypted, m.created_at,
-                     p.name as partition_name, q.name as queue_name, q.priority, 
-                     q.lease_time, q.retry_limit, q.delayed_processing,
-                     q.window_buffer, q.max_wait_time_seconds
-              FROM queen.messages m
-              JOIN queen.partitions p ON m.partition_id = p.id
-              JOIN queen.queues q ON p.queue_id = q.id
-              LEFT JOIN queen.messages_status ms ON m.id = ms.message_id AND ms.consumer_group = $2
-              WHERE q.name = $1
+            WITH queue_config AS (
+              -- Get queue configuration
+              SELECT 
+                id as queue_id,
+                lease_time,
+                delayed_processing,
+                max_wait_time_seconds,
+                window_buffer
+              FROM queen.queues
+              WHERE name = $1
+            ),
+            available_partitions AS (
+              -- Find partitions with messages that don't have active leases
+              SELECT 
+                p.id, 
+                p.name,
+                sub.oldest_message,
+                sub.pending_count
+              FROM (
+                SELECT 
+                  p.id as partition_id,
+                  MIN(m.created_at) as oldest_message,
+                  COUNT(m.id) as pending_count
+                FROM queen.partitions p
+                JOIN queue_config qc ON p.queue_id = qc.queue_id
+                JOIN queen.messages m ON m.partition_id = p.id
+                LEFT JOIN queen.messages_status ms ON m.id = ms.message_id 
+                  AND ms.consumer_group = $2
+                WHERE NOT EXISTS (
+                  -- No active lease for this partition/consumer group
+                  SELECT 1 FROM queen.partition_leases pl
+                  WHERE pl.partition_id = p.id 
+                    AND pl.consumer_group = $2
+                    AND pl.released_at IS NULL
+                    AND pl.lease_expires_at > NOW()
+                )
                 AND (ms.id IS NULL OR ms.status IN ('pending', 'failed'))
+                AND m.created_at <= NOW() - INTERVAL '1 second' * qc.delayed_processing
+                AND (qc.max_wait_time_seconds = 0 OR 
+                     m.created_at > NOW() - INTERVAL '1 second' * qc.max_wait_time_seconds)
+                AND (qc.window_buffer = 0 OR NOT EXISTS (
+                  SELECT 1 FROM queen.messages m2 
+                  WHERE m2.partition_id = p.id 
+                    AND m2.created_at > NOW() - INTERVAL '1 second' * qc.window_buffer
+                ))
+                GROUP BY p.id
+                ORDER BY MIN(m.created_at) ASC  -- Fairness: oldest message first
+                LIMIT 1
+              ) sub
+              JOIN queen.partitions p ON p.id = sub.partition_id
+              FOR UPDATE OF p SKIP LOCKED  -- Prevent race on partition selection
+            ),
+            acquire_lease AS (
+              -- Create a lease for the selected partition
+              INSERT INTO queen.partition_leases (
+                partition_id, 
+                consumer_group, 
+                lease_expires_at
+              )
+              SELECT 
+                id,
+                $2,
+                NOW() + INTERVAL '1 second' * (SELECT lease_time FROM queue_config)
+              FROM available_partitions
+              ON CONFLICT (partition_id, consumer_group) 
+              DO UPDATE SET 
+                lease_expires_at = CASE 
+                  WHEN queen.partition_leases.released_at IS NOT NULL 
+                  THEN EXCLUDED.lease_expires_at  -- Reacquire released lease
+                  ELSE queen.partition_leases.lease_expires_at  -- Keep existing active lease
+                END,
+                released_at = CASE 
+                  WHEN queen.partition_leases.released_at IS NOT NULL 
+                  THEN NULL  -- Clear released_at when reacquiring
+                  ELSE queen.partition_leases.released_at
+                END
+              RETURNING partition_id, id as lease_id, lease_expires_at
+            ),
+            messages_to_process AS (
+              -- Get messages from the leased partition
+              SELECT 
+                m.id,
+                m.transaction_id,
+                m.trace_id,
+                m.payload,
+                m.is_encrypted,
+                m.created_at,
+                p.name as partition_name,
+                q.name as queue_name,
+                q.priority,
+                al.lease_id,
+                al.lease_expires_at
+              FROM acquire_lease al
+              JOIN queen.messages m ON m.partition_id = al.partition_id
+              JOIN queen.partitions p ON p.id = al.partition_id
+              JOIN queen.queues q ON q.id = p.queue_id
+              LEFT JOIN queen.messages_status ms ON m.id = ms.message_id 
+                AND ms.consumer_group = $2
+              WHERE (ms.id IS NULL OR ms.status IN ('pending', 'failed'))
                 AND m.created_at <= NOW() - INTERVAL '1 second' * q.delayed_processing
                 AND (q.max_wait_time_seconds = 0 OR 
                      m.created_at > NOW() - INTERVAL '1 second' * q.max_wait_time_seconds)
-                AND (q.window_buffer = 0 OR NOT EXISTS (
-                  SELECT 1 FROM queen.messages m2 
-                  WHERE m2.partition_id = p.id 
-                    AND m2.created_at > NOW() - INTERVAL '1 second' * q.window_buffer
-                ))
-              ORDER BY q.priority DESC, m.created_at ASC
+              ORDER BY m.created_at ASC
               LIMIT $3
               FOR UPDATE OF m SKIP LOCKED
-            )
-            INSERT INTO queen.messages_status (message_id, consumer_group, status, lease_expires_at, processing_at, worker_id, retry_count)
+            ),
+            update_lease AS (
+              -- Store which messages are part of this lease
+              UPDATE queen.partition_leases
+              SET message_batch = (SELECT jsonb_agg(id) FROM messages_to_process)
+              WHERE id = (SELECT lease_id FROM messages_to_process LIMIT 1)
+            ),
+            insert_status AS (
+              -- Insert or update status records for the messages
+              INSERT INTO queen.messages_status (
+                message_id, 
+                consumer_group, 
+                status, 
+                lease_expires_at,
+                processing_at,
+                worker_id,
+                retry_count
+              )
             SELECT 
               id, 
               $2, 
               'processing', 
-              NOW() + INTERVAL '1 second' * lease_time, 
+                lease_expires_at,
               NOW(), 
               $4,
               0
-            FROM available_messages
-            ON CONFLICT (message_id, consumer_group) DO NOTHING
-            RETURNING message_id,
-              (SELECT transaction_id FROM queen.messages WHERE id = message_id),
-              (SELECT trace_id FROM queen.messages WHERE id = message_id),
-              (SELECT payload FROM queen.messages WHERE id = message_id),
-              (SELECT is_encrypted FROM queen.messages WHERE id = message_id),
-              (SELECT created_at FROM queen.messages WHERE id = message_id),
-              (SELECT p.name FROM queen.messages m2 JOIN queen.partitions p ON m2.partition_id = p.id WHERE m2.id = message_id) as partition_name,
-              $1 as queue_name,
-              (SELECT priority FROM queen.queues WHERE name = $1) as priority,
-              retry_count
+              FROM messages_to_process
+            ON CONFLICT (message_id, consumer_group) DO UPDATE SET
+              status = 'processing',
+              lease_expires_at = EXCLUDED.lease_expires_at,
+              processing_at = NOW(),
+              worker_id = EXCLUDED.worker_id
+              -- Keep existing retry_count when re-processing failed messages
+            )
+            -- Return the messages
+            SELECT 
+              id as message_id,
+              transaction_id,
+              trace_id,
+              payload,
+              is_encrypted,
+              created_at,
+              partition_name,
+              queue_name,
+              priority,
+              0 as retry_count
+            FROM messages_to_process
           `, [queue, actualConsumerGroup, batch, config.WORKER_ID]);
         }
       } else {
@@ -471,21 +681,97 @@ export const createOptimizedQueueManager = (pool, resourceCache, eventManager) =
         }
         
         if (partition) {
-          // Specific partition with consumer group
+          // Specific partition with consumer group - WITH PARTITION LOCKING
           result = await client.query(`
-            WITH available_messages AS (
-              SELECT m.id, m.transaction_id, m.trace_id, m.payload, m.is_encrypted, m.created_at,
-                     p.name as partition_name, q.name as queue_name,
-                     q.priority, q.lease_time, q.retry_limit, q.delayed_processing,
-                     q.window_buffer, q.max_wait_time_seconds
-              FROM queen.messages m
-              JOIN queen.partitions p ON m.partition_id = p.id
-              JOIN queen.queues q ON p.queue_id = q.id
-              WHERE q.name = $1 AND p.name = $2
-                AND m.created_at > $4::timestamp  -- Only messages created AFTER subscription
+            WITH params AS (
+              SELECT 
+                $1::VARCHAR(255) as queue_name,
+                $2::VARCHAR(255) as partition_name,
+                $3::INTEGER as batch_size,
+                $4::TIMESTAMP as subscription_start,
+                $5::VARCHAR(255) as consumer_group,
+                $6::VARCHAR(255) as worker_id
+            ),
+            queue_config AS (
+              -- Get queue configuration
+              SELECT 
+                q.id as queue_id,
+                q.lease_time,
+                q.delayed_processing,
+                q.max_wait_time_seconds,
+                q.window_buffer
+              FROM queen.queues q
+              CROSS JOIN params
+              WHERE q.name = params.queue_name
+            ),
+            target_partition AS (
+              -- Get the specific partition requested
+              SELECT 
+                p.id,
+                p.name
+              FROM queen.partitions p
+              JOIN queue_config qc ON p.queue_id = qc.queue_id
+              CROSS JOIN params
+              WHERE p.name = params.partition_name
+            ),
+            acquire_lease AS (
+              -- Try to acquire or verify lease for the specific partition for this consumer group
+              INSERT INTO queen.partition_leases (
+                partition_id, 
+                consumer_group, 
+                lease_expires_at
+              )
+              SELECT 
+                tp.id,
+                params.consumer_group,
+                NOW() + INTERVAL '1 second' * (SELECT lease_time FROM queue_config)
+              FROM target_partition tp
+              CROSS JOIN params
+              WHERE NOT EXISTS (
+                -- Check if another consumer in same group has an active lease
+                SELECT 1 FROM queen.partition_leases pl
+                WHERE pl.partition_id = tp.id 
+                  AND pl.consumer_group = params.consumer_group
+                  AND pl.released_at IS NULL
+                  AND pl.lease_expires_at > NOW()
+              )
+              ON CONFLICT (partition_id, consumer_group) 
+              DO UPDATE SET 
+                lease_expires_at = CASE 
+                  WHEN queen.partition_leases.released_at IS NOT NULL 
+                  THEN EXCLUDED.lease_expires_at  -- Reacquire released lease
+                  ELSE queen.partition_leases.lease_expires_at  -- Keep existing active lease
+                END,
+                released_at = CASE 
+                  WHEN queen.partition_leases.released_at IS NOT NULL 
+                  THEN NULL  -- Clear released_at when reacquiring
+                  ELSE queen.partition_leases.released_at
+                END
+              RETURNING partition_id, id as lease_id, lease_expires_at
+            ),
+            messages_to_process AS (
+              -- Get messages from the partition only if we have the lease
+              SELECT 
+                m.id,
+                m.transaction_id,
+                m.trace_id,
+                m.payload,
+                m.is_encrypted,
+                m.created_at,
+                p.name as partition_name,
+                q.name as queue_name,
+                q.priority,
+                al.lease_id,
+                al.lease_expires_at
+              FROM acquire_lease al
+              JOIN queen.messages m ON m.partition_id = al.partition_id
+              JOIN queen.partitions p ON p.id = al.partition_id
+              JOIN queen.queues q ON q.id = p.queue_id
+              CROSS JOIN params
+              WHERE m.created_at > params.subscription_start  -- Only messages created AFTER subscription
                 AND NOT EXISTS (
                   SELECT 1 FROM queen.messages_status ms 
-                  WHERE ms.message_id = m.id AND ms.consumer_group = $5
+                  WHERE ms.message_id = m.id AND ms.consumer_group = params.consumer_group
                 )
                 AND m.created_at <= NOW() - INTERVAL '1 second' * q.delayed_processing
                 AND (q.max_wait_time_seconds = 0 OR 
@@ -496,65 +782,215 @@ export const createOptimizedQueueManager = (pool, resourceCache, eventManager) =
                     AND m2.created_at > NOW() - INTERVAL '1 second' * q.window_buffer
                 ))
               ORDER BY m.created_at ASC
-              LIMIT $3
-              -- No locking in bus mode - each group gets its own status record
+              LIMIT (SELECT batch_size FROM params)
+              FOR UPDATE OF m SKIP LOCKED
+            ),
+            update_lease AS (
+              -- Store which messages are part of this lease
+              UPDATE queen.partition_leases
+              SET message_batch = (SELECT jsonb_agg(id) FROM messages_to_process)
+              WHERE id = (SELECT lease_id FROM messages_to_process LIMIT 1)
+            ),
+            insert_status AS (
+              -- Insert or update status records for the messages
+              INSERT INTO queen.messages_status (
+                message_id,
+                consumer_group,
+                status,
+                lease_expires_at,
+                processing_at,
+                worker_id
+              )
+              SELECT 
+                mtp.id,
+                params.consumer_group,
+                'processing',
+                mtp.lease_expires_at,
+                NOW(),
+                params.worker_id
+              FROM messages_to_process mtp
+              CROSS JOIN params
+              ON CONFLICT (message_id, consumer_group) DO UPDATE SET
+                status = 'processing',
+                lease_expires_at = EXCLUDED.lease_expires_at,
+                processing_at = NOW(),
+                worker_id = EXCLUDED.worker_id
+                -- Keep existing retry_count when re-processing failed messages
             )
-            INSERT INTO queen.messages_status (message_id, consumer_group, status, lease_expires_at, processing_at, worker_id)
-            SELECT id, $5, 'processing', NOW() + INTERVAL '1 second' * lease_time, NOW(), $6
-            FROM available_messages
-            RETURNING message_id,
-              (SELECT transaction_id FROM queen.messages WHERE id = message_id),
-              (SELECT trace_id FROM queen.messages WHERE id = message_id),
-              (SELECT payload FROM queen.messages WHERE id = message_id),
-              (SELECT is_encrypted FROM queen.messages WHERE id = message_id),
-              (SELECT created_at FROM queen.messages WHERE id = message_id),
-              (SELECT p.name FROM queen.messages m2 JOIN queen.partitions p ON m2.partition_id = p.id WHERE m2.id = message_id) as partition_name,
-              $1 as queue_name,
-              (SELECT priority FROM queen.queues WHERE name = $1) as priority,
-              retry_count
+            -- Return the messages
+            SELECT 
+              id as message_id,
+              transaction_id,
+              trace_id,
+              payload,
+              is_encrypted,
+              created_at,
+              partition_name,
+              queue_name,
+              priority,
+              0 as retry_count
+            FROM messages_to_process
           `, [queue, partition, batch, subscriptionStart, consumerGroup, config.WORKER_ID]);
         } else {
-          // Any partition with consumer group
+          // Any partition with consumer group - WITH PARTITION LOCKING for bus mode
           result = await client.query(`
-            WITH available_messages AS (
-              SELECT m.id, m.transaction_id, m.trace_id, m.payload, m.is_encrypted, m.created_at,
-                     p.name as partition_name, q.name as queue_name,
-                     q.priority, q.lease_time, q.retry_limit, q.delayed_processing,
-                     q.window_buffer, q.max_wait_time_seconds
-              FROM queen.messages m
-              JOIN queen.partitions p ON m.partition_id = p.id
-              JOIN queen.queues q ON p.queue_id = q.id
-              WHERE q.name = $1
+            WITH queue_config AS (
+              -- Get queue configuration
+              SELECT 
+                id as queue_id,
+                lease_time,
+                delayed_processing,
+                max_wait_time_seconds,
+                window_buffer
+              FROM queen.queues
+              WHERE name = $1
+            ),
+            available_partitions AS (
+              -- Find partitions with messages that don't have active leases for this consumer group
+              SELECT 
+                p.id, 
+                p.name,
+                sub.oldest_message,
+                sub.pending_count
+              FROM (
+                SELECT 
+                  p.id as partition_id,
+                  MIN(m.created_at) as oldest_message,
+                  COUNT(m.id) as pending_count
+                FROM queen.partitions p
+                JOIN queue_config qc ON p.queue_id = qc.queue_id
+                JOIN queen.messages m ON m.partition_id = p.id
+                WHERE NOT EXISTS (
+                  -- No active lease for this partition/consumer group
+                  SELECT 1 FROM queen.partition_leases pl
+                  WHERE pl.partition_id = p.id 
+                    AND pl.consumer_group = $4
+                    AND pl.released_at IS NULL
+                    AND pl.lease_expires_at > NOW()
+                )
                 AND m.created_at > $3::timestamp  -- Only messages created AFTER subscription
                 AND NOT EXISTS (
+                  -- Message not already processed by this consumer group
                   SELECT 1 FROM queen.messages_status ms 
-                  WHERE ms.message_id = m.id AND ms.consumer_group = $4
+                  WHERE ms.message_id = m.id 
+                    AND ms.consumer_group = $4
+                )
+                AND m.created_at <= NOW() - INTERVAL '1 second' * qc.delayed_processing
+                AND (qc.max_wait_time_seconds = 0 OR 
+                     m.created_at > NOW() - INTERVAL '1 second' * qc.max_wait_time_seconds)
+                AND (qc.window_buffer = 0 OR NOT EXISTS (
+                  SELECT 1 FROM queen.messages m2 
+                  WHERE m2.partition_id = p.id 
+                    AND m2.created_at > NOW() - INTERVAL '1 second' * qc.window_buffer
+                ))
+                GROUP BY p.id
+                ORDER BY MIN(m.created_at) ASC  -- Fairness: oldest message first
+                LIMIT 1
+              ) sub
+              JOIN queen.partitions p ON p.id = sub.partition_id
+              FOR UPDATE OF p SKIP LOCKED  -- Prevent race on partition selection
+            ),
+            acquire_lease AS (
+              -- Create a lease for the selected partition for this consumer group
+              INSERT INTO queen.partition_leases (
+                partition_id, 
+                consumer_group, 
+                lease_expires_at
+              )
+              SELECT 
+                id,
+                $4,
+                NOW() + INTERVAL '1 second' * (SELECT lease_time FROM queue_config)
+              FROM available_partitions
+              ON CONFLICT (partition_id, consumer_group) 
+              DO UPDATE SET 
+                lease_expires_at = CASE 
+                  WHEN queen.partition_leases.released_at IS NOT NULL 
+                  THEN EXCLUDED.lease_expires_at  -- Reacquire released lease
+                  ELSE queen.partition_leases.lease_expires_at  -- Keep existing active lease
+                END,
+                released_at = CASE 
+                  WHEN queen.partition_leases.released_at IS NOT NULL 
+                  THEN NULL  -- Clear released_at when reacquiring
+                  ELSE queen.partition_leases.released_at
+                END
+              RETURNING partition_id, id as lease_id, lease_expires_at
+            ),
+            messages_to_process AS (
+              -- Get messages from the leased partition
+              SELECT 
+                m.id,
+                m.transaction_id,
+                m.trace_id,
+                m.payload,
+                m.is_encrypted,
+                m.created_at,
+                p.name as partition_name,
+                q.name as queue_name,
+                q.priority,
+                al.lease_id,
+                al.lease_expires_at
+              FROM acquire_lease al
+              JOIN queen.messages m ON m.partition_id = al.partition_id
+              JOIN queen.partitions p ON p.id = al.partition_id
+              JOIN queen.queues q ON q.id = p.queue_id
+              WHERE m.created_at > $3::timestamp  -- Only messages created AFTER subscription
+                AND NOT EXISTS (
+                  SELECT 1 FROM queen.messages_status ms 
+                  WHERE ms.message_id = m.id 
+                    AND ms.consumer_group = $4
                 )
                 AND m.created_at <= NOW() - INTERVAL '1 second' * q.delayed_processing
                 AND (q.max_wait_time_seconds = 0 OR 
                      m.created_at > NOW() - INTERVAL '1 second' * q.max_wait_time_seconds)
-                AND (q.window_buffer = 0 OR NOT EXISTS (
-                  SELECT 1 FROM queen.messages m2 
-                  WHERE m2.partition_id = p.id 
-                    AND m2.created_at > NOW() - INTERVAL '1 second' * q.window_buffer
-                ))
-              ORDER BY q.priority DESC, m.created_at ASC
+              ORDER BY m.created_at ASC
               LIMIT $2
-              -- No locking in bus mode - each group gets its own status record
+              FOR UPDATE OF m SKIP LOCKED
+            ),
+            update_lease AS (
+              -- Store which messages are part of this lease
+              UPDATE queen.partition_leases
+              SET message_batch = (SELECT jsonb_agg(id) FROM messages_to_process)
+              WHERE id = (SELECT lease_id FROM messages_to_process LIMIT 1)
+            ),
+            insert_status AS (
+              -- Insert or update status records for the messages
+              INSERT INTO queen.messages_status (
+                message_id,
+                consumer_group,
+                status,
+                lease_expires_at,
+                processing_at,
+                worker_id
+              )
+              SELECT 
+                id,
+                $4,
+                'processing',
+                lease_expires_at,
+                NOW(),
+                $5
+              FROM messages_to_process
+              ON CONFLICT (message_id, consumer_group) DO UPDATE SET
+                status = 'processing',
+                lease_expires_at = EXCLUDED.lease_expires_at,
+                processing_at = NOW(),
+                worker_id = EXCLUDED.worker_id
+                -- Keep existing retry_count when re-processing failed messages
             )
-            INSERT INTO queen.messages_status (message_id, consumer_group, status, lease_expires_at, processing_at, worker_id)
-            SELECT id, $4, 'processing', NOW() + INTERVAL '1 second' * lease_time, NOW(), $5
-            FROM available_messages
-            RETURNING message_id,
-              (SELECT transaction_id FROM queen.messages WHERE id = message_id),
-              (SELECT trace_id FROM queen.messages WHERE id = message_id),
-              (SELECT payload FROM queen.messages WHERE id = message_id),
-              (SELECT is_encrypted FROM queen.messages WHERE id = message_id),
-              (SELECT created_at FROM queen.messages WHERE id = message_id),
-              (SELECT p.name FROM queen.messages m2 JOIN queen.partitions p ON m2.partition_id = p.id WHERE m2.id = message_id),
-              $1 as queue_name,
-              (SELECT priority FROM queen.queues WHERE name = $1),
-              retry_count
+            -- Return the messages
+            SELECT 
+              id as message_id,
+              transaction_id,
+              trace_id,
+              payload,
+              is_encrypted,
+              created_at,
+              partition_name,
+              queue_name,
+              priority,
+              0 as retry_count
+            FROM messages_to_process
           `, [queue, batch, subscriptionStart, consumerGroup, config.WORKER_ID]);
         }
       }
@@ -614,12 +1050,16 @@ export const createOptimizedQueueManager = (pool, resourceCache, eventManager) =
       
       return { messages };
     });
-  };
+  };*/
   
+const popMessages = async (scope, options = {}) => {
+  return popMessagesV2(scope, options, pool, withTransaction);
+};
+
   // Acknowledge messages (now per consumer group)
   const acknowledgeMessage = async (transactionId, status = 'completed', error = null, consumerGroup = null) => {
     return withTransaction(pool, async (client) => {
-      // Find the message and status entry
+      // Find the message and status entry (must be in 'processing' status to be acknowledged)
       const findQuery = consumerGroup 
         ? `SELECT ms.retry_count, ms.status, ms.message_id, m.partition_id, 
                   q.retry_limit, q.dlq_after_max_retries
@@ -687,33 +1127,38 @@ export const createOptimizedQueueManager = (pool, resourceCache, eventManager) =
         // Release partition lease if this was the last message in the batch
         const releaseQuery = `
           WITH message_partition AS (
-            SELECT m.partition_id
+            -- Get the partition for this message
+            SELECT DISTINCT m.partition_id
             FROM queen.messages m
             WHERE m.transaction_id = $1
+          ),
+          check_remaining AS (
+            -- Check if there are any other processing messages in this partition
+            SELECT 
+              mp.partition_id,
+              COUNT(ms.message_id) as processing_count
+            FROM message_partition mp
+            LEFT JOIN queen.messages m ON m.partition_id = mp.partition_id
+            LEFT JOIN queen.messages_status ms ON ms.message_id = m.id
+              AND ms.consumer_group = $2
+              AND ms.status = 'processing'
+            GROUP BY mp.partition_id
           )
+          -- Release the lease only if no messages are processing
           UPDATE queen.partition_leases pl
           SET released_at = NOW()
-          FROM message_partition mp
-          WHERE pl.partition_id = mp.partition_id
+          FROM check_remaining cr
+          WHERE pl.partition_id = cr.partition_id
             AND pl.consumer_group = $2
             AND pl.released_at IS NULL
-            AND EXISTS (
-              SELECT 1 
-              WHERE NOT EXISTS (
-                SELECT 1 
-                FROM queen.messages_status ms
-                JOIN queen.messages m2 ON ms.message_id = m2.id
-                WHERE m2.partition_id = mp.partition_id
-                  AND ms.consumer_group = $2
-                  AND ms.status = 'processing'
-              )
-            )`;
+            AND cr.processing_count = 0`;
         
         await client.query(releaseQuery, [transactionId, actualConsumerGroup]);
         
         log(`${LogTypes.ACK} | TransactionId: ${transactionId} | Status: completed | ConsumerGroup: ${consumerGroup || 'QUEUE_MODE'}`);
       } else if (status === 'failed') {
         // Handle failure with retry logic
+        const actualConsumerGroup = consumerGroup || '__QUEUE_MODE__';
         const currentRetryCount = messageStatus.retry_count || 0;
         const nextRetryCount = currentRetryCount + 1;
         const retryLimit = messageStatus.retry_limit || config.QUEUE.DEFAULT_RETRY_LIMIT;
@@ -775,6 +1220,34 @@ export const createOptimizedQueueManager = (pool, resourceCache, eventManager) =
                  AND ms.consumer_group = '__QUEUE_MODE__'`;
           
           await client.query(updateQuery, updateParams);
+          
+          // Release partition lease on failure as well (so partition can be retried)
+          const releaseOnFailQuery = `
+            WITH message_partition AS (
+              SELECT DISTINCT m.partition_id
+              FROM queen.messages m
+              WHERE m.transaction_id = $1
+            ),
+            check_remaining AS (
+              SELECT 
+                mp.partition_id,
+                COUNT(ms.message_id) as processing_count
+              FROM message_partition mp
+              LEFT JOIN queen.messages m ON m.partition_id = mp.partition_id
+              LEFT JOIN queen.messages_status ms ON ms.message_id = m.id
+                AND ms.consumer_group = $2
+                AND ms.status = 'processing'
+              GROUP BY mp.partition_id
+            )
+            UPDATE queen.partition_leases pl
+            SET released_at = NOW()
+            FROM check_remaining cr
+            WHERE pl.partition_id = cr.partition_id
+              AND pl.consumer_group = $2
+              AND pl.released_at IS NULL
+              AND cr.processing_count = 0`;
+          
+          await client.query(releaseOnFailQuery, [transactionId, actualConsumerGroup]);
           
           log(`${LogTypes.ACK} | TransactionId: ${transactionId} | Status: failed (retry ${nextRetryCount}/${retryLimit}) | ConsumerGroup: ${consumerGroup || 'QUEUE_MODE'} | Error: ${error}`);
         }
@@ -927,7 +1400,7 @@ export const createOptimizedQueueManager = (pool, resourceCache, eventManager) =
   
   // Get queue statistics (updated for new structure)
   const getQueueStats = async (filters = {}) => {
-    const { queue, namespace, task } = filters;
+    const { queue, namespace, task, fromDateTime, toDateTime } = filters;
     
     let query = `
       SELECT 
@@ -968,6 +1441,17 @@ export const createOptimizedQueueManager = (pool, resourceCache, eventManager) =
       params.push(task);
     }
     
+    // Add date/time filtering
+    if (fromDateTime) {
+      conditions.push(`m.created_at >= $${params.length + 1}::timestamp`);
+      params.push(fromDateTime);
+    }
+    
+    if (toDateTime) {
+      conditions.push(`m.created_at <= $${params.length + 1}::timestamp`);
+      params.push(toDateTime);
+    }
+    
     if (conditions.length > 0) {
       query += ` WHERE ${conditions.join(' AND ')}`;
     }
@@ -981,7 +1465,7 @@ export const createOptimizedQueueManager = (pool, resourceCache, eventManager) =
   
   // Get queue lag statistics
   const getQueueLag = async (filters = {}) => {
-    const { queue, namespace, task } = filters;
+    const { queue, namespace, task, fromDateTime, toDateTime } = filters;
     
     let query = `
       WITH lag_stats AS (
@@ -993,7 +1477,12 @@ export const createOptimizedQueueManager = (pool, resourceCache, eventManager) =
           COUNT(CASE WHEN ms.status = 'pending' THEN 1 END) as pending_count,
           COUNT(CASE WHEN ms.status = 'processing' THEN 1 END) as processing_count,
           COUNT(CASE WHEN ms.status IN ('pending', 'processing') THEN 1 END) as total_backlog,
-          COUNT(CASE WHEN ms.status = 'completed' AND ms.completed_at >= NOW() - INTERVAL '1 hour' THEN 1 END) as completed_messages,
+          COUNT(CASE 
+            WHEN ms.status = 'completed' 
+            AND ms.completed_at >= COALESCE($1::timestamp, NOW() - INTERVAL '1 hour')
+            AND ms.completed_at <= COALESCE($2::timestamp, NOW())
+            THEN 1 
+          END) as completed_messages,
           AVG(CASE 
             WHEN ms.status = 'completed' AND ms.completed_at IS NOT NULL AND m.created_at IS NOT NULL
             THEN EXTRACT(EPOCH FROM (ms.completed_at - m.created_at))
@@ -1023,6 +1512,10 @@ export const createOptimizedQueueManager = (pool, resourceCache, eventManager) =
     
     const conditions = [];
     const params = [];
+    
+    // Add date params first (they're referenced in the query above as $1 and $2)
+    params.push(fromDateTime || null);
+    params.push(toDateTime || null);
     
     if (queue) {
       conditions.push(`q.name = $${params.length + 1}`);
@@ -1134,7 +1627,7 @@ export const createOptimizedQueueManager = (pool, resourceCache, eventManager) =
         query += ` ORDER BY q.priority DESC, m.created_at ASC LIMIT $${params.length} FOR UPDATE OF m SKIP LOCKED`;
         query += `)
           INSERT INTO queen.messages_status (message_id, consumer_group, status, lease_expires_at, processing_at, worker_id)
-          SELECT id, NULL, 'processing', NOW() + INTERVAL '1 second' * lease_time, NOW(), $${params.length + 1}
+          SELECT id, '__QUEUE_MODE__', 'processing', NOW() + INTERVAL '1 second' * lease_time, NOW(), $${params.length + 1}
           FROM available_messages
           ON CONFLICT (message_id, consumer_group) 
           DO UPDATE SET 

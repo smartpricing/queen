@@ -100,8 +100,8 @@ class ApiService {
   }
 
   // Analytics
-  async getQueueAnalytics(queueName) {
-    return this.get(`/analytics/queue/${encodeURIComponent(queueName)}`)
+  async getQueueAnalytics(queueName, params = {}) {
+    return this.get(`/analytics/queue/${encodeURIComponent(queueName)}`, params)
   }
 
   async getAllQueuesAnalytics(params = {}) {

@@ -3,11 +3,7 @@
     <div class="layout-main">
       <AppSidebar v-model:visible="sidebarVisible" />
       <div class="layout-content">
-        <router-view v-slot="{ Component }">
-          <transition name="fade" mode="out-in">
-            <component :is="Component" />
-          </transition>
-        </router-view>
+        <router-view />
       </div>
     </div>
   </div>
@@ -66,6 +62,15 @@ provide('toggleSidebar', () => {
 .fade-enter-from,
 .fade-leave-to {
   opacity: 0;
+}
+
+/* Loading container */
+.loading-container {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  min-height: 400px;
+  color: #ec4899;
 }
 
 /* Responsive */

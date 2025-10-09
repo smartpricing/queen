@@ -15,16 +15,16 @@
             <div class="table-header">
               <h2>Message Browser</h2>
               <div class="table-actions">
-                <Dropdown 
+                <Select 
                   v-model="selectedQueue" 
-                  :options="queues" 
+                  :options="queues || []" 
                   optionLabel="name" 
                   optionValue="name"
                   placeholder="Select Queue"
                   class="queue-dropdown"
                   @change="fetchMessages"
                 />
-                <Dropdown 
+                <Select 
                   v-model="selectedStatus" 
                   :options="statusOptions" 
                   optionLabel="label" 
@@ -138,7 +138,7 @@ import { useToast } from 'primevue/usetoast'
 import DataTable from 'primevue/datatable'
 import Column from 'primevue/column'
 import Button from 'primevue/button'
-import Dropdown from 'primevue/dropdown'
+import Select from 'primevue/select'
 import Tag from 'primevue/tag'
 import Card from 'primevue/card'
 import Dialog from 'primevue/dialog'
