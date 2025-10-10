@@ -1,6 +1,6 @@
 {
-  "name": "@dev.smartpricing/queen",
-  "version": "0.1.0",
+  "name": "queen-mq",
+  "version": "0.1.1",
   "type": "module",
   "description": "High-performance message queue backed by PostgreSQL",
   "main": "src/client/index.js",
@@ -31,6 +31,17 @@
   "engines": {
     "node": ">=22.0.0"
   },
-  "author": "",
-  "license": "ISC"
+  "author": "Smartness",
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/smartpricing/queen"
+  },
+  "keywords": [
+    "message-queue",
+    "queue",
+    "broker",
+    "message-queue-system",
+    "fifo"
+  ]
 }
