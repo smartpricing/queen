@@ -1,11 +1,15 @@
 // In-memory cache for resource existence to avoid repeated DB lookups
 export const createResourceCache = () => {
   const cache = new Map();
-  const TTL = 60000; // 1 minute TTL
+  // Make TTL configurable - set to 0 to disable caching in multi-server setups
+  const TTL = process.env.QUEEN_CACHE_TTL ? parseInt(process.env.QUEEN_CACHE_TTL) : 60000; // Default 1 minute
   
   const getCacheKey = (queue, partition) => `${queue}:${partition || 'Default'}`;
   
   const checkResource = (queue, partition) => {
+    // If TTL is 0, caching is disabled
+    if (TTL === 0) return null;
+    
     const key = getCacheKey(queue, partition);
     const cached = cache.get(key);
     
@@ -17,6 +21,9 @@ export const createResourceCache = () => {
   };
   
   const cacheResource = (queue, partition, data) => {
+    // If TTL is 0, caching is disabled
+    if (TTL === 0) return;
+    
     const key = getCacheKey(queue, partition);
     cache.set(key, { data, timestamp: Date.now() });
   };
@@ -45,15 +52,17 @@ export const createResourceCache = () => {
     }
   };
   
-  // Cleanup old entries periodically
-  setInterval(() => {
-    const now = Date.now();
-    for (const [key, value] of cache.entries()) {
-      if (now - value.timestamp > TTL) {
-        cache.delete(key);
+  // Cleanup old entries periodically (only if caching is enabled)
+  if (TTL > 0) {
+    setInterval(() => {
+      const now = Date.now();
+      for (const [key, value] of cache.entries()) {
+        if (now - value.timestamp > TTL) {
+          cache.delete(key);
+        }
       }
-    }
-  }, TTL);
+    }, Math.min(TTL, 60000)); // Check at most once per minute
+  }
   
   return {
     checkResource,

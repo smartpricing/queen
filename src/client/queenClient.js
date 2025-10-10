@@ -1,15 +1,36 @@
-import { httpRequest, createHttpClient } from './utils/http.js';
+import { httpRequest, createHttpClient, createLoadBalancedHttpClient } from './utils/http.js';
 import { withRetry } from './utils/retry.js';
+import { createLoadBalancer, LoadBalancingStrategy } from './utils/loadBalancer.js';
 
 export const createQueenClient = (options = {}) => {
   const {
     baseUrl = 'http://localhost:6632',
+    baseUrls = null, // Array of base URLs for load balancing
+    loadBalancingStrategy = LoadBalancingStrategy.ROUND_ROBIN,
+    enableFailover = true,
     timeout = 30000,
     retryAttempts = 3,
     retryDelay = 1000
   } = options;
   
-  const http = createHttpClient({ baseUrl, timeout });
+  // Determine if we're using load balancing or single server
+  let http;
+  let loadBalancer = null;
+  
+  if (baseUrls && Array.isArray(baseUrls) && baseUrls.length > 0) {
+    // Multiple servers with load balancing
+    loadBalancer = createLoadBalancer(baseUrls, loadBalancingStrategy);
+    http = createLoadBalancedHttpClient({ 
+      baseUrls, 
+      loadBalancer, 
+      timeout,
+      enableFailover 
+    });
+  } else {
+    // Single server (backward compatibility)
+    const singleUrl = baseUrls && baseUrls.length === 1 ? baseUrls[0] : baseUrl;
+    http = createHttpClient({ baseUrl: singleUrl, timeout });
+  }
   
   const configure = async ({ queue, namespace, task, options = {} }) => {
     return withRetry(
@@ -360,11 +381,26 @@ export const createQueenClient = (options = {}) => {
   
   // WebSocket support for real-time updates
   const createWebSocketConnection = (path = '/ws/dashboard') => {
-    const wsUrl = baseUrl.replace('http://', 'ws://').replace('https://', 'wss://');
+    // For WebSocket, we'll use the first available server or round-robin
+    let wsBaseUrl;
+    
+    if (loadBalancer) {
+      // Get a URL from the load balancer for WebSocket connection
+      wsBaseUrl = loadBalancer.getNextUrl();
+    } else {
+      // Use single server URL
+      wsBaseUrl = baseUrls && baseUrls.length === 1 ? baseUrls[0] : baseUrl;
+    }
+    
+    const wsUrl = wsBaseUrl.replace('http://', 'ws://').replace('https://', 'wss://');
     const ws = new WebSocket(`${wsUrl}${path}`);
+    
+    // Store the server URL for reconnection purposes
+    ws._serverUrl = wsBaseUrl;
     
     return {
       ws,
+      serverUrl: wsBaseUrl,
       onMessage: (handler) => {
         ws.addEventListener('message', (event) => {
           try {
@@ -378,8 +414,43 @@ export const createQueenClient = (options = {}) => {
       onError: (handler) => ws.addEventListener('error', handler),
       onClose: (handler) => ws.addEventListener('close', handler),
       onOpen: (handler) => ws.addEventListener('open', handler),
-      close: () => ws.close()
+      close: () => ws.close(),
+      reconnect: () => {
+        // For reconnection, try a different server if using load balancing
+        if (loadBalancer) {
+          return createWebSocketConnection(path);
+        }
+        // For single server, reconnect to the same
+        const newWs = new WebSocket(`${wsUrl}${path}`);
+        newWs._serverUrl = wsBaseUrl;
+        return {
+          ws: newWs,
+          serverUrl: wsBaseUrl,
+          onMessage: (handler) => {
+            newWs.addEventListener('message', (event) => {
+              try {
+                const data = JSON.parse(event.data);
+                handler(data);
+              } catch (error) {
+                console.error('Error parsing WebSocket message:', error);
+              }
+            });
+          },
+          onError: (handler) => newWs.addEventListener('error', handler),
+          onClose: (handler) => newWs.addEventListener('close', handler),
+          onOpen: (handler) => newWs.addEventListener('open', handler),
+          close: () => newWs.close()
+        };
+      }
     };
+  };
+  
+  // Get load balancer stats (useful for debugging)
+  const getLoadBalancerStats = () => {
+    if (loadBalancer) {
+      return loadBalancer.getStats();
+    }
+    return null;
   };
   
   return {
@@ -393,7 +464,8 @@ export const createQueenClient = (options = {}) => {
     analytics,
     health,
     consume,
-    createWebSocketConnection
+    createWebSocketConnection,
+    getLoadBalancerStats
   };
 };
 

@@ -4106,7 +4106,8 @@ async function runAllTests() {
   
   try {
     // Initialize client and database connection
-    client = createQueenClient({ baseUrl: TEST_CONFIG.baseUrl });
+    // Using single baseUrl for backward compatibility (can also use baseUrls: [TEST_CONFIG.baseUrl])
+    client = createQueenClient({ baseUrls: [TEST_CONFIG.baseUrl, 'http://localhost:6633'] });
     dbPool = new pg.Pool(TEST_CONFIG.dbConfig);
     
     // Test database connection
