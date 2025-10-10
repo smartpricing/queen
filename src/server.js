@@ -275,7 +275,7 @@ app.post('/api/v1/push', (res, req) => {
       });
     } catch (error) {
       if (abortedRef.aborted) return;
-      log('Push error:', error);
+      log('Push error:', error.message || error);
       res.cork(() => {
         setCorsHeaders(res);
         res.writeStatus(config.HTTP_STATUS.INTERNAL_SERVER_ERROR.toString()).end(JSON.stringify({ error: error.message }));

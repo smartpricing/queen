@@ -1,6 +1,5 @@
 import { generateUUID } from '../utils/uuid.js';
 import { withTransaction } from '../database/connection.js';
-import { PoolManager } from '../database/poolManager.js';
 import * as encryption from '../services/encryptionService.js';
 import { log, LogTypes } from '../utils/logger.js';
 import config from '../config.js';
@@ -10,30 +9,44 @@ export const createOptimizedQueueManager = (pool, resourceCache, eventManager) =
   // Batch size for database operations
   const BATCH_INSERT_SIZE = config.QUEUE.BATCH_INSERT_SIZE;
   
-  // Create pool manager for better connection handling
-  const poolManager = new PoolManager({
-    max: pool.options?.max || config.DATABASE.POOL_SIZE
-  });
+  // Create pool manager using the existing pool
+  const poolManager = {
+    withClient: async (fn) => {
+      const client = await pool.connect();
+      try {
+        return await fn(client);
+      } finally {
+        client.release();
+      }
+    }
+  };
   
-  // Ensure queue and partition exist (with caching)
+  // Ensure queue exists and partition exist (with caching)
+  // Queue must be created via configure endpoint, but partitions can be created on-demand
   const ensureResources = async (client, queueName, partitionName = 'Default', namespace = null, task = null) => {
     // Check cache first, but skip cache if we're updating namespace/task
     const cacheKey = `${queueName}:${partitionName}`;
     const cached = resourceCache.checkResource(queueName, partitionName);
     if (cached && namespace === null && task === null) return cached;
     
-    // Insert or get queue - handle null values properly
+    // Get queue - don't create if it doesn't exist
     const queueResult = await client.query(
-      `INSERT INTO queen.queues (name, namespace, task) VALUES ($1, $2, $3) 
-       ON CONFLICT (name) DO UPDATE SET 
-         namespace = CASE WHEN EXCLUDED.namespace IS NOT NULL THEN EXCLUDED.namespace ELSE queen.queues.namespace END,
-         task = CASE WHEN EXCLUDED.task IS NOT NULL THEN EXCLUDED.task ELSE queen.queues.task END
-       RETURNING id, name, namespace, task, encryption_enabled, max_wait_time_seconds,
-                lease_time, retry_limit, retry_delay, max_size, ttl, dead_letter_queue,
-                dlq_after_max_retries, delayed_processing, window_buffer, retention_seconds,
-                completed_retention_seconds, retention_enabled, priority, max_queue_size`,
-      [queueName, namespace || null, task || null]
+      `SELECT id, name, namespace, task, encryption_enabled, max_wait_time_seconds,
+              lease_time, retry_limit, retry_delay, max_size, ttl, dead_letter_queue,
+              dlq_after_max_retries, delayed_processing, window_buffer, retention_seconds,
+              completed_retention_seconds, retention_enabled, priority, max_queue_size
+       FROM queen.queues
+       WHERE name = $1`,
+      [queueName]
     );
+    
+    if (queueResult.rows.length === 0) {
+      // Queue doesn't exist - throw error instead of creating
+      const errorMsg = `Queue '${queueName}' does not exist. Please create it using the configure endpoint first.`;
+      log(`${LogTypes.ERROR} | ${errorMsg}`);
+      throw new Error(errorMsg);
+    }
+    
     const queue = queueResult.rows[0];
     const queueId = queue.id;
     

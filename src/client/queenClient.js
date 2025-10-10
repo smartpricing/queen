@@ -33,11 +33,18 @@ export const createQueenClient = (options = {}) => {
   }
   
   const configure = async ({ queue, namespace, task, options = {} }) => {
-    return withRetry(
+    const result = await withRetry(
       () => http.post('/api/v1/configure', { queue, namespace, task, options }),
       retryAttempts,
       retryDelay
     );
+    
+    // Check if the response contains an error
+    if (result && result.error) {
+      throw new Error(result.error);
+    }
+    
+    return result;
   };
   
   // Push messages to queue
@@ -55,11 +62,18 @@ export const createQueenClient = (options = {}) => {
       transactionId: item.transactionId
     }));
     
-    return withRetry(
+    const result = await withRetry(
       () => http.post('/api/v1/push', { items: v2Items, config }),
       retryAttempts,
       retryDelay
     );
+    
+    // Check if the response contains an error
+    if (result && result.error) {
+      throw new Error(result.error);
+    }
+    
+    return result;
   };
   
   // Pop messages from queue (with consumer group support)
@@ -120,20 +134,34 @@ export const createQueenClient = (options = {}) => {
   
   // Acknowledge a message (with consumer group support)
   const ack = async (transactionId, status = 'completed', error = null, consumerGroup = null) => {
-    return withRetry(
+    const result = await withRetry(
       () => http.post('/api/v1/ack', { transactionId, status, error, consumerGroup }),
       retryAttempts,
       retryDelay
     );
+    
+    // Check if the response contains an error
+    if (result && result.error) {
+      throw new Error(result.error);
+    }
+    
+    return result;
   };
   
   // Batch acknowledge messages (with consumer group support)
   const ackBatch = async (acknowledgments, consumerGroup = null) => {
-    return withRetry(
+    const result = await withRetry(
       () => http.post('/api/v1/ack/batch', { acknowledgments, consumerGroup }),
       retryAttempts,
       retryDelay
     );
+    
+    // Check if the response contains an error
+    if (result && result.error) {
+      throw new Error(result.error);
+    }
+    
+    return result;
   };
   
   // Message management

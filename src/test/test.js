@@ -18,7 +18,7 @@ import crypto from 'crypto';
 
 // Test configuration
 const TEST_CONFIG = {
-  baseUrl: 'http://localhost:6632',
+  baseUrls: ['http://localhost:6632', 'http://localhost:6633'],
   dbConfig: {
     host: process.env.PG_HOST || 'localhost',
     port: process.env.PG_PORT || 5432,
@@ -121,17 +121,106 @@ const getMessageCount = async (queueName, partitionName = null) => {
   return parseInt(result.rows[0].count);
 };
 
+// Helper function to ensure queue exists
+const ensureQueue = async (queueName, options = {}) => {
+  try {
+    await client.configure({
+      queue: queueName,
+      options: options
+    });
+  } catch (error) {
+    // Queue might already exist, that's okay
+    if (!error.message.includes('already exists')) {
+      log(`Warning: Failed to configure queue ${queueName}: ${error.message}`, 'warning');
+    }
+  }
+};
+
 // ============================================
 // CORE FEATURE TESTS
 // ============================================
 
 /**
- * Test 1: Single Message Push
+ * Test 1: Queue Creation Policy
+ * Verifies that queues must be created via configure endpoint
+ */
+async function testQueueCreationPolicy() {
+  startTest('Queue Creation Policy');
+  
+  try {
+    // Test 1: Push to non-existent queue should fail
+    const nonExistentQueue = 'queue-that-does-not-exist-' + Date.now();
+    try {
+      await client.push({
+        items: [{
+          queue: nonExistentQueue,
+          partition: 'Default',
+          payload: { test: 'should fail' }
+        }]
+      });
+      throw new Error('Push to non-existent queue should have failed');
+    } catch (error) {
+      if (!error.message.includes('does not exist')) {
+        throw error;
+      }
+      log('Push to non-existent queue correctly failed', 'success');
+    }
+    
+    // Test 2: Create queue via configure
+    const testQueue = 'test-creation-policy-' + Date.now();
+    await client.configure({
+      queue: testQueue,
+      namespace: 'test',
+      task: 'creation-policy',
+      options: {
+        retryLimit: 3,
+        priority: 5
+      }
+    });
+    log('Queue created via configure endpoint', 'success');
+    
+    // Test 3: Push to configured queue should succeed
+    await client.push({
+      items: [{
+        queue: testQueue,
+        partition: 'Default',
+        payload: { test: 'message 1' }
+      }]
+    });
+    log('Push to configured queue succeeded', 'success');
+    
+    // Test 4: Push to new partition (should create on-demand)
+    await client.push({
+      items: [{
+        queue: testQueue,
+        partition: 'NewPartition',
+        payload: { test: 'message 2' }
+      }]
+    });
+    log('Partition created on-demand', 'success');
+    
+    // Clean up
+    await client.queues.clear(testQueue);
+    
+    passTest('Queue creation policy working correctly');
+  } catch (error) {
+    failTest(error);
+  }
+}
+
+/**
+ * Test 2: Single Message Push
  */
 async function testSingleMessagePush() {
   startTest('Single Message Push');
   
   try {
+    // Configure queue first
+    await client.configure({
+      queue: 'test-single-push',
+      options: {}
+    });
+    
     const result = await client.push({
       items: [{
         queue: 'test-single-push',
@@ -162,12 +251,18 @@ async function testSingleMessagePush() {
 }
 
 /**
- * Test 2: Batch Message Push
+ * Test 3: Batch Message Push
  */
 async function testBatchMessagePush() {
   startTest('Batch Message Push');
   
   try {
+    // Configure queue first
+    await client.configure({
+      queue: 'test-batch-push',
+      options: {}
+    });
+    
     const batchSize = 5;
     const items = Array.from({ length: batchSize }, (_, i) => ({
       queue: 'test-batch-push',
@@ -255,6 +350,12 @@ async function testPopAndAcknowledgment() {
   startTest('Pop and Acknowledgment');
   
   try {
+    // Configure queue first
+    await client.configure({
+      queue: 'test-pop-ack',
+      options: {}
+    });
+    
     // Push test messages
     const pushResult = await client.push({
       items: [
@@ -382,12 +483,13 @@ async function testPartitionPriorityOrdering() {
   startTest('FIFO Ordering Within Partitions');
   
   try {
-    // Setup queue with multiple partitions
-    await dbPool.query(`
-      INSERT INTO queen.queues (name, priority) 
-      VALUES ('test-partition-priority', 0)
-      ON CONFLICT (name) DO UPDATE SET priority = EXCLUDED.priority
-    `);
+    // Configure queue
+    await client.configure({
+      queue: 'test-partition-priority',
+      options: {
+        priority: 0
+      }
+    });
     
     const partitions = [
       { name: 'ultra-high', priority: 100 },
@@ -476,6 +578,12 @@ async function testPartitionLocking() {
   const PARTITION2 = 'partition-B';
   
   try {
+    // Configure queue
+    await client.configure({
+      queue: QUEUE_NAME,
+      options: {}
+    });
+    
     // Setup: Push 3 messages to each partition
     const messages = [];
     
@@ -589,6 +697,12 @@ async function testBusPartitionLocking() {
   const CONSUMER_GROUP2 = 'group-beta';
   
   try {
+    // Configure queue
+    await client.configure({
+      queue: QUEUE_NAME,
+      options: {}
+    });
+    
     // Setup: Push 3 messages to each partition
     const messages = [];
     
@@ -695,6 +809,12 @@ async function testSpecificPartitionLocking() {
   const CONSUMER_GROUP = 'test-group';
   
   try {
+    // Configure queue
+    await client.configure({
+      queue: QUEUE_NAME,
+      options: {}
+    });
+    
     // Part 1: Test Queue Mode
     log('=== Testing Queue Mode with Specific Partition ===');
     
@@ -1424,21 +1544,13 @@ async function testMessageEviction() {
   startTest('Message Eviction', 'enterprise');
   
   try {
-    // Create queue with max wait time
-    await dbPool.query(`
-      INSERT INTO queen.queues (name, max_wait_time_seconds) 
-      VALUES ('test-eviction-queue', 3)
-      ON CONFLICT (name) DO UPDATE SET max_wait_time_seconds = EXCLUDED.max_wait_time_seconds
-    `);
-    
-    // Create partition
-    await dbPool.query(`
-      INSERT INTO queen.partitions (queue_id, name)
-      SELECT q.id, 'eviction-partition'
-      FROM queen.queues q
-      WHERE q.name = 'test-eviction-queue'
-      ON CONFLICT (queue_id, name) DO NOTHING
-    `);
+    // Configure queue with max wait time
+    await client.configure({
+      queue: 'test-eviction-queue',
+      options: {
+        maxWaitTimeSeconds: 3
+      }
+    });
     
     // Push messages
     await client.push({
@@ -1741,6 +1853,12 @@ async function testBusConsumerGroups() {
   try {
     const queue = 'test-bus-mode';
     
+    // Configure queue
+    await client.configure({
+      queue: queue,
+      options: {}
+    });
+    
     // Push test messages
     const messages = [];
     for (let i = 1; i <= 5; i++) {
@@ -1817,6 +1935,12 @@ async function testMixedMode() {
   
   try {
     const queue = 'test-mixed-mode';
+    
+    // Configure queue
+    await client.configure({
+      queue: queue,
+      options: {}
+    });
     
     // Push test messages
     const messages = [];
@@ -1895,6 +2019,12 @@ async function testConsumerGroupSubscriptionModes() {
   
   try {
     const queue = 'test-subscription-modes';
+    
+    // Configure queue
+    await client.configure({
+      queue: queue,
+      options: {}
+    });
     
     // Push historical messages
     const historicalMessages = [];
@@ -1992,6 +2122,12 @@ async function testConsumerGroupIsolation() {
   
   try {
     const queue = 'test-group-isolation';
+    
+    // Configure queue
+    await client.configure({
+      queue: queue,
+      options: {}
+    });
     
     // Push messages
     const messages = [];
@@ -2157,6 +2293,12 @@ async function testEmptyAndNullPayloads() {
   try {
     const queue = 'edge-empty-payloads';
     
+    // Configure queue
+    await client.configure({
+      queue: queue,
+      options: {}
+    });
+    
     // Test null payload
     await client.push({
       items: [{
@@ -2241,6 +2383,12 @@ async function testVeryLargePayloads() {
   try {
     const queue = 'edge-large-payloads';
     
+    // Configure queue
+    await client.configure({
+      queue: queue,
+      options: {}
+    });
+    
     // Create a large payload (1MB of data)
     const largeArray = new Array(10000).fill({
       id: crypto.randomBytes(16).toString('hex'),
@@ -2302,6 +2450,12 @@ async function testConcurrentPushOperations() {
     const concurrentPushes = 10;
     const messagesPerPush = 5;
     
+    // Configure queue
+    await client.configure({
+      queue: queue,
+      options: {}
+    });
+    
     // Create multiple push promises
     const pushPromises = [];
     for (let i = 0; i < concurrentPushes; i++) {
@@ -2351,6 +2505,12 @@ async function testConcurrentPopOperations() {
     const queue = 'edge-concurrent-pop';
     const totalMessages = 50;
     const concurrentPops = 10;
+    
+    // Configure queue
+    await client.configure({
+      queue: queue,
+      options: {}
+    });
     
     // Push messages
     await client.push({
@@ -2435,6 +2595,12 @@ async function testManyConsumerGroups() {
     const queue = 'edge-many-groups';
     const numGroups = 10;
     const numMessages = 5;
+    
+    // Configure queue
+    await client.configure({
+      queue: queue,
+      options: {}
+    });
     
     // Push messages
     await client.push({
@@ -2621,6 +2787,11 @@ async function testSQLInjectionPrevention() {
   startTest('SQL Injection Prevention', 'edge');
   
   try {
+    // Configure queue for SQL injection tests
+    await client.configure({
+      queue: 'edge-sql-test',
+      options: {}
+    });
     // Try various SQL injection attempts
     const injectionAttempts = [
       "'; DROP TABLE queen.messages; --",
@@ -2695,6 +2866,12 @@ async function testXSSPrevention() {
   
   try {
     const queue = 'edge-xss-test';
+    
+    // Configure queue
+    await client.configure({
+      queue: queue,
+      options: {}
+    });
     
     // Various XSS attempts
     const xssPayloads = [
@@ -3365,6 +3542,13 @@ async function testMessageDeduplication() {
   
   try {
     const queue = 'pattern-dedup';
+    
+    // Configure queue
+    await client.configure({
+      queue: queue,
+      options: {}
+    });
+    
     const deduplicationWindow = new Map();
     
     // Push messages with some duplicates
@@ -3430,6 +3614,13 @@ async function testTimeBatchProcessing() {
   
   try {
     const queue = 'pattern-time-batch';
+    
+    // Configure queue
+    await client.configure({
+      queue: queue,
+      options: {}
+    });
+    
     const batchWindow = 2000; // 2 seconds
     const minBatchSize = 3;
     const maxBatchSize = 10;
@@ -3764,6 +3955,13 @@ async function testCircuitBreaker() {
   
   try {
     const queue = 'pattern-circuit-breaker';
+    
+    // Configure queue
+    await client.configure({
+      queue: queue,
+      options: {}
+    });
+    
     const circuitBreaker = {
       state: 'CLOSED', // CLOSED, OPEN, HALF_OPEN
       failureCount: 0,
@@ -4106,8 +4304,7 @@ async function runAllTests() {
   
   try {
     // Initialize client and database connection
-    // Using single baseUrl for backward compatibility (can also use baseUrls: [TEST_CONFIG.baseUrl])
-    client = createQueenClient({ baseUrls: [TEST_CONFIG.baseUrl, 'http://localhost:6633'] });
+    client = createQueenClient({ baseUrls: TEST_CONFIG.baseUrls });
     dbPool = new pg.Pool(TEST_CONFIG.dbConfig);
     
     // Test database connection
@@ -4127,6 +4324,7 @@ async function runAllTests() {
     
     // Core feature tests
     const coreTests = [
+      testQueueCreationPolicy,
       testSingleMessagePush,
       testBatchMessagePush,
       testQueueConfiguration,
