@@ -4,13 +4,14 @@
  * All configuration values can be overridden using environment variables.
  * This file provides default values and documentation for all settings.
  */
+import os from 'os';
 
 // Server Configuration
 export const SERVER = {
   PORT: parseInt(process.env.PORT) || 6632,
   HOST: process.env.HOST || '0.0.0.0',
-  WORKER_ID: process.env.WORKER_ID || `worker-${process.pid}`,
-  APPLICATION_NAME: process.env.APP_NAME || 'queen-uws'
+  WORKER_ID: process.env.WORKER_ID || `worker-${os.hostname()}-${process.pid}`,
+  APPLICATION_NAME: process.env.APP_NAME || 'queen-mq'
 };
 
 // Database Configuration
@@ -66,6 +67,18 @@ export const QUEUE = {
   
   // Eviction
   DEFAULT_MAX_WAIT_TIME_SECONDS: parseInt(process.env.DEFAULT_MAX_WAIT_TIME_SECONDS) || 0
+};
+
+// System Events Configuration
+export const SYSTEM_EVENTS = {
+  // Enable/disable system event propagation
+  ENABLED: process.env.QUEEN_SYSTEM_EVENTS_ENABLED === 'true' || true,
+  
+  // Batching window for event publishing (milliseconds)
+  BATCH_MS: parseInt(process.env.QUEEN_SYSTEM_EVENTS_BATCH_MS) || 10,
+  
+  // Timeout for startup synchronization (milliseconds)
+  SYNC_TIMEOUT: parseInt(process.env.QUEEN_SYSTEM_EVENTS_SYNC_TIMEOUT) || 30000
 };
 
 // Background Jobs Configuration
@@ -189,6 +202,7 @@ export default {
   SERVER,
   DATABASE,
   QUEUE,
+  SYSTEM_EVENTS,
   JOBS,
   WEBSOCKET,
   ENCRYPTION,

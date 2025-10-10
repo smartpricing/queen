@@ -1,3 +1,5 @@
+import { EventTypes } from './systemEventManager.js';
+
 // In-memory cache for resource existence to avoid repeated DB lookups
 export const createResourceCache = () => {
   const cache = new Map();
@@ -64,10 +66,31 @@ export const createResourceCache = () => {
     }, Math.min(TTL, 60000)); // Check at most once per minute
   }
   
+  // Register event handlers for cache invalidation
+  const registerEventHandlers = (eventManager) => {
+    // Invalidate cache on queue changes
+    eventManager.on(EventTypes.QUEUE_UPDATED, (event) => {
+      invalidateQueue(event.entityId);
+    });
+    
+    eventManager.on(EventTypes.QUEUE_DELETED, (event) => {
+      invalidateQueue(event.entityId);
+    });
+    
+    eventManager.on(EventTypes.PARTITION_CREATED, (event) => {
+      invalidate(event.queueName, event.entityId);
+    });
+    
+    eventManager.on(EventTypes.PARTITION_DELETED, (event) => {
+      invalidate(event.queueName, event.entityId);
+    });
+  };
+  
   return {
     checkResource,
     cacheResource,
     invalidate,
-    invalidateQueue
+    invalidateQueue,
+    registerEventHandlers
   };
 };

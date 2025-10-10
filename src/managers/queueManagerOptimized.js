@@ -3,27 +3,60 @@ import { withTransaction } from '../database/connection.js';
 import * as encryption from '../services/encryptionService.js';
 import { log, LogTypes } from '../utils/logger.js';
 import config from '../config.js';
+import { EventTypes } from './systemEventManager.js';
 
-export const createOptimizedQueueManager = (pool, resourceCache, eventManager) => {
+export const createOptimizedQueueManager = (pool, resourceCache, eventManager, systemEventManager = null) => {
   
   // Batch size for database operations
   const BATCH_INSERT_SIZE = config.QUEUE.BATCH_INSERT_SIZE;
   
-  // Create pool manager using the existing pool
-  const poolManager = {
-    withClient: async (fn) => {
-      const client = await pool.connect();
-      try {
-        return await fn(client);
-      } finally {
-        client.release();
-      }
-    }
-  };
-  
   // Ensure queue exists and partition exist (with caching)
   // Queue must be created via configure endpoint, but partitions can be created on-demand
   const ensureResources = async (client, queueName, partitionName = 'Default', namespace = null, task = null) => {
+    // CRITICAL: System queues bypass cache completely
+    if (queueName.startsWith('__system_')) {
+      // Direct database query for system queues
+      const result = await client.query(`
+        SELECT 
+          q.id as queue_id,
+          q.name as queue_name,
+          p.id as partition_id,
+          q.*
+        FROM queen.queues q
+        JOIN queen.partitions p ON p.queue_id = q.id
+        WHERE q.name = $1 AND p.name = $2
+      `, [queueName, partitionName]);
+      
+      if (result.rows.length === 0) {
+        throw new Error(`System queue ${queueName} not found`);
+      }
+      
+      const row = result.rows[0];
+      return {
+        queueId: row.queue_id,
+        queueName: row.queue_name,
+        partitionId: row.partition_id,
+        queueConfig: {
+          leaseTime: row.lease_time,
+          retryLimit: row.retry_limit,
+          retryDelay: row.retry_delay,
+          maxSize: row.max_size,
+          ttl: row.ttl,
+          deadLetterQueue: row.dead_letter_queue,
+          dlqAfterMaxRetries: row.dlq_after_max_retries,
+          delayedProcessing: row.delayed_processing,
+          windowBuffer: row.window_buffer,
+          retentionSeconds: row.retention_seconds,
+          completedRetentionSeconds: row.completed_retention_seconds,
+          retentionEnabled: row.retention_enabled,
+          priority: row.priority,
+          maxQueueSize: row.max_queue_size
+        },
+        encryptionEnabled: false,  // System queues never encrypted
+        maxWaitTimeSeconds: row.max_wait_time_seconds
+      };
+    }
+    
     // Check cache first, but skip cache if we're updating namespace/task
     const cacheKey = `${queueName}:${partitionName}`;
     const cached = resourceCache.checkResource(queueName, partitionName);
@@ -110,11 +143,16 @@ export const createOptimizedQueueManager = (pool, resourceCache, eventManager) =
     for (const [partitionKey, partitionItems] of Object.entries(partitionGroups)) {
       const [queueName, partitionName] = partitionKey.split(':');
       
-      // Use pool manager for better connection handling
-      const results = await poolManager.withClient(async (client) => {
-        // Ensure resources exist (cached after first call)
-        const resources = await ensureResources(client, queueName, partitionName);
-        const { partitionId, encryptionEnabled, queueConfig } = resources;
+      // Use transaction for better error handling with retry on stale cache
+      let retryCount = 0;
+      const maxRetries = 1;
+      
+      while (retryCount <= maxRetries) {
+        try {
+          const results = await withTransaction(pool, async (client) => {
+            // Ensure resources exist (cached after first call)
+            const resources = await ensureResources(client, queueName, partitionName);
+            const { partitionId, encryptionEnabled, queueConfig } = resources;
         
         // Check queue capacity if max_queue_size is set
         if (queueConfig.maxQueueSize > 0) {
@@ -222,14 +260,25 @@ export const createOptimizedQueueManager = (pool, resourceCache, eventManager) =
               RETURNING id, transaction_id, trace_id
             `;
             
-            const insertResult = await client.query(insertQuery, [
-              messageIds,
-              transactionIds,
-              traceIds,
-              Array(messageIds.length).fill(partitionId),
-              payloads,
-              encryptedFlags
-            ]);
+            let insertResult;
+            try {
+              insertResult = await client.query(insertQuery, [
+                messageIds,
+                transactionIds,
+                traceIds,
+                Array(messageIds.length).fill(partitionId),
+                payloads,
+                encryptedFlags
+              ]);
+            } catch (error) {
+              // If foreign key constraint error, the cached partition is stale
+              if (error.code === '23503' && error.constraint === 'messages_partition_id_fkey') {
+                // Invalidate cache and throw a more helpful error
+                resourceCache.invalidate(queueName, partitionName);
+                throw new Error(`Stale cache detected for queue '${queueName}' partition '${partitionName}'. Please retry the operation.`);
+              }
+              throw error;
+            }
             
             // Format results
             for (const row of insertResult.rows) {
@@ -246,14 +295,25 @@ export const createOptimizedQueueManager = (pool, resourceCache, eventManager) =
           batchResults.push(...duplicates);
         }
         
-        // Notify event manager about new messages
-        const queuePath = `${queueName}/${partitionName}`;
-        eventManager.notifyMessageAvailable(queuePath);
-        
-        return batchResults;
-      });
-      
-      allResults.push(...results);
+            // Notify event manager about new messages
+            const queuePath = `${queueName}/${partitionName}`;
+            eventManager.notifyMessageAvailable(queuePath);
+            
+            return batchResults;
+          });
+          
+          allResults.push(...results);
+          break; // Success, exit retry loop
+        } catch (error) {
+          // Check if it's a stale cache error
+          if (error.message && error.message.includes('Stale cache detected') && retryCount < maxRetries) {
+            retryCount++;
+            // Cache already invalidated in the error handler, just retry
+            continue;
+          }
+          throw error; // Re-throw if not a stale cache error or max retries exceeded
+        }
+      }
     }
     
     return allResults;
@@ -402,7 +462,7 @@ const popMessagesV2 = async (scope, options = {}) => {
           VALUES ($1, $2, $3)
           ON CONFLICT (queue_id, name) DO UPDATE SET name = EXCLUDED.name
           RETURNING *
-        `, [uuidv4(), queueInfo.id, partition]);
+        `, [generateUUID(), queueInfo.id, partition]);
         partitionInfo = createPartitionResult.rows[0];
       } else {
         partitionInfo = partitionResult.rows[0];
@@ -440,7 +500,7 @@ const popMessagesV2 = async (scope, options = {}) => {
             VALUES ($1, $2, 'Default')
             ON CONFLICT (queue_id, name) DO UPDATE SET name = EXCLUDED.name
             RETURNING *
-          `, [uuidv4(), queueInfo.id]);
+          `, [generateUUID(), queueInfo.id]);
           partitionInfo = createPartitionResult.rows[0];
         } else {
           return { messages: [] };
@@ -1330,6 +1390,13 @@ const popMessages = async (scope, options = {}) => {
    */
   const configureQueue = async (queueName, options = {}, namespace = null, task = null) => {
     return withTransaction(pool, async (client) => {
+      // Check if queue exists (for update vs create detection)
+      const existingQueue = await client.query(
+        'SELECT * FROM queen.queues WHERE name = $1',
+        [queueName]
+      );
+      const isUpdate = existingQueue.rows.length > 0;
+      
       // First create/update the queue with namespace and task
       const queueResult = await client.query(
         `INSERT INTO queen.queues (name, namespace, task) VALUES ($1, $2, $3) 
@@ -1365,9 +1432,21 @@ const popMessages = async (scope, options = {}) => {
         maxQueueSize: 'max_queue_size'
       };
       
+      // Detect what changed (for update events)
+      const changes = {};
+      
       // Process each option
       for (const [optionKey, columnName] of Object.entries(optionMappings)) {
         if (options[optionKey] !== undefined) {
+          // Track changes for update events
+          if (isUpdate && existingQueue.rows[0]) {
+            const old = existingQueue.rows[0];
+            const newValue = options[optionKey];
+            if (old[columnName] !== newValue) {
+              changes[optionKey] = { old: old[columnName], new: newValue };
+            }
+          }
+          
           updates.push(`${columnName} = $${paramIndex}`);
           
           // Handle different data types
@@ -1390,7 +1469,21 @@ const popMessages = async (scope, options = {}) => {
         await client.query(updateQuery, params);
       }
       
-      // Invalidate cache for all partitions of this queue
+      // Emit appropriate event (if systemEventManager is available)
+      if (systemEventManager) {
+        await systemEventManager.emit(
+          isUpdate ? EventTypes.QUEUE_UPDATED : EventTypes.QUEUE_CREATED,
+          {
+            entityType: 'queue',
+            entityId: queueName,
+            changes: isUpdate ? changes : options,
+            namespace,
+            task
+          }
+        );
+      }
+      
+      // Local cache invalidation (immediate)
       resourceCache.invalidateQueue(queueName);
       
       return { 

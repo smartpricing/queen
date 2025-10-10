@@ -8,6 +8,9 @@ import { initDatabase } from './database/connection.js';
 import { createOptimizedQueueManager } from './managers/queueManagerOptimized.js';
 import { createResourceCache } from './managers/resourceCache.js';
 import { createEventManager } from './managers/eventManager.js';
+import { SystemEventManager, SYSTEM_QUEUE } from './managers/systemEventManager.js';
+import { syncSystemEvents } from './services/startupSync.js';
+import { createQueenClient } from './client/queenClient.js';
 import { createPushRoute } from './routes/push.js';
 import { createPopRoute } from './routes/pop.js';
 import { createAckRoute } from './routes/ack.js';
@@ -25,6 +28,10 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 const PORT = config.SERVER.PORT;
 const HOST = config.SERVER.HOST;
+
+// Use WORKER_ID from config as the server instance ID for consumer groups
+// This ensures the same server (identified by WORKER_ID) maintains its position in the event stream
+const SERVER_INSTANCE_ID = config.SERVER.WORKER_ID;
 
 // Performance monitoring
 let requestCount = 0;
@@ -54,8 +61,14 @@ const pool = createOptimizedPool();
 const resourceCache = createResourceCache();
 const eventManager = createEventManager();
 
+// Initialize system event manager
+const systemEventManager = new SystemEventManager(pool, SERVER_INSTANCE_ID);
+
+// Register cache event handlers
+resourceCache.registerEventHandlers(systemEventManager);
+
 // Always use optimized queue manager - it's better for all scenarios
-const queueManager = createOptimizedQueueManager(pool, resourceCache, eventManager);
+const queueManager = createOptimizedQueueManager(pool, resourceCache, eventManager, systemEventManager);
 const analyticsRoutes = createAnalyticsRoutes(queueManager);
 const messagesRoutes = createMessagesRoutes(pool, queueManager);
 const resourcesRoutes = createResourcesRoutes(pool);
@@ -81,6 +94,34 @@ const initDatabaseWithMigrations = async () => {
 };
 
 await initDatabaseWithMigrations();
+
+// Initialize system queue
+async function initializeSystemQueue() {
+  try {
+    // Direct database operation to create system queue
+    await pool.query(`
+      INSERT INTO queen.queues (name, ttl, priority, max_queue_size)
+      VALUES ($1, 300, 100, 10000)
+      ON CONFLICT (name) DO UPDATE SET
+        ttl = EXCLUDED.ttl,
+        priority = EXCLUDED.priority,
+        max_queue_size = EXCLUDED.max_queue_size
+    `, [SYSTEM_QUEUE]);
+    
+    await pool.query(`
+      INSERT INTO queen.partitions (queue_id, name)
+      SELECT id, 'Default' FROM queen.queues WHERE name = $1
+      ON CONFLICT (queue_id, name) DO NOTHING
+    `, [SYSTEM_QUEUE]);
+    
+    log('✅ System event queue initialized');
+  } catch (error) {
+    console.error('Failed to initialize system queue:', error);
+    throw error;
+  }
+}
+
+await initializeSystemQueue();
 
 // Initialize extended features
 log('🚀 Initializing Queen Services...');
@@ -1167,8 +1208,11 @@ app.get('/metrics', (res, req) => {
   });
 });
 
+// Variable to hold system event consumer stop function
+let stopSystemEventConsumer = null;
+
 // Start server
-app.listen(HOST, PORT, (token) => {
+app.listen(HOST, PORT, async (token) => {
   if (token) {
     log(`✅ Queen Server running at http://${HOST}:${PORT}`);
     log(`📊 Features enabled:`);
@@ -1176,6 +1220,37 @@ app.listen(HOST, PORT, (token) => {
     log(`   - Retention: ✅`);
     log(`   - Eviction: ✅`);
     log(`   - WebSocket Dashboard: ws://${HOST}:${PORT}/ws/dashboard`);
+    log(`   - Server Instance ID: ${SERVER_INSTANCE_ID}`);
+    
+    // Start system event synchronization and consumption
+    try {
+      // Create temporary client for synchronization
+      const syncClient = createQueenClient({ 
+        baseUrl: `http://localhost:${PORT}` 
+      });
+      
+      // Synchronize system events (catch up on missed events)
+      await syncSystemEvents(syncClient, systemEventManager, SERVER_INSTANCE_ID);
+      
+      // Start consuming system events
+      // Note: consume() returns the stop function directly
+      stopSystemEventConsumer = syncClient.consume({
+        queue: SYSTEM_QUEUE,
+        consumerGroup: SERVER_INSTANCE_ID,
+        handler: async (message) => {
+          await systemEventManager.processSystemEvent(message.payload);
+        },
+        options: {
+          batch: 10,
+          wait: true
+        }
+      });
+      
+      log(`✅ System event consumer started`);
+    } catch (error) {
+      log(`⚠️ Failed to start system event consumer: ${error.message}`);
+    }
+    
     log(`🎯 Ready to process messages with high performance!`);
   } else {
     log(`Failed to start server on port ${PORT}`);
@@ -1186,6 +1261,12 @@ app.listen(HOST, PORT, (token) => {
 // Graceful shutdown
 const shutdown = async (signal) => {
   log(`\n🛑 Received ${signal}, shutting down gracefully...`);
+  
+  // Stop system event consumer
+  if (stopSystemEventConsumer) {
+    stopSystemEventConsumer();
+    log('✅ System event consumer stopped');
+  }
   
   // Stop background jobs
   if (stopRetention) stopRetention();
