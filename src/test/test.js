@@ -852,9 +852,9 @@ async function testNamespaceTaskFiltering() {
     // Setup: Create multiple queues with same namespace but different tasks
     const namespace = 'test-namespace';
     const queues = [
-      { name: 'queue-task-1', task: 'process', partition: 'p1' },
-      { name: 'queue-task-2', task: 'process', partition: 'p2' },
-      { name: 'queue-task-3', task: 'analyze', partition: 'p3' }
+      { name: 'test-queue-task-1', task: 'process', partition: 'p1' },
+      { name: 'test-queue-task-2', task: 'process', partition: 'p2' },
+      { name: 'test-queue-task-3', task: 'analyze', partition: 'p3' }
     ];
     
     // Configure queues with namespace and task
@@ -931,7 +931,7 @@ async function testNamespaceTaskFiltering() {
     if (result3.messages.length > 0) {
       log(`Consumer 3: Got ${result3.messages.length} messages for task "analyze"`);
       // Verify all messages are from the analyze task
-      const allAnalyze = result3.messages.every(m => m.queue === 'queue-task-3');
+      const allAnalyze = result3.messages.every(m => m.queue === 'test-queue-task-3');
       if (!allAnalyze) {
         throw new Error('Got messages from wrong task!');
       }
@@ -959,8 +959,8 @@ async function testNamespaceTaskBusMode() {
     const namespace = 'bus-namespace';
     const task = 'bus-task';
     const queues = [
-      { name: 'bus-queue-1', partition: 'bus-p1' },
-      { name: 'bus-queue-2', partition: 'bus-p2' }
+      { name: 'test-bus-queue-1', partition: 'bus-p1' },
+      { name: 'test-bus-queue-2', partition: 'bus-p2' }
     ];
     
     // Setup queues and push messages
@@ -2146,14 +2146,8 @@ async function testEnterpriseErrorHandling() {
 }
 
 // ============================================
-// EDGE CASE TESTS (from comprehensive-edge-cases-test.js)
-// ============================================
-
-// [I'll continue with the edge case tests and advanced scenario tests in the next part due to length...]
-// ============================================
 // EDGE CASE TESTS
 // ============================================
-
 /**
  * Test: Empty and null payloads
  */

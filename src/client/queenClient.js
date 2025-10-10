@@ -11,9 +11,7 @@ export const createQueenClient = (options = {}) => {
   
   const http = createHttpClient({ baseUrl, timeout });
   
-  // Configure a queue (partition parameter is deprecated but still accepted for compatibility)
   const configure = async ({ queue, namespace, task, options = {} }) => {
-    // Note: partition is now ignored at the server level - all config is queue-level
     return withRetry(
       () => http.post('/api/v1/configure', { queue, namespace, task, options }),
       retryAttempts,

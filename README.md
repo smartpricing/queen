@@ -205,6 +205,369 @@ await client.configure({
 });
 ```
 
+## 🔐 Advanced Concepts
+
+### Partition Locking
+
+Partition locking is a critical mechanism that ensures message processing isolation and prevents duplicate processing. When a consumer retrieves messages from a partition, that partition becomes "locked" to that consumer for the duration of the lease.
+
+#### How Partition Locking Works
+
+1. **Lock Acquisition**: When a consumer calls `pop()`, the system:
+   - Checks for available messages in unlocked partitions
+   - Acquires a lease on the partition(s) containing those messages
+   - Records the lease with an expiration time based on the queue's `leaseTime`
+
+2. **Lock Duration**: The partition remains locked until:
+   - The consumer acknowledges all messages (releases the lock)
+   - The lease expires (automatic release after `leaseTime` seconds)
+   - The consumer explicitly releases the partition
+
+3. **Lock Scope**: 
+   - In **Queue Mode**: Each consumer gets a unique session, preventing any other consumer from accessing the same partition
+   - In **Bus Mode**: Locks are per consumer group, allowing different groups to process the same messages independently
+
+```javascript
+// Example: Two consumers in queue mode
+const consumer1 = await client.pop({ queue: 'orders' }); 
+// Consumer 1 gets messages from partition A and locks it
+
+const consumer2 = await client.pop({ queue: 'orders' }); 
+// Consumer 2 gets messages from partition B (A is locked)
+
+// After Consumer 1 acknowledges:
+await client.ack(consumer1.messages[0].transactionId, 'completed');
+// Partition A is now unlocked and available
+```
+
+### FIFO Ordering Guarantees
+
+Queen provides strong FIFO (First-In-First-Out) ordering guarantees **within each partition**. This means:
+
+#### Partition-Level FIFO
+
+Messages within the same partition are always processed in the exact order they were received:
+
+```javascript
+// These messages will be processed in order 1, 2, 3
+await client.push({
+  items: [
+    { queue: 'tasks', partition: 'user-123', payload: { step: 1 } },
+    { queue: 'tasks', partition: 'user-123', payload: { step: 2 } },
+    { queue: 'tasks', partition: 'user-123', payload: { step: 3 } }
+  ]
+});
+
+// Consumer will always receive them in order 1, 2, 3
+const result = await client.pop({ queue: 'tasks', partition: 'user-123' });
+```
+
+#### Cross-Partition Ordering
+
+Messages in different partitions can be processed in parallel and have no ordering guarantees relative to each other:
+
+```javascript
+// These can be processed in any order relative to each other
+await client.push({
+  items: [
+    { queue: 'tasks', partition: 'user-123', payload: { data: 'A' } },
+    { queue: 'tasks', partition: 'user-456', payload: { data: 'B' } }
+  ]
+});
+```
+
+#### Use Cases for Partitioning
+
+- **Per-User Processing**: Use user ID as partition to ensure all user operations are processed in order
+- **Per-Resource Processing**: Use resource ID to maintain operation order for specific resources
+- **Priority Lanes**: Use different partitions for different priority levels
+
+### Consumer Groups (Bus Mode)
+
+Consumer groups enable pub-sub messaging patterns where multiple independent consumers can process the same messages. This is ideal for scenarios like event streaming, audit logging, and analytics.
+
+#### How Consumer Groups Work
+
+1. **Independent Processing**: Each consumer group maintains its own:
+   - Message status tracking
+   - Partition leases
+   - Retry counters
+   - Processing state
+
+2. **Message Visibility**: All consumer groups see all messages, but each group tracks which messages it has processed independently
+
+3. **Partition Locking per Group**: Within a consumer group, partition locking still applies to prevent duplicate processing
+
+```javascript
+// Analytics service (Group A)
+const analyticsResult = await client.pop({
+  queue: 'events',
+  consumerGroup: 'analytics-service'
+});
+
+// Audit service (Group B) - gets the same messages
+const auditResult = await client.pop({
+  queue: 'events',
+  consumerGroup: 'audit-service'
+});
+
+// Billing service (Group C) - also gets the same messages
+const billingResult = await client.pop({
+  queue: 'events',
+  consumerGroup: 'billing-service'
+});
+```
+
+#### Consumer Group Subscription Modes
+
+When a consumer group is created, it can specify when to start consuming messages:
+
+```javascript
+// Start from all existing messages
+await client.pop({
+  queue: 'events',
+  consumerGroup: 'replay-service',
+  subscriptionMode: 'all'
+});
+
+// Start from messages created after joining
+await client.pop({
+  queue: 'events',
+  consumerGroup: 'realtime-service',
+  subscriptionMode: 'new'
+});
+
+// Start from a specific timestamp
+await client.pop({
+  queue: 'events',
+  consumerGroup: 'batch-processor',
+  subscriptionFrom: '2024-01-01T00:00:00Z'
+});
+```
+
+### Namespace and Task Filtering
+
+Queen supports cross-queue message consumption through namespace and task filtering, with full partition locking support:
+
+#### Namespace-Based Routing
+
+Group related queues under a namespace and consume from all of them:
+
+```javascript
+// Configure multiple queues with the same namespace
+await client.configure({
+  queue: 'orders-processing',
+  namespace: 'ecommerce',
+  task: 'process',
+  options: { leaseTime: 30 }
+});
+
+await client.configure({
+  queue: 'inventory-updates',
+  namespace: 'ecommerce',
+  task: 'update',
+  options: { leaseTime: 30 }
+});
+
+// Consume from all queues in the namespace
+const messages = await client.pop({
+  namespace: 'ecommerce'
+}, { batch: 10 });
+// Gets messages from both queues, with partition locking across all
+```
+
+#### Task-Based Routing
+
+Filter messages by specific tasks across namespaces:
+
+```javascript
+// Consume only 'process' tasks from the ecommerce namespace
+const messages = await client.pop({
+  namespace: 'ecommerce',
+  task: 'process'
+}, { batch: 5 });
+```
+
+#### Partition Locking with Filters
+
+When using namespace/task filtering:
+- The system locks all partitions from which messages are retrieved
+- Different consumers cannot access the same partitions until locks are released
+- Consumer groups maintain independent locks
+
+```javascript
+// Consumer 1: Gets messages and locks partitions A, B, C
+const result1 = await client.pop({ namespace: 'ecommerce' });
+
+// Consumer 2: Gets messages from different partitions D, E (A, B, C are locked)
+const result2 = await client.pop({ namespace: 'ecommerce' });
+
+// No partition overlap between consumers
+```
+
+### Concurrency Control
+
+Queen provides several mechanisms for controlling concurrent message processing:
+
+#### 1. Partition-Based Concurrency
+
+Control parallelism by the number of partitions:
+
+```javascript
+// Create multiple partitions for parallel processing
+const partitions = ['worker-1', 'worker-2', 'worker-3', 'worker-4'];
+
+// Distribute messages across partitions
+await client.push({
+  items: messages.map((msg, i) => ({
+    queue: 'tasks',
+    partition: partitions[i % partitions.length],
+    payload: msg
+  }))
+});
+
+// Each worker processes one partition
+const worker1 = await client.pop({ queue: 'tasks', partition: 'worker-1' });
+const worker2 = await client.pop({ queue: 'tasks', partition: 'worker-2' });
+// Workers process in parallel without interference
+```
+
+#### 2. Lease-Based Concurrency
+
+Automatic concurrency control through lease timeouts:
+
+```javascript
+// Configure short leases for quick tasks
+await client.configure({
+  queue: 'quick-tasks',
+  options: { 
+    leaseTime: 30,  // 30 seconds per message
+    retryLimit: 3   // Retry up to 3 times
+  }
+});
+
+// Long-running tasks need longer leases
+await client.configure({
+  queue: 'heavy-processing',
+  options: { 
+    leaseTime: 600,  // 10 minutes per message
+    retryLimit: 1    // Retry only once
+  }
+});
+```
+
+#### 3. Batch Size Control
+
+Limit concurrent processing per consumer:
+
+```javascript
+// Each consumer processes max 5 messages at a time
+const batch = await client.pop({ 
+  queue: 'tasks' 
+}, { 
+  batch: 5  // Limit to 5 concurrent messages
+});
+
+// Process batch
+for (const message of batch.messages) {
+  await processMessage(message);
+  await client.ack(message.transactionId, 'completed');
+}
+```
+
+### Message Visibility and Isolation
+
+#### Queue Mode (Default)
+
+In queue mode, messages are consumed competitively - once a consumer gets a message, no other consumer can see it:
+
+```javascript
+// Without consumer group - competitive consumption
+const consumer1 = await client.pop({ queue: 'tasks' });
+const consumer2 = await client.pop({ queue: 'tasks' });
+// Each consumer gets different messages
+```
+
+#### Bus Mode (Consumer Groups)
+
+In bus mode, all consumer groups see all messages:
+
+```javascript
+// With consumer groups - broadcast consumption
+const service1 = await client.pop({ 
+  queue: 'events',
+  consumerGroup: 'service-1'
+});
+
+const service2 = await client.pop({ 
+  queue: 'events',
+  consumerGroup: 'service-2'
+});
+// Both services get the same messages
+```
+
+#### Mixed Mode
+
+You can combine both patterns in the same system:
+
+```javascript
+// Competitive workers for processing
+const worker = await client.pop({ queue: 'jobs' });
+
+// Broadcast to monitoring services
+const monitor = await client.pop({ 
+  queue: 'jobs',
+  consumerGroup: 'monitoring'
+});
+
+const analytics = await client.pop({ 
+  queue: 'jobs',
+  consumerGroup: 'analytics'
+});
+```
+
+### Best Practices
+
+#### 1. Partition Strategy
+
+- **User-based**: Use user IDs as partitions for per-user ordering
+- **Resource-based**: Use resource IDs for ordered operations on resources
+- **Round-robin**: Use rotating partition names for load distribution
+- **Priority-based**: Use separate partitions for different priority levels
+
+#### 2. Consumer Group Design
+
+- **Single Responsibility**: Each consumer group should have one clear purpose
+- **Independent Processing**: Design groups to be independent of each other
+- **Idempotent Operations**: Ensure operations can be safely retried
+
+#### 3. Lease Management
+
+- **Right-size Leases**: Set lease times slightly longer than expected processing time
+- **Handle Timeouts**: Implement proper timeout handling and retries
+- **Release Early**: Acknowledge messages as soon as processing completes
+
+#### 4. Error Handling
+
+```javascript
+try {
+  const messages = await client.pop({ queue: 'tasks' });
+  
+  for (const message of messages.messages) {
+    try {
+      await processMessage(message);
+      await client.ack(message.transactionId, 'completed');
+    } catch (error) {
+      // Log error but don't ack - message will retry
+      console.error('Processing failed:', error);
+      await client.ack(message.transactionId, 'failed', error.message);
+    }
+  }
+} catch (error) {
+  console.error('Pop failed:', error);
+}
+```
+
 ## 🔌 API Reference
 
 ### Base URL

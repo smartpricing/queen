@@ -48,6 +48,8 @@ export const createOptimizedQueueManager = (pool, resourceCache, eventManager) =
     const result = {
       queueId,
       queueName: queue.name,
+      namespace: queue.namespace,
+      task: queue.task,
       partitionId: partitionResult.rows[0].id,
       // All configuration now comes from queue level
       queueConfig: {
@@ -75,54 +77,6 @@ export const createOptimizedQueueManager = (pool, resourceCache, eventManager) =
     
     return result;
   };
-  
-  // Ensure consumer group exists and get subscription preferences
-  /*const ensureConsumerGroup = async (client, queueId, consumerGroup, subscriptionMode = null, subscriptionFrom = null) => {
-    if (!consumerGroup) return null;
-    
-    // Check if consumer group exists
-    const existing = await client.query(
-      `SELECT * FROM queen.consumer_groups 
-       WHERE queue_id = $1 AND name = $2`,
-      [queueId, consumerGroup]
-    );
-    
-    if (existing.rows.length > 0) {
-      // Update last seen
-      await client.query(
-        `UPDATE queen.consumer_groups 
-         SET last_seen_at = NOW() 
-         WHERE queue_id = $1 AND name = $2`,
-        [queueId, consumerGroup]
-      );
-      return existing.rows[0];
-    }
-    
-    // Create new consumer group with subscription preferences
-    let subscriptionStartFrom = null;
-    
-    if (subscriptionMode === 'new') {
-      // Only consume messages created after this exact moment
-      // Get the max created_at from existing messages to ensure we only get newer ones
-      // If no messages exist, use current time
-      // Simply use NOW() - with TIMESTAMPTZ, timezone handling is automatic
-      const nowResult = await client.query("SELECT NOW() as db_now");
-      subscriptionStartFrom = nowResult.rows[0].db_now;
-    } else if (subscriptionFrom) {
-      // Consume from specific timestamp
-      subscriptionStartFrom = new Date(subscriptionFrom);
-    }
-    // If neither, subscriptionStartFrom remains NULL (consume all)
-    
-    const result = await client.query(
-      `INSERT INTO queen.consumer_groups (queue_id, name, subscription_start_from)
-       VALUES ($1, $2, $3)
-       RETURNING *`,
-      [queueId, consumerGroup, subscriptionStartFrom]
-    );
-    
-    return result.rows[0];
-  };*/
   
   // Optimized batch insert for high throughput (simplified - no status)
   const pushMessagesBatch = async (items) => {
@@ -1198,6 +1152,243 @@ const popMessages = async (scope, options = {}) => {
     return result.rows;
   };
 
+  /**
+   * Build query for popping messages with filters (namespace/task)
+   * This is a helper function to construct the complex query used in popMessagesWithFilters
+   */
+  const buildPopMessagesWithFiltersQuery = (actualConsumerGroup, namespace, task, batch) => {
+    let query = `
+      WITH available_messages AS (
+        SELECT m.id, m.transaction_id, m.trace_id, m.payload, m.is_encrypted, m.created_at,
+               p.id as partition_id, p.name as partition_name, q.name as queue_name,
+               q.priority, q.lease_time, q.retry_limit, q.delayed_processing,
+               q.window_buffer, q.max_wait_time_seconds, q.namespace, q.task
+        FROM queen.messages m
+        JOIN queen.partitions p ON m.partition_id = p.id
+        JOIN queen.queues q ON p.queue_id = q.id
+        LEFT JOIN queen.messages_status ms ON m.id = ms.message_id AND ms.consumer_group = $1
+        WHERE (ms.id IS NULL OR ms.status = 'pending')
+          AND m.created_at <= NOW() - INTERVAL '1 second' * q.delayed_processing
+          AND (q.max_wait_time_seconds = 0 OR 
+               m.created_at > NOW() - INTERVAL '1 second' * q.max_wait_time_seconds)
+          AND (q.window_buffer = 0 OR NOT EXISTS (
+            SELECT 1 FROM queen.messages m2 
+            WHERE m2.partition_id = p.id 
+              AND m2.created_at > NOW() - INTERVAL '1 second' * q.window_buffer
+          ))
+          AND NOT EXISTS (
+            -- Check for active partition leases
+            SELECT 1 FROM queen.partition_leases pl
+            WHERE pl.partition_id = p.id
+              AND pl.consumer_group = $1
+              AND pl.released_at IS NULL
+              AND pl.lease_expires_at > NOW()
+          )
+    `;
+    
+    const params = [actualConsumerGroup];
+    
+    if (namespace) {
+      params.push(namespace);
+      query += ` AND q.namespace = $${params.length}`;
+    }
+    
+    if (task) {
+      params.push(task);
+      query += ` AND q.task = $${params.length}`;
+    }
+    
+    params.push(batch);
+    query += ` ORDER BY q.priority DESC, m.created_at ASC LIMIT $${params.length} FOR UPDATE OF m SKIP LOCKED`;
+    
+    // Add the INSERT part
+    params.push(config.WORKER_ID);
+    query += `)
+      INSERT INTO queen.messages_status (message_id, consumer_group, status, lease_expires_at, processing_at, worker_id)
+      SELECT id, $1, 'processing', NOW() + INTERVAL '1 second' * lease_time, NOW(), $${params.length}
+      FROM available_messages
+      ON CONFLICT (message_id, consumer_group) 
+      DO UPDATE SET 
+        status = 'processing',
+        lease_expires_at = EXCLUDED.lease_expires_at,
+        processing_at = EXCLUDED.processing_at,
+        worker_id = EXCLUDED.worker_id,
+        retry_count = queen.messages_status.retry_count + 1
+      RETURNING message_id,
+        (SELECT transaction_id FROM queen.messages WHERE id = message_id),
+        (SELECT trace_id FROM queen.messages WHERE id = message_id),
+        (SELECT payload FROM queen.messages WHERE id = message_id),
+        (SELECT is_encrypted FROM queen.messages WHERE id = message_id),
+        (SELECT created_at FROM queen.messages WHERE id = message_id),
+        (SELECT p.id FROM queen.messages m2 JOIN queen.partitions p ON m2.partition_id = p.id WHERE m2.id = message_id) as partition_id,
+        (SELECT p.name FROM queen.messages m2 JOIN queen.partitions p ON m2.partition_id = p.id WHERE m2.id = message_id) as partition_name,
+        (SELECT q.name FROM queen.messages m2 JOIN queen.partitions p ON m2.partition_id = p.id JOIN queen.queues q ON p.queue_id = q.id WHERE m2.id = message_id) as queue_name,
+        (SELECT q.priority FROM queen.messages m2 JOIN queen.partitions p ON m2.partition_id = p.id JOIN queen.queues q ON p.queue_id = q.id WHERE m2.id = message_id) as priority,
+        (SELECT q.lease_time FROM queen.messages m2 JOIN queen.partitions p ON m2.partition_id = p.id JOIN queen.queues q ON p.queue_id = q.id WHERE m2.id = message_id) as lease_time,
+        retry_count
+    `;
+    
+    return { query, params };
+  };
+
+  /**
+   * Pop messages with namespace/task filtering
+   * Supports filtering by namespace and/or task in addition to consumer groups
+   */
+  const popMessagesWithFilters = async (filters, options = {}) => {
+    const { namespace, task, consumerGroup } = filters;
+    const { wait = false, timeout = config.QUEUE.DEFAULT_TIMEOUT, batch = config.QUEUE.DEFAULT_BATCH_SIZE } = options;
+    
+    return withTransaction(pool, async (client) => {
+      // Determine the actual consumer group to use
+      const actualConsumerGroup = consumerGroup || '__QUEUE_MODE__';
+      
+      // Use the helper function to build the query
+      const { query, params } = buildPopMessagesWithFiltersQuery(actualConsumerGroup, namespace, task, batch);
+      
+      const result = await client.query(query, params);
+      
+      // Lock all partitions that we got messages from
+      if (result.rows.length > 0) {
+        const partitionIds = [...new Set(result.rows.map(r => r.partition_id))];
+        const leaseTime = Math.max(...result.rows.map(r => r.lease_time || 30));
+        
+        // Acquire partition leases for all partitions we got messages from
+        for (const partitionId of partitionIds) {
+          await client.query(`
+            INSERT INTO queen.partition_leases (
+              partition_id, 
+              consumer_group, 
+              lease_expires_at
+            ) VALUES ($1, $2, NOW() + INTERVAL '1 second' * $3)
+            ON CONFLICT (partition_id, consumer_group) 
+            DO UPDATE SET 
+              lease_expires_at = EXCLUDED.lease_expires_at,
+              released_at = NULL
+          `, [partitionId, actualConsumerGroup, leaseTime]);
+        }
+      }
+      
+      if (result.rows.length === 0 && wait) {
+        // For namespace/task filtering, we can't easily wait on specific queue paths
+        // So we'll use simple polling
+        return { messages: [] };
+      }
+      
+      // Format and decrypt messages
+      const messages = await Promise.all(
+        result.rows.map(async (row) => {
+          let decryptedPayload = row.payload;
+          
+          if (row.is_encrypted && encryption.isEncryptionEnabled()) {
+            try {
+              decryptedPayload = await encryption.decryptPayload(row.payload);
+            } catch (error) {
+              log('ERROR: Decryption failed:', error);
+            }
+          }
+          
+          return {
+            id: row.message_id,
+            transactionId: row.transaction_id,
+            traceId: row.trace_id,
+            queue: row.queue_name,
+            partition: row.partition_name,
+            data: decryptedPayload,
+            payload: decryptedPayload,
+            retryCount: row.retry_count || 0,
+            priority: row.priority || 0,
+            createdAt: row.created_at
+          };
+        })
+      );
+      
+      if (messages.length > 0) {
+        log(`${LogTypes.POP} | Count: ${messages.length} | Namespace: ${namespace || 'ANY'} | Task: ${task || 'ANY'}`);
+      }
+      
+      return { messages };
+    });
+  };
+
+  /**
+   * Configure queue settings with namespace and task support
+   * Updates queue configuration options and optionally sets namespace/task
+   */
+  const configureQueue = async (queueName, options = {}, namespace = null, task = null) => {
+    return withTransaction(pool, async (client) => {
+      // First create/update the queue with namespace and task
+      const queueResult = await client.query(
+        `INSERT INTO queen.queues (name, namespace, task) VALUES ($1, $2, $3) 
+         ON CONFLICT (name) DO UPDATE SET 
+           namespace = CASE WHEN EXCLUDED.namespace IS NOT NULL THEN EXCLUDED.namespace ELSE queen.queues.namespace END,
+           task = CASE WHEN EXCLUDED.task IS NOT NULL THEN EXCLUDED.task ELSE queen.queues.task END
+         RETURNING id, name, namespace, task`,
+        [queueName, namespace || null, task || null]
+      );
+      
+      // Build update query for all configuration options
+      const updates = [];
+      const params = [];
+      let paramIndex = 1;
+      
+      // Map options to database columns
+      const optionMappings = {
+        leaseTime: 'lease_time',
+        retryLimit: 'retry_limit',
+        retryDelay: 'retry_delay',
+        maxSize: 'max_size',
+        ttl: 'ttl',
+        deadLetterQueue: 'dead_letter_queue',
+        dlqAfterMaxRetries: 'dlq_after_max_retries',
+        delayedProcessing: 'delayed_processing',
+        windowBuffer: 'window_buffer',
+        retentionSeconds: 'retention_seconds',
+        completedRetentionSeconds: 'completed_retention_seconds',
+        retentionEnabled: 'retention_enabled',
+        priority: 'priority',
+        encryptionEnabled: 'encryption_enabled',
+        maxWaitTimeSeconds: 'max_wait_time_seconds',
+        maxQueueSize: 'max_queue_size'
+      };
+      
+      // Process each option
+      for (const [optionKey, columnName] of Object.entries(optionMappings)) {
+        if (options[optionKey] !== undefined) {
+          updates.push(`${columnName} = $${paramIndex}`);
+          
+          // Handle different data types
+          if (typeof options[optionKey] === 'boolean') {
+            params.push(!!options[optionKey]);
+          } else if (typeof options[optionKey] === 'number' || !isNaN(options[optionKey])) {
+            params.push(parseInt(options[optionKey]) || 0);
+          } else {
+            params.push(options[optionKey]);
+          }
+          
+          paramIndex++;
+        }
+      }
+      
+      // Apply updates if any
+      if (updates.length > 0) {
+        params.push(queueName);
+        const updateQuery = `UPDATE queen.queues SET ${updates.join(', ')} WHERE name = $${paramIndex}`;
+        await client.query(updateQuery, params);
+      }
+      
+      // Invalidate cache for all partitions of this queue
+      resourceCache.invalidateQueue(queueName);
+      
+      return { 
+        queue: queueName, 
+        namespace: queueResult.rows[0].namespace, 
+        task: queueResult.rows[0].task,
+        options
+      };
+    });
+  };
+
   // Export all functions
   return {
     pushMessages: pushMessagesBatch,
@@ -1209,220 +1400,7 @@ const popMessages = async (scope, options = {}) => {
     reclaimExpiredLeases,
     getQueueStats,
     getQueueLag,
-    // Additional functions for compatibility
-    popMessagesWithFilters: async (filters, options = {}) => {
-      const { namespace, task, consumerGroup } = filters;
-      const { wait = false, timeout = config.QUEUE.DEFAULT_TIMEOUT, batch = config.QUEUE.DEFAULT_BATCH_SIZE } = options;
-      
-      return withTransaction(pool, async (client) => {
-        // Determine the actual consumer group to use
-        const actualConsumerGroup = consumerGroup || '__QUEUE_MODE__';
-        
-        // Build query for namespace/task filtering with new schema
-        // First, select messages and also get partition info for locking
-        let query = `
-          WITH available_messages AS (
-            SELECT m.id, m.transaction_id, m.trace_id, m.payload, m.is_encrypted, m.created_at,
-                   p.id as partition_id, p.name as partition_name, q.name as queue_name,
-                   q.priority, q.lease_time, q.retry_limit, q.delayed_processing,
-                   q.window_buffer, q.max_wait_time_seconds, q.namespace, q.task
-            FROM queen.messages m
-            JOIN queen.partitions p ON m.partition_id = p.id
-            JOIN queen.queues q ON p.queue_id = q.id
-            LEFT JOIN queen.messages_status ms ON m.id = ms.message_id AND ms.consumer_group = $1
-            WHERE (ms.id IS NULL OR ms.status = 'pending')
-              AND m.created_at <= NOW() - INTERVAL '1 second' * q.delayed_processing
-              AND (q.max_wait_time_seconds = 0 OR 
-                   m.created_at > NOW() - INTERVAL '1 second' * q.max_wait_time_seconds)
-              AND (q.window_buffer = 0 OR NOT EXISTS (
-                SELECT 1 FROM queen.messages m2 
-                WHERE m2.partition_id = p.id 
-                  AND m2.created_at > NOW() - INTERVAL '1 second' * q.window_buffer
-              ))
-              AND NOT EXISTS (
-                -- Check for active partition leases
-                SELECT 1 FROM queen.partition_leases pl
-                WHERE pl.partition_id = p.id
-                  AND pl.consumer_group = $1
-                  AND pl.released_at IS NULL
-                  AND pl.lease_expires_at > NOW()
-              )
-        `;
-        
-        const params = [actualConsumerGroup];
-        if (namespace) {
-          params.push(namespace);
-          query += ` AND q.namespace = $${params.length}`;
-        }
-        if (task) {
-          params.push(task);
-          query += ` AND q.task = $${params.length}`;
-        }
-        
-        params.push(batch);
-        query += ` ORDER BY q.priority DESC, m.created_at ASC LIMIT $${params.length} FOR UPDATE OF m SKIP LOCKED`;
-        query += `)
-          INSERT INTO queen.messages_status (message_id, consumer_group, status, lease_expires_at, processing_at, worker_id)
-          SELECT id, $1, 'processing', NOW() + INTERVAL '1 second' * lease_time, NOW(), $${params.length + 1}
-          FROM available_messages
-          ON CONFLICT (message_id, consumer_group) 
-          DO UPDATE SET 
-            status = 'processing',
-            lease_expires_at = EXCLUDED.lease_expires_at,
-            processing_at = EXCLUDED.processing_at,
-            worker_id = EXCLUDED.worker_id,
-            retry_count = queen.messages_status.retry_count + 1
-          RETURNING message_id,
-            (SELECT transaction_id FROM queen.messages WHERE id = message_id),
-            (SELECT trace_id FROM queen.messages WHERE id = message_id),
-            (SELECT payload FROM queen.messages WHERE id = message_id),
-            (SELECT is_encrypted FROM queen.messages WHERE id = message_id),
-            (SELECT created_at FROM queen.messages WHERE id = message_id),
-            (SELECT p.id FROM queen.messages m2 JOIN queen.partitions p ON m2.partition_id = p.id WHERE m2.id = message_id) as partition_id,
-            (SELECT p.name FROM queen.messages m2 JOIN queen.partitions p ON m2.partition_id = p.id WHERE m2.id = message_id) as partition_name,
-            (SELECT q.name FROM queen.messages m2 JOIN queen.partitions p ON m2.partition_id = p.id JOIN queen.queues q ON p.queue_id = q.id WHERE m2.id = message_id) as queue_name,
-            (SELECT q.priority FROM queen.messages m2 JOIN queen.partitions p ON m2.partition_id = p.id JOIN queen.queues q ON p.queue_id = q.id WHERE m2.id = message_id) as priority,
-            (SELECT q.lease_time FROM queen.messages m2 JOIN queen.partitions p ON m2.partition_id = p.id JOIN queen.queues q ON p.queue_id = q.id WHERE m2.id = message_id) as lease_time,
-            retry_count
-        `;
-        
-        params.push(config.WORKER_ID);
-        const result = await client.query(query, params);
-        
-        // Lock all partitions that we got messages from
-        if (result.rows.length > 0) {
-          const partitionIds = [...new Set(result.rows.map(r => r.partition_id))];
-          const leaseTime = Math.max(...result.rows.map(r => r.lease_time || 30));
-          
-          // Acquire partition leases for all partitions we got messages from
-          for (const partitionId of partitionIds) {
-            await client.query(`
-              INSERT INTO queen.partition_leases (
-                partition_id, 
-                consumer_group, 
-                lease_expires_at
-              ) VALUES ($1, $2, NOW() + INTERVAL '1 second' * $3)
-              ON CONFLICT (partition_id, consumer_group) 
-              DO UPDATE SET 
-                lease_expires_at = EXCLUDED.lease_expires_at,
-                released_at = NULL
-            `, [partitionId, actualConsumerGroup, leaseTime]);
-          }
-        }
-        
-        if (result.rows.length === 0 && wait) {
-          // For namespace/task filtering, we can't easily wait on specific queue paths
-          // So we'll use simple polling
-          return { messages: [] };
-        }
-        
-        // Format and decrypt messages
-        const messages = await Promise.all(
-          result.rows.map(async (row) => {
-            let decryptedPayload = row.payload;
-            
-            if (row.is_encrypted && encryption.isEncryptionEnabled()) {
-              try {
-                decryptedPayload = await encryption.decryptPayload(row.payload);
-              } catch (error) {
-                log('ERROR: Decryption failed:', error);
-              }
-            }
-            
-            return {
-              id: row.message_id,
-              transactionId: row.transaction_id,
-              traceId: row.trace_id,
-              queue: row.queue_name,
-              partition: row.partition_name,
-              data: decryptedPayload,
-              payload: decryptedPayload,
-              retryCount: row.retry_count || 0,
-              priority: row.priority || 0,
-              createdAt: row.created_at
-            };
-          })
-        );
-        
-        if (messages.length > 0) {
-          log(`${LogTypes.POP} | Count: ${messages.length} | Namespace: ${namespace || 'ANY'} | Task: ${task || 'ANY'}`);
-        }
-        
-        return { messages };
-      });
-    },
-    configureQueue: async (queueName, options = {}, namespace = null, task = null) => {
-      return withTransaction(pool, async (client) => {
-        // First create/update the queue with namespace and task
-        const queueResult = await client.query(
-          `INSERT INTO queen.queues (name, namespace, task) VALUES ($1, $2, $3) 
-           ON CONFLICT (name) DO UPDATE SET 
-             namespace = CASE WHEN EXCLUDED.namespace IS NOT NULL THEN EXCLUDED.namespace ELSE queen.queues.namespace END,
-             task = CASE WHEN EXCLUDED.task IS NOT NULL THEN EXCLUDED.task ELSE queen.queues.task END
-           RETURNING id, name, namespace, task`,
-          [queueName, namespace || null, task || null]
-        );
-        
-        // Build update query for all configuration options
-        const updates = [];
-        const params = [];
-        let paramIndex = 1;
-        
-        // Map options to database columns
-        const optionMappings = {
-          leaseTime: 'lease_time',
-          retryLimit: 'retry_limit',
-          retryDelay: 'retry_delay',
-          maxSize: 'max_size',
-          ttl: 'ttl',
-          deadLetterQueue: 'dead_letter_queue',
-          dlqAfterMaxRetries: 'dlq_after_max_retries',
-          delayedProcessing: 'delayed_processing',
-          windowBuffer: 'window_buffer',
-          retentionSeconds: 'retention_seconds',
-          completedRetentionSeconds: 'completed_retention_seconds',
-          retentionEnabled: 'retention_enabled',
-          priority: 'priority',
-          encryptionEnabled: 'encryption_enabled',
-          maxWaitTimeSeconds: 'max_wait_time_seconds',
-          maxQueueSize: 'max_queue_size'
-        };
-        
-        // Process each option
-        for (const [optionKey, columnName] of Object.entries(optionMappings)) {
-          if (options[optionKey] !== undefined) {
-            updates.push(`${columnName} = $${paramIndex}`);
-            
-            // Handle different data types
-            if (typeof options[optionKey] === 'boolean') {
-              params.push(!!options[optionKey]);
-            } else if (typeof options[optionKey] === 'number' || !isNaN(options[optionKey])) {
-              params.push(parseInt(options[optionKey]) || 0);
-            } else {
-              params.push(options[optionKey]);
-            }
-            
-            paramIndex++;
-          }
-        }
-        
-        // Apply updates if any
-        if (updates.length > 0) {
-          params.push(queueName);
-          const updateQuery = `UPDATE queen.queues SET ${updates.join(', ')} WHERE name = $${paramIndex}`;
-          await client.query(updateQuery, params);
-        }
-        
-        // Invalidate cache for all partitions of this queue
-        resourceCache.invalidateQueue(queueName);
-        
-        return { 
-          queue: queueName, 
-          namespace: queueResult.rows[0].namespace, 
-          task: queueResult.rows[0].task,
-          options
-        };
-      });
-    }
+    popMessagesWithFilters,
+    configureQueue
   };
 };

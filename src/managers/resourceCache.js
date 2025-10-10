@@ -10,15 +10,15 @@ export const createResourceCache = () => {
     const cached = cache.get(key);
     
     if (cached && Date.now() - cached.timestamp < TTL) {
-      return cached.exists;
+      return cached.data;
     }
     
     return null; // Not in cache
   };
   
-  const cacheResource = (queue, partition, exists = true) => {
+  const cacheResource = (queue, partition, data) => {
     const key = getCacheKey(queue, partition);
-    cache.set(key, { exists, timestamp: Date.now() });
+    cache.set(key, { data, timestamp: Date.now() });
   };
   
   const invalidate = (queue, partition) => {
