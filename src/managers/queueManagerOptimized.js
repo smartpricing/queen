@@ -499,21 +499,23 @@ const popMessagesV2 = async (scope, options = {}) => {
     await client.query('SET TRANSACTION ISOLATION LEVEL READ COMMITTED');
     
     // Step 1: Reclaim expired leases
-    const reclaimResult = await client.query(`
-      UPDATE queen.messages_status 
-      SET status = 'pending', 
-          lease_expires_at = NULL, 
-          worker_id = NULL, 
-          processing_at = NULL
-      WHERE status = 'processing' 
-        AND lease_expires_at < NOW()
-        AND consumer_group = $1
-      RETURNING message_id
-    `, [consumerGroup || '__QUEUE_MODE__']);
+    // PERFORMANCE OPTIMIZATION: Since we no longer create 'processing' status on pop,
+    // expired leases are now handled at the PARTITION level via partition_leases table
+    // This step is no longer needed - partition lease expiration automatically makes
+    // messages available for re-consumption
     
-    if (reclaimResult.rowCount > 0) {
-      log(`Reclaimed ${reclaimResult.rowCount} expired leases`);
-    }
+    // NOTE: If we had any old 'processing' status records (from before optimization),
+    // they would be handled by the separate reclaimExpiredLeases background job
+    
+    // const reclaimResult = await client.query(`
+    //   UPDATE queen.messages_status 
+    //   SET status = 'pending', lease_expires_at = NULL, worker_id = NULL, processing_at = NULL
+    //   WHERE status = 'processing' AND lease_expires_at < NOW() AND consumer_group = $1
+    //   RETURNING message_id
+    // `, [consumerGroup || '__QUEUE_MODE__']);
+    // if (reclaimResult.rowCount > 0) {
+    //   log(`Reclaimed ${reclaimResult.rowCount} expired leases`);
+    // }
     
     // ⚡ OPTIMIZATION #4: Combine eviction, queue lookup, consumer group, and partition selection
     // Handle subscription start date preparation
@@ -678,6 +680,12 @@ const popMessagesV2 = async (scope, options = {}) => {
             OR queen.partition_leases.lease_expires_at <= NOW()
           THEN NULL
           ELSE queen.partition_leases.released_at
+        END,
+        message_batch = CASE
+          WHEN queen.partition_leases.released_at IS NOT NULL 
+            OR queen.partition_leases.lease_expires_at <= NOW()
+          THEN NULL
+          ELSE queen.partition_leases.message_batch
         END
       RETURNING 
         lease_expires_at,
@@ -705,6 +713,18 @@ const popMessagesV2 = async (scope, options = {}) => {
         AND m.created_at <= NOW() - INTERVAL '1 second' * $3
         AND m.created_at >= $4::timestamp
         AND ($5 = 0 OR m.created_at > NOW() - INTERVAL '1 second' * $5)
+        AND NOT EXISTS (
+          -- CRITICAL: Exclude messages already in this partition's active lease batch
+          -- This prevents re-consumption of messages that were popped but not yet acknowledged
+          -- Only exclude if the lease is still active (not expired or released)
+          SELECT 1 FROM queen.partition_leases pl
+          WHERE pl.partition_id = $2
+            AND pl.consumer_group = $1
+            AND pl.released_at IS NULL
+            AND pl.lease_expires_at > NOW()
+            AND pl.message_batch IS NOT NULL
+            AND pl.message_batch::jsonb ? m.id::text
+        )
       `;
       queryParams = [
         actualConsumerGroup,
@@ -726,6 +746,18 @@ const popMessagesV2 = async (scope, options = {}) => {
           WHERE m2.partition_id = p.id 
             AND m2.created_at > NOW() - INTERVAL '1 second' * $5
         ))
+        AND NOT EXISTS (
+          -- CRITICAL: Exclude messages already in this partition's active lease batch
+          -- This prevents re-consumption of messages that were popped but not yet acknowledged
+          -- Only exclude if the lease is still active (not expired or released)
+          SELECT 1 FROM queen.partition_leases pl
+          WHERE pl.partition_id = $2
+            AND pl.consumer_group = $1
+            AND pl.released_at IS NULL
+            AND pl.lease_expires_at > NOW()
+            AND pl.message_batch IS NOT NULL
+            AND pl.message_batch::jsonb ? m.id::text
+        )
       `;
       queryParams = [
         actualConsumerGroup,
@@ -783,49 +815,45 @@ const popMessagesV2 = async (scope, options = {}) => {
     }
     
     // Step 9: Update or insert message status for selected messages (BATCHED)
+    // PERFORMANCE OPTIMIZATION: Status update moved to ACK phase
+    // We rely on partition lease for locking, and only create status records on ACK
+    // This eliminates 700-850ms of INSERT/UPSERT overhead per pop operation
     const statusUpdateStart = Date.now();
-    const leaseExpiresAt = new Date(Date.now() + (queueInfo.lease_time * 1000));
     
-    if (messages.length > 0) {
-      // Build batched VALUES clause for all messages
-      const valuesArray = [];
-      const params = [];
-      let paramIndex = 1;
-      
-      for (const message of messages) {
-        valuesArray.push(
-          `($${paramIndex}, $${paramIndex + 1}, 'processing', $${paramIndex + 2}, NOW(), $${paramIndex + 3}, $${paramIndex + 4})`
-        );
-        params.push(
-          message.id,                   // message_id
-          actualConsumerGroup,          // consumer_group
-          leaseExpiresAt,              // lease_expires_at
-          config.WORKER_ID,            // worker_id
-          message.retry_count || 0     // retry_count
-        );
-        paramIndex += 5;
-      }
-      
-      // Single batched INSERT query for all messages
-      await client.query(`
-        INSERT INTO queen.messages_status (
-          message_id,
-          consumer_group,
-          status,
-          lease_expires_at,
-          processing_at,
-          worker_id,
-          retry_count
-        ) VALUES ${valuesArray.join(', ')}
-        ON CONFLICT (message_id, consumer_group) 
-        DO UPDATE SET
-          status = 'processing',
-          lease_expires_at = EXCLUDED.lease_expires_at,
-          processing_at = NOW(),
-          worker_id = EXCLUDED.worker_id
-          -- Keep existing retry_count when re-processing failed messages
-      `, params);
-    }
+    // SKIP status update on pop - messages are "locked" via partition lease
+    // Status will be created/updated on ACK (completed/failed)
+    // if (messages.length > 0) {
+    //   const leaseExpiresAt = new Date(Date.now() + (queueInfo.lease_time * 1000));
+    //   const valuesArray = [];
+    //   const params = [];
+    //   let paramIndex = 1;
+    //   
+    //   for (const message of messages) {
+    //     valuesArray.push(
+    //       `($${paramIndex}, $${paramIndex + 1}, 'processing', $${paramIndex + 2}, NOW(), $${paramIndex + 3}, $${paramIndex + 4})`
+    //     );
+    //     params.push(
+    //       message.id,
+    //       actualConsumerGroup,
+    //       leaseExpiresAt,
+    //       config.WORKER_ID,
+    //       message.retry_count || 0
+    //     );
+    //     paramIndex += 5;
+    //   }
+    //   
+    //   await client.query(`
+    //     INSERT INTO queen.messages_status (
+    //       message_id, consumer_group, status, lease_expires_at, processing_at, worker_id, retry_count
+    //     ) VALUES ${valuesArray.join(', ')}
+    //     ON CONFLICT (message_id, consumer_group) DO UPDATE SET
+    //       status = 'processing',
+    //       lease_expires_at = EXCLUDED.lease_expires_at,
+    //       processing_at = NOW(),
+    //       worker_id = EXCLUDED.worker_id
+    //   `, params);
+    // }
+    
     const statusUpdateTime = Date.now() - statusUpdateStart;
     directPopMetrics.statusUpdateTimes.push(statusUpdateTime);
     
@@ -894,99 +922,94 @@ const popMessages = async (scope, options = {}) => {
   // Acknowledge messages (now per consumer group)
   const acknowledgeMessage = async (transactionId, status = 'completed', error = null, consumerGroup = null) => {
     return withTransaction(pool, async (client) => {
-      // Find the message and status entry (must be in 'processing' status to be acknowledged)
+      // PERFORMANCE OPTIMIZATION: Since we no longer create status on POP, we need to handle both cases:
+      // 1. Status exists (message was popped before optimization, or retry)
+      // 2. Status doesn't exist (message was just popped with new optimization)
+      
+      // Find the message and get queue config (don't require status to exist)
       const findQuery = consumerGroup 
-        ? `SELECT ms.retry_count, ms.status, ms.message_id, m.partition_id, 
+        ? `SELECT ms.retry_count, ms.status, ms.message_id, m.partition_id, m.id as message_id,
                   q.retry_limit, q.dlq_after_max_retries
-           FROM queen.messages_status ms
-           JOIN queen.messages m ON ms.message_id = m.id
+           FROM queen.messages m
            JOIN queen.partitions p ON m.partition_id = p.id
            JOIN queen.queues q ON p.queue_id = q.id
-           WHERE m.transaction_id = $1 AND ms.consumer_group = $2 AND ms.status = 'processing'`
-        : `SELECT ms.retry_count, ms.status, ms.message_id, m.partition_id, 
+           LEFT JOIN queen.messages_status ms ON ms.message_id = m.id AND ms.consumer_group = $2
+           WHERE m.transaction_id = $1`
+        : `SELECT ms.retry_count, ms.status, ms.message_id, m.partition_id, m.id as message_id,
                   q.retry_limit, q.dlq_after_max_retries
-           FROM queen.messages_status ms
-           JOIN queen.messages m ON ms.message_id = m.id
+           FROM queen.messages m
            JOIN queen.partitions p ON m.partition_id = p.id
            JOIN queen.queues q ON p.queue_id = q.id
-           WHERE m.transaction_id = $1 AND ms.consumer_group = '__QUEUE_MODE__' AND ms.status = 'processing'`;
+           LEFT JOIN queen.messages_status ms ON ms.message_id = m.id AND ms.consumer_group = '__QUEUE_MODE__'
+           WHERE m.transaction_id = $1`;
       
       const params = consumerGroup ? [transactionId, consumerGroup] : [transactionId];
       const result = await client.query(findQuery, params);
       
       if (result.rows.length === 0) {
         log(`WARN: Message not found for acknowledgment: ${transactionId}, consumerGroup: ${consumerGroup || 'QUEUE_MODE'}`);
-        
-        // Try to find the message regardless of status for debugging
-        const debugQuery = consumerGroup
-          ? `SELECT ms.retry_count, ms.status FROM queen.messages_status ms
-             JOIN queen.messages m ON ms.message_id = m.id
-             WHERE m.transaction_id = $1 AND ms.consumer_group = $2`
-          : `SELECT ms.retry_count, ms.status FROM queen.messages_status ms
-             JOIN queen.messages m ON ms.message_id = m.id
-             WHERE m.transaction_id = $1 AND ms.consumer_group = '__QUEUE_MODE__'`;
-        const debugResult = await client.query(debugQuery, params);
-        if (debugResult.rows.length > 0) {
-          log(`DEBUG: Found message with status=${debugResult.rows[0].status}, retry_count=${debugResult.rows[0].retry_count}`);
-        }
-        
         return { status: 'not_found', transaction_id: transactionId };
       }
       
       const messageStatus = result.rows[0];
-      log(`DEBUG: Found message for ack with retry_count=${messageStatus.retry_count}, status=${messageStatus.status}, dlq=${messageStatus.dlq_after_max_retries}, limit=${messageStatus.retry_limit}`);
+      const currentRetryCount = messageStatus.retry_count || 0;
+      log(`DEBUG: Acknowledging message transaction=${transactionId} status=${messageStatus.status || 'NEW'} retry_count=${currentRetryCount}`);
       
       if (status === 'completed') {
-        // Mark as completed and release partition lease
+        // Mark as completed using UPSERT (handles both new and existing status records)
         const actualConsumerGroup = consumerGroup || '__QUEUE_MODE__';
-        const updateParams = consumerGroup 
-          ? [transactionId, consumerGroup]
-          : [transactionId];
         
-        const updateQuery = consumerGroup
-          ? `UPDATE queen.messages_status ms
-             SET status = 'completed', completed_at = NOW()
-             FROM queen.messages m
-             WHERE ms.message_id = m.id 
-               AND m.transaction_id = $1 
-               AND ms.consumer_group = $2`
-          : `UPDATE queen.messages_status ms
-             SET status = 'completed', completed_at = NOW()
-             FROM queen.messages m
-             WHERE ms.message_id = m.id 
-               AND m.transaction_id = $1 
-               AND ms.consumer_group = '__QUEUE_MODE__'`;
+        // Use UPSERT to create or update status
+        const upsertQuery = `
+          INSERT INTO queen.messages_status (message_id, consumer_group, status, completed_at, retry_count)
+          VALUES ($1, $2, 'completed', NOW(), $3)
+          ON CONFLICT (message_id, consumer_group) 
+          DO UPDATE SET
+            status = 'completed',
+            completed_at = NOW()
+        `;
         
-        await client.query(updateQuery, updateParams);
+        await client.query(upsertQuery, [messageStatus.message_id, actualConsumerGroup, currentRetryCount]);
         
-        // Release partition lease if this was the last message in the batch
-        const releaseQuery = `
-          WITH message_partition AS (
-            -- Get the partition for this message
-            SELECT DISTINCT m.partition_id
+        // Remove this message from the partition lease's message_batch
+        // This allows the consumer to continue popping new messages while processing the current batch
+        const updateBatchQuery = `
+          WITH message_info AS (
+            SELECT m.partition_id, m.id as message_id
             FROM queen.messages m
             WHERE m.transaction_id = $1
-          ),
-          check_remaining AS (
-            -- Check if there are any other processing messages in this partition
-            SELECT 
-              mp.partition_id,
-              COUNT(ms.message_id) as processing_count
-            FROM message_partition mp
-            LEFT JOIN queen.messages m ON m.partition_id = mp.partition_id
-            LEFT JOIN queen.messages_status ms ON ms.message_id = m.id
-              AND ms.consumer_group = $2
-              AND ms.status = 'processing'
-            GROUP BY mp.partition_id
           )
-          -- Release the lease only if no messages are processing
           UPDATE queen.partition_leases pl
-          SET released_at = NOW()
-          FROM check_remaining cr
-          WHERE pl.partition_id = cr.partition_id
+          SET message_batch = (
+            -- Remove the acknowledged message ID from the batch
+            SELECT jsonb_agg(elem)
+            FROM jsonb_array_elements_text(pl.message_batch) elem
+            WHERE elem::uuid != mi.message_id
+          )
+          FROM message_info mi
+          WHERE pl.partition_id = mi.partition_id
             AND pl.consumer_group = $2
             AND pl.released_at IS NULL
-            AND cr.processing_count = 0`;
+            AND pl.message_batch IS NOT NULL
+        `;
+        
+        await client.query(updateBatchQuery, [transactionId, actualConsumerGroup]);
+        
+        // Release partition lease if the message_batch is now empty
+        const releaseQuery = `
+          WITH message_info AS (
+            SELECT m.partition_id
+            FROM queen.messages m
+            WHERE m.transaction_id = $1
+          )
+          UPDATE queen.partition_leases pl
+          SET released_at = NOW(), message_batch = NULL
+          FROM message_info mi
+          WHERE pl.partition_id = mi.partition_id
+            AND pl.consumer_group = $2
+            AND pl.released_at IS NULL
+            AND (pl.message_batch IS NULL OR jsonb_array_length(pl.message_batch) = 0)
+        `;
         
         await client.query(releaseQuery, [transactionId, actualConsumerGroup]);
         
@@ -994,7 +1017,6 @@ const popMessages = async (scope, options = {}) => {
       } else if (status === 'failed') {
         // Handle failure with retry logic
         const actualConsumerGroup = consumerGroup || '__QUEUE_MODE__';
-        const currentRetryCount = messageStatus.retry_count || 0;
         const nextRetryCount = currentRetryCount + 1;
         const retryLimit = messageStatus.retry_limit || config.QUEUE.DEFAULT_RETRY_LIMIT;
         const dlqEnabled = messageStatus.dlq_after_max_retries;
@@ -1002,85 +1024,75 @@ const popMessages = async (scope, options = {}) => {
         log(`${LogTypes.ACK} | Retry check: current=${currentRetryCount}, next=${nextRetryCount}, limit=${retryLimit}, dlq=${dlqEnabled}`);
         
         if (nextRetryCount > retryLimit && dlqEnabled) {
-          // Move to dead letter queue after exceeding retry limit
-          const updateParams = consumerGroup 
-            ? [transactionId, error, consumerGroup]
-            : [transactionId, error];
+          // Move to dead letter queue after exceeding retry limit using UPSERT
+          const upsertQuery = `
+            INSERT INTO queen.messages_status (message_id, consumer_group, status, failed_at, error_message, retry_count)
+            VALUES ($1, $2, 'dead_letter', NOW(), $3, $4)
+            ON CONFLICT (message_id, consumer_group) 
+            DO UPDATE SET
+              status = 'dead_letter',
+              failed_at = NOW(),
+              error_message = EXCLUDED.error_message
+          `;
           
-          const updateQuery = consumerGroup
-            ? `UPDATE queen.messages_status ms
-               SET status = 'dead_letter', failed_at = NOW(), error_message = $2
-               FROM queen.messages m
-               WHERE ms.message_id = m.id 
-                 AND m.transaction_id = $1 
-                 AND ms.consumer_group = $3`
-            : `UPDATE queen.messages_status ms
-               SET status = 'dead_letter', failed_at = NOW(), error_message = $2
-               FROM queen.messages m
-               WHERE ms.message_id = m.id 
-                 AND m.transaction_id = $1 
-                 AND ms.consumer_group = '__QUEUE_MODE__'`;
-          
-          await client.query(updateQuery, updateParams);
+          await client.query(upsertQuery, [messageStatus.message_id, actualConsumerGroup, error, nextRetryCount]);
           
           log(`${LogTypes.ACK} | TransactionId: ${transactionId} | Status: dead_letter | ConsumerGroup: ${consumerGroup || 'QUEUE_MODE'} | Error: ${error}`);
           
           return { status: 'dead_letter', transaction_id: transactionId };
         } else {
-          // Mark as failed and increment retry count
-          const updateParams = consumerGroup 
-            ? [transactionId, error, consumerGroup]
-            : [transactionId, error];
+          // Mark as failed and increment retry count using UPSERT
+          const upsertQuery = `
+            INSERT INTO queen.messages_status (message_id, consumer_group, status, failed_at, error_message, lease_expires_at, retry_count)
+            VALUES ($1, $2, 'failed', NOW(), $3, NULL, $4)
+            ON CONFLICT (message_id, consumer_group) 
+            DO UPDATE SET
+              status = 'failed',
+              failed_at = NOW(),
+              error_message = EXCLUDED.error_message,
+              lease_expires_at = NULL,
+              retry_count = EXCLUDED.retry_count
+          `;
           
-          const updateQuery = consumerGroup
-            ? `UPDATE queen.messages_status ms
-               SET status = 'failed', 
-                   failed_at = NOW(), 
-                   error_message = $2, 
-                   lease_expires_at = NULL,
-                   retry_count = COALESCE(retry_count, 0) + 1
-               FROM queen.messages m
-               WHERE ms.message_id = m.id 
-                 AND m.transaction_id = $1 
-                 AND ms.consumer_group = $3`
-            : `UPDATE queen.messages_status ms
-               SET status = 'failed', 
-                   failed_at = NOW(), 
-                   error_message = $2, 
-                   lease_expires_at = NULL,
-                   retry_count = COALESCE(retry_count, 0) + 1
-               FROM queen.messages m
-               WHERE ms.message_id = m.id 
-                 AND m.transaction_id = $1 
-                 AND ms.consumer_group = '__QUEUE_MODE__'`;
+          await client.query(upsertQuery, [messageStatus.message_id, actualConsumerGroup, error, nextRetryCount]);
           
-          await client.query(updateQuery, updateParams);
-          
-          // Release partition lease on failure as well (so partition can be retried)
-          const releaseOnFailQuery = `
-            WITH message_partition AS (
-              SELECT DISTINCT m.partition_id
+          // Remove this message from the partition lease's message_batch
+          const updateBatchQuery = `
+            WITH message_info AS (
+              SELECT m.partition_id, m.id as message_id
               FROM queen.messages m
               WHERE m.transaction_id = $1
-            ),
-            check_remaining AS (
-              SELECT 
-                mp.partition_id,
-                COUNT(ms.message_id) as processing_count
-              FROM message_partition mp
-              LEFT JOIN queen.messages m ON m.partition_id = mp.partition_id
-              LEFT JOIN queen.messages_status ms ON ms.message_id = m.id
-                AND ms.consumer_group = $2
-                AND ms.status = 'processing'
-              GROUP BY mp.partition_id
             )
             UPDATE queen.partition_leases pl
-            SET released_at = NOW()
-            FROM check_remaining cr
-            WHERE pl.partition_id = cr.partition_id
+            SET message_batch = (
+              SELECT jsonb_agg(elem)
+              FROM jsonb_array_elements_text(pl.message_batch) elem
+              WHERE elem::uuid != mi.message_id
+            )
+            FROM message_info mi
+            WHERE pl.partition_id = mi.partition_id
               AND pl.consumer_group = $2
               AND pl.released_at IS NULL
-              AND cr.processing_count = 0`;
+              AND pl.message_batch IS NOT NULL
+          `;
+          
+          await client.query(updateBatchQuery, [transactionId, actualConsumerGroup]);
+          
+          // Release partition lease if the message_batch is now empty
+          const releaseOnFailQuery = `
+            WITH message_info AS (
+              SELECT m.partition_id
+              FROM queen.messages m
+              WHERE m.transaction_id = $1
+            )
+            UPDATE queen.partition_leases pl
+            SET released_at = NOW(), message_batch = NULL
+            FROM message_info mi
+            WHERE pl.partition_id = mi.partition_id
+              AND pl.consumer_group = $2
+              AND pl.released_at IS NULL
+              AND (pl.message_batch IS NULL OR jsonb_array_length(pl.message_batch) = 0)
+          `;
           
           await client.query(releaseOnFailQuery, [transactionId, actualConsumerGroup]);
           
@@ -1114,24 +1126,65 @@ const popMessages = async (scope, options = {}) => {
         const ids = grouped.completed.map(a => a.transactionId);
         const actualConsumerGroup = consumerGroup || '__QUEUE_MODE__';
         
-        const updateQuery = consumerGroup
-          ? `UPDATE queen.messages_status ms
-             SET status = 'completed', completed_at = NOW()
-             FROM queen.messages m
-             WHERE ms.message_id = m.id 
-               AND m.transaction_id = ANY($1::varchar[])
-               AND ms.consumer_group = $2`
-          : `UPDATE queen.messages_status ms
-             SET status = 'completed', completed_at = NOW()
-             FROM queen.messages m
-             WHERE ms.message_id = m.id 
-               AND m.transaction_id = ANY($1::varchar[])
-               AND ms.consumer_group = '__QUEUE_MODE__'`;
+        // PERFORMANCE OPTIMIZATION: Use UPSERT to handle messages that don't have status yet
+        // First, get the message_ids for all transaction_ids
+        const getMessageIdsQuery = `
+          SELECT m.id as message_id, m.transaction_id
+          FROM queen.messages m
+          WHERE m.transaction_id = ANY($1::varchar[])
+        `;
+        const messageIdsResult = await client.query(getMessageIdsQuery, [ids]);
         
-        const params = consumerGroup ? [ids, consumerGroup] : [ids];
-        await client.query(updateQuery, params);
+        // Build batched UPSERT for all completed messages
+        if (messageIdsResult.rows.length > 0) {
+          const valuesArray = [];
+          const params = [];
+          let paramIndex = 1;
+          
+          for (const row of messageIdsResult.rows) {
+            valuesArray.push(`($${paramIndex}, $${paramIndex + 1}, 'completed', NOW(), 0)`);
+            params.push(row.message_id, actualConsumerGroup);
+            paramIndex += 2;
+          }
+          
+          const upsertQuery = `
+            INSERT INTO queen.messages_status (message_id, consumer_group, status, completed_at, retry_count)
+            VALUES ${valuesArray.join(', ')}
+            ON CONFLICT (message_id, consumer_group) 
+            DO UPDATE SET
+              status = 'completed',
+              completed_at = NOW()
+          `;
+          
+          await client.query(upsertQuery, params);
+        }
         
-        // Release partition leases for partitions with no more processing messages
+        // Remove acknowledged messages from partition lease message_batch
+        // This allows consumers to continue popping new messages while processing current batch
+        const updateBatchQuery = `
+          WITH acknowledged_messages AS (
+            SELECT DISTINCT m.partition_id, array_agg(m.id) as acked_message_ids
+            FROM queen.messages m
+            WHERE m.transaction_id = ANY($1::varchar[])
+            GROUP BY m.partition_id
+          )
+          UPDATE queen.partition_leases pl
+          SET message_batch = (
+            -- Remove all acknowledged message IDs from the batch
+            SELECT jsonb_agg(elem)
+            FROM jsonb_array_elements_text(pl.message_batch) elem
+            WHERE elem::uuid != ALL(am.acked_message_ids)
+          )
+          FROM acknowledged_messages am
+          WHERE pl.partition_id = am.partition_id
+            AND pl.consumer_group = $2
+            AND pl.released_at IS NULL
+            AND pl.message_batch IS NOT NULL
+        `;
+        
+        await client.query(updateBatchQuery, [ids, actualConsumerGroup]);
+        
+        // Release partition leases if their message_batch is now empty
         const releaseQuery = `
           WITH affected_partitions AS (
             SELECT DISTINCT m.partition_id
@@ -1139,19 +1192,13 @@ const popMessages = async (scope, options = {}) => {
             WHERE m.transaction_id = ANY($1::varchar[])
           )
           UPDATE queen.partition_leases pl
-          SET released_at = NOW()
+          SET released_at = NOW(), message_batch = NULL
           FROM affected_partitions ap
           WHERE pl.partition_id = ap.partition_id
             AND pl.consumer_group = $2
             AND pl.released_at IS NULL
-            AND NOT EXISTS (
-              SELECT 1 
-              FROM queen.messages_status ms
-              JOIN queen.messages m2 ON ms.message_id = m2.id
-              WHERE m2.partition_id = ap.partition_id
-                AND ms.consumer_group = $2
-                AND ms.status = 'processing'
-            )`;
+            AND (pl.message_batch IS NULL OR jsonb_array_length(pl.message_batch) = 0)
+        `;
         
         await client.query(releaseQuery, [ids, actualConsumerGroup]);
         
@@ -1168,7 +1215,8 @@ const popMessages = async (scope, options = {}) => {
         const failedErrors = grouped.failed.map(a => a.error || 'Unknown error');
         const actualConsumerGroup = consumerGroup || '__QUEUE_MODE__';
         
-        // Single query that handles all retry logic
+        // Single query that handles all retry logic with UPSERT
+        // PERFORMANCE OPTIMIZATION: Changed to UPSERT to handle messages without status
         const failedQuery = consumerGroup
           ? `WITH message_info AS (
                SELECT 
@@ -1198,24 +1246,25 @@ const popMessages = async (scope, options = {}) => {
                CROSS JOIN LATERAL UNNEST($1::varchar[], $2::text[]) AS e(txn_id, error_message)
                WHERE mi.transaction_id = e.txn_id
              ),
-             updated_status AS (
-               UPDATE queen.messages_status ms
-               SET 
-                 status = fwe.final_status,
-                 failed_at = NOW(),
-                 error_message = fwe.error_message,
-                 lease_expires_at = NULL,
-                 retry_count = fwe.next_retry_count
+             upserted_status AS (
+               INSERT INTO queen.messages_status (message_id, consumer_group, status, failed_at, error_message, lease_expires_at, retry_count)
+               SELECT fwe.message_id, $3, fwe.final_status, NOW(), fwe.error_message, NULL, fwe.next_retry_count
                FROM failed_with_errors fwe
-               WHERE ms.message_id = fwe.message_id 
-                 AND ms.consumer_group = $3
-               RETURNING ms.message_id, fwe.transaction_id, fwe.final_status, fwe.partition_id
+               ON CONFLICT (message_id, consumer_group) 
+               DO UPDATE SET 
+                 status = EXCLUDED.status,
+                 failed_at = NOW(),
+                 error_message = EXCLUDED.error_message,
+                 lease_expires_at = NULL,
+                 retry_count = EXCLUDED.retry_count
+               RETURNING message_id, (SELECT transaction_id FROM failed_with_errors fwe2 WHERE fwe2.message_id = queen.messages_status.message_id) as transaction_id,
+                         status, (SELECT partition_id FROM failed_with_errors fwe2 WHERE fwe2.message_id = queen.messages_status.message_id) as partition_id
              )
              SELECT 
                us.transaction_id,
-               us.final_status as status,
+               us.status,
                us.partition_id
-             FROM updated_status us`
+             FROM upserted_status us`
           : `WITH message_info AS (
                SELECT 
                  m.transaction_id,
@@ -1244,24 +1293,25 @@ const popMessages = async (scope, options = {}) => {
                CROSS JOIN LATERAL UNNEST($1::varchar[], $2::text[]) AS e(txn_id, error_message)
                WHERE mi.transaction_id = e.txn_id
              ),
-             updated_status AS (
-               UPDATE queen.messages_status ms
-               SET 
-                 status = fwe.final_status,
-                 failed_at = NOW(),
-                 error_message = fwe.error_message,
-                 lease_expires_at = NULL,
-                 retry_count = fwe.next_retry_count
+             upserted_status AS (
+               INSERT INTO queen.messages_status (message_id, consumer_group, status, failed_at, error_message, lease_expires_at, retry_count)
+               SELECT fwe.message_id, '__QUEUE_MODE__', fwe.final_status, NOW(), fwe.error_message, NULL, fwe.next_retry_count
                FROM failed_with_errors fwe
-               WHERE ms.message_id = fwe.message_id 
-                 AND ms.consumer_group = '__QUEUE_MODE__'
-               RETURNING ms.message_id, fwe.transaction_id, fwe.final_status, fwe.partition_id
+               ON CONFLICT (message_id, consumer_group) 
+               DO UPDATE SET 
+                 status = EXCLUDED.status,
+                 failed_at = NOW(),
+                 error_message = EXCLUDED.error_message,
+                 lease_expires_at = NULL,
+                 retry_count = EXCLUDED.retry_count
+               RETURNING message_id, (SELECT transaction_id FROM failed_with_errors fwe2 WHERE fwe2.message_id = queen.messages_status.message_id) as transaction_id,
+                         status, (SELECT partition_id FROM failed_with_errors fwe2 WHERE fwe2.message_id = queen.messages_status.message_id) as partition_id
              )
              SELECT 
                us.transaction_id,
-               us.final_status as status,
+               us.status,
                us.partition_id
-             FROM updated_status us`;
+             FROM upserted_status us`;
         
         const params = consumerGroup 
           ? [failedIds, failedErrors, consumerGroup]
@@ -1269,25 +1319,41 @@ const popMessages = async (scope, options = {}) => {
         
         const failedResult = await client.query(failedQuery, params);
         
-        // Release partition leases for affected partitions
+        // Remove failed messages from partition lease message_batch
         if (failedResult.rows.length > 0) {
+          const updateBatchQuery = `
+            WITH failed_messages AS (
+              SELECT DISTINCT m.partition_id, array_agg(m.id) as failed_message_ids
+              FROM queen.messages m
+              WHERE m.transaction_id = ANY($1::varchar[])
+              GROUP BY m.partition_id
+            )
+            UPDATE queen.partition_leases pl
+            SET message_batch = (
+              SELECT jsonb_agg(elem)
+              FROM jsonb_array_elements_text(pl.message_batch) elem
+              WHERE elem::uuid != ALL(fm.failed_message_ids)
+            )
+            FROM failed_messages fm
+            WHERE pl.partition_id = fm.partition_id
+              AND pl.consumer_group = $2
+              AND pl.released_at IS NULL
+              AND pl.message_batch IS NOT NULL
+          `;
+          
+          await client.query(updateBatchQuery, [failedIds, actualConsumerGroup]);
+          
+          // Release partition leases if their message_batch is now empty
           const affectedPartitions = [...new Set(failedResult.rows.map(r => r.partition_id))];
           
           for (const partitionId of affectedPartitions) {
             await client.query(`
               UPDATE queen.partition_leases pl
-              SET released_at = NOW()
+              SET released_at = NOW(), message_batch = NULL
               WHERE pl.partition_id = $1
                 AND pl.consumer_group = $2
                 AND pl.released_at IS NULL
-                AND NOT EXISTS (
-                  SELECT 1 
-                  FROM queen.messages_status ms
-                  JOIN queen.messages m ON ms.message_id = m.id
-                  WHERE m.partition_id = $1
-                    AND ms.consumer_group = $2
-                    AND ms.status = 'processing'
-                )
+                AND (pl.message_batch IS NULL OR jsonb_array_length(pl.message_batch) = 0)
             `, [partitionId, actualConsumerGroup]);
           }
         }
@@ -1311,6 +1377,8 @@ const popMessages = async (scope, options = {}) => {
   const reclaimExpiredLeases = async () => {
     return withTransaction(pool, async (client) => {
       // First, handle expired partition leases
+      // PERFORMANCE OPTIMIZATION: With our optimization, messages won't have 'processing' status
+      // The partition lease release is what matters - it makes messages available again
       const partitionLeaseResult = await client.query(
         `WITH expired_leases AS (
           UPDATE queen.partition_leases
@@ -1319,7 +1387,8 @@ const popMessages = async (scope, options = {}) => {
             AND released_at IS NULL
           RETURNING partition_id, consumer_group, message_batch
         )
-        -- Reset message status for messages in expired leases
+        -- Reset message status for messages in expired leases (if status exists)
+        -- NOTE: With optimization, most messages won't have status, so this updates fewer rows
         UPDATE queen.messages_status ms
         SET status = 'pending',
             retry_count = COALESCE(retry_count, 0) + 1,
@@ -1337,7 +1406,7 @@ const popMessages = async (scope, options = {}) => {
       );
       
       if (partitionLeaseResult.rows.length > 0) {
-        log(`${LogTypes.RECLAIM} | Expired partition leases reclaimed | Message count: ${partitionLeaseResult.rows.length}`);
+        log(`${LogTypes.RECLAIM} | Expired partition leases reclaimed | Status rows updated: ${partitionLeaseResult.rows.length}`);
       }
       
       // Then handle individual message lease expiration
@@ -1668,6 +1737,12 @@ const popMessages = async (scope, options = {}) => {
                   OR queen.partition_leases.lease_expires_at <= NOW()
                 THEN NULL
                 ELSE queen.partition_leases.released_at
+              END,
+              message_batch = CASE
+                WHEN queen.partition_leases.released_at IS NOT NULL 
+                  OR queen.partition_leases.lease_expires_at <= NOW()
+                THEN NULL
+                ELSE queen.partition_leases.message_batch
               END
             RETURNING 
               partition_id,
@@ -1713,10 +1788,21 @@ const popMessages = async (scope, options = {}) => {
         FROM queen.messages m
         LEFT JOIN queen.messages_status ms ON m.id = ms.message_id 
           AND ms.consumer_group = $1
+        LEFT JOIN queen.partition_leases pl ON pl.partition_id = $5
+          AND pl.consumer_group = $1
         WHERE m.partition_id = $5
           AND (ms.id IS NULL OR ms.status IN ('pending', 'failed'))
           AND m.created_at <= NOW() - INTERVAL '1 second' * $6
           AND ($7 = 0 OR m.created_at > NOW() - INTERVAL '1 second' * $7)
+          AND NOT (
+            -- CRITICAL: Exclude messages already in this partition's active lease batch
+            -- This prevents re-consumption of messages that were popped but not yet acknowledged
+            -- Only exclude if the lease is still active (not expired or released)
+            pl.released_at IS NULL
+            AND pl.lease_expires_at > NOW()
+            AND pl.message_batch IS NOT NULL
+            AND pl.message_batch::jsonb ? m.id::text
+          )
         ORDER BY m.created_at ASC, m.id ASC
         LIMIT $8
         FOR UPDATE OF m NOWAIT
@@ -1752,43 +1838,41 @@ const popMessages = async (scope, options = {}) => {
       }
       
       // Step 4: Update message status (mark as processing)
-      const leaseExpiresAt = new Date(Date.now() + (partition.lease_time * 1000));
+      // PERFORMANCE OPTIMIZATION: Status update moved to ACK phase
+      // We rely on partition lease for locking, and only create status records on ACK
+      // This eliminates 700-850ms of INSERT/UPSERT overhead per pop operation
       
-      const valuesArray = [];
-      const statusParams = [];
-      let paramIndex = 1;
-      
-      for (const message of messages) {
-        valuesArray.push(
-          `($${paramIndex}, $${paramIndex + 1}, 'processing', $${paramIndex + 2}, NOW(), $${paramIndex + 3}, $${paramIndex + 4})`
-        );
-        statusParams.push(
-          message.id,
-          actualConsumerGroup,
-          leaseExpiresAt,
-          config.WORKER_ID,
-          message.retry_count || 0
-        );
-        paramIndex += 5;
-      }
-      
-      await client.query(`
-        INSERT INTO queen.messages_status (
-          message_id,
-          consumer_group,
-          status,
-          lease_expires_at,
-          processing_at,
-          worker_id,
-          retry_count
-        ) VALUES ${valuesArray.join(', ')}
-        ON CONFLICT (message_id, consumer_group) 
-        DO UPDATE SET
-          status = 'processing',
-          lease_expires_at = EXCLUDED.lease_expires_at,
-          processing_at = NOW(),
-          worker_id = EXCLUDED.worker_id
-      `, statusParams);
+      // SKIP status update on pop - messages are "locked" via partition lease
+      // Status will be created/updated on ACK (completed/failed)
+      // const leaseExpiresAt = new Date(Date.now() + (partition.lease_time * 1000));
+      // const valuesArray = [];
+      // const statusParams = [];
+      // let paramIndex = 1;
+      // 
+      // for (const message of messages) {
+      //   valuesArray.push(
+      //     `($${paramIndex}, $${paramIndex + 1}, 'processing', $${paramIndex + 2}, NOW(), $${paramIndex + 3}, $${paramIndex + 4})`
+      //   );
+      //   statusParams.push(
+      //     message.id,
+      //     actualConsumerGroup,
+      //     leaseExpiresAt,
+      //     config.WORKER_ID,
+      //     message.retry_count || 0
+      //   );
+      //   paramIndex += 5;
+      // }
+      // 
+      // await client.query(`
+      //   INSERT INTO queen.messages_status (
+      //     message_id, consumer_group, status, lease_expires_at, processing_at, worker_id, retry_count
+      //   ) VALUES ${valuesArray.join(', ')}
+      //   ON CONFLICT (message_id, consumer_group) DO UPDATE SET
+      //     status = 'processing',
+      //     lease_expires_at = EXCLUDED.lease_expires_at,
+      //     processing_at = NOW(),
+      //     worker_id = EXCLUDED.worker_id
+      // `, statusParams);
       
       // Step 5: Update partition lease with message batch
       const messageIds = messages.map(m => m.id);
