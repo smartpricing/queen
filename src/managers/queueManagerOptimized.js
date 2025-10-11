@@ -10,6 +10,83 @@ export const createOptimizedQueueManager = (pool, resourceCache, eventManager, s
   // Batch size for database operations
   const BATCH_INSERT_SIZE = config.QUEUE.BATCH_INSERT_SIZE;
   
+  // Performance metrics tracking for filtered pops
+  const popMetrics = {
+    partitionQueryTimes: [],
+    leaseAttempts: 0,
+    leaseSuccesses: 0,
+    messageQueryTimes: [],
+    totalPopTimes: [],
+    batchSizes: [],
+    lastLogTime: Date.now()
+  };
+  
+  // Performance metrics for direct pops (queue/partition)
+  const directPopMetrics = {
+    leaseAcquisitionTimes: [],
+    messageQueryTimes: [],
+    statusUpdateTimes: [],
+    leaseUpdateTimes: [],
+    decryptionTimes: [],
+    totalPopTimes: [],
+    batchSizes: [],
+    lastLogTime: Date.now()
+  };
+  
+  // Log metrics periodically (every 5 seconds OR after 10 samples)
+  const logMetrics = () => {
+    const now = Date.now();
+    const timeSinceLastLog = now - Math.max(popMetrics.lastLogTime, directPopMetrics.lastLogTime);
+    const hasEnoughSamples = popMetrics.totalPopTimes.length >= 10 || directPopMetrics.totalPopTimes.length >= 10;
+    
+    // Only log if enough time passed OR we have enough samples
+    if (timeSinceLastLog < 5000 && !hasEnoughSamples) return;
+    
+    if (popMetrics.totalPopTimes.length === 0 && directPopMetrics.totalPopTimes.length === 0) return; // No data yet
+    
+    const avg = arr => arr.length > 0 ? (arr.reduce((a,b) => a+b, 0) / arr.length).toFixed(2) : 0;
+    const max = arr => arr.length > 0 ? Math.max(...arr).toFixed(2) : 0;
+    const min = arr => arr.length > 0 ? Math.min(...arr).toFixed(2) : 0;
+    
+    if (popMetrics.totalPopTimes.length > 0) {
+      log(`📊 PERF METRICS (filtered pop) | Samples: ${popMetrics.totalPopTimes.length}`);
+      log(`  - Partition Query: avg=${avg(popMetrics.partitionQueryTimes)}ms max=${max(popMetrics.partitionQueryTimes)}ms`);
+      log(`  - Message Query: avg=${avg(popMetrics.messageQueryTimes)}ms max=${max(popMetrics.messageQueryTimes)}ms`);
+      log(`  - Total Pop: avg=${avg(popMetrics.totalPopTimes)}ms max=${max(popMetrics.totalPopTimes)}ms`);
+      log(`  - Lease Success Rate: ${popMetrics.leaseSuccesses}/${popMetrics.leaseAttempts} (${(popMetrics.leaseSuccesses/popMetrics.leaseAttempts*100).toFixed(1)}%)`);
+      log(`  - Avg Batch Size: ${avg(popMetrics.batchSizes)} messages`);
+    }
+    
+    if (directPopMetrics.totalPopTimes.length > 0) {
+      log(`📊 PERF METRICS (direct pop) | Samples: ${directPopMetrics.totalPopTimes.length}`);
+      log(`  - Lease Acquisition: avg=${avg(directPopMetrics.leaseAcquisitionTimes)}ms max=${max(directPopMetrics.leaseAcquisitionTimes)}ms`);
+      log(`  - Message Query: avg=${avg(directPopMetrics.messageQueryTimes)}ms max=${max(directPopMetrics.messageQueryTimes)}ms`);
+      log(`  - Status Update: avg=${avg(directPopMetrics.statusUpdateTimes)}ms max=${max(directPopMetrics.statusUpdateTimes)}ms`);
+      log(`  - Lease Update: avg=${avg(directPopMetrics.leaseUpdateTimes)}ms max=${max(directPopMetrics.leaseUpdateTimes)}ms`);
+      log(`  - Decryption/Format: avg=${avg(directPopMetrics.decryptionTimes)}ms max=${max(directPopMetrics.decryptionTimes)}ms`);
+      log(`  - Total Pop: avg=${avg(directPopMetrics.totalPopTimes)}ms max=${max(directPopMetrics.totalPopTimes)}ms`);
+      log(`  - Avg Batch Size: ${avg(directPopMetrics.batchSizes)} messages`);
+    }
+    
+    // Reset metrics after logging
+    popMetrics.partitionQueryTimes = [];
+    popMetrics.leaseAttempts = 0;
+    popMetrics.leaseSuccesses = 0;
+    popMetrics.messageQueryTimes = [];
+    popMetrics.totalPopTimes = [];
+    popMetrics.batchSizes = [];
+    popMetrics.lastLogTime = now;
+    
+    directPopMetrics.leaseAcquisitionTimes = [];
+    directPopMetrics.messageQueryTimes = [];
+    directPopMetrics.statusUpdateTimes = [];
+    directPopMetrics.leaseUpdateTimes = [];
+    directPopMetrics.decryptionTimes = [];
+    directPopMetrics.totalPopTimes = [];
+    directPopMetrics.batchSizes = [];
+    directPopMetrics.lastLogTime = now;
+  };
+  
   // Ensure queue exists and partition exist (with caching)
   // Queue must be created via configure endpoint, but partitions can be created on-demand
   const ensureResources = async (client, queueName, partitionName = 'Default', namespace = null, task = null) => {
@@ -412,6 +489,8 @@ const popMessagesV2 = async (scope, options = {}) => {
     subscriptionFrom = null
   } = options;
   
+  const startTime = Date.now();
+  
   return withTransaction(pool, async (client) => {
     // Set transaction isolation level to prevent dirty reads
     // await client.query('SET TRANSACTION ISOLATION LEVEL REPEATABLE READ');
@@ -579,6 +658,7 @@ const popMessagesV2 = async (scope, options = {}) => {
     // This ensures partition isolation between consumers in the same group
     
     // First, try to acquire a new lease or check if we can take over an expired one
+    const leaseAcqStart = Date.now();
     const leaseResult = await client.query(`
       INSERT INTO queen.partition_leases (
         partition_id, 
@@ -603,6 +683,9 @@ const popMessagesV2 = async (scope, options = {}) => {
         lease_expires_at,
         (lease_expires_at = NOW() + INTERVAL '1 second' * $3) as acquired
     `, [partitionInfo.id, actualConsumerGroup, queueInfo.lease_time]);
+    
+    const leaseAcqTime = Date.now() - leaseAcqStart;
+    directPopMetrics.leaseAcquisitionTimes.push(leaseAcqTime);
     
     // Check if we actually acquired the lease
     if (!leaseResult.rows[0].acquired) {
@@ -655,6 +738,7 @@ const popMessagesV2 = async (scope, options = {}) => {
     }
     
     // Step 8: Select and lock messages
+    const messageQueryStart = Date.now();
     const messagesResult = await client.query(`
       SELECT 
         m.id,
@@ -683,6 +767,9 @@ const popMessagesV2 = async (scope, options = {}) => {
       throw err;
     });
     
+    const messageQueryTime = Date.now() - messageQueryStart;
+    directPopMetrics.messageQueryTimes.push(messageQueryTime);
+    
     const messages = messagesResult.rows;
     
     if (messages.length === 0) {
@@ -696,6 +783,7 @@ const popMessagesV2 = async (scope, options = {}) => {
     }
     
     // Step 9: Update or insert message status for selected messages (BATCHED)
+    const statusUpdateStart = Date.now();
     const leaseExpiresAt = new Date(Date.now() + (queueInfo.lease_time * 1000));
     
     if (messages.length > 0) {
@@ -738,7 +826,10 @@ const popMessagesV2 = async (scope, options = {}) => {
           -- Keep existing retry_count when re-processing failed messages
       `, params);
     }
+    const statusUpdateTime = Date.now() - statusUpdateStart;
+    directPopMetrics.statusUpdateTimes.push(statusUpdateTime);
     
+    const leaseUpdateStart = Date.now();
     // Step 10: Update partition lease with message batch
     if (messages.length > 0) {
       const messageIds = messages.map(m => m.id);
@@ -748,8 +839,11 @@ const popMessagesV2 = async (scope, options = {}) => {
         WHERE partition_id = $2 AND consumer_group = $3
       `, [JSON.stringify(messageIds), partitionInfo.id, actualConsumerGroup]);
     }
+    const leaseUpdateTime = Date.now() - leaseUpdateStart;
+    directPopMetrics.leaseUpdateTimes.push(leaseUpdateTime);
     
     // Step 11: Decrypt payloads if needed and format response
+    const decryptionStart = Date.now();
     const decryptedMessages = await Promise.all(messages.map(async (msg) => {
       let payload = msg.payload;
       if (msg.is_encrypted && encryption.isEncryptionEnabled()) {
@@ -774,8 +868,19 @@ const popMessagesV2 = async (scope, options = {}) => {
         consumerGroup: consumerGroup || null
       };
     }));
+    const decryptionTime = Date.now() - decryptionStart;
+    directPopMetrics.decryptionTimes.push(decryptionTime);
+    
+    const totalTime = Date.now() - startTime;
+    directPopMetrics.totalPopTimes.push(totalTime);
+    directPopMetrics.batchSizes.push(decryptedMessages.length);
+    
+    // Log metrics for THIS specific pop operation
+    const thisLeaseTime = directPopMetrics.leaseAcquisitionTimes[directPopMetrics.leaseAcquisitionTimes.length - 1] || 0;
+    const thisQueryTime = directPopMetrics.messageQueryTimes[directPopMetrics.messageQueryTimes.length - 1] || 0;
     
     log(`${LogTypes.POP} | Count: ${decryptedMessages.length} | ConsumerGroup: ${actualConsumerGroup === '__QUEUE_MODE__' ? 'QUEUE_MODE' : actualConsumerGroup}`);
+    log(`  ⏱️  Lease:${thisLeaseTime.toFixed(0)}ms Query:${thisQueryTime.toFixed(0)}ms Status:${statusUpdateTime.toFixed(0)}ms LeaseUpd:${leaseUpdateTime.toFixed(0)}ms Decrypt:${decryptionTime.toFixed(0)}ms Total:${totalTime.toFixed(0)}ms`);
     
     return { messages: decryptedMessages };
   });
@@ -1451,6 +1556,8 @@ const popMessages = async (scope, options = {}) => {
     const { namespace, task, consumerGroup } = filters;
     const { wait = false, timeout = config.QUEUE.DEFAULT_TIMEOUT, batch = config.QUEUE.DEFAULT_BATCH_SIZE } = options;
     
+    const startTime = Date.now();
+    
     return withTransaction(pool, async (client) => {
       // Determine the actual consumer group to use
       const actualConsumerGroup = consumerGroup || '__QUEUE_MODE__';
@@ -1459,6 +1566,7 @@ const popMessages = async (scope, options = {}) => {
       // With 100 candidates and shuffling, we should succeed quickly
       const MAX_PARTITION_ATTEMPTS = 3;
       let partition = null;
+      let totalPartitionQueryTime = 0;
       
       for (let attempt = 0; attempt < MAX_PARTITION_ATTEMPTS; attempt++) {
         // Step 1: Find an available partition with messages (ordered by priority and age)
@@ -1519,7 +1627,11 @@ const popMessages = async (scope, options = {}) => {
         `;
         
         params.push(config.QUEUE.MAX_PARTITION_CANDIDATES);
+        
+        const partitionQueryStart = Date.now();
         const partitionResult = await client.query(findPartitionQuery, params);
+        const partitionQueryTime = Date.now() - partitionQueryStart;
+        totalPartitionQueryTime += partitionQueryTime;
         
         if (partitionResult.rows.length === 0) {
           // No available partitions with messages
@@ -1536,6 +1648,7 @@ const popMessages = async (scope, options = {}) => {
         
         // Try to acquire a lease on one of the returned partitions
         for (const candidatePartition of candidatePartitions) {
+          popMetrics.leaseAttempts++;
           const leaseResult = await client.query(`
             INSERT INTO queen.partition_leases (
               partition_id, 
@@ -1565,6 +1678,7 @@ const popMessages = async (scope, options = {}) => {
           // Check if we actually acquired the lease
           if (leaseResult.rows[0].acquired) {
             partition = candidatePartition;
+            popMetrics.leaseSuccesses++;
             log(`DEBUG: Acquired lease on partition ${partition.partition_name} (id=${partition.partition_id}) for consumerGroup=${actualConsumerGroup}`);
             break;
           }
@@ -1574,12 +1688,16 @@ const popMessages = async (scope, options = {}) => {
         if (partition) break;
       }
       
+      // Record partition query metrics
+      popMetrics.partitionQueryTimes.push(totalPartitionQueryTime);
+      
       // If we couldn't acquire any partition after all attempts, return empty
       if (!partition) {
         return { messages: [] };
       }
       
       // Step 3: Select messages from this partition only
+      const messageQueryStart = Date.now();
       const messagesResult = await client.query(`
         SELECT 
           m.id,
@@ -1617,6 +1735,9 @@ const popMessages = async (scope, options = {}) => {
         }
         throw err;
       });
+      
+      const messageQueryTime = Date.now() - messageQueryStart;
+      popMetrics.messageQueryTimes.push(messageQueryTime);
       
       const messages = messagesResult.rows;
       
@@ -1708,6 +1829,14 @@ const popMessages = async (scope, options = {}) => {
       if (formattedMessages.length > 0) {
         log(`${LogTypes.POP} | Count: ${formattedMessages.length} | Namespace: ${namespace || 'ANY'} | Task: ${task || 'ANY'}`);
       }
+      
+      // Record overall metrics
+      const totalTime = Date.now() - startTime;
+      popMetrics.totalPopTimes.push(totalTime);
+      popMetrics.batchSizes.push(formattedMessages.length);
+      
+      // Log metrics periodically
+      logMetrics();
       
       return { messages: formattedMessages };
     });
