@@ -1,4 +1,6 @@
-export const createResourcesRoutes = (pool) => {
+import { EventTypes } from '../managers/systemEventManager.js';
+
+export const createResourcesRoutes = (pool, systemEventManager) => {
   
   // Get all queues with their partitions
   const getQueues = async (filters = {}) => {
@@ -285,12 +287,37 @@ export const createResourcesRoutes = (pool) => {
     };
   };
   
+  // Delete a queue (cascades to partitions, messages, etc.)
+  // Idempotent: returns success even if queue doesn't exist
+  const deleteQueue = async (queueName) => {
+    const result = await pool.query(
+      `DELETE FROM queen.queues WHERE name = $1 RETURNING id, name`,
+      [queueName]
+    );
+    
+    // Emit system event for cache invalidation across nodes
+    if (result.rows.length > 0 && systemEventManager) {
+      await systemEventManager.emit(EventTypes.QUEUE_DELETED, {
+        entityId: queueName,
+        queueId: result.rows[0].id
+      });
+    }
+    
+    return {
+      deleted: true,
+      queue: queueName,
+      existed: result.rows.length > 0,
+      id: result.rows.length > 0 ? result.rows[0].id : null
+    };
+  };
+  
   return {
     getQueues,
     getQueue,
     getPartitions,
     getNamespaces,
     getTasks,
-    getSystemOverview
+    getSystemOverview,
+    deleteQueue
   };
 };

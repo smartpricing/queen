@@ -212,6 +212,11 @@ export const createQueenClient = (options = {}) => {
     clear: async (queue, partition = null) => {
       const params = partition ? `?partition=${partition}` : '';
       return http.delete(`/api/v1/queues/${queue}/clear${params}`);
+    },
+    
+    // Delete a queue (removes queue and all its messages/partitions)
+    delete: async (queue) => {
+      return http.delete(`/api/v1/resources/queues/${encodeURIComponent(queue)}`);
     }
   };
   

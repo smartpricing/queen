@@ -1067,6 +1067,12 @@ POST /api/v1/messages/{transactionId}/dlq
 DELETE /api/v1/queues/{queue}/clear
 ```
 
+**Delete queue:**
+```
+DELETE /api/v1/resources/queues/{queue}
+```
+_Note: Deletes the queue and all its partitions, messages, and related data._
+
 ### System Health
 
 **Health check:**

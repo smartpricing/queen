@@ -212,12 +212,13 @@ export class Queen {
   }
   
   /**
-   * Take messages from a queue (async iterator)
-   * @param {string} address - Queue address (e.g., "myqueue", "myqueue/partition", "myqueue@group")
+   * Internal method that yields batches of messages (arrays)
+   * @private
+   * @param {string} address - Queue address
    * @param {Object} options - Options for taking messages
-   * @yields {Object} Message objects
+   * @yields {Array} Arrays of message objects
    */
-  async *take(address, options = {}) {
+  async *#takeInternal(address, options = {}) {
     await this.#ensureConnected();
     
     const { queue, partition, consumerGroup, namespace, task } = this.#parseAddress(address);
@@ -227,23 +228,36 @@ export class Queen {
       wait = false, 
       timeout = 30000,
       subscriptionMode = null,
-      subscriptionFrom = null
+      subscriptionFrom = null,
+      idleTimeout = null
     } = options;
     
-    let count = 0;
+    let totalCount = 0;
     let consecutiveEmptyResponses = 0;
     const maxConsecutiveEmpty = 3;
+    let lastMessageTime = idleTimeout ? Date.now() : null;
     
     while (true) {
       // Check if we've reached the limit
-      if (limit && count >= limit) break;
+      if (limit && totalCount >= limit) break;
+      
+      // Check idle timeout
+      if (idleTimeout && lastMessageTime) {
+        const idleTime = Date.now() - lastMessageTime;
+        if (idleTime >= idleTimeout) {
+          break; // Exit if idle time exceeded
+        }
+      }
+      
+      // Calculate batch size respecting the limit
+      const effectiveBatch = limit ? Math.min(batch, limit - totalCount) : batch;
       
       // Build the request path and parameters
       let path;
       const params = new URLSearchParams({
         wait: wait.toString(),
         timeout: timeout.toString(),
-        batch: Math.min(batch, limit ? limit - count : batch).toString()
+        batch: effectiveBatch.toString()
       });
       
       // Add consumer group parameters if provided
@@ -293,12 +307,21 @@ export class Queen {
         // Reset empty counter on successful fetch
         consecutiveEmptyResponses = 0;
         
-        // Yield each message (filter out any null/undefined values)
-        for (const message of result.messages) {
-          if (message) { // Skip null/undefined messages
-            yield message;
-            count++;
-            if (limit && count >= limit) return;
+        // Update last message time if tracking idle timeout
+        if (idleTimeout) {
+          lastMessageTime = Date.now();
+        }
+        
+        // Filter out null/undefined messages
+        const messages = result.messages.filter(msg => msg != null);
+        
+        if (messages.length > 0) {
+          totalCount += messages.length;
+          yield messages;
+          
+          // If we've hit the limit, stop
+          if (limit && totalCount >= limit) {
+            break;
           }
         }
         
@@ -320,14 +343,142 @@ export class Queen {
   }
   
   /**
-   * Acknowledge a message
-   * @param {Object|string} message - Message object or transaction ID
+   * Take messages from a queue one at a time (async iterator)
+   * @param {string} address - Queue address (e.g., "myqueue", "myqueue/partition", "myqueue@group")
+   * @param {Object} options - Options for taking messages
+   * @yields {Object} Individual message objects
+   */
+  async *take(address, options = {}) {
+    let count = 0;
+    const { limit = null } = options;
+    
+    for await (const messages of this.#takeInternal(address, options)) {
+      for (const message of messages) {
+        yield message;
+        count++;
+        
+        // Double-check limit (internal method also checks, but this ensures exact limit)
+        if (limit && count >= limit) {
+          return;
+        }
+      }
+    }
+  }
+  
+  /**
+   * Take messages from a queue in batches (async iterator)
+   * @param {string} address - Queue address (e.g., "myqueue", "myqueue/partition", "myqueue@group")
+   * @param {Object} options - Options for taking messages
+   * @yields {Array} Arrays of message objects
+   */
+  async *takeBatch(address, options = {}) {
+    for await (const messages of this.#takeInternal(address, options)) {
+      // Only yield non-empty batches
+      if (messages && messages.length > 0) {
+        yield messages;
+      }
+    }
+  }
+  
+  /**
+   * Acknowledge a message or batch of messages
+   * @param {Object|string|Array} message - Message object, transaction ID, or array of messages
    * @param {boolean|string} status - true for success, false for failure, or 'retry'
    * @param {Object} context - Optional context (e.g., { group: 'workers', error: 'reason' })
    */
   async ack(message, status = true, context = {}) {
     await this.#ensureConnected();
     
+    // Handle batch acknowledgment
+    if (Array.isArray(message)) {
+      if (message.length === 0) {
+        return { processed: 0, results: [] };
+      }
+      
+      // Check if messages have individual status (Option B pattern)
+      const hasIndividualStatus = message.some(msg => 
+        typeof msg === 'object' && msg !== null && ('_status' in msg || '_error' in msg)
+      );
+      
+      let acknowledgments;
+      
+      if (hasIndividualStatus) {
+        // Option B: Each message has its own status
+        acknowledgments = message.map(msg => {
+          // Extract transaction ID
+          let transactionId;
+          if (typeof msg === 'string') {
+            transactionId = msg;
+          } else if (typeof msg === 'object' && msg !== null) {
+            transactionId = msg.transactionId || msg.id;
+            if (!transactionId) {
+              throw new Error('Message object must have transactionId or id property');
+            }
+          } else {
+            throw new Error('Invalid message in batch');
+          }
+          
+          // Get individual status or fall back to parameter
+          let msgStatus = msg._status !== undefined ? msg._status : status;
+          let statusStr;
+          if (typeof msgStatus === 'boolean') {
+            statusStr = msgStatus ? 'completed' : 'failed';
+          } else {
+            statusStr = msgStatus;
+          }
+          
+          return {
+            transactionId,
+            status: statusStr,
+            error: msg._error || context.error || null
+          };
+        });
+      } else {
+        // Option A: Same status for all messages
+        const statusStr = typeof status === 'boolean' 
+          ? (status ? 'completed' : 'failed')
+          : status;
+        
+        acknowledgments = message.map(msg => {
+          // Extract transaction ID
+          let transactionId;
+          if (typeof msg === 'string') {
+            transactionId = msg;
+          } else if (typeof msg === 'object' && msg !== null) {
+            transactionId = msg.transactionId || msg.id;
+            if (!transactionId) {
+              throw new Error('Message object must have transactionId or id property');
+            }
+          } else {
+            throw new Error('Invalid message in batch');
+          }
+          
+          return {
+            transactionId,
+            status: statusStr,
+            error: context.error || null
+          };
+        });
+      }
+      
+      // Call batch ack endpoint
+      const result = await withRetry(
+        () => this.#http.post('/api/v1/ack/batch', { 
+          acknowledgments,
+          consumerGroup: context.group || null
+        }),
+        this.#config.retryAttempts,
+        this.#config.retryDelay
+      );
+      
+      if (result && result.error) {
+        throw new Error(result.error);
+      }
+      
+      return result;
+    }
+    
+    // Handle single message acknowledgment
     // Extract transaction ID
     let transactionId;
     if (typeof message === 'string') {
@@ -359,6 +510,31 @@ export class Queen {
     
     const result = await withRetry(
       () => this.#http.post('/api/v1/ack', body),
+      this.#config.retryAttempts,
+      this.#config.retryDelay
+    );
+    
+    if (result && result.error) {
+      throw new Error(result.error);
+    }
+    
+    return result;
+  }
+  
+  /**
+   * Delete a queue (removes queue and all its messages/partitions)
+   * @param {string} name - Queue name to delete
+   * @returns {Promise<Object>} Deletion result
+   */
+  async queueDelete(name) {
+    await this.#ensureConnected();
+    
+    if (typeof name !== 'string' || !name) {
+      throw new Error('Queue name must be a non-empty string');
+    }
+    
+    const result = await withRetry(
+      () => this.#http.delete(`/api/v1/resources/queues/${encodeURIComponent(name)}`),
       this.#config.retryAttempts,
       this.#config.retryDelay
     );

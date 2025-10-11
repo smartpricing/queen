@@ -154,6 +154,10 @@ class ApiService {
     return this.delete(`/queues/${encodeURIComponent(queueName)}/clear`, params)
   }
 
+  async deleteQueue(queueName) {
+    return this.delete(`/resources/queues/${encodeURIComponent(queueName)}`)
+  }
+
   // Push & Pop
   async pushMessages(items) {
     return this.post('/push', { items })

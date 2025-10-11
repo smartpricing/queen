@@ -71,7 +71,7 @@ resourceCache.registerEventHandlers(systemEventManager);
 const queueManager = createOptimizedQueueManager(pool, resourceCache, eventManager, systemEventManager);
 const analyticsRoutes = createAnalyticsRoutes(queueManager);
 const messagesRoutes = createMessagesRoutes(pool, queueManager);
-const resourcesRoutes = createResourcesRoutes(pool);
+const resourcesRoutes = createResourcesRoutes(pool, systemEventManager);
 
 // Initialize database with migrations
 const initDatabaseWithMigrations = async () => {
@@ -1125,6 +1125,32 @@ app.get('/api/v1/resources/overview', (res, req) => {
   }).catch(error => {
     if (aborted) return;
     log('Get overview error:', error);
+    res.cork(() => {
+      setCorsHeaders(res);
+      res.writeStatus(config.HTTP_STATUS.INTERNAL_SERVER_ERROR.toString()).end(JSON.stringify({ error: error.message }));
+    });
+  });
+});
+
+// Delete queue
+app.del('/api/v1/resources/queues/:queue', (res, req) => {
+  const queue = req.getParameter(0);
+  
+  let aborted = false;
+  res.onAborted(() => {
+    aborted = true;
+    log('Delete queue request aborted');
+  });
+  
+  resourcesRoutes.deleteQueue(queue).then(result => {
+    if (aborted) return;
+    res.cork(() => {
+      setCorsHeaders(res);
+      res.writeStatus(config.HTTP_STATUS.OK.toString()).end(JSON.stringify(result));
+    });
+  }).catch(error => {
+    if (aborted) return;
+    log('Delete queue error:', error);
     res.cork(() => {
       setCorsHeaders(res);
       res.writeStatus(config.HTTP_STATUS.INTERNAL_SERVER_ERROR.toString()).end(JSON.stringify({ error: error.message }));

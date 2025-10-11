@@ -56,7 +56,7 @@ export const createMessagesRoutes = (pool, queueManager) => {
       query += ` AND m.status = $${++paramCount}`;
     }
     
-    query += ` ORDER BY m.created_at DESC`;
+    query += ` ORDER BY m.created_at DESC, m.id DESC`;
     
     params.push(limit);
     query += ` LIMIT $${++paramCount}`;

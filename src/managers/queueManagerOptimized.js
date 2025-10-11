@@ -388,7 +388,10 @@ const popMessagesV2 = async (scope, options = {}) => {
   
   return withTransaction(pool, async (client) => {
     // Set transaction isolation level to prevent dirty reads
-    await client.query('SET TRANSACTION ISOLATION LEVEL REPEATABLE READ');
+    // await client.query('SET TRANSACTION ISOLATION LEVEL REPEATABLE READ');
+
+    // Using READ COMMITTED for better concurrency with multiple consumers
+    await client.query('SET TRANSACTION ISOLATION LEVEL READ COMMITTED');
     
     // Step 1: Reclaim expired leases
     const reclaimResult = await client.query(`
@@ -608,7 +611,7 @@ const popMessagesV2 = async (scope, options = {}) => {
       LEFT JOIN queen.messages_status ms ON m.id = ms.message_id 
         AND ms.consumer_group = $1
       WHERE ${whereClause}
-      ORDER BY m.created_at ASC
+      ORDER BY m.created_at ASC, m.id ASC
       LIMIT $6
       FOR UPDATE OF m NOWAIT
     `, queryParams).catch(err => {
@@ -971,7 +974,7 @@ const popMessages = async (scope, options = {}) => {
         
         await client.query(releaseQuery, [ids, actualConsumerGroup]);
         
-        log(`${LogTypes.ACK_BATCH} | Status: completed | Count: ${ids.length} | ConsumerGroup: ${consumerGroup || 'QUEUE_MODE'} | TransactionIds: [${ids.join(', ')}]`);
+        log(`${LogTypes.ACK_BATCH} | Status: completed | Count: ${ids.length} | ConsumerGroup: ${consumerGroup || 'QUEUE_MODE'} | Transaction: ${ids.length}`);
         
         grouped.completed.forEach(ack => {
           results.push({ transactionId: ack.transactionId, status: 'completed' });
@@ -1272,7 +1275,7 @@ const popMessages = async (scope, options = {}) => {
     }
     
     params.push(batch);
-    query += ` ORDER BY q.priority DESC, m.created_at ASC LIMIT $${params.length} FOR UPDATE OF m SKIP LOCKED`;
+    query += ` ORDER BY q.priority DESC, m.created_at ASC, m.id ASC LIMIT $${params.length} FOR UPDATE OF m SKIP LOCKED`;
     
     // Add the INSERT part
     params.push(config.WORKER_ID);
