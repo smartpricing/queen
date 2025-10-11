@@ -73,7 +73,7 @@ async function consumer(consumerId, partition) {
 
         // Acknowledge all messages
         const ackStartTime = Date.now();
-        await q.ack(messages);
+        q.ack(messages);
         const ackTime = Date.now() - ackStartTime;
         consumerMetrics.ackTimes.push(ackTime);
         metrics.ackTimes.push(ackTime);

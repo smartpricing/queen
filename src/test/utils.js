@@ -6,7 +6,7 @@ import pg from 'pg';
 
 // Test configuration
 export const TEST_CONFIG = {
-  baseUrls: ['http://localhost:6632', 'http://localhost:6633'],
+  baseUrls: ['http://localhost:6632'],
   dbConfig: {
     host: process.env.PG_HOST || 'localhost',
     port: process.env.PG_PORT || 5432,
