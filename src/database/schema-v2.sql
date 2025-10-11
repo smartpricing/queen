@@ -88,7 +88,9 @@ CREATE TABLE IF NOT EXISTS queen.partition_leases (
     partition_id UUID REFERENCES queen.partitions(id) ON DELETE CASCADE,
     consumer_group VARCHAR(255) DEFAULT '__QUEUE_MODE__',  -- '__QUEUE_MODE__' for queue mode
     lease_expires_at TIMESTAMPTZ NOT NULL,
-    message_batch JSONB,  -- Store IDs of messages in this lease
+    message_batch JSONB,  -- Store IDs of messages in this lease (for exclusion)
+    batch_size INTEGER DEFAULT 0,  -- Total number of messages in the batch
+    acked_count INTEGER DEFAULT 0,  -- Number of messages acknowledged so far
     created_at TIMESTAMPTZ DEFAULT NOW(),
     released_at TIMESTAMPTZ,  -- When lease was released (NULL if active)
     UNIQUE(partition_id, consumer_group)  -- One active lease per partition per consumer group

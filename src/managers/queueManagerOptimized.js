@@ -665,8 +665,10 @@ const popMessagesV2 = async (scope, options = {}) => {
       INSERT INTO queen.partition_leases (
         partition_id, 
         consumer_group, 
-        lease_expires_at
-      ) VALUES ($1, $2, NOW() + INTERVAL '1 second' * $3)
+        lease_expires_at,
+        batch_size,
+        acked_count
+      ) VALUES ($1, $2, NOW() + INTERVAL '1 second' * $3, 0, 0)
       ON CONFLICT (partition_id, consumer_group) 
       DO UPDATE SET 
         lease_expires_at = CASE
@@ -686,6 +688,18 @@ const popMessagesV2 = async (scope, options = {}) => {
             OR queen.partition_leases.lease_expires_at <= NOW()
           THEN NULL
           ELSE queen.partition_leases.message_batch
+        END,
+        batch_size = CASE
+          WHEN queen.partition_leases.released_at IS NOT NULL 
+            OR queen.partition_leases.lease_expires_at <= NOW()
+          THEN 0
+          ELSE queen.partition_leases.batch_size
+        END,
+        acked_count = CASE
+          WHEN queen.partition_leases.released_at IS NOT NULL 
+            OR queen.partition_leases.lease_expires_at <= NOW()
+          THEN 0
+          ELSE queen.partition_leases.acked_count
         END
       RETURNING 
         lease_expires_at,
@@ -858,14 +872,17 @@ const popMessagesV2 = async (scope, options = {}) => {
     directPopMetrics.statusUpdateTimes.push(statusUpdateTime);
     
     const leaseUpdateStart = Date.now();
-    // Step 10: Update partition lease with message batch
+    // Step 10: Update partition lease with message batch, batch_size, and reset acked_count
+    // HYBRID COUNTER OPTIMIZATION: Track batch size for O(1) completion checking
     if (messages.length > 0) {
       const messageIds = messages.map(m => m.id);
       await client.query(`
         UPDATE queen.partition_leases
-        SET message_batch = $1::jsonb
-        WHERE partition_id = $2 AND consumer_group = $3
-      `, [JSON.stringify(messageIds), partitionInfo.id, actualConsumerGroup]);
+        SET message_batch = $1::jsonb,
+            batch_size = $2::integer,
+            acked_count = 0
+        WHERE partition_id = $3 AND consumer_group = $4
+      `, [JSON.stringify(messageIds), messageIds.length, partitionInfo.id, actualConsumerGroup]);
     }
     const leaseUpdateTime = Date.now() - leaseUpdateStart;
     directPopMetrics.leaseUpdateTimes.push(leaseUpdateTime);
@@ -971,31 +988,26 @@ const popMessages = async (scope, options = {}) => {
         
         await client.query(upsertQuery, [messageStatus.message_id, actualConsumerGroup, currentRetryCount]);
         
-        // Remove this message from the partition lease's message_batch
-        // This allows the consumer to continue popping new messages while processing the current batch
-        const updateBatchQuery = `
+        // HYBRID COUNTER OPTIMIZATION: Increment acked_count instead of manipulating JSONB
+        // This is O(1) instead of O(n) for large batches
+        const incrementQuery = `
           WITH message_info AS (
-            SELECT m.partition_id, m.id as message_id
+            SELECT m.partition_id
             FROM queen.messages m
             WHERE m.transaction_id = $1
           )
           UPDATE queen.partition_leases pl
-          SET message_batch = (
-            -- Remove the acknowledged message ID from the batch
-            SELECT jsonb_agg(elem)
-            FROM jsonb_array_elements_text(pl.message_batch) elem
-            WHERE elem::uuid != mi.message_id
-          )
+          SET acked_count = acked_count + 1
           FROM message_info mi
           WHERE pl.partition_id = mi.partition_id
             AND pl.consumer_group = $2
             AND pl.released_at IS NULL
-            AND pl.message_batch IS NOT NULL
         `;
         
-        await client.query(updateBatchQuery, [transactionId, actualConsumerGroup]);
+        await client.query(incrementQuery, [transactionId, actualConsumerGroup]);
         
-        // Release partition lease if the message_batch is now empty
+        // Release partition lease if all messages in batch have been acknowledged
+        // Simple integer comparison: O(1) instead of checking entire JSONB array
         const releaseQuery = `
           WITH message_info AS (
             SELECT m.partition_id
@@ -1003,12 +1015,16 @@ const popMessages = async (scope, options = {}) => {
             WHERE m.transaction_id = $1
           )
           UPDATE queen.partition_leases pl
-          SET released_at = NOW(), message_batch = NULL
+          SET released_at = NOW(), 
+              message_batch = NULL,
+              batch_size = 0,
+              acked_count = 0
           FROM message_info mi
           WHERE pl.partition_id = mi.partition_id
             AND pl.consumer_group = $2
             AND pl.released_at IS NULL
-            AND (pl.message_batch IS NULL OR jsonb_array_length(pl.message_batch) = 0)
+            AND pl.acked_count >= pl.batch_size
+            AND pl.batch_size > 0
         `;
         
         await client.query(releaseQuery, [transactionId, actualConsumerGroup]);
@@ -1056,29 +1072,24 @@ const popMessages = async (scope, options = {}) => {
           
           await client.query(upsertQuery, [messageStatus.message_id, actualConsumerGroup, error, nextRetryCount]);
           
-          // Remove this message from the partition lease's message_batch
-          const updateBatchQuery = `
+          // HYBRID COUNTER OPTIMIZATION: Increment acked_count instead of manipulating JSONB
+          const incrementQuery = `
             WITH message_info AS (
-              SELECT m.partition_id, m.id as message_id
+              SELECT m.partition_id
               FROM queen.messages m
               WHERE m.transaction_id = $1
             )
             UPDATE queen.partition_leases pl
-            SET message_batch = (
-              SELECT jsonb_agg(elem)
-              FROM jsonb_array_elements_text(pl.message_batch) elem
-              WHERE elem::uuid != mi.message_id
-            )
+            SET acked_count = acked_count + 1
             FROM message_info mi
             WHERE pl.partition_id = mi.partition_id
               AND pl.consumer_group = $2
               AND pl.released_at IS NULL
-              AND pl.message_batch IS NOT NULL
           `;
           
-          await client.query(updateBatchQuery, [transactionId, actualConsumerGroup]);
+          await client.query(incrementQuery, [transactionId, actualConsumerGroup]);
           
-          // Release partition lease if the message_batch is now empty
+          // Release partition lease if all messages acknowledged
           const releaseOnFailQuery = `
             WITH message_info AS (
               SELECT m.partition_id
@@ -1086,12 +1097,16 @@ const popMessages = async (scope, options = {}) => {
               WHERE m.transaction_id = $1
             )
             UPDATE queen.partition_leases pl
-            SET released_at = NOW(), message_batch = NULL
+            SET released_at = NOW(), 
+                message_batch = NULL,
+                batch_size = 0,
+                acked_count = 0
             FROM message_info mi
             WHERE pl.partition_id = mi.partition_id
               AND pl.consumer_group = $2
               AND pl.released_at IS NULL
-              AND (pl.message_batch IS NULL OR jsonb_array_length(pl.message_batch) = 0)
+              AND pl.acked_count >= pl.batch_size
+              AND pl.batch_size > 0
           `;
           
           await client.query(releaseOnFailQuery, [transactionId, actualConsumerGroup]);
@@ -1159,32 +1174,27 @@ const popMessages = async (scope, options = {}) => {
           await client.query(upsertQuery, params);
         }
         
-        // Remove acknowledged messages from partition lease message_batch
-        // This allows consumers to continue popping new messages while processing current batch
-        const updateBatchQuery = `
+        // HYBRID COUNTER OPTIMIZATION: Increment acked_count by batch size instead of manipulating JSONB
+        // This is O(1) instead of O(n×m) for large batches
+        const incrementQuery = `
           WITH acknowledged_messages AS (
-            SELECT DISTINCT m.partition_id, array_agg(m.id) as acked_message_ids
+            SELECT m.partition_id, COUNT(*) as ack_count
             FROM queen.messages m
             WHERE m.transaction_id = ANY($1::varchar[])
             GROUP BY m.partition_id
           )
           UPDATE queen.partition_leases pl
-          SET message_batch = (
-            -- Remove all acknowledged message IDs from the batch
-            SELECT jsonb_agg(elem)
-            FROM jsonb_array_elements_text(pl.message_batch) elem
-            WHERE elem::uuid != ALL(am.acked_message_ids)
-          )
+          SET acked_count = acked_count + am.ack_count
           FROM acknowledged_messages am
           WHERE pl.partition_id = am.partition_id
             AND pl.consumer_group = $2
             AND pl.released_at IS NULL
-            AND pl.message_batch IS NOT NULL
         `;
         
-        await client.query(updateBatchQuery, [ids, actualConsumerGroup]);
+        await client.query(incrementQuery, [ids, actualConsumerGroup]);
         
-        // Release partition leases if their message_batch is now empty
+        // Release partition leases if all messages in batch have been acknowledged
+        // Simple integer comparison instead of checking JSONB array
         const releaseQuery = `
           WITH affected_partitions AS (
             SELECT DISTINCT m.partition_id
@@ -1192,12 +1202,16 @@ const popMessages = async (scope, options = {}) => {
             WHERE m.transaction_id = ANY($1::varchar[])
           )
           UPDATE queen.partition_leases pl
-          SET released_at = NOW(), message_batch = NULL
+          SET released_at = NOW(), 
+              message_batch = NULL,
+              batch_size = 0,
+              acked_count = 0
           FROM affected_partitions ap
           WHERE pl.partition_id = ap.partition_id
             AND pl.consumer_group = $2
             AND pl.released_at IS NULL
-            AND (pl.message_batch IS NULL OR jsonb_array_length(pl.message_batch) = 0)
+            AND pl.acked_count >= pl.batch_size
+            AND pl.batch_size > 0
         `;
         
         await client.query(releaseQuery, [ids, actualConsumerGroup]);
@@ -1319,41 +1333,40 @@ const popMessages = async (scope, options = {}) => {
         
         const failedResult = await client.query(failedQuery, params);
         
-        // Remove failed messages from partition lease message_batch
+        // HYBRID COUNTER OPTIMIZATION: Increment acked_count by number of failed messages
         if (failedResult.rows.length > 0) {
-          const updateBatchQuery = `
+          const incrementQuery = `
             WITH failed_messages AS (
-              SELECT DISTINCT m.partition_id, array_agg(m.id) as failed_message_ids
+              SELECT m.partition_id, COUNT(*) as fail_count
               FROM queen.messages m
               WHERE m.transaction_id = ANY($1::varchar[])
               GROUP BY m.partition_id
             )
             UPDATE queen.partition_leases pl
-            SET message_batch = (
-              SELECT jsonb_agg(elem)
-              FROM jsonb_array_elements_text(pl.message_batch) elem
-              WHERE elem::uuid != ALL(fm.failed_message_ids)
-            )
+            SET acked_count = acked_count + fm.fail_count
             FROM failed_messages fm
             WHERE pl.partition_id = fm.partition_id
               AND pl.consumer_group = $2
               AND pl.released_at IS NULL
-              AND pl.message_batch IS NOT NULL
           `;
           
-          await client.query(updateBatchQuery, [failedIds, actualConsumerGroup]);
+          await client.query(incrementQuery, [failedIds, actualConsumerGroup]);
           
-          // Release partition leases if their message_batch is now empty
+          // Release partition leases if all messages acknowledged
           const affectedPartitions = [...new Set(failedResult.rows.map(r => r.partition_id))];
           
           for (const partitionId of affectedPartitions) {
             await client.query(`
               UPDATE queen.partition_leases pl
-              SET released_at = NOW(), message_batch = NULL
+              SET released_at = NOW(), 
+                  message_batch = NULL,
+                  batch_size = 0,
+                  acked_count = 0
               WHERE pl.partition_id = $1
                 AND pl.consumer_group = $2
                 AND pl.released_at IS NULL
-                AND (pl.message_batch IS NULL OR jsonb_array_length(pl.message_batch) = 0)
+                AND pl.acked_count >= pl.batch_size
+                AND pl.batch_size > 0
             `, [partitionId, actualConsumerGroup]);
           }
         }
@@ -1722,8 +1735,10 @@ const popMessages = async (scope, options = {}) => {
             INSERT INTO queen.partition_leases (
               partition_id, 
               consumer_group, 
-              lease_expires_at
-            ) VALUES ($1, $2, NOW() + INTERVAL '1 second' * $3)
+              lease_expires_at,
+              batch_size,
+              acked_count
+            ) VALUES ($1, $2, NOW() + INTERVAL '1 second' * $3, 0, 0)
             ON CONFLICT (partition_id, consumer_group) 
             DO UPDATE SET 
               lease_expires_at = CASE
@@ -1743,6 +1758,18 @@ const popMessages = async (scope, options = {}) => {
                   OR queen.partition_leases.lease_expires_at <= NOW()
                 THEN NULL
                 ELSE queen.partition_leases.message_batch
+              END,
+              batch_size = CASE
+                WHEN queen.partition_leases.released_at IS NOT NULL 
+                  OR queen.partition_leases.lease_expires_at <= NOW()
+                THEN 0
+                ELSE queen.partition_leases.batch_size
+              END,
+              acked_count = CASE
+                WHEN queen.partition_leases.released_at IS NOT NULL 
+                  OR queen.partition_leases.lease_expires_at <= NOW()
+                THEN 0
+                ELSE queen.partition_leases.acked_count
               END
             RETURNING 
               partition_id,
@@ -1874,13 +1901,16 @@ const popMessages = async (scope, options = {}) => {
       //     worker_id = EXCLUDED.worker_id
       // `, statusParams);
       
-      // Step 5: Update partition lease with message batch
+      // Step 5: Update partition lease with message batch, batch_size, and reset acked_count
+      // HYBRID COUNTER OPTIMIZATION: Track batch size for O(1) completion checking
       const messageIds = messages.map(m => m.id);
       await client.query(`
         UPDATE queen.partition_leases
-        SET message_batch = $1::jsonb
-        WHERE partition_id = $2 AND consumer_group = $3
-      `, [JSON.stringify(messageIds), partition.partition_id, actualConsumerGroup]);
+        SET message_batch = $1::jsonb,
+            batch_size = $2::integer,
+            acked_count = 0
+        WHERE partition_id = $3 AND consumer_group = $4
+      `, [JSON.stringify(messageIds), messageIds.length, partition.partition_id, actualConsumerGroup]);
       
       // Step 6: Format and decrypt messages
       const formattedMessages = await Promise.all(
