@@ -1,10 +1,9 @@
 import uWS from 'uWebSockets.js';
-import pg from 'pg';
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import config from './config.js';
-import { initDatabase } from './database/connection.js';
+import { createPool, initDatabase } from './database/connection.js';
 import { createOptimizedQueueManager } from './managers/queueManagerOptimized.js';
 import { createResourceCache } from './managers/resourceCache.js';
 import { createEventManager } from './managers/eventManager.js';
@@ -38,35 +37,8 @@ let requestCount = 0;
 let messageCount = 0;
 const startTime = Date.now();
 
-// Create optimized connection pool
-const { Pool } = pg;
-const createOptimizedPool = () => {
-  const poolConfig = {
-    user: config.DATABASE.USER,
-    host: config.DATABASE.HOST,
-    database: config.DATABASE.DATABASE,
-    password: config.DATABASE.PASSWORD,
-    port: config.DATABASE.PORT,
-    max: config.DATABASE.POOL_SIZE,
-    idleTimeoutMillis: config.DATABASE.IDLE_TIMEOUT,
-    connectionTimeoutMillis: config.DATABASE.CONNECTION_TIMEOUT,
-    statement_timeout: config.DATABASE.STATEMENT_TIMEOUT,
-    query_timeout: config.DATABASE.QUERY_TIMEOUT,
-    application_name: config.SERVER.APPLICATION_NAME
-  };
-
-  // Add SSL configuration if enabled
-  if (config.DATABASE.USE_SSL) {
-    poolConfig.ssl = {
-      rejectUnauthorized: config.DATABASE.SSL_REJECT_UNAUTHORIZED
-    };
-  }
-
-  return new Pool(poolConfig);
-};
-
 // Initialize components
-const pool = createOptimizedPool();
+const pool = createPool();
 const resourceCache = createResourceCache();
 const eventManager = createEventManager();
 

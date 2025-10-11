@@ -2,27 +2,34 @@ import pg from 'pg';
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
+import config from '../config.js';
 
 const { Pool } = pg;
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
-// Create connection pool
+/**
+ * Create a PostgreSQL connection pool with proper configuration
+ * This is the single source of truth for pool creation across the application
+ */
 export const createPool = () => {
   const poolConfig = {
-    user: process.env.PG_USER || 'postgres',
-    host: process.env.PG_HOST || 'localhost',
-    database: process.env.PG_DB || 'postgres',
-    password: process.env.PG_PASSWORD || 'postgres',
-    port: process.env.PG_PORT || 5432,
-    max: process.env.DB_POOL_SIZE || 20,
-    idleTimeoutMillis: 30000,
-    connectionTimeoutMillis: 2000,
+    user: config.DATABASE.USER,
+    host: config.DATABASE.HOST,
+    database: config.DATABASE.DATABASE,
+    password: config.DATABASE.PASSWORD,
+    port: config.DATABASE.PORT,
+    max: config.DATABASE.POOL_SIZE,
+    idleTimeoutMillis: config.DATABASE.IDLE_TIMEOUT,
+    connectionTimeoutMillis: config.DATABASE.CONNECTION_TIMEOUT,
+    // Note: statement_timeout and query_timeout cannot be set as startup parameters
+    // They should be set per-query or per-transaction using SET commands
+    application_name: config.SERVER.APPLICATION_NAME
   };
 
   // Add SSL configuration if enabled
-  if (process.env.PG_USE_SSL === 'true') {
+  if (config.DATABASE.USE_SSL) {
     poolConfig.ssl = {
-      rejectUnauthorized: process.env.PG_SSL_REJECT_UNAUTHORIZED !== 'false'
+      rejectUnauthorized: config.DATABASE.SSL_REJECT_UNAUTHORIZED
     };
   }
 
