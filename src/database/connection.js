@@ -90,8 +90,8 @@ export const withTransaction = async (pool, callback, isolationLevel = 'READ COM
       }
       
       // Set timeouts to prevent long blocks
-      await client.query('SET LOCAL statement_timeout = 30000'); // 30 seconds
-      await client.query('SET LOCAL lock_timeout = 5000'); // 5 seconds
+      await client.query(`SET LOCAL statement_timeout = ${config.DATABASE.STATEMENT_TIMEOUT}`);
+      await client.query(`SET LOCAL lock_timeout = ${config.DATABASE.LOCK_TIMEOUT}`);
       
       const result = await callback(client);
       await client.query('COMMIT');
@@ -99,13 +99,16 @@ export const withTransaction = async (pool, callback, isolationLevel = 'READ COM
     } catch (error) {
       await client.query('ROLLBACK');
       
-      // Check for serialization failure or deadlock
-      if ((error.code === '40001' || error.code === '40P01') && attempt < maxAttempts) {
+      // Check for serialization failure, deadlock, or lock timeout
+      // 40001: serialization_failure
+      // 40P01: deadlock_detected
+      // 55P03: lock_not_available (lock timeout)
+      if ((error.code === '40001' || error.code === '40P01' || error.code === '55P03') && attempt < maxAttempts) {
         // Exponential backoff: 100ms, 200ms, 400ms
         const delay = Math.min(100 * Math.pow(2, attempt - 1), 1000);
         await new Promise(resolve => setTimeout(resolve, delay));
         attempt++;
-        console.log(`Transaction retry attempt ${attempt}/${maxAttempts} after ${error.code}`);
+        console.log(`Transaction retry attempt ${attempt}/${maxAttempts} after ${error.code} (${error.message})`);
         continue;
       }
       

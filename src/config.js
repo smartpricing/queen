@@ -33,6 +33,7 @@ export const DATABASE = {
   CONNECTION_TIMEOUT: parseInt(process.env.DB_CONNECTION_TIMEOUT) || 2000, // 2 seconds
   STATEMENT_TIMEOUT: parseInt(process.env.DB_STATEMENT_TIMEOUT) || 30000, // 30 seconds
   QUERY_TIMEOUT: parseInt(process.env.DB_QUERY_TIMEOUT) || 30000, // 30 seconds
+  LOCK_TIMEOUT: parseInt(process.env.DB_LOCK_TIMEOUT) || 10000, // 10 seconds
   
   // Pool manager settings
   MAX_RETRIES: parseInt(process.env.DB_MAX_RETRIES) || 3
