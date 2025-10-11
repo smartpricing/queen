@@ -2,13 +2,13 @@ import { Queen } from '../client/client.js';
 import fs from 'fs';
 
 const TOTAL_MESSAGES = 100000;
-const PARTITIONS = 100;
+const PARTITIONS = 10;  // Reduced from 100 to allow larger batches per partition
 const PUSH_PARALLEL = 10;
 const QUEUE_NAME = 'benchmark-queue-01';
 
 const q = new Queen({
-  baseUrls: ['http://localhost:6632', 'http://localhost:6633'],
-  timeout: 30000
+  baseUrls: ['http://localhost:6632'],
+  timeout: 120000
 });
 
 await q.queueDelete(QUEUE_NAME);

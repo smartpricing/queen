@@ -2,78 +2,189 @@ import { Queen } from '../client/client.js';
 import fs from 'fs';
 
 const QUEUE_NAME = 'benchmark-queue-01';
+const NUMBER_OF_CONSUMERS = 10;
 
+// Global metrics tracking
+const metrics = {
+  startTime: null,
+  endTime: null,
+  totalProcessed: 0,
+  consumers: [],
+  batchTimes: [],
+  ackTimes: [],
+  popTimes: []
+};
 
-
-/*await q.queue(QUEUE_NAME, {
-  leaseTime: 10,
-  retryLimit: 3
-});*/
-
-
-// Process continuously with batch processing
-let totalProcessed = 0;
-let startTime = Date.now();
-
-async function consumer () {
+async function consumer(consumerId, partition) {
   const q = new Queen({
-    baseUrls: ['http://localhost:6632', 'http://localhost:6633'],
+    baseUrls: ['http://localhost:6632'],
     timeout: 30000
-  });  
-for await (const messages of q.takeBatch(QUEUE_NAME, { 
-    wait: true,        // Enable long polling
-    timeout: 30000,    // 30 second timeout
-    batch: 10000,       // Fetch up to 1000 at once
-    idleTimeout: 20000 // Stop if no messages for 10 seconds
-  })) {
-    try {
-      // Process the batch
+  });
+  
+  const consumerMetrics = {
+    consumerId,
+    partition,
+    messagesProcessed: 0,
+    batchesProcessed: 0,
+    batchTimes: [],
+    ackTimes: [],
+    popTimes: [],
+    startTime: Date.now(),
+    endTime: null
+  };
+  
+  metrics.consumers.push(consumerMetrics);
+  console.log(`[Consumer ${consumerId}] Started, consuming partition ${partition}`);
+  
+  try {
+    for await (const messages of q.takeBatch(`${QUEUE_NAME}/${partition}`, { 
+      wait: true,
+      timeout: 30000,
+      batch: 10000,
+      idleTimeout: 5000
+    })) {
       const batchStartTime = Date.now();
-      totalProcessed += messages.length;
-       
-      // Validate message ordering within each partition
-      const partitionLastIds = new Map();
+      const popTime = batchStartTime - (consumerMetrics.endTime || consumerMetrics.startTime);
+      consumerMetrics.popTimes.push(popTime);
+      metrics.popTimes.push(popTime);
       
-      for (const message of messages) {
-        if (!message.data || typeof message.data.id !== 'number') {
-          throw new Error(`Message missing or invalid data.id: ${JSON.stringify(message)}`);
-        }
+      try {
+        // Validate message ordering
+        const partitionLastIds = new Map();
         
-        const partition = message.partition || 'default';
-        const messageId = message.data.id;
-        
-        if (partitionLastIds.has(partition)) {
-          //console.log(message.partition, message.data.id);
-          const lastId = partitionLastIds.get(partition);
-          if (messageId !== lastId + 1) {
-            console.log(message.partition, message);
-            throw new Error(`Message ordering violation in partition '${partition}': expected id ${lastId + 1}, got ${messageId}`);
+        for (const message of messages) {
+          if (!message.data || typeof message.data.id !== 'number') {
+            throw new Error(`Message missing or invalid data.id: ${JSON.stringify(message)}`);
           }
+          
+          const partition = message.partition || 'default';
+          const messageId = message.data.id;
+          
+          if (partitionLastIds.has(partition)) {
+            const lastId = partitionLastIds.get(partition);
+            if (messageId !== lastId + 1) {
+              console.log(message.partition, message);
+              throw new Error(`Message ordering violation in partition '${partition}': expected id ${lastId + 1}, got ${messageId}`);
+            }
+          }
+          
+          partitionLastIds.set(partition, messageId);
         }
+
+        // Acknowledge all messages
+        const ackStartTime = Date.now();
+        await q.ack(messages);
+        const ackTime = Date.now() - ackStartTime;
+        consumerMetrics.ackTimes.push(ackTime);
+        metrics.ackTimes.push(ackTime);
         
-        partitionLastIds.set(partition, messageId);
+        const batchEndTime = Date.now();
+        const batchDuration = batchEndTime - batchStartTime;
+        
+        consumerMetrics.messagesProcessed += messages.length;
+        consumerMetrics.batchesProcessed++;
+        consumerMetrics.batchTimes.push(batchDuration);
+        consumerMetrics.endTime = batchEndTime;
+        
+        metrics.totalProcessed += messages.length;
+        metrics.batchTimes.push(batchDuration);
+        
+        const overallDuration = (batchEndTime - metrics.startTime) / 1000;
+        const currentRate = (metrics.totalProcessed / overallDuration).toFixed(0);
+        
+        console.log(`[C${consumerId}] Batch: ${messages.length} msgs | Time: ${(batchDuration/1000).toFixed(3)}s (pop:${(popTime/1000).toFixed(3)}s ack:${(ackTime/1000).toFixed(3)}s) | Total: ${metrics.totalProcessed} | Rate: ${currentRate} msg/s`);
+      } catch (error) {
+        console.error(`[Consumer ${consumerId}] Error processing batch:`, error);
+        await q.ack(messages, false, { error: error.message });
       }
-
-      // Acknowledge all messages in the batch
-      await q.ack(messages);
-      
-      const batchEndTime = Date.now();
-      const batchDuration = (batchEndTime - batchStartTime) / 1000;
-      const overallDuration = (batchEndTime - startTime) / 1000;
-      
-      console.log(`Batch: ${messages.length} messages | Batch time: ${batchDuration.toFixed(3)}s | Total: ${totalProcessed} | Rate: ${(totalProcessed / overallDuration).toFixed(0)} msg/s`);
-    } catch (error) {
-      console.error('Error processing batch:', error);
-      // Acknowledge all messages as failed
-      await q.ack(messages, false, { error: error.message });
     }
-}
+  } catch (error) {
+    console.error(`[Consumer ${consumerId}] Fatal error:`, error);
+  }
+  
+  consumerMetrics.endTime = Date.now();
+  console.log(`[Consumer ${consumerId}] Finished. Processed ${consumerMetrics.messagesProcessed} messages in ${consumerMetrics.batchesProcessed} batches`);
 }
 
-for (let i = 0; i < 10; i++) {
-   consumer();
+// Start metrics
+metrics.startTime = Date.now();
+
+// Launch all consumers
+const consumerPromises = [];
+for (let i = 0; i < NUMBER_OF_CONSUMERS; i++) {
+  consumerPromises.push(consumer(i, i));
 }
 
-const totalDuration = (Date.now() - startTime) / 1000;
-console.log(`\nCompleted! Total: ${totalProcessed} messages in ${totalDuration.toFixed(2)}s`);
-console.log(`Average throughput: ${(totalProcessed / totalDuration).toFixed(0)} messages/second`);
+// Wait for all consumers to complete
+await Promise.all(consumerPromises);
+metrics.endTime = Date.now();
+
+// Calculate actual processing time (excluding idle timeout)
+// Find the time when the last batch was actually completed
+let lastBatchCompletedTime = metrics.startTime;
+metrics.consumers.forEach(c => {
+  if (c.endTime && c.batchesProcessed > 0) {
+    // c.endTime is when consumer exited (after idle timeout)
+    // Actual last batch time = c.endTime - (idle timeout we didn't track)
+    // Better: use the sum of all processing times
+    const totalBatchTime = c.batchTimes.reduce((a,b)=>a+b,0);
+    const totalPopTime = c.popTimes.reduce((a,b)=>a+b,0);
+    const actualEndTime = c.startTime + totalBatchTime + totalPopTime;
+    if (actualEndTime > lastBatchCompletedTime) {
+      lastBatchCompletedTime = actualEndTime;
+    }
+  }
+});
+
+const totalDuration = (metrics.endTime - metrics.startTime) / 1000;
+const actualProcessingDuration = (lastBatchCompletedTime - metrics.startTime) / 1000;
+const avgThroughput = (metrics.totalProcessed / actualProcessingDuration).toFixed(0);
+
+console.log('\n' + '='.repeat(80));
+console.log('📊 BENCHMARK RESULTS');
+console.log('='.repeat(80));
+console.log(`Total Messages Processed: ${metrics.totalProcessed.toLocaleString()}`);
+console.log(`Total Wall Clock Time: ${totalDuration.toFixed(2)}s (includes idle timeout)`);
+console.log(`Actual Processing Time: ${actualProcessingDuration.toFixed(2)}s`);
+console.log(`Idle/Wait Time: ${(totalDuration - actualProcessingDuration).toFixed(2)}s`);
+console.log(`Average Throughput: ${avgThroughput} msg/s (based on processing time)`);
+console.log(`Number of Consumers: ${NUMBER_OF_CONSUMERS}`);
+console.log(`Total Batches: ${metrics.batchTimes.length}`);
+
+if (metrics.batchTimes.length > 0) {
+  const avgBatchTime = (metrics.batchTimes.reduce((a, b) => a + b, 0) / metrics.batchTimes.length / 1000).toFixed(3);
+  const minBatchTime = (Math.min(...metrics.batchTimes) / 1000).toFixed(3);
+  const maxBatchTime = (Math.max(...metrics.batchTimes) / 1000).toFixed(3);
+  
+  console.log(`\nBatch Times:`);
+  console.log(`  Average: ${avgBatchTime}s`);
+  console.log(`  Min: ${minBatchTime}s`);
+  console.log(`  Max: ${maxBatchTime}s`);
+}
+
+if (metrics.popTimes.length > 0) {
+  const avgPopTime = (metrics.popTimes.reduce((a, b) => a + b, 0) / metrics.popTimes.length / 1000).toFixed(3);
+  console.log(`\nAverage POP Time: ${avgPopTime}s`);
+}
+
+if (metrics.ackTimes.length > 0) {
+  const avgAckTime = (metrics.ackTimes.reduce((a, b) => a + b, 0) / metrics.ackTimes.length / 1000).toFixed(3);
+  console.log(`Average ACK Time: ${avgAckTime}s`);
+}
+
+console.log(`\nPer-Consumer Stats:`);
+metrics.consumers.forEach(c => {
+  // Calculate actual processing time (sum of all batch times + pop times)
+  const totalBatchTime = c.batchTimes.reduce((a,b)=>a+b,0);
+  const totalPopTime = c.popTimes.reduce((a,b)=>a+b,0);
+  const actualProcessingTime = (totalBatchTime + totalPopTime) / 1000;
+  
+  const wallClockTime = ((c.endTime - c.startTime) / 1000).toFixed(2);
+  const rate = (c.messagesProcessed / actualProcessingTime).toFixed(0);
+  const avgBatch = c.batchTimes.length > 0 ? (totalBatchTime / c.batchTimes.length / 1000).toFixed(3) : 'N/A';
+  const idleTime = (wallClockTime - actualProcessingTime).toFixed(2);
+  
+  console.log(`  [C${c.consumerId}] ${c.messagesProcessed.toLocaleString()} msgs | Active: ${actualProcessingTime.toFixed(2)}s (${rate} msg/s) | Idle: ${idleTime}s | ${c.batchesProcessed} batches | avg: ${avgBatch}s`);
+});
+
+console.log('='.repeat(80));

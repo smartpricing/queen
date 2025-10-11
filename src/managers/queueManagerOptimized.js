@@ -633,10 +633,30 @@ const popMessagesV2 = async (scope, options = {}) => {
       return { messages: [] };
     }
     
-    // Step 9: Update or insert message status for selected messages
+    // Step 9: Update or insert message status for selected messages (BATCHED)
     const leaseExpiresAt = new Date(Date.now() + (queueInfo.lease_time * 1000));
     
-    for (const message of messages) {
+    if (messages.length > 0) {
+      // Build batched VALUES clause for all messages
+      const valuesArray = [];
+      const params = [];
+      let paramIndex = 1;
+      
+      for (const message of messages) {
+        valuesArray.push(
+          `($${paramIndex}, $${paramIndex + 1}, 'processing', $${paramIndex + 2}, NOW(), $${paramIndex + 3}, $${paramIndex + 4})`
+        );
+        params.push(
+          message.id,                   // message_id
+          actualConsumerGroup,          // consumer_group
+          leaseExpiresAt,              // lease_expires_at
+          config.WORKER_ID,            // worker_id
+          message.retry_count || 0     // retry_count
+        );
+        paramIndex += 5;
+      }
+      
+      // Single batched INSERT query for all messages
       await client.query(`
         INSERT INTO queen.messages_status (
           message_id,
@@ -646,7 +666,7 @@ const popMessagesV2 = async (scope, options = {}) => {
           processing_at,
           worker_id,
           retry_count
-        ) VALUES ($1, $2, 'processing', $3, NOW(), $4, $5)
+        ) VALUES ${valuesArray.join(', ')}
         ON CONFLICT (message_id, consumer_group) 
         DO UPDATE SET
           status = 'processing',
@@ -654,13 +674,7 @@ const popMessagesV2 = async (scope, options = {}) => {
           processing_at = NOW(),
           worker_id = EXCLUDED.worker_id
           -- Keep existing retry_count when re-processing failed messages
-      `, [
-        message.id,
-        actualConsumerGroup,
-        leaseExpiresAt,
-        config.WORKER_ID,
-        message.retry_count || 0
-      ]);
+      `, params);
     }
     
     // Step 10: Update partition lease with message batch

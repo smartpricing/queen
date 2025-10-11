@@ -23,6 +23,10 @@ export const DATABASE = {
   PASSWORD: process.env.PG_PASSWORD || 'postgres',
   PORT: parseInt(process.env.PG_PORT) || 5432,
   
+  // SSL configuration
+  USE_SSL: process.env.PG_USE_SSL === 'true',
+  SSL_REJECT_UNAUTHORIZED: process.env.PG_SSL_REJECT_UNAUTHORIZED !== 'false',
+  
   // Pool configuration
   POOL_SIZE: parseInt(process.env.DB_POOL_SIZE) || 20,
   IDLE_TIMEOUT: parseInt(process.env.DB_IDLE_TIMEOUT) || 30000, // 30 seconds
@@ -129,7 +133,7 @@ export const CLIENT = {
 
 // API Configuration
 export const API = {
-  MAX_BODY_SIZE: parseInt(process.env.MAX_BODY_SIZE) || 10 * 1024 * 1024, // 10MB max body size
+  MAX_BODY_SIZE: parseInt(process.env.MAX_BODY_SIZE) || 100 * 1024 * 1024, // 100MB max body size
   // Pagination
   DEFAULT_LIMIT: parseInt(process.env.API_DEFAULT_LIMIT) || 100,
   MAX_LIMIT: parseInt(process.env.API_MAX_LIMIT) || 1000,

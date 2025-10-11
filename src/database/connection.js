@@ -8,7 +8,7 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 // Create connection pool
 export const createPool = () => {
-  return new Pool({
+  const poolConfig = {
     user: process.env.PG_USER || 'postgres',
     host: process.env.PG_HOST || 'localhost',
     database: process.env.PG_DB || 'postgres',
@@ -17,7 +17,16 @@ export const createPool = () => {
     max: process.env.DB_POOL_SIZE || 20,
     idleTimeoutMillis: 30000,
     connectionTimeoutMillis: 2000,
-  });
+  };
+
+  // Add SSL configuration if enabled
+  if (process.env.PG_USE_SSL === 'true') {
+    poolConfig.ssl = {
+      rejectUnauthorized: process.env.PG_SSL_REJECT_UNAUTHORIZED !== 'false'
+    };
+  }
+
+  return new Pool(poolConfig);
 };
 
 // Initialize database schema
