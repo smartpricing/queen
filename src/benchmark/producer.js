@@ -15,7 +15,7 @@ await q.queueDelete(QUEUE_NAME);
 await q.queue(QUEUE_NAME, {
   leaseTime: 10,
   retryLimit: 3
-});
+}, { namespace: 'benchmark' });
 
 
 

@@ -49,7 +49,10 @@ export const QUEUE = {
   
   // Long polling
   POLL_INTERVAL: parseInt(process.env.QUEUE_POLL_INTERVAL) || 100, // 100ms
-  POLL_INTERVAL_FILTERED: parseInt(process.env.QUEUE_POLL_INTERVAL_FILTERED) || 1000, // 1 second
+  POLL_INTERVAL_FILTERED: parseInt(process.env.QUEUE_POLL_INTERVAL_FILTERED) || 50, // 50ms for better distribution across consumers
+  
+  // Partition selection for filtered pops (namespace/task)
+  MAX_PARTITION_CANDIDATES: parseInt(process.env.MAX_PARTITION_CANDIDATES) || 100, // Number of candidate partitions to fetch for lease acquisition
   
   // Queue defaults
   DEFAULT_LEASE_TIME: parseInt(process.env.DEFAULT_LEASE_TIME) || 300, // 5 minutes

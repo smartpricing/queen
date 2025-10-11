@@ -37,7 +37,7 @@ async function consumer(consumerId, partition) {
   console.log(`[Consumer ${consumerId}] Started, consuming partition ${partition}`);
   
   try {
-    for await (const messages of q.takeBatch(`${QUEUE_NAME}/${partition}`, { 
+    for await (const messages of q.takeBatch(`${QUEUE_NAME}/${partition}`, { //`namespace:benchmark`, 
       wait: true,
       timeout: 30000,
       batch: 10000,

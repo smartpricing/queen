@@ -1440,87 +1440,12 @@ const popMessages = async (scope, options = {}) => {
   };
 
   /**
-   * Build query for popping messages with filters (namespace/task)
-   * This is a helper function to construct the complex query used in popMessagesWithFilters
-   */
-  const buildPopMessagesWithFiltersQuery = (actualConsumerGroup, namespace, task, batch) => {
-    let query = `
-      WITH available_messages AS (
-        SELECT m.id, m.transaction_id, m.trace_id, m.payload, m.is_encrypted, m.created_at,
-               p.id as partition_id, p.name as partition_name, q.name as queue_name,
-               q.priority, q.lease_time, q.retry_limit, q.delayed_processing,
-               q.window_buffer, q.max_wait_time_seconds, q.namespace, q.task
-        FROM queen.messages m
-        JOIN queen.partitions p ON m.partition_id = p.id
-        JOIN queen.queues q ON p.queue_id = q.id
-        LEFT JOIN queen.messages_status ms ON m.id = ms.message_id AND ms.consumer_group = $1
-        WHERE (ms.id IS NULL OR ms.status = 'pending')
-          AND m.created_at <= NOW() - INTERVAL '1 second' * q.delayed_processing
-          AND (q.max_wait_time_seconds = 0 OR 
-               m.created_at > NOW() - INTERVAL '1 second' * q.max_wait_time_seconds)
-          AND (q.window_buffer = 0 OR NOT EXISTS (
-            SELECT 1 FROM queen.messages m2 
-            WHERE m2.partition_id = p.id 
-              AND m2.created_at > NOW() - INTERVAL '1 second' * q.window_buffer
-          ))
-          AND NOT EXISTS (
-            -- Check for active partition leases
-            SELECT 1 FROM queen.partition_leases pl
-            WHERE pl.partition_id = p.id
-              AND pl.consumer_group = $1
-              AND pl.released_at IS NULL
-              AND pl.lease_expires_at > NOW()
-          )
-    `;
-    
-    const params = [actualConsumerGroup];
-    
-    if (namespace) {
-      params.push(namespace);
-      query += ` AND q.namespace = $${params.length}`;
-    }
-    
-    if (task) {
-      params.push(task);
-      query += ` AND q.task = $${params.length}`;
-    }
-    
-    params.push(batch);
-    query += ` ORDER BY q.priority DESC, m.created_at ASC, m.id ASC LIMIT $${params.length} FOR UPDATE OF m SKIP LOCKED`;
-    
-    // Add the INSERT part
-    params.push(config.WORKER_ID);
-    query += `)
-      INSERT INTO queen.messages_status (message_id, consumer_group, status, lease_expires_at, processing_at, worker_id)
-      SELECT id, $1, 'processing', NOW() + INTERVAL '1 second' * lease_time, NOW(), $${params.length}
-      FROM available_messages
-      ON CONFLICT (message_id, consumer_group) 
-      DO UPDATE SET 
-        status = 'processing',
-        lease_expires_at = EXCLUDED.lease_expires_at,
-        processing_at = EXCLUDED.processing_at,
-        worker_id = EXCLUDED.worker_id,
-        retry_count = queen.messages_status.retry_count + 1
-      RETURNING message_id,
-        (SELECT transaction_id FROM queen.messages WHERE id = message_id),
-        (SELECT trace_id FROM queen.messages WHERE id = message_id),
-        (SELECT payload FROM queen.messages WHERE id = message_id),
-        (SELECT is_encrypted FROM queen.messages WHERE id = message_id),
-        (SELECT created_at FROM queen.messages WHERE id = message_id),
-        (SELECT p.id FROM queen.messages m2 JOIN queen.partitions p ON m2.partition_id = p.id WHERE m2.id = message_id) as partition_id,
-        (SELECT p.name FROM queen.messages m2 JOIN queen.partitions p ON m2.partition_id = p.id WHERE m2.id = message_id) as partition_name,
-        (SELECT q.name FROM queen.messages m2 JOIN queen.partitions p ON m2.partition_id = p.id JOIN queen.queues q ON p.queue_id = q.id WHERE m2.id = message_id) as queue_name,
-        (SELECT q.priority FROM queen.messages m2 JOIN queen.partitions p ON m2.partition_id = p.id JOIN queen.queues q ON p.queue_id = q.id WHERE m2.id = message_id) as priority,
-        (SELECT q.lease_time FROM queen.messages m2 JOIN queen.partitions p ON m2.partition_id = p.id JOIN queen.queues q ON p.queue_id = q.id WHERE m2.id = message_id) as lease_time,
-        retry_count
-    `;
-    
-    return { query, params };
-  };
-
-  /**
    * Pop messages with namespace/task filtering
    * Supports filtering by namespace and/or task in addition to consumer groups
+   * 
+   * IMPORTANT: This function acquires a partition lease BEFORE selecting messages
+   * to prevent multiple consumers from grabbing messages from the same partition,
+   * which would break message ordering guarantees.
    */
   const popMessagesWithFilters = async (filters, options = {}) => {
     const { namespace, task, consumerGroup } = filters;
@@ -1530,19 +1455,88 @@ const popMessages = async (scope, options = {}) => {
       // Determine the actual consumer group to use
       const actualConsumerGroup = consumerGroup || '__QUEUE_MODE__';
       
-      // Use the helper function to build the query
-      const { query, params } = buildPopMessagesWithFiltersQuery(actualConsumerGroup, namespace, task, batch);
+      // Try to find and acquire a partition lease (with retries for contention)
+      // With 100 candidates and shuffling, we should succeed quickly
+      const MAX_PARTITION_ATTEMPTS = 3;
+      let partition = null;
       
-      const result = await client.query(query, params);
-      
-      // Lock all partitions that we got messages from
-      if (result.rows.length > 0) {
-        const partitionIds = [...new Set(result.rows.map(r => r.partition_id))];
-        const leaseTime = Math.max(...result.rows.map(r => r.lease_time || 30));
+      for (let attempt = 0; attempt < MAX_PARTITION_ATTEMPTS; attempt++) {
+        // Step 1: Find an available partition with messages (ordered by priority and age)
+        // This query finds partitions that:
+        // - Match namespace/task filters
+        // - Have available messages (not leased by this consumer group)
+        // - Are not currently leased
+        // Uses RANDOM() to distribute partition selection across consumers
+        let findPartitionQuery = `
+          SELECT 
+            p.id as partition_id,
+            p.name as partition_name,
+            q.id as queue_id,
+            q.name as queue_name,
+            q.priority,
+            q.lease_time,
+            q.delayed_processing,
+            q.max_wait_time_seconds,
+            q.window_buffer,
+            MIN(m.created_at) as oldest_message
+          FROM queen.messages m
+          JOIN queen.partitions p ON m.partition_id = p.id
+          JOIN queen.queues q ON p.queue_id = q.id
+          LEFT JOIN queen.messages_status ms ON m.id = ms.message_id AND ms.consumer_group = $1
+          LEFT JOIN queen.partition_leases pl ON pl.partition_id = p.id AND pl.consumer_group = $1
+          WHERE (ms.id IS NULL OR ms.status IN ('pending', 'failed'))
+            AND m.created_at <= NOW() - INTERVAL '1 second' * q.delayed_processing
+            AND (q.max_wait_time_seconds = 0 OR 
+                 m.created_at > NOW() - INTERVAL '1 second' * q.max_wait_time_seconds)
+            AND (q.window_buffer = 0 OR NOT EXISTS (
+              SELECT 1 FROM queen.messages m2 
+              WHERE m2.partition_id = p.id 
+                AND m2.created_at > NOW() - INTERVAL '1 second' * q.window_buffer
+            ))
+            AND (pl.id IS NULL OR pl.released_at IS NOT NULL OR pl.lease_expires_at <= NOW())
+        `;
         
-        // Acquire partition leases for all partitions we got messages from
-        for (const partitionId of partitionIds) {
-          await client.query(`
+        const params = [actualConsumerGroup];
+        
+        if (namespace) {
+          params.push(namespace);
+          findPartitionQuery += ` AND q.namespace = $${params.length}`;
+        }
+        
+        if (task) {
+          params.push(task);
+          findPartitionQuery += ` AND q.task = $${params.length}`;
+        }
+        
+        // Note: We order by priority first, then by oldest message timestamp, then randomly
+        // This ensures high-priority queues are processed first while distributing work fairly
+        findPartitionQuery += `
+          GROUP BY p.id, p.name, q.id, q.name, q.priority, q.lease_time, 
+                   q.delayed_processing, q.max_wait_time_seconds, q.window_buffer
+          HAVING COUNT(CASE WHEN (ms.id IS NULL OR ms.status IN ('pending', 'failed')) THEN 1 END) > 0
+          ORDER BY q.priority DESC, MIN(m.created_at) ASC, RANDOM()
+          LIMIT $${params.length + 1}
+        `;
+        
+        params.push(config.QUEUE.MAX_PARTITION_CANDIDATES);
+        const partitionResult = await client.query(findPartitionQuery, params);
+        
+        if (partitionResult.rows.length === 0) {
+          // No available partitions with messages
+          return { messages: [] };
+        }
+        
+        // Shuffle the candidate partitions to distribute across consumers
+        // This ensures different consumers try different partitions first
+        const candidatePartitions = partitionResult.rows;
+        for (let i = candidatePartitions.length - 1; i > 0; i--) {
+          const j = Math.floor(Math.random() * (i + 1));
+          [candidatePartitions[i], candidatePartitions[j]] = [candidatePartitions[j], candidatePartitions[i]];
+        }
+        
+        // Try to acquire a lease on one of the returned partitions
+        for (const candidatePartition of candidatePartitions) {
+          const leaseResult = await client.query(`
             INSERT INTO queen.partition_leases (
               partition_id, 
               consumer_group, 
@@ -1550,21 +1544,142 @@ const popMessages = async (scope, options = {}) => {
             ) VALUES ($1, $2, NOW() + INTERVAL '1 second' * $3)
             ON CONFLICT (partition_id, consumer_group) 
             DO UPDATE SET 
-              lease_expires_at = EXCLUDED.lease_expires_at,
-              released_at = NULL
-          `, [partitionId, actualConsumerGroup, leaseTime]);
+              lease_expires_at = CASE
+                WHEN queen.partition_leases.released_at IS NOT NULL 
+                  OR queen.partition_leases.lease_expires_at <= NOW()
+                THEN NOW() + INTERVAL '1 second' * $3
+                ELSE queen.partition_leases.lease_expires_at
+              END,
+              released_at = CASE
+                WHEN queen.partition_leases.released_at IS NOT NULL 
+                  OR queen.partition_leases.lease_expires_at <= NOW()
+                THEN NULL
+                ELSE queen.partition_leases.released_at
+              END
+            RETURNING 
+              partition_id,
+              lease_expires_at,
+              (lease_expires_at = NOW() + INTERVAL '1 second' * $3) as acquired
+          `, [candidatePartition.partition_id, actualConsumerGroup, candidatePartition.lease_time]);
+          
+          // Check if we actually acquired the lease
+          if (leaseResult.rows[0].acquired) {
+            partition = candidatePartition;
+            log(`DEBUG: Acquired lease on partition ${partition.partition_name} (id=${partition.partition_id}) for consumerGroup=${actualConsumerGroup}`);
+            break;
+          }
         }
+        
+        // If we acquired a partition, break out of retry loop
+        if (partition) break;
       }
       
-      if (result.rows.length === 0 && wait) {
-        // For namespace/task filtering, we can't easily wait on specific queue paths
-        // So we'll use simple polling
+      // If we couldn't acquire any partition after all attempts, return empty
+      if (!partition) {
         return { messages: [] };
       }
       
-      // Format and decrypt messages
-      const messages = await Promise.all(
-        result.rows.map(async (row) => {
+      // Step 3: Select messages from this partition only
+      const messagesResult = await client.query(`
+        SELECT 
+          m.id,
+          m.transaction_id,
+          m.trace_id,
+          m.payload,
+          m.is_encrypted,
+          m.created_at,
+          $2 as partition_name,
+          $3 as queue_name,
+          $4 as priority,
+          COALESCE(ms.retry_count, 0) as retry_count
+        FROM queen.messages m
+        LEFT JOIN queen.messages_status ms ON m.id = ms.message_id 
+          AND ms.consumer_group = $1
+        WHERE m.partition_id = $5
+          AND (ms.id IS NULL OR ms.status IN ('pending', 'failed'))
+          AND m.created_at <= NOW() - INTERVAL '1 second' * $6
+          AND ($7 = 0 OR m.created_at > NOW() - INTERVAL '1 second' * $7)
+        ORDER BY m.created_at ASC, m.id ASC
+        LIMIT $8
+        FOR UPDATE OF m NOWAIT
+      `, [
+        actualConsumerGroup,
+        partition.partition_name,
+        partition.queue_name,
+        partition.priority,
+        partition.partition_id,
+        partition.delayed_processing || 0,
+        partition.max_wait_time_seconds || 0,
+        batch
+      ]).catch(err => {
+        if (err.code === '55P03') { // Lock not available
+          return { rows: [] };
+        }
+        throw err;
+      });
+      
+      const messages = messagesResult.rows;
+      
+      if (messages.length === 0) {
+        // Release partition lease if no messages
+        await client.query(`
+          UPDATE queen.partition_leases
+          SET released_at = NOW()
+          WHERE partition_id = $1 AND consumer_group = $2
+        `, [partition.partition_id, actualConsumerGroup]);
+        return { messages: [] };
+      }
+      
+      // Step 4: Update message status (mark as processing)
+      const leaseExpiresAt = new Date(Date.now() + (partition.lease_time * 1000));
+      
+      const valuesArray = [];
+      const statusParams = [];
+      let paramIndex = 1;
+      
+      for (const message of messages) {
+        valuesArray.push(
+          `($${paramIndex}, $${paramIndex + 1}, 'processing', $${paramIndex + 2}, NOW(), $${paramIndex + 3}, $${paramIndex + 4})`
+        );
+        statusParams.push(
+          message.id,
+          actualConsumerGroup,
+          leaseExpiresAt,
+          config.WORKER_ID,
+          message.retry_count || 0
+        );
+        paramIndex += 5;
+      }
+      
+      await client.query(`
+        INSERT INTO queen.messages_status (
+          message_id,
+          consumer_group,
+          status,
+          lease_expires_at,
+          processing_at,
+          worker_id,
+          retry_count
+        ) VALUES ${valuesArray.join(', ')}
+        ON CONFLICT (message_id, consumer_group) 
+        DO UPDATE SET
+          status = 'processing',
+          lease_expires_at = EXCLUDED.lease_expires_at,
+          processing_at = NOW(),
+          worker_id = EXCLUDED.worker_id
+      `, statusParams);
+      
+      // Step 5: Update partition lease with message batch
+      const messageIds = messages.map(m => m.id);
+      await client.query(`
+        UPDATE queen.partition_leases
+        SET message_batch = $1::jsonb
+        WHERE partition_id = $2 AND consumer_group = $3
+      `, [JSON.stringify(messageIds), partition.partition_id, actualConsumerGroup]);
+      
+      // Step 6: Format and decrypt messages
+      const formattedMessages = await Promise.all(
+        messages.map(async (row) => {
           let decryptedPayload = row.payload;
           
           if (row.is_encrypted && encryption.isEncryptionEnabled()) {
@@ -1576,7 +1691,7 @@ const popMessages = async (scope, options = {}) => {
           }
           
           return {
-            id: row.message_id,
+            id: row.id,
             transactionId: row.transaction_id,
             traceId: row.trace_id,
             queue: row.queue_name,
@@ -1590,11 +1705,11 @@ const popMessages = async (scope, options = {}) => {
         })
       );
       
-      if (messages.length > 0) {
-        log(`${LogTypes.POP} | Count: ${messages.length} | Namespace: ${namespace || 'ANY'} | Task: ${task || 'ANY'}`);
+      if (formattedMessages.length > 0) {
+        log(`${LogTypes.POP} | Count: ${formattedMessages.length} | Namespace: ${namespace || 'ANY'} | Task: ${task || 'ANY'}`);
       }
       
-      return { messages };
+      return { messages: formattedMessages };
     });
   };
 
