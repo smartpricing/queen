@@ -22,6 +22,13 @@ export class PoolManager {
       connectionTimeoutMillis: appConfig.DATABASE.CONNECTION_TIMEOUT,
       ...config
     };
+
+    // Add SSL configuration if enabled
+    if (appConfig.DATABASE.USE_SSL) {
+      this.config.ssl = {
+        rejectUnauthorized: appConfig.DATABASE.SSL_REJECT_UNAUTHORIZED
+      };
+    }
     
     this.pool = new Pool(this.config);
     this.waitingQueue = [];

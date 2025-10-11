@@ -41,7 +41,7 @@ const startTime = Date.now();
 // Create optimized connection pool
 const { Pool } = pg;
 const createOptimizedPool = () => {
-  return new Pool({
+  const poolConfig = {
     user: config.DATABASE.USER,
     host: config.DATABASE.HOST,
     database: config.DATABASE.DATABASE,
@@ -53,7 +53,16 @@ const createOptimizedPool = () => {
     statement_timeout: config.DATABASE.STATEMENT_TIMEOUT,
     query_timeout: config.DATABASE.QUERY_TIMEOUT,
     application_name: config.SERVER.APPLICATION_NAME
-  });
+  };
+
+  // Add SSL configuration if enabled
+  if (config.DATABASE.USE_SSL) {
+    poolConfig.ssl = {
+      rejectUnauthorized: config.DATABASE.SSL_REJECT_UNAUTHORIZED
+    };
+  }
+
+  return new Pool(poolConfig);
 };
 
 // Initialize components
