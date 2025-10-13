@@ -13,45 +13,14 @@ export const createPopRoute = (queueManager, eventManager) => {
     const maxTimeout = config.QUEUE.MAX_TIMEOUT;
     const effectiveTimeout = Math.min(timeout, maxTimeout);
     
-    // Handle different pop scenarios
-    if (scope.namespace || scope.task) {
-      // Pop with filters (namespace or task)
-      let result = await queueManager.popMessagesWithFilters(scope, { batch, wait: false, timeout: effectiveTimeout });
-      
-      if (result.messages.length > 0 || !wait) {
-        return result;
-      }
-      
-      // Simple polling for filtered pops (no specific queue path to wait on)
-      const startTime = Date.now();
-      const pollInterval = Math.min(config.QUEUE.POLL_INTERVAL_FILTERED, effectiveTimeout / 10);
-      
-      while (Date.now() - startTime < effectiveTimeout) {
-        await new Promise(resolve => setTimeout(resolve, pollInterval));
-        result = await queueManager.popMessagesWithFilters(scope, { batch, wait: false });
-        if (result.messages.length > 0) {
-          return result;
-        }
-      }
-      
-      return { messages: [] };
-    }
-    
-    // Regular queue/partition pop (now with consumer group support)
-    const popScope = {
-      ...scope,
-      consumerGroup: consumerGroup || scope.consumerGroup
-    };
-    
-    const popOptions = {
+    // ALWAYS USE UNIFIED POP - handles all 3 modes (direct, queue-level, filtered)
+    let result = await queueManager.uniquePop(scope, { 
       batch, 
       wait: false, 
-      timeout: effectiveTimeout,
-      subscriptionMode,
-      subscriptionFrom
-    };
-    
-    let result = await queueManager.popMessages(popScope, popOptions);
+      timeout: effectiveTimeout, 
+      subscriptionMode, 
+      subscriptionFrom 
+    });
     
     if (result.messages.length > 0 || !wait) {
       return result;
@@ -73,7 +42,7 @@ export const createPopRoute = (queueManager, eventManager) => {
       ]);
       
       // Try to get messages whether notified or not
-      result = await queueManager.popMessages(popScope, popOptions);
+      result = await queueManager.uniquePop(scope, { batch, wait: false, subscriptionMode, subscriptionFrom });
       if (result.messages.length > 0) {
         return result;
       }

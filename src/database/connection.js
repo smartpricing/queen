@@ -23,7 +23,13 @@ export const createPool = () => {
     connectionTimeoutMillis: config.DATABASE.CONNECTION_TIMEOUT,
     // Note: statement_timeout and query_timeout cannot be set as startup parameters
     // They should be set per-query or per-transaction using SET commands
-    application_name: config.SERVER.APPLICATION_NAME
+    application_name: config.SERVER.APPLICATION_NAME,
+    // PERFORMANCE NOTE: TCP_NODELAY for latency reduction
+    // The node-postgres driver enables TCP_NODELAY by default on sockets
+    // For server-side: Edit postgresql.conf and add: tcp_nodelay = on
+    // Reference: https://stackoverflow.com/questions/60634455/how-does-one-configure-tcp-nodelay-for-libpq-and-postgres-server
+    keepAlive: true,
+    keepAliveInitialDelayMillis: 10000
   };
 
   // Add SSL configuration if enabled
@@ -99,11 +105,12 @@ export const withTransaction = async (pool, callback, isolationLevel = 'READ COM
     } catch (error) {
       await client.query('ROLLBACK');
       
-      // Check for serialization failure, deadlock, or lock timeout
+      // Check for retriable errors:
       // 40001: serialization_failure
       // 40P01: deadlock_detected
       // 55P03: lock_not_available (lock timeout)
-      if ((error.code === '40001' || error.code === '40P01' || error.code === '55P03') && attempt < maxAttempts) {
+      // 25P02: in_failed_sql_transaction (transaction already aborted - retry whole transaction)
+      if ((error.code === '40001' || error.code === '40P01' || error.code === '55P03' || error.code === '25P02') && attempt < maxAttempts) {
         // Exponential backoff: 100ms, 200ms, 400ms
         const delay = Math.min(100 * Math.pow(2, attempt - 1), 1000);
         await new Promise(resolve => setTimeout(resolve, delay));

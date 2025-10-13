@@ -1,8 +1,8 @@
 import { Queen } from '../client/client.js'; 
 import fs from 'fs';
 
-const TOTAL_MESSAGES = 100000;
-const PARTITIONS = 10;  // Reduced from 100 to allow larger batches per partition
+const TOTAL_MESSAGES = 1000000;
+const PARTITIONS = 100; 
 const PUSH_PARALLEL = 10;
 const QUEUE_NAME = 'benchmark-queue-01';
 
@@ -26,8 +26,8 @@ for (let i = 0; i < PARTITIONS; i++) {
   for (let j = 0; j < messagesPerPartition; j++) {
     messages.push({
       id: j,
-      message: `Message ${i * messagesPerPartition + j}`,
-      timestamp: new Date().toISOString()
+      //message: `Message ${i * messagesPerPartition + j}`,
+      //timestamp: new Date().toISOString()
     });
   }
   batches.push({

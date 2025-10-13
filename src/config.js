@@ -28,7 +28,9 @@ export const DATABASE = {
   SSL_REJECT_UNAUTHORIZED: process.env.PG_SSL_REJECT_UNAUTHORIZED !== 'false',
   
   // Pool configuration
-  POOL_SIZE: parseInt(process.env.DB_POOL_SIZE) || 20,
+  // IMPORTANT: In cluster mode, total connections = POOL_SIZE × number_of_workers
+  // Adjust for cluster: 10 workers × 10 connections = 100 total (safe for most PostgreSQL configs)
+  POOL_SIZE: parseInt(process.env.DB_POOL_SIZE) || (process.env.WORKER_INDEX ? 10 : 20),
   IDLE_TIMEOUT: parseInt(process.env.DB_IDLE_TIMEOUT) || 30000, // 30 seconds
   CONNECTION_TIMEOUT: parseInt(process.env.DB_CONNECTION_TIMEOUT) || 2000, // 2 seconds
   STATEMENT_TIMEOUT: parseInt(process.env.DB_STATEMENT_TIMEOUT) || 30000, // 30 seconds

@@ -22,6 +22,7 @@ import { initEncryption } from './services/encryptionService.js';
 import { startRetentionJob } from './services/retentionService.js';
 import { startEvictionJob } from './services/evictionService.js';
 import { log } from './utils/logger.js';
+import { streamJSON, sendJSON, sendError } from './utils/streaming.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -344,21 +345,26 @@ app.get('/api/v1/pop/queue/:queue/partition/:partition', (res, req) => {
       });
     }
     
-    res.cork(() => {
-      setCorsHeaders(res);
-      if (result.messages.length > 0) {
-        res.writeStatus(config.HTTP_STATUS.OK.toString()).end(JSON.stringify(result));
-      } else {
+    // Use streaming with backpressure for large responses
+    if (result.messages.length === 0) {
+      res.cork(() => {
+        setCorsHeaders(res);
         res.writeStatus(config.HTTP_STATUS.NO_CONTENT.toString()).end();
-      }
-    });
+      });
+    } else {
+      res.cork(() => {
+        setCorsHeaders(res);
+        res.writeStatus(config.HTTP_STATUS.OK.toString());
+      });
+      streamJSON(res, result, { aborted });
+    }
   }).catch(error => {
     if (aborted) return;
     log('Pop error:', error);
     res.cork(() => {
       setCorsHeaders(res);
-      res.writeStatus(config.HTTP_STATUS.INTERNAL_SERVER_ERROR.toString()).end(JSON.stringify({ error: error.message }));
     });
+    sendError(res, error, config.HTTP_STATUS.INTERNAL_SERVER_ERROR);
   });
 });
 
@@ -396,21 +402,26 @@ app.get('/api/v1/pop/queue/:queue', (res, req) => {
       });
     }
     
-    res.cork(() => {
-      setCorsHeaders(res);
-      if (result.messages.length > 0) {
-        res.writeStatus(config.HTTP_STATUS.OK.toString()).end(JSON.stringify(result));
-      } else {
+    // Use streaming with backpressure for large responses
+    if (result.messages.length === 0) {
+      res.cork(() => {
+        setCorsHeaders(res);
         res.writeStatus(config.HTTP_STATUS.NO_CONTENT.toString()).end();
-      }
-    });
+      });
+    } else {
+      res.cork(() => {
+        setCorsHeaders(res);
+        res.writeStatus(config.HTTP_STATUS.OK.toString());
+      });
+      streamJSON(res, result, { aborted });
+    }
   }).catch(error => {
     if (aborted) return;
     log('Pop error:', error);
     res.cork(() => {
       setCorsHeaders(res);
-      res.writeStatus(config.HTTP_STATUS.INTERNAL_SERVER_ERROR.toString()).end(JSON.stringify({ error: error.message }));
     });
+    sendError(res, error, config.HTTP_STATUS.INTERNAL_SERVER_ERROR);
   });
 });
 
@@ -451,21 +462,26 @@ app.get('/api/v1/pop', (res, req) => {
       });
     }
     
-    res.cork(() => {
-      setCorsHeaders(res);
-      if (result.messages.length > 0) {
-        res.writeStatus(config.HTTP_STATUS.OK.toString()).end(JSON.stringify(result));
-      } else {
+    // Use streaming with backpressure for large responses
+    if (result.messages.length === 0) {
+      res.cork(() => {
+        setCorsHeaders(res);
         res.writeStatus(config.HTTP_STATUS.NO_CONTENT.toString()).end();
-      }
-    });
+      });
+    } else {
+      res.cork(() => {
+        setCorsHeaders(res);
+        res.writeStatus(config.HTTP_STATUS.OK.toString());
+      });
+      streamJSON(res, result, { aborted });
+    }
   }).catch(error => {
     if (aborted) return;
     log('Pop error:', error);
     res.cork(() => {
       setCorsHeaders(res);
-      res.writeStatus(config.HTTP_STATUS.INTERNAL_SERVER_ERROR.toString()).end(JSON.stringify({ error: error.message }));
     });
+    sendError(res, error, config.HTTP_STATUS.INTERNAL_SERVER_ERROR);
   });
 });
 
@@ -1240,10 +1256,12 @@ app.listen(HOST, PORT, async (token) => {
       await syncSystemEvents(syncClient, systemEventManager, SERVER_INSTANCE_ID);
       
       // Start consuming system events
-      // Note: consume() returns the stop function directly
+      // IMPORTANT: Each worker MUST have unique consumer group
+      // In bus mode, this ensures ALL workers receive cache invalidation events
+      // This is necessary for distributed cache consistency across workers
       stopSystemEventConsumer = syncClient.consume({
         queue: SYSTEM_QUEUE,
-        consumerGroup: SERVER_INSTANCE_ID,
+        consumerGroup: SERVER_INSTANCE_ID,  // Unique per worker (srv-1-0, srv-1-1, etc)
         handler: async (message) => {
           await systemEventManager.processSystemEvent(message.payload);
         },
@@ -1266,18 +1284,41 @@ app.listen(HOST, PORT, async (token) => {
 });
 
 // Graceful shutdown
+let isShuttingDown = false;
 const shutdown = async (signal) => {
+  if (isShuttingDown) {
+    // Already shutting down, prevent double shutdown
+    return;
+  }
+  isShuttingDown = true;
+  
   log(`\n🛑 Received ${signal}, shutting down gracefully...`);
   
   // Stop system event consumer
   if (stopSystemEventConsumer) {
-    stopSystemEventConsumer();
-    log('✅ System event consumer stopped');
+    try {
+      stopSystemEventConsumer();
+      log('✅ System event consumer stopped');
+    } catch (err) {
+      // Ignore errors during shutdown
+    }
   }
   
   // Stop background jobs
-  if (stopRetention) stopRetention();
-  if (stopEviction) stopEviction();
+  if (stopRetention) {
+    try {
+      stopRetention();
+    } catch (err) {
+      // Ignore errors during shutdown
+    }
+  }
+  if (stopEviction) {
+    try {
+      stopEviction();
+    } catch (err) {
+      // Ignore errors during shutdown
+    }
+  }
   
   const uptime = (Date.now() - startTime) / 1000;
   if (messageCount > 0) {
@@ -1285,7 +1326,12 @@ const shutdown = async (signal) => {
     log(`   Average: ${(messageCount / uptime).toFixed(2)} messages/second`);
   }
   
-  await pool.end();
+  try {
+    await pool.end();
+  } catch (err) {
+    // Pool may already be ended or closing, ignore
+  }
+  
   process.exit(0);
 };
 

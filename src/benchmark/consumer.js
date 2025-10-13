@@ -3,6 +3,8 @@ import fs from 'fs';
 
 const QUEUE_NAME = 'benchmark-queue-01';
 const NUMBER_OF_CONSUMERS = 10;
+const BATCH_SIZE = 10000;
+const CONSUME_MODE = null//'partition';
 
 // Global metrics tracking
 const metrics = {
@@ -12,7 +14,9 @@ const metrics = {
   consumers: [],
   batchTimes: [],
   ackTimes: [],
-  popTimes: []
+  popTimes: [],
+  firstMessageTime: null,
+  lastMessageTime: null
 };
 
 async function consumer(consumerId, partition) {
@@ -32,17 +36,27 @@ async function consumer(consumerId, partition) {
     startTime: Date.now(),
     endTime: null
   };
+
+  const target = CONSUME_MODE === 'partition' ? `${QUEUE_NAME}/${partition}` : `${QUEUE_NAME}`;
   
   metrics.consumers.push(consumerMetrics);
-  console.log(`[Consumer ${consumerId}] Started, consuming partition ${partition}`);
+  if (target === `${QUEUE_NAME}`) {
+    console.log(`[Consumer ${consumerId}] Started, consuming all partitions`);
+  } else {
+    console.log(`[Consumer ${consumerId}] Started, consuming partition ${partition}`);
+  }
   
   try {
-    for await (const messages of q.takeBatch(`${QUEUE_NAME}/${partition}`, { //`namespace:benchmark`, 
+    for await (const messages of q.takeBatch(target, { //`namespace:benchmark`, 
       wait: true,
       timeout: 30000,
-      batch: 10000,
+      batch: BATCH_SIZE,
       idleTimeout: 5000
     })) {
+      if (!metrics.firstMessageTime) {
+        metrics.firstMessageTime = Date.now();
+      }
+      metrics.lastMessageTime = Date.now();
       const batchStartTime = Date.now();
       const popTime = batchStartTime - (consumerMetrics.endTime || consumerMetrics.startTime);
       consumerMetrics.popTimes.push(popTime);
@@ -73,7 +87,7 @@ async function consumer(consumerId, partition) {
 
         // Acknowledge all messages
         const ackStartTime = Date.now();
-        q.ack(messages);
+        await q.ack(messages);
         const ackTime = Date.now() - ackStartTime;
         consumerMetrics.ackTimes.push(ackTime);
         metrics.ackTimes.push(ackTime);
@@ -92,9 +106,10 @@ async function consumer(consumerId, partition) {
         const overallDuration = (batchEndTime - metrics.startTime) / 1000;
         const currentRate = (metrics.totalProcessed / overallDuration).toFixed(0);
         
-        console.log(`[C${consumerId}] Batch: ${messages.length} msgs | Time: ${(batchDuration/1000).toFixed(3)}s (pop:${(popTime/1000).toFixed(3)}s ack:${(ackTime/1000).toFixed(3)}s) | Total: ${metrics.totalProcessed} | Rate: ${currentRate} msg/s`);
+        console.log(new Date().toISOString(), `[C${consumerId}] Batch: ${messages.length} msgs | Time: ${(batchDuration/1000).toFixed(3)}s (pop:${(popTime/1000).toFixed(3)}s ack:${(ackTime/1000).toFixed(3)}s) | Total: ${metrics.totalProcessed} | Rate: ${currentRate} msg/s`);
+        metrics.lastMessageTime = Date.now();
       } catch (error) {
-        console.error(`[Consumer ${consumerId}] Error processing batch:`, error);
+        console.error(new Date().toISOString(), `[Consumer ${consumerId}] Error processing batch:`, error);
         await q.ack(messages, false, { error: error.message });
       }
     }
@@ -150,6 +165,8 @@ console.log(`Idle/Wait Time: ${(totalDuration - actualProcessingDuration).toFixe
 console.log(`Average Throughput: ${avgThroughput} msg/s (based on processing time)`);
 console.log(`Number of Consumers: ${NUMBER_OF_CONSUMERS}`);
 console.log(`Total Batches: ${metrics.batchTimes.length}`);
+console.log(`Total Time: ${metrics.lastMessageTime - metrics.firstMessageTime}ms`);
+console.log(`Total msg/s: ${metrics.totalProcessed / (metrics.lastMessageTime - metrics.firstMessageTime) * 1000} msg/s`);
 
 if (metrics.batchTimes.length > 0) {
   const avgBatchTime = (metrics.batchTimes.reduce((a, b) => a + b, 0) / metrics.batchTimes.length / 1000).toFixed(3);
