@@ -28,7 +28,7 @@ export const DATABASE = {
   SSL_REJECT_UNAUTHORIZED: process.env.PG_SSL_REJECT_UNAUTHORIZED !== 'false',
   
   // Pool configuration
-  POOL_SIZE: parseInt(process.env.DB_POOL_SIZE) || 100,
+  POOL_SIZE: parseInt(process.env.DB_POOL_SIZE) || 150,
   IDLE_TIMEOUT: parseInt(process.env.DB_IDLE_TIMEOUT) || 30000, // 30 seconds
   CONNECTION_TIMEOUT: parseInt(process.env.DB_CONNECTION_TIMEOUT) || 2000, // 2 seconds
   STATEMENT_TIMEOUT: parseInt(process.env.DB_STATEMENT_TIMEOUT) || 30000, // 30 seconds

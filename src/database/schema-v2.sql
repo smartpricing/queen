@@ -145,6 +145,11 @@ WHERE status IN ('pending', 'processing') OR status IS NULL;
 CREATE INDEX IF NOT EXISTS idx_status_message_consumer 
 ON queen.messages_status(message_id, consumer_group);
 
+-- Composite index for POP query optimization (covers the WHERE clause pattern)
+CREATE INDEX IF NOT EXISTS idx_status_consumer_status_message
+ON queen.messages_status(consumer_group, status, message_id)
+WHERE status IN ('pending', 'failed') OR status IS NULL;
+
 -- Indexes for consumer groups
 CREATE INDEX IF NOT EXISTS idx_consumer_groups_queue_name 
 ON queen.consumer_groups(queue_id, name);
