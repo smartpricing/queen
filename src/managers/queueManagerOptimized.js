@@ -433,192 +433,10 @@ export const createOptimizedQueueManager = (pool, resourceCache, eventManager, s
 
 
   // Acknowledge messages (now per consumer group)
+  // CURSOR-BASED: Single ACK now routes through batch ACK to advance cursor properly
   const acknowledgeMessage = async (transactionId, status = 'completed', error = null, consumerGroup = null) => {
-    // CURSOR-BASED: Convert single ACK to batch ACK to advance cursor properly
     const batchResult = await acknowledgeMessages([{ transactionId, status, error }], consumerGroup);
     return batchResult[0] || { status: 'not_found', transaction_id: transactionId };
-    
-    /* OLD single-message ACK code (deprecated - use batch ACK for cursor advancement)
-    return withTransaction(pool, async (client) => {
-      // PERFORMANCE OPTIMIZATION: Since we no longer create status on POP, we need to handle both cases:
-      // 1. Status exists (message was popped before optimization, or retry)
-      // 2. Status doesn't exist (message was just popped with new optimization)
-      
-      // Find the message and get queue config (don't require status to exist)
-      const findQuery = consumerGroup 
-        ? `SELECT ms.retry_count, ms.status, ms.message_id, m.partition_id, m.id as message_id,
-                  q.retry_limit, q.dlq_after_max_retries
-           FROM queen.messages m
-           JOIN queen.partitions p ON m.partition_id = p.id
-           JOIN queen.queues q ON p.queue_id = q.id
-           LEFT JOIN queen.messages_status ms ON ms.message_id = m.id AND ms.consumer_group = $2
-           WHERE m.transaction_id = $1`
-        : `SELECT ms.retry_count, ms.status, ms.message_id, m.partition_id, m.id as message_id,
-                  q.retry_limit, q.dlq_after_max_retries
-           FROM queen.messages m
-           JOIN queen.partitions p ON m.partition_id = p.id
-           JOIN queen.queues q ON p.queue_id = q.id
-           LEFT JOIN queen.messages_status ms ON ms.message_id = m.id AND ms.consumer_group = '__QUEUE_MODE__'
-           WHERE m.transaction_id = $1`;
-      
-      const params = consumerGroup ? [transactionId, consumerGroup] : [transactionId];
-      const result = await client.query(findQuery, params);
-      
-      if (result.rows.length === 0) {
-        log(`WARN: Message not found for acknowledgment: ${transactionId}, consumerGroup: ${consumerGroup || 'QUEUE_MODE'}`);
-        return { status: 'not_found', transaction_id: transactionId };
-      }
-      
-      const messageStatus = result.rows[0];
-      const currentRetryCount = messageStatus.retry_count || 0;
-      log(`DEBUG: Acknowledging message transaction=${transactionId} status=${messageStatus.status || 'NEW'} retry_count=${currentRetryCount}`);
-      
-      if (status === 'completed') {
-        // Mark as completed using UPSERT (handles both new and existing status records)
-        const actualConsumerGroup = consumerGroup || '__QUEUE_MODE__';
-        
-        // Use UPSERT to create or update status
-        const upsertQuery = `
-          INSERT INTO queen.messages_status (message_id, consumer_group, status, completed_at, retry_count)
-          VALUES ($1, $2, 'completed', NOW(), $3)
-          ON CONFLICT (message_id, consumer_group) 
-          DO UPDATE SET
-            status = 'completed',
-            completed_at = NOW()
-        `;
-        
-        await client.query(upsertQuery, [messageStatus.message_id, actualConsumerGroup, currentRetryCount]);
-        
-        // HYBRID COUNTER OPTIMIZATION: Increment acked_count instead of manipulating JSONB
-        // This is O(1) instead of O(n) for large batches
-        const incrementQuery = `
-          WITH message_info AS (
-            SELECT m.partition_id
-             FROM queen.messages m
-            WHERE m.transaction_id = $1
-          )
-          UPDATE queen.partition_leases pl
-          SET acked_count = acked_count + 1
-          FROM message_info mi
-          WHERE pl.partition_id = mi.partition_id
-            AND pl.consumer_group = $2
-            AND pl.released_at IS NULL
-        `;
-        
-        await client.query(incrementQuery, [transactionId, actualConsumerGroup]);
-        
-        // Release partition lease if all messages in batch have been acknowledged
-        // Simple integer comparison: O(1) instead of checking entire JSONB array
-        const releaseQuery = `
-          WITH message_info AS (
-            SELECT m.partition_id
-            FROM queen.messages m
-            WHERE m.transaction_id = $1
-          )
-          UPDATE queen.partition_leases pl
-          SET released_at = NOW(), 
-              message_batch = NULL,
-              batch_size = 0,
-              acked_count = 0
-          FROM message_info mi
-          WHERE pl.partition_id = mi.partition_id
-            AND pl.consumer_group = $2
-            AND pl.released_at IS NULL
-            AND pl.acked_count >= pl.batch_size
-            AND pl.batch_size > 0
-        `;
-        
-        await client.query(releaseQuery, [transactionId, actualConsumerGroup]);
-        
-        log(`${LogTypes.ACK} | TransactionId: ${transactionId} | Status: completed | ConsumerGroup: ${consumerGroup || 'QUEUE_MODE'}`);
-      } else if (status === 'failed') {
-        // Handle failure with retry logic
-        const actualConsumerGroup = consumerGroup || '__QUEUE_MODE__';
-        const nextRetryCount = currentRetryCount + 1;
-        const retryLimit = messageStatus.retry_limit || config.QUEUE.DEFAULT_RETRY_LIMIT;
-        const dlqEnabled = messageStatus.dlq_after_max_retries;
-        
-        log(`${LogTypes.ACK} | Retry check: current=${currentRetryCount}, next=${nextRetryCount}, limit=${retryLimit}, dlq=${dlqEnabled}`);
-        
-        if (nextRetryCount > retryLimit && dlqEnabled) {
-          // Move to dead letter queue after exceeding retry limit using UPSERT
-          const upsertQuery = `
-            INSERT INTO queen.messages_status (message_id, consumer_group, status, failed_at, error_message, retry_count)
-            VALUES ($1, $2, 'dead_letter', NOW(), $3, $4)
-            ON CONFLICT (message_id, consumer_group) 
-            DO UPDATE SET
-              status = 'dead_letter',
-              failed_at = NOW(),
-              error_message = EXCLUDED.error_message
-          `;
-          
-          await client.query(upsertQuery, [messageStatus.message_id, actualConsumerGroup, error, nextRetryCount]);
-          
-          log(`${LogTypes.ACK} | TransactionId: ${transactionId} | Status: dead_letter | ConsumerGroup: ${consumerGroup || 'QUEUE_MODE'} | Error: ${error}`);
-          
-          return { status: 'dead_letter', transaction_id: transactionId };
-        } else {
-          // Mark as failed and increment retry count using UPSERT
-          const upsertQuery = `
-            INSERT INTO queen.messages_status (message_id, consumer_group, status, failed_at, error_message, lease_expires_at, retry_count)
-            VALUES ($1, $2, 'failed', NOW(), $3, NULL, $4)
-            ON CONFLICT (message_id, consumer_group) 
-            DO UPDATE SET
-              status = 'failed',
-                   failed_at = NOW(), 
-              error_message = EXCLUDED.error_message,
-                   lease_expires_at = NULL,
-              retry_count = EXCLUDED.retry_count
-          `;
-          
-          await client.query(upsertQuery, [messageStatus.message_id, actualConsumerGroup, error, nextRetryCount]);
-          
-          // HYBRID COUNTER OPTIMIZATION: Increment acked_count instead of manipulating JSONB
-          const incrementQuery = `
-            WITH message_info AS (
-              SELECT m.partition_id
-               FROM queen.messages m
-              WHERE m.transaction_id = $1
-            )
-            UPDATE queen.partition_leases pl
-            SET acked_count = acked_count + 1
-            FROM message_info mi
-            WHERE pl.partition_id = mi.partition_id
-              AND pl.consumer_group = $2
-              AND pl.released_at IS NULL
-          `;
-          
-          await client.query(incrementQuery, [transactionId, actualConsumerGroup]);
-          
-          // Release partition lease if all messages acknowledged
-          const releaseOnFailQuery = `
-            WITH message_info AS (
-              SELECT m.partition_id
-              FROM queen.messages m
-              WHERE m.transaction_id = $1
-            )
-            UPDATE queen.partition_leases pl
-            SET released_at = NOW(), 
-                message_batch = NULL,
-                batch_size = 0,
-                acked_count = 0
-            FROM message_info mi
-            WHERE pl.partition_id = mi.partition_id
-              AND pl.consumer_group = $2
-              AND pl.released_at IS NULL
-              AND pl.acked_count >= pl.batch_size
-              AND pl.batch_size > 0
-          `;
-          
-          await client.query(releaseOnFailQuery, [transactionId, actualConsumerGroup]);
-          
-          log(`${LogTypes.ACK} | TransactionId: ${transactionId} | Status: failed (retry ${nextRetryCount}/${retryLimit}) | ConsumerGroup: ${consumerGroup || 'QUEUE_MODE'} | Error: ${error}`);
-        }
-      }
-      
-      return { status, transaction_id: transactionId };
-    });
-    */
   };
   
   // Batch acknowledge messages with cursor-based advancement
@@ -879,13 +697,14 @@ export const createOptimizedQueueManager = (pool, resourceCache, eventManager, s
         COUNT(CASE WHEN ms.status = 'processing' THEN 1 END) as processing,
         COUNT(CASE WHEN ms.status = 'completed' THEN 1 END) as completed,
         COUNT(CASE WHEN ms.status = 'failed' THEN 1 END) as failed,
-        COUNT(CASE WHEN ms.status = 'dead_letter' THEN 1 END) as dead_letter,
+        COUNT(DISTINCT dlq.message_id) as dead_letter,
         COUNT(m.id) as total_messages,
         COUNT(DISTINCT cg.name) as consumer_groups_count
       FROM queen.queues q
       LEFT JOIN queen.partitions p ON p.queue_id = q.id
       LEFT JOIN queen.messages m ON m.partition_id = p.id
       LEFT JOIN queen.messages_status ms ON ms.message_id = m.id
+      LEFT JOIN queen.dead_letter_queue dlq ON dlq.message_id = m.id
       LEFT JOIN queen.consumer_groups cg ON cg.queue_id = q.id AND cg.active = true
     `;
     

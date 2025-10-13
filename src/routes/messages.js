@@ -159,46 +159,75 @@ export const createMessagesRoutes = (pool, queueManager) => {
   
   // Retry message
   const retryMessage = async (transactionId) => {
+    // Find the message
+    const msgCheck = await pool.query(`
+      SELECT m.id, ms.consumer_group, ms.status, ms.retry_count
+      FROM queen.messages m
+      LEFT JOIN queen.messages_status ms ON ms.message_id = m.id
+      WHERE m.transaction_id = $1
+    `, [transactionId]);
+    
+    if (msgCheck.rows.length === 0) {
+      throw new Error('Message not found');
+    }
+    
+    const msg = msgCheck.rows[0];
+    const consumerGroup = msg.consumer_group || '__QUEUE_MODE__';
+    const newRetryCount = (msg.retry_count || 0) + 1;
+    
+    // Check if message is in DLQ and remove it
+    await pool.query(`
+      DELETE FROM queen.dead_letter_queue
+      WHERE message_id = $1
+    `, [msg.id]);
+    
+    // Update or create status as pending for retry
     const result = await pool.query(`
-      UPDATE queen.messages 
-      SET 
+      INSERT INTO queen.messages_status (message_id, consumer_group, status, retry_count, worker_id, locked_at, lease_expires_at, error_message)
+      VALUES ($1, $2, 'pending', $3, NULL, NULL, NULL, NULL)
+      ON CONFLICT (message_id, consumer_group) 
+      DO UPDATE SET
         status = 'pending',
         worker_id = NULL,
         locked_at = NULL,
         lease_expires_at = NULL,
-        retry_count = retry_count + 1,
+        retry_count = EXCLUDED.retry_count,
         error_message = NULL
-      WHERE transaction_id = $1 
-        AND status IN ('failed', 'dead_letter')
-      RETURNING id, retry_count
-    `, [transactionId]);
-    
-    if (result.rows.length === 0) {
-      throw new Error('Message not found or not in failed state');
-    }
+      RETURNING retry_count
+    `, [msg.id, consumerGroup, newRetryCount]);
     
     log(`${LogTypes.RETRY} | TransactionId: ${transactionId} | NewRetryCount: ${result.rows[0].retry_count}`);
-    return { retried: true, transactionId };
+    return { retried: true, transactionId, newRetryCount: result.rows[0].retry_count };
   };
   
   // Move message to DLQ
   const moveToDLQ = async (transactionId) => {
-    const result = await pool.query(`
-      UPDATE queen.messages 
-      SET 
-        status = 'dead_letter',
-        failed_at = NOW()
-      WHERE transaction_id = $1 
-        AND status = 'failed'
-      RETURNING id
+    // Find the message and check if it's in failed state
+    const msgCheck = await pool.query(`
+      SELECT m.id, m.partition_id, ms.consumer_group, ms.error_message, ms.retry_count, m.created_at
+      FROM queen.messages m
+      LEFT JOIN queen.messages_status ms ON ms.message_id = m.id
+      WHERE m.transaction_id = $1
+        AND (ms.status = 'failed' OR ms.status IS NULL)
     `, [transactionId]);
     
-    if (result.rows.length === 0) {
+    if (msgCheck.rows.length === 0) {
       throw new Error('Message not found or not in failed state');
     }
     
-    log(`${LogTypes.MANUAL_DLQ} | TransactionId: ${transactionId} | MessageId: ${result.rows[0].id}`);
-    return { movedToDLQ: true, transactionId };
+    const msg = msgCheck.rows[0];
+    const consumerGroup = msg.consumer_group || '__QUEUE_MODE__';
+    
+    // Insert into dead_letter_queue
+    const result = await pool.query(`
+      INSERT INTO queen.dead_letter_queue (message_id, partition_id, consumer_group, error_message, retry_count, original_created_at)
+      VALUES ($1, $2, $3, $4, $5, $6)
+      ON CONFLICT DO NOTHING
+      RETURNING id
+    `, [msg.id, msg.partition_id, consumerGroup, msg.error_message || 'Manually moved to DLQ', msg.retry_count || 0, msg.created_at]);
+    
+    log(`${LogTypes.MANUAL_DLQ} | TransactionId: ${transactionId} | MessageId: ${msg.id}`);
+    return { movedToDLQ: true, transactionId, messageId: msg.id };
   };
   
   // Get related messages (same partition, near in time)

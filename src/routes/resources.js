@@ -85,12 +85,13 @@ export const createResourcesRoutes = (pool, systemEventManager) => {
         COUNT(DISTINCT CASE WHEN ms.status = 'processing' THEN m.id END) as processing,
         COUNT(DISTINCT CASE WHEN ms.status = 'completed' THEN m.id END) as completed,
         COUNT(DISTINCT CASE WHEN ms.status = 'failed' THEN m.id END) as failed,
-        COUNT(DISTINCT CASE WHEN ms.status = 'dead_letter' THEN m.id END) as dead_letter,
+        COUNT(DISTINCT dlq.message_id) as dead_letter,
         MIN(m.created_at) as oldest_message,
         MAX(m.created_at) as newest_message
       FROM queen.partitions p
       LEFT JOIN queen.messages m ON m.partition_id = p.id
       LEFT JOIN queen.messages_status ms ON ms.message_id = m.id AND ms.consumer_group IS NULL
+      LEFT JOIN queen.dead_letter_queue dlq ON dlq.message_id = m.id AND (dlq.consumer_group IS NULL OR dlq.consumer_group = '__QUEUE_MODE__')
       WHERE p.queue_id = $1
       GROUP BY p.id, p.name, p.created_at
       ORDER BY p.name
@@ -263,7 +264,7 @@ export const createResourcesRoutes = (pool, systemEventManager) => {
         (SELECT COUNT(*) FROM queen.messages_status WHERE status = 'processing' AND consumer_group IS NULL) as processing_messages,
         (SELECT COUNT(*) FROM queen.messages_status WHERE status = 'completed' AND consumer_group IS NULL) as completed_messages,
         (SELECT COUNT(*) FROM queen.messages_status WHERE status = 'failed' AND consumer_group IS NULL) as failed_messages,
-        (SELECT COUNT(*) FROM queen.messages_status WHERE status = 'dead_letter' AND consumer_group IS NULL) as dead_letter_messages,
+        (SELECT COUNT(*) FROM queen.dead_letter_queue WHERE consumer_group IS NULL OR consumer_group = '__QUEUE_MODE__') as dead_letter_messages,
         (SELECT COUNT(DISTINCT namespace) FROM queen.queues WHERE namespace IS NOT NULL) as namespaces,
         (SELECT COUNT(DISTINCT task) FROM queen.queues WHERE task IS NOT NULL) as tasks
     `);

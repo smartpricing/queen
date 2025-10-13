@@ -465,16 +465,15 @@ export const createAnalyticsRoutes = (queueManager) => {
         )
         SELECT 
           ts.minute,
-          COALESCE(COUNT(ms.id), 0) as count
+          COALESCE(COUNT(dlq.id), 0) as count
         FROM time_series ts
-        LEFT JOIN queen.messages_status ms ON 
-          DATE_TRUNC('minute', ms.failed_at) = ts.minute
-          AND ms.failed_at >= $${paramCounter}::timestamp
-          AND ms.failed_at <= $${paramCounter + 1}::timestamp
-          AND ms.status = 'dead_letter'
-          AND ms.consumer_group IS NULL
-        ${whereClause ? `LEFT JOIN queen.messages m ON ms.message_id = m.id
-        LEFT JOIN queen.partitions p ON m.partition_id = p.id
+        LEFT JOIN queen.dead_letter_queue dlq ON 
+          DATE_TRUNC('minute', dlq.failed_at) = ts.minute
+          AND dlq.failed_at >= $${paramCounter}::timestamp
+          AND dlq.failed_at <= $${paramCounter + 1}::timestamp
+          AND (dlq.consumer_group IS NULL OR dlq.consumer_group = '__QUEUE_MODE__')
+        ${whereClause ? `LEFT JOIN queen.messages m ON dlq.message_id = m.id
+        LEFT JOIN queen.partitions p ON m.partition_id = p.id OR dlq.partition_id = p.id
         LEFT JOIN queen.queues q ON p.queue_id = q.id` : ''}
         ${whereClause ? `WHERE 1=1 ${whereClause}` : ''}
         GROUP BY ts.minute
@@ -540,7 +539,7 @@ export const createAnalyticsRoutes = (queueManager) => {
             COUNT(DISTINCT CASE WHEN ms.status = 'completed' THEN m.id END) as completed_count,
             COUNT(DISTINCT CASE WHEN ms.status = 'processing' THEN m.id END) as processing_count,
             COUNT(DISTINCT CASE WHEN ms.status = 'failed' THEN m.id END) as failed_count,
-            COUNT(DISTINCT CASE WHEN ms.status = 'dead_letter' THEN m.id END) as dead_letter_count,
+            COUNT(DISTINCT dlq.message_id) as dead_letter_count,
             AVG(
               CASE 
                 WHEN ms.completed_at IS NOT NULL AND m.created_at IS NOT NULL 
@@ -550,6 +549,7 @@ export const createAnalyticsRoutes = (queueManager) => {
             ) as avg_lag_seconds
           FROM queen.messages m
           LEFT JOIN queen.messages_status ms ON m.id = ms.message_id AND ms.consumer_group IS NULL
+          LEFT JOIN queen.dead_letter_queue dlq ON dlq.message_id = m.id AND (dlq.consumer_group IS NULL OR dlq.consumer_group = '__QUEUE_MODE__')
           WHERE m.created_at IS NOT NULL
           GROUP BY minute
           ORDER BY minute DESC
