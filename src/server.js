@@ -1256,12 +1256,10 @@ app.listen(HOST, PORT, async (token) => {
       await syncSystemEvents(syncClient, systemEventManager, SERVER_INSTANCE_ID);
       
       // Start consuming system events
-      // IMPORTANT: Each worker MUST have unique consumer group
-      // In bus mode, this ensures ALL workers receive cache invalidation events
-      // This is necessary for distributed cache consistency across workers
+      // Note: consume() returns the stop function directly
       stopSystemEventConsumer = syncClient.consume({
         queue: SYSTEM_QUEUE,
-        consumerGroup: SERVER_INSTANCE_ID,  // Unique per worker (srv-1-0, srv-1-1, etc)
+        consumerGroup: SERVER_INSTANCE_ID,
         handler: async (message) => {
           await systemEventManager.processSystemEvent(message.payload);
         },
@@ -1284,41 +1282,18 @@ app.listen(HOST, PORT, async (token) => {
 });
 
 // Graceful shutdown
-let isShuttingDown = false;
 const shutdown = async (signal) => {
-  if (isShuttingDown) {
-    // Already shutting down, prevent double shutdown
-    return;
-  }
-  isShuttingDown = true;
-  
   log(`\n🛑 Received ${signal}, shutting down gracefully...`);
   
   // Stop system event consumer
   if (stopSystemEventConsumer) {
-    try {
-      stopSystemEventConsumer();
-      log('✅ System event consumer stopped');
-    } catch (err) {
-      // Ignore errors during shutdown
-    }
+    stopSystemEventConsumer();
+    log('✅ System event consumer stopped');
   }
   
   // Stop background jobs
-  if (stopRetention) {
-    try {
-      stopRetention();
-    } catch (err) {
-      // Ignore errors during shutdown
-    }
-  }
-  if (stopEviction) {
-    try {
-      stopEviction();
-    } catch (err) {
-      // Ignore errors during shutdown
-    }
-  }
+  if (stopRetention) stopRetention();
+  if (stopEviction) stopEviction();
   
   const uptime = (Date.now() - startTime) / 1000;
   if (messageCount > 0) {
@@ -1326,12 +1301,7 @@ const shutdown = async (signal) => {
     log(`   Average: ${(messageCount / uptime).toFixed(2)} messages/second`);
   }
   
-  try {
-    await pool.end();
-  } catch (err) {
-    // Pool may already be ended or closing, ignore
-  }
-  
+  await pool.end();
   process.exit(0);
 };
 

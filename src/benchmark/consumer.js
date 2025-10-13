@@ -4,7 +4,7 @@ import fs from 'fs';
 const QUEUE_NAME = 'benchmark-queue-01';
 const NUMBER_OF_CONSUMERS = 10;
 const BATCH_SIZE = 10000;
-const CONSUME_MODE = null//'partition';
+const CONSUME_MODE = 'partition';
 
 // Global metrics tracking
 const metrics = {
@@ -87,7 +87,7 @@ async function consumer(consumerId, partition) {
 
         // Acknowledge all messages
         const ackStartTime = Date.now();
-        await q.ack(messages);
+        q.ack(messages);
         const ackTime = Date.now() - ackStartTime;
         consumerMetrics.ackTimes.push(ackTime);
         metrics.ackTimes.push(ackTime);

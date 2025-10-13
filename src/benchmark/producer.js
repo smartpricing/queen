@@ -1,8 +1,8 @@
 import { Queen } from '../client/client.js'; 
 import fs from 'fs';
 
-const TOTAL_MESSAGES = 1000000;
-const PARTITIONS = 100; 
+const TOTAL_MESSAGES = 100000;
+const PARTITIONS = 10; 
 const PUSH_PARALLEL = 10;
 const QUEUE_NAME = 'benchmark-queue-01';
 
