@@ -96,6 +96,35 @@ CREATE TABLE IF NOT EXISTS queen.partition_leases (
     UNIQUE(partition_id, consumer_group)  -- One active lease per partition per consumer group
 );
 
+-- Partition cursors table (tracks consumption progress per partition per consumer group)
+-- This enables O(batch_size) POP performance regardless of table size
+CREATE TABLE IF NOT EXISTS queen.partition_cursors (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    partition_id UUID REFERENCES queen.partitions(id) ON DELETE CASCADE,
+    consumer_group VARCHAR(255) DEFAULT '__QUEUE_MODE__',
+    -- Cursor position (last message fully consumed in this batch)
+    last_consumed_created_at TIMESTAMPTZ,
+    last_consumed_id UUID,
+    -- Metrics
+    total_messages_consumed BIGINT DEFAULT 0,
+    total_batches_consumed BIGINT DEFAULT 0,
+    last_consumed_at TIMESTAMPTZ,
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    UNIQUE(partition_id, consumer_group)
+);
+
+-- Dead Letter Queue for failed messages (individual failures, not batch failures)
+CREATE TABLE IF NOT EXISTS queen.dead_letter_queue (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    message_id UUID REFERENCES queen.messages(id) ON DELETE CASCADE,
+    partition_id UUID REFERENCES queen.partitions(id) ON DELETE CASCADE,
+    consumer_group VARCHAR(255),
+    error_message TEXT,
+    retry_count INTEGER DEFAULT 0,
+    original_created_at TIMESTAMPTZ,
+    failed_at TIMESTAMPTZ DEFAULT NOW()
+);
+
 -- Indexes for queues
 CREATE INDEX IF NOT EXISTS idx_queues_name ON queen.queues(name);
 CREATE INDEX IF NOT EXISTS idx_queues_priority ON queen.queues(priority DESC);
@@ -170,6 +199,20 @@ WHERE released_at IS NULL;
 CREATE INDEX IF NOT EXISTS idx_partition_leases_active_lookup 
 ON queen.partition_leases(partition_id, consumer_group, lease_expires_at) 
 WHERE released_at IS NULL;
+
+-- Indexes for partition cursors
+CREATE INDEX IF NOT EXISTS idx_partition_cursors_lookup
+ON queen.partition_cursors(partition_id, consumer_group);
+
+-- Indexes for dead letter queue
+CREATE INDEX IF NOT EXISTS idx_dlq_partition
+ON queen.dead_letter_queue(partition_id);
+
+CREATE INDEX IF NOT EXISTS idx_dlq_consumer_group
+ON queen.dead_letter_queue(consumer_group);
+
+CREATE INDEX IF NOT EXISTS idx_dlq_failed_at
+ON queen.dead_letter_queue(failed_at DESC);
 
 -- Retention history table for tracking deletions
 CREATE TABLE IF NOT EXISTS queen.retention_history (

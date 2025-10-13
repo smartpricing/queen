@@ -320,24 +320,37 @@ export async function testConsumerGroupIsolation(client) {
       }
     }
     
-    // Verify isolation: Check that group1's first message is completed for group1 but failed for group2
+    // Verify isolation: Check that group1's first message is completed (cursor advanced) and group2 failed (in DLQ)
     const statusCheck = await dbPool.query(`
-      SELECT ms.status, ms.consumer_group
-      FROM queen.messages_status ms
-      JOIN queen.messages m ON ms.message_id = m.id
+      SELECT 
+        m.id as message_id,
+        m.transaction_id,
+        CASE 
+          WHEN dlq1.id IS NOT NULL THEN 'failed'
+          WHEN m.id <= COALESCE(pc1.last_consumed_id, '00000000-0000-0000-0000-000000000000'::uuid) THEN 'completed'
+          ELSE 'pending'
+        END as group1_status,
+        CASE
+          WHEN dlq2.id IS NOT NULL THEN 'failed'
+          WHEN m.id <= COALESCE(pc2.last_consumed_id, '00000000-0000-0000-0000-000000000000'::uuid) THEN 'completed'
+          ELSE 'pending'
+        END as group2_status
+      FROM queen.messages m
+      LEFT JOIN queen.partition_cursors pc1 ON pc1.partition_id = m.partition_id AND pc1.consumer_group = 'group1'
+      LEFT JOIN queen.partition_cursors pc2 ON pc2.partition_id = m.partition_id AND pc2.consumer_group = 'group2'
+      LEFT JOIN queen.dead_letter_queue dlq1 ON dlq1.message_id = m.id AND dlq1.consumer_group = 'group1'
+      LEFT JOIN queen.dead_letter_queue dlq2 ON dlq2.message_id = m.id AND dlq2.consumer_group = 'group2'
       WHERE m.transaction_id = $1
-      ORDER BY ms.consumer_group
     `, [group1Messages[0].transactionId]);
     
-    const group1Status = statusCheck.rows.find(r => r.consumer_group === 'group1');
-    const group2Status = statusCheck.rows.find(r => r.consumer_group === 'group2');
+    const result = statusCheck.rows[0];
     
-    if (group1Status?.status !== 'completed') {
-      throw new Error(`Group1 status should be completed, got ${group1Status?.status}`);
+    if (result?.group1_status !== 'completed') {
+      throw new Error(`Group1 status should be completed, got ${result?.group1_status}`);
     }
     
-    if (group2Status?.status !== 'failed') {
-      throw new Error(`Group2 status should be failed, got ${group2Status?.status}`);
+    if (result?.group2_status !== 'failed') {
+      throw new Error(`Group2 status should be failed, got ${result?.group2_status}`);
     }
     
     passTest('Consumer groups are properly isolated');

@@ -382,12 +382,18 @@ export async function testRetentionCompletedMessages(client) {
       throw new Error('Failed to take message for completion');
     }
     
-    // Verify message is marked as completed
+    // Verify message is marked as completed (cursor-based check)
     const statusCheck = await dbPool.query(`
-      SELECT ms.status 
-      FROM queen.messages_status ms
-      JOIN queen.messages m ON ms.message_id = m.id
-      WHERE m.transaction_id = $1 AND ms.consumer_group = '__QUEUE_MODE__'
+      SELECT 
+        CASE 
+          WHEN m.id <= COALESCE(pc.last_consumed_id, '00000000-0000-0000-0000-000000000000'::uuid) THEN 'completed'
+          ELSE 'pending'
+        END as status
+      FROM queen.messages m
+      LEFT JOIN queen.partition_cursors pc 
+        ON pc.partition_id = m.partition_id 
+        AND pc.consumer_group = '__QUEUE_MODE__'
+      WHERE m.transaction_id = $1
     `, [transactionId]);
     
     if (!statusCheck.rows[0] || statusCheck.rows[0].status !== 'completed') {
