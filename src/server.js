@@ -1240,38 +1240,41 @@ app.listen(HOST, PORT, async (token) => {
     log(`✅ Queen Server running at http://${HOST}:${PORT}`);
     log(`📊 Features enabled:`);
     log(`   - Encryption: ${encryptionEnabled ? '✅' : '❌ (set QUEEN_ENCRYPTION_KEY)'}`);
+    log(`   - System Events: ${config.SYSTEM_EVENTS.ENABLED ? '✅' : '❌ (disabled via config)'}`);
     log(`   - Retention: ✅`);
     log(`   - Eviction: ✅`);
     log(`   - WebSocket Dashboard: ws://${HOST}:${PORT}/ws/dashboard`);
     log(`   - Server Instance ID: ${SERVER_INSTANCE_ID}`);
     
-    // Start system event synchronization and consumption
-    try {
-      // Create temporary client for synchronization
-      const syncClient = createQueenClient({ 
-        baseUrl: `http://localhost:${PORT}` 
-      });
-      
-      // Synchronize system events (catch up on missed events)
-      await syncSystemEvents(syncClient, systemEventManager, SERVER_INSTANCE_ID);
-      
-      // Start consuming system events
-      // Note: consume() returns the stop function directly
-      stopSystemEventConsumer = syncClient.consume({
-        queue: SYSTEM_QUEUE,
-        consumerGroup: SERVER_INSTANCE_ID,
-        handler: async (message) => {
-          await systemEventManager.processSystemEvent(message.payload);
-        },
-        options: {
-          batch: 10,
-          wait: true
-        }
-      });
-      
-      log(`✅ System event consumer started`);
-    } catch (error) {
-      log(`⚠️ Failed to start system event consumer: ${error.message}`);
+    // Start system event synchronization and consumption (only if enabled)
+    if (config.SYSTEM_EVENTS.ENABLED) {
+      try {
+        // Create temporary client for synchronization
+        const syncClient = createQueenClient({ 
+          baseUrl: `http://localhost:${PORT}` 
+        });
+        
+        // Synchronize system events (catch up on missed events)
+        await syncSystemEvents(syncClient, systemEventManager, SERVER_INSTANCE_ID);
+        
+        // Start consuming system events
+        // Note: consume() returns the stop function directly
+        stopSystemEventConsumer = syncClient.consume({
+          queue: SYSTEM_QUEUE,
+          consumerGroup: SERVER_INSTANCE_ID,
+          handler: async (message) => {
+            await systemEventManager.processSystemEvent(message.payload);
+          },
+          options: {
+            batch: 10,
+            wait: true
+          }
+        });
+        
+        log(`✅ System event consumer started`);
+      } catch (error) {
+        log(`⚠️ Failed to start system event consumer: ${error.message}`);
+      }
     }
     
     log(`🎯 Ready to process messages with high performance!`);

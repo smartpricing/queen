@@ -47,6 +47,11 @@ if (cluster.isPrimary) {
     workers: new Map()
   };
 
+  // Graceful shutdown state (declared early for use in event handlers)
+  let isShuttingDown = false;
+  let forceExitTimeout = null;
+  let statusInterval = null;
+
   // Fork workers
   for (let i = 0; i < numWorkers; i++) {
     forkWorker(i, workerStats);
@@ -78,6 +83,14 @@ if (cluster.isPrimary) {
       // Graceful shutdown
       console.log(`✅ Worker ${workerId} (PID: ${worker.process.pid}) exited gracefully`);
       workerStats.workers.delete(worker.id);
+      
+      // Check if all workers have exited during shutdown
+      if (isShuttingDown && Object.keys(cluster.workers).length === 0) {
+        console.log('✅ All workers exited, shutting down master process');
+        clearInterval(statusInterval);
+        clearTimeout(forceExitTimeout);
+        process.exit(0);
+      }
     }
   });
 
@@ -118,8 +131,6 @@ if (cluster.isPrimary) {
   });
 
   // Graceful shutdown handling
-  let isShuttingDown = false;
-  
   const gracefulShutdown = (signal) => {
     if (isShuttingDown) return;
     isShuttingDown = true;
@@ -129,23 +140,36 @@ if (cluster.isPrimary) {
     console.log(`📊 Total worker restarts during uptime: ${workerStats.totalRestarts}`);
     console.log(`⏱️  Uptime: ${((Date.now() - workerStats.startTime) / 1000 / 60).toFixed(2)} minutes`);
     
+    // Stop status reporting during shutdown
+    clearInterval(statusInterval);
+    
+    // Check if we already have no workers
+    if (Object.keys(cluster.workers).length === 0) {
+      console.log('✅ No active workers, exiting immediately');
+      process.exit(0);
+    }
+    
     // Disconnect all workers
     for (const id in cluster.workers) {
       cluster.workers[id].disconnect();
     }
     
-    // Force exit if workers don't shut down in 30 seconds
-    setTimeout(() => {
-      console.log('⚠️  Forcing shutdown after 30 second timeout');
+    // Force exit if workers don't shut down in 10 seconds (reduced from 30)
+    forceExitTimeout = setTimeout(() => {
+      console.log('⚠️  Forcing shutdown after 10 second timeout');
+      console.log(`   Remaining workers: ${Object.keys(cluster.workers).length}`);
       process.exit(0);
-    }, 30000);
+    }, 10000);
   };
 
   process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
   process.on('SIGINT', () => gracefulShutdown('SIGINT'));
 
   // Status reporting every 60 seconds
-  setInterval(() => {
+  statusInterval = setInterval(() => {
+    // Don't show status during shutdown
+    if (isShuttingDown) return;
+    
     const aliveWorkers = Object.keys(cluster.workers).length;
     const uptime = ((Date.now() - workerStats.startTime) / 1000 / 60).toFixed(2);
     

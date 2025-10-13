@@ -48,8 +48,11 @@ export const QUEUE = {
   BATCH_INSERT_SIZE: parseInt(process.env.BATCH_INSERT_SIZE) || 1000,
   
   // Long polling
-  POLL_INTERVAL: parseInt(process.env.QUEUE_POLL_INTERVAL) || 100, // 100ms
+  POLL_INTERVAL: parseInt(process.env.QUEUE_POLL_INTERVAL) || 100, // 100ms - initial poll interval
   POLL_INTERVAL_FILTERED: parseInt(process.env.QUEUE_POLL_INTERVAL_FILTERED) || 50, // 50ms for better distribution across consumers
+  MAX_POLL_INTERVAL: parseInt(process.env.QUEUE_MAX_POLL_INTERVAL) || 2000, // 2000ms - max poll interval after backoff
+  BACKOFF_THRESHOLD: parseInt(process.env.QUEUE_BACKOFF_THRESHOLD) || 5, // Number of empty polls before backoff starts
+  BACKOFF_MULTIPLIER: parseFloat(process.env.QUEUE_BACKOFF_MULTIPLIER) || 2, // Exponential backoff multiplier
   
   // Partition selection for filtered pops (namespace/task)
   MAX_PARTITION_CANDIDATES: parseInt(process.env.MAX_PARTITION_CANDIDATES) || 100, // Number of candidate partitions to fetch for lease acquisition
@@ -80,7 +83,7 @@ export const QUEUE = {
 // System Events Configuration
 export const SYSTEM_EVENTS = {
   // Enable/disable system event propagation
-  ENABLED: process.env.QUEEN_SYSTEM_EVENTS_ENABLED === 'true' || true,
+  ENABLED: process.env.QUEEN_SYSTEM_EVENTS_ENABLED === 'true' || false,
   
   // Batching window for event publishing (milliseconds)
   BATCH_MS: parseInt(process.env.QUEEN_SYSTEM_EVENTS_BATCH_MS) || 10,

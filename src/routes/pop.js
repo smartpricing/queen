@@ -26,25 +26,40 @@ export const createPopRoute = (queueManager, eventManager) => {
       return result;
     }
     
-    // Long polling with event-driven optimization
+    // Long polling with event-driven optimization and exponential backoff
     const queuePath = scope.partition 
       ? `${scope.queue}/${scope.partition}`
       : scope.queue;
     
     const startTime = Date.now();
-    const pollInterval = Math.min(config.QUEUE.POLL_INTERVAL, effectiveTimeout / 10);
+    const initialPollInterval = Math.min(config.QUEUE.POLL_INTERVAL, effectiveTimeout / 10);
+    const maxPollInterval = config.QUEUE.MAX_POLL_INTERVAL || 2000; // Default 2 seconds
+    const backoffThreshold = config.QUEUE.BACKOFF_THRESHOLD || 5; // Retries before backoff
+    const backoffMultiplier = config.QUEUE.BACKOFF_MULTIPLIER || 2;
+    
+    let currentPollInterval = initialPollInterval;
+    let consecutiveEmptyPolls = 0;
     
     while (Date.now() - startTime < effectiveTimeout) {
-      // Wait for message notification or short timeout
+      // Wait for message notification or current poll interval
       const notification = await Promise.race([
-        eventManager.waitForMessage(queuePath, pollInterval),
-        new Promise(resolve => setTimeout(() => resolve(null), pollInterval))
+        eventManager.waitForMessage(queuePath, currentPollInterval),
+        new Promise(resolve => setTimeout(() => resolve(null), currentPollInterval))
       ]);
       
       // Try to get messages whether notified or not
       result = await queueManager.uniquePop(scope, { batch, wait: false, subscriptionMode, subscriptionFrom });
       if (result.messages.length > 0) {
         return result;
+      }
+      
+      // Implement exponential backoff after threshold
+      consecutiveEmptyPolls++;
+      if (consecutiveEmptyPolls >= backoffThreshold) {
+        currentPollInterval = Math.min(
+          currentPollInterval * backoffMultiplier,
+          maxPollInterval
+        );
       }
     }
     

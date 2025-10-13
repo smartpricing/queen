@@ -1,4 +1,5 @@
 import { generateUUID } from '../utils/uuid.js';
+import config from '../config.js';
 
 export const SYSTEM_QUEUE = '__system_events__';
 
@@ -24,6 +25,7 @@ export class SystemEventManager {
     this.handlers = new Map();
     this.eventQueue = [];
     this.batchTimer = null;
+    this.enabled = config.SYSTEM_EVENTS.ENABLED;
   }
   
   // Register event handlers
@@ -48,9 +50,12 @@ export class SystemEventManager {
     // Handle locally first (immediate consistency for originating server)
     await this.handleEventLocally(event);
     
-    // Queue for batch publishing
-    this.eventQueue.push(event);
-    this.scheduleBatch();
+    // Only publish to system queue if system events are enabled
+    if (this.enabled) {
+      // Queue for batch publishing
+      this.eventQueue.push(event);
+      this.scheduleBatch();
+    }
   }
   
   // Process incoming event from system queue

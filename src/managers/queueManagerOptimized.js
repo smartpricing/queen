@@ -203,6 +203,8 @@ export const createOptimizedQueueManager = (pool, resourceCache, eventManager, s
   
   // Optimized batch insert for high throughput (simplified - no status)
   const pushMessagesBatch = async (items) => {
+    const pushStartTime = Date.now();
+    
     // Group items by queue and partition for efficient resource lookup
     const partitionGroups = {};
     for (const item of items) {
@@ -268,8 +270,13 @@ export const createOptimizedQueueManager = (pool, resourceCache, eventManager, s
           
           // ⚡ OPTIMIZATION #1: Batch duplicate check - single query for all transaction IDs
           const allTransactionIds = batch.map(item => item.transactionId || generateUUID());
+          
+          // Use more efficient LEFT JOIN approach instead of ANY() for better index usage
           const dupCheck = await client.query(
-            'SELECT transaction_id, id FROM queen.messages WHERE transaction_id = ANY($1::varchar[])',
+            `SELECT t.txn_id as transaction_id, m.id
+             FROM UNNEST($1::varchar[]) AS t(txn_id)
+             LEFT JOIN queen.messages m ON m.transaction_id = t.txn_id
+             WHERE m.id IS NOT NULL`,
             [allTransactionIds]
           );
           
@@ -419,6 +426,8 @@ export const createOptimizedQueueManager = (pool, resourceCache, eventManager, s
       }
     }
     
+    const duration = Date.now() - pushStartTime;
+    log(`[PUSH] Pushed ${items.length} items → ${allResults.length} results in ${duration}ms (${(items.length / (duration / 1000)).toFixed(0)} msg/s)`);
     return allResults;
   };
 
@@ -1320,7 +1329,8 @@ const evictOnPop = async (client, queueName) => {
           if (leaseResult.rows[0].acquired) {
             partition = candidatePartition;
             popMetrics.leaseSuccesses++;
-            log(`DEBUG: Acquired lease on partition ${partition.partition_name} (id=${partition.partition_id}) for consumerGroup=${actualConsumerGroup}`);
+            // Debug logging disabled to reduce noise during idle polling
+            // log(`DEBUG: Acquired lease on partition ${partition.partition_name} (id=${partition.partition_id}) for consumerGroup=${actualConsumerGroup}`);
             break;
           }
         }
@@ -1784,10 +1794,10 @@ const evictOnPop = async (client, queueName) => {
         return { messages: [] };
       }
       
-      // Log partition selection for debugging
-      if (!partition && queueInfo && !queueInfo.queue_name.startsWith('__')) {
-        log(`DEBUG: Found ${candidatePartitions.length} candidate partitions for ${accessMode} mode`);
-      }
+      // Log partition selection for debugging (disabled to reduce noise)
+      // if (!partition && queueInfo && !queueInfo.queue_name.startsWith('__')) {
+      //   log(`DEBUG: Found ${candidatePartitions.length} candidate partitions for ${accessMode} mode`);
+      // }
       
       // ─────────────────────────────────────────────────────────────────────
       // PHASE 2: Try to Acquire Lease on a Candidate Partition (shared logic)
@@ -1855,10 +1865,10 @@ const evictOnPop = async (client, queueName) => {
           if (leaseResult.rows[0].acquired) {
             acquiredPartition = candidate;
             const leaseAcqTime = Date.now() - leaseAcqStart;
-            // Skip logging for system queues
-            if (!candidate.queue_name.startsWith('__')) {
-              log(`DEBUG: Acquired lease on partition '${candidate.partition_name}' (${leaseAcqTime}ms)`);
-            }
+            // Debug logging disabled to reduce noise during idle polling
+            // if (!candidate.queue_name.startsWith('__')) {
+            //   log(`DEBUG: Acquired lease on partition '${candidate.partition_name}' (${leaseAcqTime}ms)`);
+            // }
             break;
           }
         }
