@@ -163,7 +163,30 @@ const sortBy = ref('name');
 const fetchQueues = async () => {
   try {
     const result = await execute(client.getQueues.bind(client));
-    queues.value = result.queues || [];
+    // Map API response with nested messages to flat structure
+    queues.value = (result.queues || []).map(q => {
+      const total = q.messages?.total || 0;
+      const pending = q.messages?.pending || 0;
+      const processing = q.messages?.processing || 0;
+      const completed = q.messages?.completed || 0;
+      const failed = q.messages?.failed || 0;
+      
+      // Calculate unaccounted messages (treat as pending)
+      const accountedFor = pending + processing + completed + failed;
+      const unaccountedMessages = Math.max(0, total - accountedFor);
+      const actualPending = pending + unaccountedMessages;
+      
+      return {
+        ...q,
+        pendingMessages: actualPending,
+        processingMessages: processing,
+        completedMessages: completed,
+        failedMessages: failed,
+        totalMessages: total,
+        lagSeconds: q.lag?.seconds || 0,
+        lagFormatted: q.lag?.formatted || null
+      };
+    });
   } catch (err) {
     console.error('Failed to fetch queues:', err);
     queues.value = [];

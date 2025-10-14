@@ -1,7 +1,7 @@
 import { Queen } from '../client/client.js'; 
 import fs from 'fs';
 
-const TOTAL_MESSAGES = 1000000;
+const TOTAL_MESSAGES = 100000;
 const NUM_QUEUES = 50;          // X: Number of queues
 const PARTITIONS_PER_QUEUE = 10; // Y: Partitions per queue
 const MAX_BATCH_SIZE = 1000;  

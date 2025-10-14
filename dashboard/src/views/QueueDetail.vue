@@ -142,7 +142,7 @@
                   </td>
                   <td class="px-6 py-4 whitespace-nowrap text-sm">
                     <span :class="getLagColor(partition.lag)">
-                      {{ (partition.lag || 0).toLocaleString() }}
+                      {{ partition.lagFormatted || 'N/A' }}
                     </span>
                   </td>
                 </tr>
@@ -191,26 +191,53 @@ const data = ref(null);
 const fetchQueueDetail = async () => {
   try {
     const result = await execute(client.getQueueDetail.bind(client), queueName.value);
-    data.value = result || {
-      totalMessages: 0,
-      pendingMessages: 0,
-      processingMessages: 0,
-      completedMessages: 0,
-      failedMessages: 0,
-      partitions: []
-    };
+    if (result) {
+      // Map API response structure properly
+      data.value = {
+        name: result.queue?.name || queueName.value,
+        namespace: result.queue?.namespace,
+        task: result.queue?.task,
+        totalMessages: result.totals?.messages?.total || 0,
+        pendingMessages: result.totals?.messages?.pending || 0,
+        processingMessages: result.totals?.messages?.processing || 0,
+        completedMessages: result.totals?.messages?.completed || 0,
+        failedMessages: result.totals?.messages?.failed || 0,
+        leaseTime: result.queue?.config?.leaseTime,
+        retryLimit: result.queue?.config?.retryLimit,
+        ttl: result.queue?.config?.ttl,
+        partitions: (result.partitions || []).map(p => ({
+          partition: p.name || p.id,
+          pending: p.messages?.pending || 0,
+          processing: p.messages?.processing || 0,
+          completed: p.messages?.completed || 0,
+          failed: p.messages?.failed || 0,
+          lag: p.lag?.seconds || 0,
+          lagFormatted: p.lag?.formatted || 'N/A'
+        }))
+      };
+    } else {
+      data.value = getEmptyData();
+    }
   } catch (err) {
     console.error('Failed to fetch queue detail:', err);
-    data.value = {
-      totalMessages: 0,
-      pendingMessages: 0,
-      processingMessages: 0,
-      completedMessages: 0,
-      failedMessages: 0,
-      partitions: []
-    };
+    data.value = getEmptyData();
   }
 };
+
+const getEmptyData = () => ({
+  name: queueName.value,
+  namespace: null,
+  task: null,
+  totalMessages: 0,
+  pendingMessages: 0,
+  processingMessages: 0,
+  completedMessages: 0,
+  failedMessages: 0,
+  leaseTime: null,
+  retryLimit: null,
+  ttl: null,
+  partitions: []
+});
 
 const { startPolling, stopPolling } = usePolling(fetchQueueDetail, 5000);
 

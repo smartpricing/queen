@@ -1,18 +1,18 @@
 import { Queen } from '../client/client.js'; 
 import fs from 'fs';
 
-const TOTAL_MESSAGES = 1000000;
+const TOTAL_MESSAGES = 100000;
 const PARTITIONS = 10; 
 const MAX_BATCH_SIZE = 1000;  // Reduced from 10000
 const PUSH_PARALLEL = 10;      // Reduced from 10 to avoid lock contention
-const QUEUE_NAME = 'benchmark-queue-01';
+const QUEUE_NAME = 'benchmark-queue-001';
 
 const q = new Queen({
   baseUrls: ['http://localhost:6632'],
   timeout: 120000
 });
 
-await q.queueDelete(QUEUE_NAME);
+//await q.queueDelete(QUEUE_NAME);
 await q.queue(QUEUE_NAME, {
   leaseTime: 10,
   retryLimit: 3

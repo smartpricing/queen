@@ -462,13 +462,28 @@ const transformAnalyticsData = (apiData) => {
   const interval = apiData.timeRange?.interval || 'hour';
   
   const labels = throughputSeries.map(item => {
+    // Parse UTC timestamp and convert to local time
     const date = new Date(item.timestamp);
+    
     if (interval === 'minute') {
-      return date.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' });
+      return date.toLocaleTimeString([], { 
+        hour: '2-digit', 
+        minute: '2-digit',
+        hour12: false
+      });
     } else if (interval === 'hour') {
-      return date.toLocaleString('en-US', { month: 'short', day: 'numeric', hour: '2-digit' });
+      return date.toLocaleString([], { 
+        month: 'short', 
+        day: 'numeric', 
+        hour: '2-digit',
+        minute: '2-digit',
+        hour12: false
+      });
     } else {
-      return date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+      return date.toLocaleDateString([], { 
+        month: 'short', 
+        day: 'numeric'
+      });
     }
   }).reverse();
   

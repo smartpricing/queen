@@ -62,29 +62,29 @@ export const createStatusRoutes = (pool) => {
       const throughputQuery = `
         WITH time_series AS (
           SELECT generate_series(
-            DATE_TRUNC('minute', $1::timestamp),
-            DATE_TRUNC('minute', $2::timestamp),
+            DATE_TRUNC('minute', $1::timestamptz),
+            DATE_TRUNC('minute', $2::timestamptz),
             '1 minute'::interval
           ) AS minute
+        ),
+        ingested_per_minute AS (
+          SELECT 
+            DATE_TRUNC('minute', m.created_at) as minute,
+            COUNT(DISTINCT m.id) as messages_ingested
+          FROM queen.messages m
+          JOIN queen.partitions p ON p.id = m.partition_id
+          JOIN queen.queues q ON q.id = p.queue_id
+          WHERE m.created_at >= $1::timestamptz
+            AND m.created_at <= $2::timestamptz
+            ${filterInfo.whereClause}
+          GROUP BY DATE_TRUNC('minute', m.created_at)
         )
         SELECT 
           ts.minute,
-          COALESCE(COUNT(DISTINCT m.id), 0) as messages_ingested,
-          COALESCE((
-            SELECT SUM(total_batches_consumed) 
-            FROM queen.partition_consumers pc
-            WHERE pc.consumer_group = '__QUEUE_MODE__'
-              AND pc.last_consumed_at >= ts.minute
-              AND pc.last_consumed_at < ts.minute + INTERVAL '1 minute'
-          ), 0) as messages_processed
+          COALESCE(ipm.messages_ingested, 0) as messages_ingested,
+          0 as messages_processed
         FROM time_series ts
-        LEFT JOIN queen.messages m ON DATE_TRUNC('minute', m.created_at) = ts.minute
-          AND m.created_at >= $1::timestamp
-          AND m.created_at <= $2::timestamp
-        LEFT JOIN queen.partitions p ON p.id = m.partition_id
-        LEFT JOIN queen.queues q ON q.id = p.queue_id
-        WHERE 1=1 ${filterInfo.whereClause}
-        GROUP BY ts.minute
+        LEFT JOIN ingested_per_minute ipm ON ipm.minute = ts.minute
         ORDER BY ts.minute DESC
       `;
       
@@ -282,7 +282,7 @@ export const createStatusRoutes = (pool) => {
         (SELECT EXTRACT(EPOCH FROM (NOW() - MIN(m2.created_at)))
          FROM queen.messages m2
          JOIN queen.partitions p2 ON p2.id = m2.partition_id
-         LEFT JOIN queen.partition_consumers pc2 ON pc2.partition_id = p2.partition_id 
+         LEFT JOIN queen.partition_consumers pc2 ON pc2.partition_id = p2.id 
            AND pc2.consumer_group = '__QUEUE_MODE__'
          WHERE p2.queue_id = q.id
            AND (m2.created_at, m2.id) > (COALESCE(pc2.last_consumed_created_at, '1970-01-01'::timestamptz),
@@ -312,7 +312,7 @@ export const createStatusRoutes = (pool) => {
     
     const [result, countResult] = await Promise.all([
       pool.query(query, params),
-      pool.query(countQuery, params.slice(2, paramCount - 2))
+      pool.query(countQuery, params.slice(2, -2))
     ]);
     
     const queues = result.rows.map(row => ({
@@ -583,7 +583,7 @@ export const createStatusRoutes = (pool) => {
     
     const [result, countResult] = await Promise.all([
       pool.query(query, params),
-      pool.query(countQuery, params.slice(0, paramCount - 2))
+      pool.query(countQuery, params.slice(0, -2))
     ]);
     
     const messages = result.rows.map(row => {
@@ -693,32 +693,50 @@ export const createStatusRoutes = (pool) => {
     
     try {
       // Query 1: Throughput time series
+      // Note: V2 schema doesn't track per-message consumption timestamps,
+      // so we can only show ingested messages accurately. "Processed" would
+      // require tracking individual message acks with timestamps.
       const throughputQuery = `
         WITH time_series AS (
           SELECT generate_series(
-            DATE_TRUNC('${interval}', $1::timestamp),
-            DATE_TRUNC('${interval}', $2::timestamp),
+            DATE_TRUNC('${interval}', $1::timestamptz),
+            DATE_TRUNC('${interval}', $2::timestamptz),
             '${sqlInterval}'::interval
           ) AS bucket
+        ),
+        ingested_counts AS (
+          SELECT 
+            DATE_TRUNC('${interval}', m.created_at) as bucket,
+            COUNT(DISTINCT m.id) as ingested
+          FROM queen.messages m
+          JOIN queen.partitions p ON p.id = m.partition_id
+          JOIN queen.queues q ON q.id = p.queue_id
+          WHERE m.created_at >= $1 
+            AND m.created_at <= $2
+            ${filterInfo.whereClause}
+          GROUP BY DATE_TRUNC('${interval}', m.created_at)
+        ),
+        failed_counts AS (
+          SELECT 
+            DATE_TRUNC('${interval}', dlq.failed_at) as bucket,
+            COUNT(*) as failed
+          FROM queen.dead_letter_queue dlq
+          JOIN queen.partitions p ON p.id = dlq.partition_id
+          JOIN queen.queues q ON q.id = p.queue_id
+          WHERE dlq.failed_at >= $1::timestamptz 
+            AND dlq.failed_at <= $2::timestamptz
+            AND (dlq.consumer_group IS NULL OR dlq.consumer_group = '__QUEUE_MODE__')
+            ${filterInfo.whereClause}
+          GROUP BY DATE_TRUNC('${interval}', dlq.failed_at)
         )
         SELECT 
           ts.bucket as timestamp,
-          COUNT(DISTINCT m.id) as ingested,
-          COALESCE(SUM(pc.total_messages_consumed), 0) as processed,
-          COUNT(DISTINCT dlq.id) as failed
+          COALESCE(ic.ingested, 0) as ingested,
+          0 as processed,
+          COALESCE(fc.failed, 0) as failed
         FROM time_series ts
-        LEFT JOIN queen.messages m ON DATE_TRUNC('${interval}', m.created_at) = ts.bucket
-          AND m.created_at >= $1::timestamp AND m.created_at <= $2::timestamp
-        LEFT JOIN queen.partitions p ON p.id = m.partition_id
-        LEFT JOIN queen.queues q ON q.id = p.queue_id
-        LEFT JOIN queen.partition_consumers pc ON pc.partition_id = p.id 
-          AND pc.consumer_group = '__QUEUE_MODE__'
-          AND DATE_TRUNC('${interval}', pc.last_consumed_at) = ts.bucket
-        LEFT JOIN queen.dead_letter_queue dlq ON dlq.partition_id = p.id
-          AND DATE_TRUNC('${interval}', dlq.failed_at) = ts.bucket
-          AND dlq.consumer_group = '__QUEUE_MODE__'
-        WHERE 1=1 ${filterInfo.whereClause}
-        GROUP BY ts.bucket
+        LEFT JOIN ingested_counts ic ON ic.bucket = ts.bucket
+        LEFT JOIN failed_counts fc ON fc.bucket = ts.bucket
         ORDER BY ts.bucket DESC
       `;
       
@@ -728,8 +746,8 @@ export const createStatusRoutes = (pool) => {
       const latencyQuery = `
         WITH time_series AS (
           SELECT generate_series(
-            DATE_TRUNC('${interval}', $1::timestamp),
-            DATE_TRUNC('${interval}', $2::timestamp),
+            DATE_TRUNC('${interval}', $1::timestamptz),
+            DATE_TRUNC('${interval}', $2::timestamptz),
             '${sqlInterval}'::interval
           ) AS bucket
         )
@@ -746,17 +764,17 @@ export const createStatusRoutes = (pool) => {
         ORDER BY ts.bucket DESC
       `;
       
-      // Query 3: Top queues by volume
+      // Query 3: Top queues by volume (based on ingested messages in time range)
       const topQueuesQuery = `
         SELECT 
           q.name,
           q.namespace,
-          COALESCE(SUM(pc.total_messages_consumed), 0) as messages_processed,
-          0 as avg_processing_time,
-          COUNT(DISTINCT dlq.id)::float / 
-            NULLIF(COALESCE(SUM(pc.total_messages_consumed), 0) + COUNT(DISTINCT dlq.id), 0) as error_rate
+          COUNT(DISTINCT m.id) as messages_ingested,
+          COALESCE(SUM(DISTINCT pc.total_messages_consumed), 0) as total_consumed_lifetime,
+          COUNT(DISTINCT dlq.id) as failed_in_range,
+          COUNT(DISTINCT dlq.id)::float / NULLIF(COUNT(DISTINCT m.id), 0) as error_rate
         FROM queen.queues q
-        LEFT JOIN queen.partitions p ON p.queue_id = q.id
+        JOIN queen.partitions p ON p.queue_id = q.id
         LEFT JOIN queen.messages m ON m.partition_id = p.id
           AND m.created_at >= $1 AND m.created_at <= $2
         LEFT JOIN queen.partition_consumers pc ON pc.partition_id = p.id 
@@ -767,7 +785,7 @@ export const createStatusRoutes = (pool) => {
         WHERE 1=1 ${filterInfo.whereClause}
         GROUP BY q.id, q.name, q.namespace
         HAVING COUNT(DISTINCT m.id) > 0
-        ORDER BY messages_processed DESC
+        ORDER BY messages_ingested DESC
         LIMIT 10
       `;
       
@@ -775,22 +793,29 @@ export const createStatusRoutes = (pool) => {
       const dlqQuery = `
         WITH time_series AS (
           SELECT generate_series(
-            DATE_TRUNC('${interval}', $1::timestamp),
-            DATE_TRUNC('${interval}', $2::timestamp),
+            DATE_TRUNC('${interval}', $1::timestamptz),
+            DATE_TRUNC('${interval}', $2::timestamptz),
             '${sqlInterval}'::interval
           ) AS bucket
+        ),
+        dlq_counts AS (
+          SELECT 
+            DATE_TRUNC('${interval}', dlq.failed_at) as bucket,
+            COUNT(*) as messages
+          FROM queen.dead_letter_queue dlq
+          JOIN queen.partitions p ON p.id = dlq.partition_id
+          JOIN queen.queues q ON q.id = p.queue_id
+          WHERE dlq.failed_at >= $1::timestamptz 
+            AND dlq.failed_at <= $2::timestamptz
+            AND (dlq.consumer_group IS NULL OR dlq.consumer_group = '__QUEUE_MODE__')
+            ${filterInfo.whereClause}
+          GROUP BY DATE_TRUNC('${interval}', dlq.failed_at)
         )
         SELECT 
           ts.bucket as timestamp,
-          COUNT(DISTINCT dlq.id) as messages
+          COALESCE(dc.messages, 0) as messages
         FROM time_series ts
-        LEFT JOIN queen.dead_letter_queue dlq ON DATE_TRUNC('${interval}', dlq.failed_at) = ts.bucket
-          AND dlq.failed_at >= $1::timestamp AND dlq.failed_at <= $2::timestamp
-          AND (dlq.consumer_group IS NULL OR dlq.consumer_group = '__QUEUE_MODE__')
-        LEFT JOIN queen.partitions p ON p.id = dlq.partition_id
-        LEFT JOIN queen.queues q ON q.id = p.queue_id
-        WHERE 1=1 ${filterInfo.whereClause}
-        GROUP BY ts.bucket
+        LEFT JOIN dlq_counts dc ON dc.bucket = ts.bucket
         ORDER BY ts.bucket DESC
       `;
       
@@ -813,7 +838,7 @@ export const createStatusRoutes = (pool) => {
       // Execute all queries in parallel
       const [throughputResult, latencyResult, topQueuesResult, dlqResult, dlqErrorsResult] = await Promise.all([
         pool.query(throughputQuery, filterInfo.params),
-        pool.query(latencyQuery, filterInfo.params),
+        pool.query(latencyQuery, filterInfo.params.slice(0, 2)),
         pool.query(topQueuesQuery, filterInfo.params),
         pool.query(dlqQuery, filterInfo.params),
         pool.query(dlqErrorsQuery, filterInfo.params)
@@ -889,8 +914,9 @@ export const createStatusRoutes = (pool) => {
       const topQueues = topQueuesResult.rows.map(row => ({
         name: row.name,
         namespace: row.namespace,
-        messagesProcessed: parseInt(row.messages_processed || 0),
-        avgProcessingTime: parseFloat(row.avg_processing_time || 0),
+        messagesIngested: parseInt(row.messages_ingested || 0),
+        totalConsumedLifetime: parseInt(row.total_consumed_lifetime || 0),
+        failedInRange: parseInt(row.failed_in_range || 0),
         errorRate: parseFloat(row.error_rate || 0)
       }));
       
@@ -910,6 +936,7 @@ export const createStatusRoutes = (pool) => {
       }));
       
       // Calculate queue depths (current state)
+      const depthFilters = buildFilters(1);
       const depthQuery = `
         SELECT 
           COALESCE(SUM(pc.pending_estimate), 0) as pending,
@@ -918,10 +945,10 @@ export const createStatusRoutes = (pool) => {
         LEFT JOIN queen.partitions p ON p.queue_id = q.id
         LEFT JOIN queen.partition_consumers pc ON pc.partition_id = p.id 
           AND pc.consumer_group = '__QUEUE_MODE__'
-        WHERE 1=1 ${filterInfo.whereClause}
+        WHERE 1=1 ${depthFilters.whereClause}
       `;
       
-      const depthResult = await pool.query(depthQuery, filterInfo.params.slice(2));
+      const depthResult = await pool.query(depthQuery, depthFilters.params.slice(2));
       const currentDepth = {
         pending: parseInt(depthResult.rows[0]?.pending || 0),
         processing: parseInt(depthResult.rows[0]?.processing || 0)

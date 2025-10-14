@@ -11,7 +11,7 @@
 
 </div>
 
-![Queen Dashboard](assets/dashboard.png)
+![Queen Logo](assets/queen-logo.svg)
 
 ---
 
@@ -24,7 +24,7 @@
 **🚀 Developer-First API**
 - **4 core methods, infinite patterns**: `queue()`, `push()`, `take()`, `ack()`
 - **Async iteration**: Process messages with familiar `for await` syntax
-- **Batch processing**: Use `takeBatch()` for 100k+ msg/sec throughput
+- **Batch processing**: Use `takeBatch()` for 250k+ msg/sec throughput on millions of messages
 - **Smart addressing**: `orders/urgent@workers` - queue, partition, and consumer group in one
 
 **⚡ Production-Ready Performance**

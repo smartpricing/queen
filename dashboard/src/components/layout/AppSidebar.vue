@@ -9,47 +9,66 @@
   <!-- Sidebar - Icon only on desktop, full width on mobile -->
   <aside 
     :class="[
-      'fixed lg:static inset-y-0 left-0 z-50 bg-white dark:bg-gray-900 border-r border-gray-200 dark:border-gray-800 transform transition-all duration-300 ease-in-out',
-      isOpen ? 'translate-x-0 w-64' : '-translate-x-full lg:translate-x-0 lg:w-20',
+      'fixed lg:static inset-y-0 left-0 z-50 bg-white dark:bg-gray-900 border-r border-gray-200 dark:border-gray-800 transform transition-all duration-300 ease-in-out overflow-hidden',
+      isOpen ? 'translate-x-0 w-64' : '-translate-x-full lg:translate-x-0 lg:w-16',
     ]"
   >
-    <div class="flex flex-col h-full">
+    <div class="flex flex-col h-full overflow-hidden">
       <!-- Logo -->
-      <div class="flex items-center justify-center h-16 border-b border-gray-200 dark:border-gray-800">
-        <div class="w-10 h-10 bg-gradient-to-br from-emerald-500 to-emerald-600 rounded-xl flex items-center justify-center shadow-lg hover:shadow-xl transition-shadow">
-          <svg class="w-6 h-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 8h10M7 12h4m1 8l-4-4H5a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v8a2 2 0 01-2 2h-3l-4 4z" />
-          </svg>
+      <div class="flex items-center justify-center py-3">
+        <div class="w-10 h-10 flex items-center justify-center group cursor-pointer">
+          <QueenLogo class="w-10 h-10 transition-transform duration-300 group-hover:scale-110" />
         </div>
       </div>
       
       <!-- Navigation -->
-      <nav class="flex-1 py-6 space-y-2 overflow-y-auto">
+      <nav class="flex-1 py-3 space-y-1 overflow-y-auto overflow-x-hidden px-1">
         <router-link
           v-for="item in navigation"
           :key="item.path"
           :to="item.path"
           @click="$emit('close')"
           :class="[
-            'group relative flex items-center justify-center lg:mx-2 px-3 py-3 rounded-xl transition-all duration-200',
-            isActive(item.path)
-              ? 'bg-gradient-to-br from-emerald-500 to-emerald-600 text-white shadow-lg shadow-emerald-500/30'
-              : 'text-gray-600 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-800 hover:text-emerald-600 dark:hover:text-emerald-400'
+            'group relative flex items-center justify-center w-10 h-10 mx-auto rounded-lg transition-all duration-200',
+            isActive(item.path) ? activeNavClass : inactiveNavClass
           ]"
         >
-          <component :is="item.icon" class="w-6 h-6 flex-shrink-0" />
-          <span :class="['lg:hidden absolute left-20 px-3 py-1.5 bg-gray-900 dark:bg-gray-700 text-white text-sm rounded-lg whitespace-nowrap opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none']">
+          <component :is="item.icon" class="w-5 h-5 flex-shrink-0" />
+          <span class="absolute left-full ml-2 px-3 py-1.5 bg-gray-900 dark:bg-gray-700 text-white text-sm rounded-lg whitespace-nowrap opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none z-50 shadow-lg">
             {{ item.label }}
           </span>
         </router-link>
       </nav>
       
-      <!-- Footer - Only show on mobile when open -->
-      <div v-if="isOpen" class="lg:hidden p-4 border-t border-gray-200 dark:border-gray-800">
-        <div class="text-xs text-gray-500 dark:text-gray-400">
-          <div class="font-medium">Queen Dashboard</div>
-          <div class="mt-1">v4.0.0</div>
-        </div>
+      <!-- Footer Controls -->
+      <div class="p-1 border-t border-gray-200 dark:border-gray-800 space-y-1">
+        <!-- Theme Toggle -->
+        <button
+          @click="toggleTheme"
+          :class="['group relative flex items-center justify-center w-10 h-10 mx-auto rounded-lg text-gray-600 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-800 transition-all duration-200', hoverTextClass]"
+          title="Toggle theme"
+        >
+          <svg v-if="colorMode === 'light'" class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M20.354 15.354A9 9 0 018.646 3.646 9.003 9.003 0 0012 21a9.003 9.003 0 008.354-5.646z" />
+          </svg>
+          <svg v-else class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 3v1m0 16v1m9-9h-1M4 12H3m15.364 6.364l-.707-.707M6.343 6.343l-.707-.707m12.728 0l-.707.707M6.343 17.657l-.707.707M16 12a4 4 0 11-8 0 4 4 0 018 0z" />
+          </svg>
+          <span class="absolute left-full ml-2 px-3 py-1.5 bg-gray-900 dark:bg-gray-700 text-white text-sm rounded-lg whitespace-nowrap opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none z-50 shadow-lg">
+            {{ colorMode === 'light' ? 'Dark Mode' : 'Light Mode' }}
+          </span>
+        </button>
+        
+        <!-- Mobile menu toggle (only visible on mobile) -->
+        <button
+          v-if="isOpen"
+          @click="$emit('toggle-sidebar')"
+          :class="['lg:hidden group relative flex items-center justify-center w-10 h-10 mx-auto rounded-lg text-gray-600 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-800 transition-all duration-200', hoverTextClass]"
+        >
+          <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" />
+          </svg>
+        </button>
       </div>
     </div>
   </aside>
@@ -58,6 +77,9 @@
 <script setup>
 import { computed } from 'vue';
 import { useRoute } from 'vue-router';
+import { useColorMode } from '../../composables/useColorMode';
+import QueenLogo from '../icons/QueenLogo.vue';
+import { theme } from '../../config/theme';
 
 // Icons as render functions
 import { h } from 'vue';
@@ -94,8 +116,24 @@ const props = defineProps({
   }
 });
 
-const emit = defineEmits(['close']);
+const emit = defineEmits(['close', 'toggle-sidebar']);
 const route = useRoute();
+const { colorMode, toggleColorMode } = useColorMode();
+
+// Dynamic theme classes
+const activeNavClass = computed(() => 
+  `bg-gradient-to-br ${theme.classes.primaryGradient} text-white shadow-lg ${theme.classes.primaryShadow}`
+);
+
+const inactiveNavClass = computed(() => 
+  `text-gray-600 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-800 ${theme.classes.primaryText.replace('text-', 'hover:text-').replace(' dark:text-', ' dark:hover:text-')}`
+);
+
+const hoverTextClass = computed(() => theme.classes.primaryText.replace('text-', 'hover:text-').replace(' dark:text-', ' dark:hover:text-'));
+
+const toggleTheme = () => {
+  toggleColorMode();
+};
 
 const navigation = [
   { path: '/', label: 'Dashboard', icon: HomeIcon },

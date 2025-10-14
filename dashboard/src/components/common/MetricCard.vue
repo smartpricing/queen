@@ -1,15 +1,15 @@
 <template>
-  <div class="group bg-white dark:bg-gray-900 rounded-2xl border border-gray-200 dark:border-gray-800 p-6 hover:shadow-xl hover:shadow-emerald-500/10 hover:border-emerald-200 dark:hover:border-emerald-800 transition-all duration-300">
-    <div class="flex items-start justify-between">
-      <div class="flex-1">
-        <p class="text-sm font-medium text-gray-600 dark:text-gray-400 uppercase tracking-wide">
+  <div class="group bg-white dark:bg-gray-900 rounded-2xl border border-gray-200 dark:border-gray-800 p-6 card-elevation-1 hover:card-elevation-3 hover:border-emerald-200 dark:hover:border-emerald-800 transition-all duration-300 hover:-translate-y-0.5">
+    <div class="flex items-start justify-between gap-4">
+      <div class="flex-1 min-w-0">
+        <p class="text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wider mb-3">
           {{ title }}
         </p>
-        <div class="mt-3 flex items-baseline">
-          <p class="text-4xl font-bold text-gray-900 dark:text-white">
+        <div class="flex items-baseline gap-2">
+          <p class="text-4xl font-bold gradient-text metric-value">
             {{ formattedValue }}
           </p>
-          <p v-if="unit" class="ml-2 text-lg text-gray-500 dark:text-gray-400 font-medium">
+          <p v-if="unit" class="text-base text-gray-500 dark:text-gray-400 font-semibold">
             {{ unit }}
           </p>
         </div>
@@ -21,8 +21,8 @@
       </div>
       
       <!-- Icon -->
-      <div v-if="icon" :class="`p-3 rounded-xl transition-transform group-hover:scale-110 ${iconBgClass}`">
-        <component :is="icon" :class="`w-7 h-7 ${iconColorClass}`" />
+      <div v-if="icon" :class="`flex-shrink-0 p-3 rounded-xl transition-all duration-300 group-hover:scale-110 ${iconBgClass}`">
+        <component :is="icon" :class="`w-6 h-6 ${iconColorClass}`" />
       </div>
     </div>
     
@@ -90,7 +90,17 @@ const props = defineProps({
 
 const formattedValue = computed(() => {
   if (typeof props.value === 'number') {
-    return props.value.toLocaleString();
+    // Format large numbers with suffixes (K, M, B)
+    const absValue = Math.abs(props.value);
+    if (absValue >= 1000000000) {
+      return (props.value / 1000000000).toFixed(1) + 'B';
+    } else if (absValue >= 1000000) {
+      return (props.value / 1000000).toFixed(1) + 'M';
+    } else if (absValue >= 10000) {
+      return (props.value / 1000).toFixed(1) + 'K';
+    } else {
+      return props.value.toLocaleString();
+    }
   }
   return props.value;
 });
