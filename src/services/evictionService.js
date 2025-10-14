@@ -10,45 +10,61 @@ const EVICTION_INTERVAL = config.JOBS.EVICTION_INTERVAL;
 const evictMessages = async (client, queueName, maxWaitTimeSeconds) => {
   if (!maxWaitTimeSeconds || maxWaitTimeSeconds <= 0) return 0;
   
-  // Find old messages that haven't been consumed and move to DLQ
-  const result = await client.query(`
-    WITH queue_partitions AS (
-      SELECT p.id, p.queue_id
-      FROM queen.partitions p
-      JOIN queen.queues q ON p.queue_id = q.id
-      WHERE q.name = $1
-    ),
-    old_unconsumed_messages AS (
-      SELECT m.id, m.partition_id, m.created_at
-      FROM queen.messages m
-      JOIN queue_partitions qp ON m.partition_id = qp.id
-      LEFT JOIN queen.partition_consumers pc ON pc.partition_id = m.partition_id
-        AND pc.consumer_group = '__QUEUE_MODE__'
-      WHERE m.created_at < NOW() - INTERVAL '1 second' * $2
-        -- Message has not been consumed yet
-        AND ((m.created_at, m.id) > (COALESCE(pc.last_consumed_created_at, '1970-01-01'::timestamptz),
-                                       COALESCE(pc.last_consumed_id, '00000000-0000-0000-0000-000000000000'::uuid))
-             OR pc.last_consumed_id IS NULL)
-    )
-    INSERT INTO queen.dead_letter_queue (
-        message_id, 
-        partition_id, 
-        consumer_group, 
-        error_message, 
-        original_created_at
-    )
-    SELECT 
-        om.id,
-        om.partition_id,
-        '__QUEUE_MODE__',
-        'Message exceeded maximum wait time',
-        om.created_at
-    FROM old_unconsumed_messages om
-    ON CONFLICT DO NOTHING
-    RETURNING message_id
-  `, [queueName, maxWaitTimeSeconds]);
-  
-  return result.rowCount || 0;
+  try {
+    // Find old messages that haven't been consumed and move to DLQ
+    // Use a WHERE EXISTS check to ensure message still exists before inserting into DLQ
+    const result = await client.query(`
+      WITH queue_partitions AS (
+        SELECT p.id, p.queue_id
+        FROM queen.partitions p
+        JOIN queen.queues q ON p.queue_id = q.id
+        WHERE q.name = $1
+      ),
+      old_unconsumed_messages AS (
+        SELECT m.id, m.partition_id, m.created_at
+        FROM queen.messages m
+        JOIN queue_partitions qp ON m.partition_id = qp.id
+        LEFT JOIN queen.partition_consumers pc ON pc.partition_id = m.partition_id
+          AND pc.consumer_group = '__QUEUE_MODE__'
+        WHERE m.created_at < NOW() - INTERVAL '1 second' * $2
+          -- Message has not been consumed yet
+          AND ((m.created_at, m.id) > (COALESCE(pc.last_consumed_created_at, '1970-01-01'::timestamptz),
+                                         COALESCE(pc.last_consumed_id, '00000000-0000-0000-0000-000000000000'::uuid))
+               OR pc.last_consumed_id IS NULL)
+      )
+      INSERT INTO queen.dead_letter_queue (
+          message_id, 
+          partition_id, 
+          consumer_group, 
+          error_message, 
+          original_created_at
+      )
+      SELECT 
+          om.id,
+          om.partition_id,
+          '__QUEUE_MODE__',
+          'Message exceeded maximum wait time',
+          om.created_at
+      FROM old_unconsumed_messages om
+      WHERE EXISTS (
+          SELECT 1 FROM queen.messages m WHERE m.id = om.id
+      )
+      ON CONFLICT DO NOTHING
+      RETURNING message_id
+    `, [queueName, maxWaitTimeSeconds]);
+    
+    return result.rowCount || 0;
+  } catch (error) {
+    // Catch foreign key violations (messages deleted between SELECT and INSERT)
+    if (error.code === '23503') {
+      // Foreign key constraint violation - message was deleted
+      // This is a harmless race condition, just log it
+      log(`${LogTypes.EVICTION} | Queue: ${queueName} | Warning: Message deleted during eviction (race condition)`);
+      return 0;
+    }
+    // Re-throw other errors
+    throw error;
+  }
 };
 
 // Evict messages during pop operation (inline eviction)

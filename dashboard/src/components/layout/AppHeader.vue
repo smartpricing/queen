@@ -1,20 +1,20 @@
 <template>
-  <header class="bg-white dark:bg-gray-900 border-b border-gray-200 dark:border-gray-800 h-16 flex items-center px-4 lg:px-6">
+  <header class="bg-white/80 dark:bg-gray-900/80 backdrop-blur-md border-b border-gray-200 dark:border-gray-800 h-16 flex items-center px-4 lg:px-6 sticky top-0 z-30 shadow-sm">
     <div class="flex items-center justify-between w-full">
       <!-- Left section -->
       <div class="flex items-center space-x-4">
         <!-- Mobile menu button -->
         <button 
           @click="$emit('toggle-sidebar')"
-          class="lg:hidden p-2 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-800 text-gray-600 dark:text-gray-400"
+          class="lg:hidden p-2 rounded-xl hover:bg-gray-100 dark:hover:bg-gray-800 text-gray-600 dark:text-gray-400 transition-all"
         >
           <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h16M4 12h16M4 18h16" />
           </svg>
         </button>
         
-        <!-- Page title -->
-        <h1 class="text-xl font-semibold text-gray-900 dark:text-white">
+        <!-- Page title with gradient accent -->
+        <h1 class="text-xl font-bold bg-gradient-to-r from-emerald-600 to-emerald-500 bg-clip-text text-transparent">
           {{ pageTitle }}
         </h1>
       </div>
@@ -25,7 +25,7 @@
         <button
           @click="handleRefresh"
           :class="[
-            'p-2 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-800 text-gray-600 dark:text-gray-400 transition-colors',
+            'p-2 rounded-xl hover:bg-emerald-50 dark:hover:bg-emerald-900/20 text-gray-600 dark:text-gray-400 hover:text-emerald-600 dark:hover:text-emerald-400 transition-all',
             { 'animate-spin': isRefreshing }
           ]"
           title="Refresh"
@@ -38,7 +38,7 @@
         <!-- Theme toggle -->
         <button
           @click="toggleTheme"
-          class="p-2 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-800 text-gray-600 dark:text-gray-400 transition-colors"
+          class="p-2 rounded-xl hover:bg-emerald-50 dark:hover:bg-emerald-900/20 text-gray-600 dark:text-gray-400 hover:text-emerald-600 dark:hover:text-emerald-400 transition-all"
           title="Toggle theme"
         >
           <svg v-if="colorMode === 'light'" class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">

@@ -218,6 +218,45 @@ export const createOptimizedQueueManager = (pool, resourceCache, eventManager, s
     
     const allResults = [];
     
+    // OPTIMIZATION: Check queue capacity once per queue, not per partition
+    // Build a map of queue -> total batch size across all partitions
+    const queueBatchSizes = {};
+    for (const [partitionKey, partitionItems] of Object.entries(partitionGroups)) {
+      const [queueName] = partitionKey.split(':');
+      queueBatchSizes[queueName] = (queueBatchSizes[queueName] || 0) + partitionItems.length;
+    }
+    
+    // Check capacity for all queues with max_queue_size set (single query)
+    const queuesToCheck = Object.keys(queueBatchSizes);
+    if (queuesToCheck.length > 0) {
+      await withTransaction(pool, async (client) => {
+        const capacityCheck = await client.query(
+          `SELECT 
+             q.name,
+             q.max_queue_size,
+             COALESCE(SUM(pc.pending_estimate), 0)::integer as current_depth
+           FROM queen.queues q
+           LEFT JOIN queen.partitions p ON p.queue_id = q.id
+           LEFT JOIN queen.partition_consumers pc ON pc.partition_id = p.id
+             AND pc.consumer_group = '__QUEUE_MODE__'
+           WHERE q.name = ANY($1::varchar[])
+             AND q.max_queue_size > 0
+           GROUP BY q.name, q.max_queue_size`,
+          [queuesToCheck]
+        );
+        
+        // Check each queue's capacity
+        for (const row of capacityCheck.rows) {
+          const currentDepth = parseInt(row.current_depth);
+          const batchSize = queueBatchSizes[row.name];
+          const maxSize = parseInt(row.max_queue_size);
+          if (currentDepth + batchSize > maxSize) {
+            throw new Error(`Queue '${row.name}' would exceed max capacity (${maxSize}). Current: ${currentDepth}, Batch: ${batchSize}`);
+          }
+        }
+      });
+    }
+    
     // Process each partition group
     for (const [partitionKey, partitionItems] of Object.entries(partitionGroups)) {
       const [queueName, partitionName] = partitionKey.split(':');
@@ -232,25 +271,6 @@ export const createOptimizedQueueManager = (pool, resourceCache, eventManager, s
             // Ensure resources exist (cached after first call)
             const resources = await ensureResources(client, queueName, partitionName);
             const { partitionId, encryptionEnabled, queueConfig } = resources;
-        
-        // Check queue capacity if max_queue_size is set
-        if (queueConfig.maxQueueSize > 0) {
-          const capacityCheck = await client.query(
-            `SELECT COALESCE(SUM(pc.pending_estimate), 0)::integer as current_depth
-             FROM queen.queues q
-             LEFT JOIN queen.partitions p ON p.queue_id = q.id
-             LEFT JOIN queen.partition_consumers pc ON pc.partition_id = p.id
-               AND pc.consumer_group = '__QUEUE_MODE__'
-             WHERE q.name = $1`,
-            [queueName]
-          );
-          
-          const currentDepth = parseInt(capacityCheck.rows[0].current_depth);
-          const batchSize = partitionItems.length;
-          if (currentDepth + batchSize > queueConfig.maxQueueSize) {
-            throw new Error(`Queue '${queueName}' would exceed max capacity (${queueConfig.maxQueueSize}). Current: ${currentDepth}, Batch: ${batchSize}`);
-          }
-        }
         
         // Process items in batches
         const batchResults = [];
@@ -269,17 +289,23 @@ export const createOptimizedQueueManager = (pool, resourceCache, eventManager, s
           // ⚡ OPTIMIZATION #1: Batch duplicate check - single query for all transaction IDs
           const allTransactionIds = batch.map(item => item.transactionId || generateUUID());
           
-          // Use more efficient LEFT JOIN approach instead of ANY() for better index usage
-          const dupCheck = await client.query(
-            `SELECT t.txn_id as transaction_id, m.id
-             FROM UNNEST($1::varchar[]) AS t(txn_id)
-             LEFT JOIN queen.messages m ON m.transaction_id = t.txn_id
-             WHERE m.id IS NOT NULL`,
-            [allTransactionIds]
-          );
+          // Skip duplicate check if no transaction IDs were explicitly provided (all generated)
+          const hasExplicitTxnIds = batch.some(item => item.transactionId);
+          let existingTxnIds = new Map();
           
-          // Create a map of existing transaction IDs for O(1) lookup
-          const existingTxnIds = new Map(dupCheck.rows.map(row => [row.transaction_id, row.id]));
+          if (hasExplicitTxnIds) {
+            // Use more efficient LEFT JOIN approach instead of ANY() for better index usage
+            const dupCheck = await client.query(
+              `SELECT t.txn_id as transaction_id, m.id
+               FROM UNNEST($1::varchar[]) AS t(txn_id)
+               LEFT JOIN queen.messages m ON m.transaction_id = t.txn_id
+               WHERE m.id IS NOT NULL`,
+              [allTransactionIds]
+            );
+            
+            // Create a map of existing transaction IDs for O(1) lookup
+            existingTxnIds = new Map(dupCheck.rows.map(row => [row.transaction_id, row.id]));
+          }
           
           // ⚡ OPTIMIZATION #2: Parallel encryption - encrypt all payloads concurrently
           const encryptionTasks = batch.map(async (item, idx) => {

@@ -38,6 +38,9 @@ let requestCount = 0;
 let messageCount = 0;
 const startTime = Date.now();
 
+// Shutdown flag to prevent background jobs from running during shutdown
+let isShuttingDown = false;
+
 // Initialize components
 const pool = createPool();
 const resourceCache = createResourceCache();
@@ -118,14 +121,17 @@ const stopRetention = startRetentionJob(pool);
 const stopEviction = startEvictionJob(pool, eventManager);
 
 // Background job for lease reclamation
-setInterval(async () => {
+const leaseReclaimInterval = setInterval(async () => {
+  if (isShuttingDown) return;
   try {
     const reclaimed = await queueManager.reclaimExpiredLeases();
     if (reclaimed > 0) {
       log(`Reclaimed ${reclaimed} expired leases`);
     }
   } catch (error) {
-    log('Error reclaiming leases:', error);
+    if (!isShuttingDown) {
+      log('Error reclaiming leases:', error);
+    }
   }
 }, config.JOBS.LEASE_RECLAIM_INTERVAL);
 
@@ -136,13 +142,27 @@ const app = uWS.App();
 const wsServer = createWebSocketServer(app, eventManager);
 
 // Background job for queue depth updates
-setInterval(async () => {
-  await wsServer.updateQueueDepths(queueManager);
+const queueDepthInterval = setInterval(async () => {
+  if (isShuttingDown) return;
+  try {
+    await wsServer.updateQueueDepths(queueManager);
+  } catch (error) {
+    if (!isShuttingDown) {
+      log('Error updating queue depths:', error);
+    }
+  }
 }, config.JOBS.QUEUE_DEPTH_UPDATE_INTERVAL);
 
 // Background job for system stats
-setInterval(async () => {
-  await wsServer.sendSystemStats(pool);
+const systemStatsInterval = setInterval(async () => {
+  if (isShuttingDown) return;
+  try {
+    await wsServer.sendSystemStats(pool);
+  } catch (error) {
+    if (!isShuttingDown) {
+      log('Error sending system stats:', error);
+    }
+  }
 }, config.JOBS.SYSTEM_STATS_UPDATE_INTERVAL);
 
 // CORS headers helper
@@ -1249,6 +1269,9 @@ app.listen(HOST, PORT, async (token) => {
 const shutdown = async (signal) => {
   log(`\n🛑 Received ${signal}, shutting down gracefully...`);
   
+  // Set shutdown flag immediately to prevent new operations
+  isShuttingDown = true;
+  
   // Stop system event consumer
   if (stopSystemEventConsumer) {
     stopSystemEventConsumer();
@@ -1256,8 +1279,31 @@ const shutdown = async (signal) => {
   }
   
   // Stop background jobs
-  if (stopRetention) stopRetention();
-  if (stopEviction) stopEviction();
+  if (stopRetention) {
+    stopRetention();
+    log('✅ Retention job stopped');
+  }
+  if (stopEviction) {
+    stopEviction();
+    log('✅ Eviction job stopped');
+  }
+  
+  // Clear background intervals
+  if (leaseReclaimInterval) {
+    clearInterval(leaseReclaimInterval);
+    log('✅ Lease reclaim interval stopped');
+  }
+  if (queueDepthInterval) {
+    clearInterval(queueDepthInterval);
+    log('✅ Queue depth update interval stopped');
+  }
+  if (systemStatsInterval) {
+    clearInterval(systemStatsInterval);
+    log('✅ System stats interval stopped');
+  }
+  
+  // Wait a moment for any in-flight operations to complete
+  await new Promise(resolve => setTimeout(resolve, 100));
   
   const uptime = (Date.now() - startTime) / 1000;
   if (messageCount > 0) {
@@ -1265,7 +1311,10 @@ const shutdown = async (signal) => {
     log(`   Average: ${(messageCount / uptime).toFixed(2)} messages/second`);
   }
   
+  // Close database pool last
   await pool.end();
+  log('✅ Database pool closed');
+  
   process.exit(0);
 };
 

@@ -1,6 +1,6 @@
 export default {
   ui: {
-    primary: 'green',
+    primary: 'emerald',
     gray: 'slate',
     notifications: {
       position: 'top-0 right-0'

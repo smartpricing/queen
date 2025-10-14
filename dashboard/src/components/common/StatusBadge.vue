@@ -20,34 +20,34 @@ const props = defineProps({
 
 const statusConfig = {
   'pending': {
-    class: 'bg-yellow-100 dark:bg-yellow-900/30 text-yellow-800 dark:text-yellow-300',
+    class: 'bg-gradient-to-br from-amber-100 to-yellow-100 dark:from-yellow-900/30 dark:to-amber-900/30 text-yellow-800 dark:text-yellow-300 ring-1 ring-yellow-200 dark:ring-yellow-800',
     label: 'Pending'
   },
   'processing': {
-    class: 'bg-blue-100 dark:bg-blue-900/30 text-blue-800 dark:text-blue-300',
+    class: 'bg-gradient-to-br from-blue-100 to-cyan-100 dark:from-blue-900/30 dark:to-cyan-900/30 text-blue-800 dark:text-blue-300 ring-1 ring-blue-200 dark:ring-blue-800',
     label: 'Processing'
   },
   'completed': {
-    class: 'bg-green-100 dark:bg-green-900/30 text-green-800 dark:text-green-300',
+    class: 'bg-gradient-to-br from-emerald-100 to-green-100 dark:from-emerald-900/30 dark:to-green-900/30 text-emerald-800 dark:text-emerald-300 ring-1 ring-emerald-200 dark:ring-emerald-800',
     label: 'Completed'
   },
   'failed': {
-    class: 'bg-red-100 dark:bg-red-900/30 text-red-800 dark:text-red-300',
+    class: 'bg-gradient-to-br from-red-100 to-rose-100 dark:from-red-900/30 dark:to-rose-900/30 text-red-800 dark:text-red-300 ring-1 ring-red-200 dark:ring-red-800',
     label: 'Failed'
   },
   'active': {
-    class: 'bg-emerald-100 dark:bg-emerald-900/30 text-emerald-800 dark:text-emerald-300',
+    class: 'bg-gradient-to-br from-emerald-100 to-emerald-50 dark:from-emerald-900/30 dark:to-emerald-900/20 text-emerald-800 dark:text-emerald-300 ring-1 ring-emerald-200 dark:ring-emerald-800',
     label: 'Active'
   },
   'inactive': {
-    class: 'bg-gray-100 dark:bg-gray-800 text-gray-800 dark:text-gray-300',
+    class: 'bg-gray-100 dark:bg-gray-800 text-gray-700 dark:text-gray-300 ring-1 ring-gray-200 dark:ring-gray-700',
     label: 'Inactive'
   }
 };
 
 const badgeClasses = computed(() => {
   const config = statusConfig[props.status] || statusConfig.inactive;
-  return `inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${config.class}`;
+  return `inline-flex items-center px-3 py-1 rounded-full text-xs font-semibold ${config.class}`;
 });
 
 const label = computed(() => {

@@ -27,7 +27,7 @@
             </label>
             <select
               v-model="statusFilter"
-              class="w-full px-4 py-2 rounded-lg border border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-800 text-gray-900 dark:text-white focus:ring-2 focus:ring-green-500 focus:border-transparent"
+              class="w-full px-4 py-2 rounded-lg border border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-800 text-gray-900 dark:text-white focus:ring-2 focus:ring-emerald-500 focus:border-transparent"
             >
               <option value="all">All</option>
               <option value="pending">Pending</option>
@@ -44,7 +44,7 @@
             </label>
             <select
               v-model="partitionFilter"
-              class="w-full px-4 py-2 rounded-lg border border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-800 text-gray-900 dark:text-white focus:ring-2 focus:ring-green-500 focus:border-transparent"
+              class="w-full px-4 py-2 rounded-lg border border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-800 text-gray-900 dark:text-white focus:ring-2 focus:ring-emerald-500 focus:border-transparent"
             >
               <option value="all">All</option>
               <option v-for="p in partitions" :key="p" :value="p">
@@ -60,7 +60,7 @@
             </label>
             <select
               v-model="limit"
-              class="w-full px-4 py-2 rounded-lg border border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-800 text-gray-900 dark:text-white focus:ring-2 focus:ring-green-500 focus:border-transparent"
+              class="w-full px-4 py-2 rounded-lg border border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-800 text-gray-900 dark:text-white focus:ring-2 focus:ring-emerald-500 focus:border-transparent"
             >
               <option :value="50">50</option>
               <option :value="100">100</option>
@@ -73,7 +73,7 @@
           <div class="flex items-end">
             <button
               @click="fetchMessages"
-              class="w-full px-4 py-2 bg-green-600 hover:bg-green-700 text-white rounded-lg transition-colors"
+              class="w-full px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg transition-colors"
             >
               Apply Filters
             </button>
@@ -135,7 +135,7 @@
                   <td class="px-6 py-4 whitespace-nowrap text-right text-sm font-medium">
                     <button
                       @click.stop="copyToClipboard(message.transactionId)"
-                      class="text-green-600 dark:text-green-400 hover:text-green-800 dark:hover:text-green-300"
+                      class="text-emerald-600 dark:text-emerald-400 hover:text-emerald-800 dark:hover:text-emerald-300"
                     >
                       Copy ID
                     </button>

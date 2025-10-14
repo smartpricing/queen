@@ -24,7 +24,7 @@
           
           <button
             @click="$router.push(`/queues/${queueName}/messages`)"
-            class="px-4 py-2 bg-green-600 hover:bg-green-700 text-white rounded-lg transition-colors"
+            class="px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg transition-colors"
           >
             View Messages
           </button>
@@ -156,8 +156,8 @@
         </div>
         
         <!-- Status Distribution Chart -->
-        <div class="bg-white dark:bg-gray-900 rounded-lg border border-gray-200 dark:border-gray-800 p-6">
-          <h2 class="text-lg font-semibold text-gray-900 dark:text-white mb-4">
+        <div class="bg-white dark:bg-gray-900 rounded-2xl border border-gray-200 dark:border-gray-800 p-6 shadow-sm hover:shadow-xl hover:shadow-emerald-500/5 transition-all duration-300">
+          <h2 class="text-lg font-bold text-gray-900 dark:text-white mb-6">
             Message Distribution
           </h2>
           <div class="h-64">
@@ -216,8 +216,8 @@ const { startPolling, stopPolling } = usePolling(fetchQueueDetail, 5000);
 
 const getLagColor = (lag) => {
   if (!lag || lag === 0) return 'text-gray-900 dark:text-white';
-  if (lag < 100) return 'text-green-600 dark:text-green-400';
-  if (lag < 1000) return 'text-yellow-600 dark:text-yellow-400';
+  if (lag < 100) return 'text-emerald-600 dark:text-emerald-400 font-semibold';
+  if (lag < 1000) return 'text-yellow-600 dark:text-yellow-400 font-semibold';
   return 'text-red-600 dark:text-red-400 font-semibold';
 };
 
@@ -234,18 +234,19 @@ const chartData = computed(() => {
           data.value?.failedMessages || 0
         ],
         backgroundColor: [
-          'rgba(234, 179, 8, 0.8)',
-          'rgba(34, 197, 94, 0.8)',
-          'rgba(59, 130, 246, 0.8)',
-          'rgba(239, 68, 68, 0.8)'
+          'rgba(245, 158, 11, 0.9)',
+          'rgba(59, 130, 246, 0.9)',
+          'rgba(16, 185, 129, 0.9)',
+          'rgba(239, 68, 68, 0.9)'
         ],
         borderColor: [
-          'rgb(234, 179, 8)',
-          'rgb(34, 197, 94)',
+          'rgb(245, 158, 11)',
           'rgb(59, 130, 246)',
+          'rgb(16, 185, 129)',
           'rgb(239, 68, 68)'
         ],
-        borderWidth: 2
+        borderWidth: 0,
+        borderRadius: 8
       }
     ]
   };
@@ -257,16 +258,32 @@ const chartOptions = {
   plugins: {
     legend: {
       display: false
+    },
+    tooltip: {
+      backgroundColor: 'rgba(17, 24, 39, 0.95)',
+      padding: 12,
+      titleColor: 'rgba(255, 255, 255, 0.9)',
+      bodyColor: 'rgba(255, 255, 255, 0.8)',
+      borderColor: 'rgba(16, 185, 129, 0.5)',
+      borderWidth: 1,
+      cornerRadius: 8
     }
   },
   scales: {
     y: {
       beginAtZero: true,
       grid: {
-        color: 'rgba(156, 163, 175, 0.1)'
+        color: 'rgba(148, 163, 184, 0.08)',
+        lineWidth: 1
       },
       ticks: {
-        color: 'rgba(156, 163, 175, 0.8)'
+        color: 'rgba(100, 116, 139, 0.7)',
+        font: {
+          size: 12
+        }
+      },
+      border: {
+        display: false
       }
     },
     x: {
@@ -274,7 +291,14 @@ const chartOptions = {
         display: false
       },
       ticks: {
-        color: 'rgba(156, 163, 175, 0.8)'
+        color: 'rgba(100, 116, 139, 0.7)',
+        font: {
+          size: 12,
+          weight: '500'
+        }
+      },
+      border: {
+        display: false
       }
     }
   }

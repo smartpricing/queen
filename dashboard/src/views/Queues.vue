@@ -13,7 +13,7 @@
               v-model="searchQuery"
               type="text"
               placeholder="Search queues..."
-              class="w-full px-4 py-2 rounded-lg border border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-800 text-gray-900 dark:text-white focus:ring-2 focus:ring-green-500 focus:border-transparent"
+              class="w-full px-4 py-2 rounded-lg border border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-800 text-gray-900 dark:text-white focus:ring-2 focus:ring-emerald-500 focus:border-transparent"
             />
           </div>
           
@@ -24,7 +24,7 @@
             </label>
             <select
               v-model="statusFilter"
-              class="w-full px-4 py-2 rounded-lg border border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-800 text-gray-900 dark:text-white focus:ring-2 focus:ring-green-500 focus:border-transparent"
+              class="w-full px-4 py-2 rounded-lg border border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-800 text-gray-900 dark:text-white focus:ring-2 focus:ring-emerald-500 focus:border-transparent"
             >
               <option value="all">All</option>
               <option value="active">Active</option>
@@ -39,7 +39,7 @@
             </label>
             <select
               v-model="sortBy"
-              class="w-full px-4 py-2 rounded-lg border border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-800 text-gray-900 dark:text-white focus:ring-2 focus:ring-green-500 focus:border-transparent"
+              class="w-full px-4 py-2 rounded-lg border border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-800 text-gray-900 dark:text-white focus:ring-2 focus:ring-emerald-500 focus:border-transparent"
             >
               <option value="name">Name</option>
               <option value="pending">Pending Messages</option>
@@ -127,7 +127,7 @@
                   <td class="px-6 py-4 whitespace-nowrap text-right text-sm font-medium">
                     <button
                       @click.stop="$router.push(`/queues/${queue.name}/messages`)"
-                      class="text-green-600 dark:text-green-400 hover:text-green-800 dark:hover:text-green-300"
+                      class="text-emerald-600 dark:text-emerald-400 hover:text-emerald-800 dark:hover:text-emerald-300"
                     >
                       View Messages
                     </button>

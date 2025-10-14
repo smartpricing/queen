@@ -19,7 +19,7 @@
                   :class="[
                     'px-4 py-2 text-sm font-medium transition-colors',
                     selectedTimeRange === range.value
-                      ? 'bg-green-600 text-white'
+                      ? 'bg-emerald-600 text-white'
                       : 'bg-white dark:bg-gray-800 text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-700'
                   ]"
                 >
@@ -37,7 +37,7 @@
                 @click="toggleAutoRefresh"
                 :class="[
                   'relative inline-flex h-6 w-11 items-center rounded-full transition-colors',
-                  autoRefresh ? 'bg-green-600' : 'bg-gray-200 dark:bg-gray-700'
+                  autoRefresh ? 'bg-emerald-600' : 'bg-gray-200 dark:bg-gray-700'
                 ]"
               >
                 <span
@@ -53,7 +53,7 @@
             <button
               @click="fetchAnalytics"
               :disabled="loading"
-              class="px-4 py-2 bg-green-600 hover:bg-green-700 text-white rounded-lg text-sm font-medium transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+              class="px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-sm font-medium transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
             >
               {{ loading ? 'Loading...' : 'Refresh' }}
             </button>
@@ -69,7 +69,7 @@
               <select
                 v-model="namespaceFilter"
                 @change="queueFilter = ''; fetchAnalytics()"
-                class="w-full px-4 py-2 rounded-lg border border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-800 text-gray-900 dark:text-white focus:ring-2 focus:ring-green-500 focus:border-transparent"
+                class="w-full px-4 py-2 rounded-lg border border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-800 text-gray-900 dark:text-white focus:ring-2 focus:ring-emerald-500 focus:border-transparent"
               >
                 <option value="">All namespaces</option>
                 <option v-for="ns in availableNamespaces" :key="ns" :value="ns">
@@ -86,7 +86,7 @@
               <select
                 v-model="queueFilter"
                 @change="fetchAnalytics"
-                class="w-full px-4 py-2 rounded-lg border border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-800 text-gray-900 dark:text-white focus:ring-2 focus:ring-green-500 focus:border-transparent"
+                class="w-full px-4 py-2 rounded-lg border border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-800 text-gray-900 dark:text-white focus:ring-2 focus:ring-emerald-500 focus:border-transparent"
               >
                 <option value="">All queues</option>
                 <option v-for="queue in availableQueues" :key="queue" :value="queue">
@@ -103,7 +103,7 @@
               <select
                 v-model="taskFilter"
                 @change="fetchAnalytics"
-                class="w-full px-4 py-2 rounded-lg border border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-800 text-gray-900 dark:text-white focus:ring-2 focus:ring-green-500 focus:border-transparent"
+                class="w-full px-4 py-2 rounded-lg border border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-800 text-gray-900 dark:text-white focus:ring-2 focus:ring-emerald-500 focus:border-transparent"
               >
                 <option value="">All tasks</option>
                 <option v-for="task in availableTasks" :key="task" :value="task">
@@ -116,25 +116,25 @@
           <!-- Active Filters Display -->
           <div v-if="hasActiveFilters" class="flex flex-wrap gap-2">
             <span class="text-sm text-gray-600 dark:text-gray-400">Active filters:</span>
-            <span v-if="namespaceFilter" class="inline-flex items-center px-3 py-1 rounded-full text-sm bg-green-100 dark:bg-green-900/30 text-green-800 dark:text-green-300">
+            <span v-if="namespaceFilter" class="inline-flex items-center px-3 py-1 rounded-full text-sm bg-emerald-100 dark:bg-emerald-900/30 text-emerald-800 dark:text-emerald-300">
               Namespace: {{ namespaceFilter }}
-              <button @click="namespaceFilter = ''; fetchAnalytics()" class="ml-2 hover:text-green-900 dark:hover:text-green-200">
+              <button @click="namespaceFilter = ''; fetchAnalytics()" class="ml-2 hover:text-emerald-900 dark:hover:text-emerald-200">
                 <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" />
                 </svg>
               </button>
             </span>
-            <span v-if="queueFilter" class="inline-flex items-center px-3 py-1 rounded-full text-sm bg-green-100 dark:bg-green-900/30 text-green-800 dark:text-green-300">
+            <span v-if="queueFilter" class="inline-flex items-center px-3 py-1 rounded-full text-sm bg-emerald-100 dark:bg-emerald-900/30 text-emerald-800 dark:text-emerald-300">
               Queue: {{ queueFilter }}
-              <button @click="queueFilter = ''; fetchAnalytics()" class="ml-2 hover:text-green-900 dark:hover:text-green-200">
+              <button @click="queueFilter = ''; fetchAnalytics()" class="ml-2 hover:text-emerald-900 dark:hover:text-emerald-200">
                 <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" />
                 </svg>
               </button>
             </span>
-            <span v-if="taskFilter" class="inline-flex items-center px-3 py-1 rounded-full text-sm bg-green-100 dark:bg-green-900/30 text-green-800 dark:text-green-300">
+            <span v-if="taskFilter" class="inline-flex items-center px-3 py-1 rounded-full text-sm bg-emerald-100 dark:bg-emerald-900/30 text-emerald-800 dark:text-emerald-300">
               Task: {{ taskFilter }}
-              <button @click="taskFilter = ''; fetchAnalytics()" class="ml-2 hover:text-green-900 dark:hover:text-green-200">
+              <button @click="taskFilter = ''; fetchAnalytics()" class="ml-2 hover:text-emerald-900 dark:hover:text-emerald-200">
                 <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" />
                 </svg>
@@ -183,8 +183,8 @@
         </div>
         
         <!-- Throughput Chart -->
-        <div class="bg-white dark:bg-gray-900 rounded-lg border border-gray-200 dark:border-gray-800 p-6">
-          <h2 class="text-lg font-semibold text-gray-900 dark:text-white mb-4">
+        <div class="bg-white dark:bg-gray-900 rounded-2xl border border-gray-200 dark:border-gray-800 p-6 shadow-sm hover:shadow-xl hover:shadow-emerald-500/5 transition-all duration-300">
+          <h2 class="text-lg font-bold text-gray-900 dark:text-white mb-6">
             Message Throughput Over Time
           </h2>
           <div class="h-80">
@@ -195,9 +195,9 @@
         <!-- Two Column Layout -->
         <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
           <!-- Error Distribution -->
-          <div class="bg-white dark:bg-gray-900 rounded-lg border border-gray-200 dark:border-gray-800 p-6">
-            <h2 class="text-lg font-semibold text-gray-900 dark:text-white mb-4">
-              Error Distribution
+          <div class="bg-white dark:bg-gray-900 rounded-2xl border border-gray-200 dark:border-gray-800 p-6 shadow-sm hover:shadow-xl hover:shadow-red-500/5 transition-all duration-300">
+            <h2 class="text-lg font-bold text-gray-900 dark:text-white mb-6">
+              Failed Messages Over Time
             </h2>
             <div class="h-64">
               <Bar v-if="errorChartData" :data="errorChartData" :options="chartOptions" />
@@ -205,15 +205,15 @@
           </div>
           
           <!-- Top Queues by Volume -->
-          <div class="bg-white dark:bg-gray-900 rounded-lg border border-gray-200 dark:border-gray-800 p-6">
-            <h2 class="text-lg font-semibold text-gray-900 dark:text-white mb-4">
+          <div class="bg-white dark:bg-gray-900 rounded-2xl border border-gray-200 dark:border-gray-800 p-6 shadow-sm hover:shadow-xl hover:shadow-emerald-500/5 transition-all duration-300">
+            <h2 class="text-lg font-bold text-gray-900 dark:text-white mb-6">
               Top Queues by Volume
             </h2>
-            <div class="space-y-3">
+            <div class="space-y-2">
               <div 
                 v-for="(queue, index) in topQueues" 
                 :key="queue.name"
-                class="flex items-center justify-between p-3 rounded-lg hover:bg-gray-50 dark:hover:bg-gray-800 cursor-pointer transition-colors"
+                class="group flex items-center justify-between p-4 rounded-xl hover:bg-gradient-to-r hover:from-emerald-50 hover:to-transparent dark:hover:from-emerald-900/10 dark:hover:to-transparent cursor-pointer transition-all border border-transparent hover:border-emerald-200 dark:hover:border-emerald-800"
                 @click="$router.push(`/queues/${queue.name}`)"
               >
                 <div class="flex items-center space-x-3">
@@ -247,8 +247,8 @@
         </div>
         
         <!-- Latency Percentiles Chart -->
-        <div class="bg-white dark:bg-gray-900 rounded-lg border border-gray-200 dark:border-gray-800 p-6">
-          <h2 class="text-lg font-semibold text-gray-900 dark:text-white mb-4">
+        <div class="bg-white dark:bg-gray-900 rounded-2xl border border-gray-200 dark:border-gray-800 p-6 shadow-sm hover:shadow-xl hover:shadow-purple-500/5 transition-all duration-300">
+          <h2 class="text-lg font-bold text-gray-900 dark:text-white mb-6">
             Processing Latency Percentiles
           </h2>
           <div class="h-64">
@@ -257,35 +257,35 @@
         </div>
         
         <!-- System Performance Table -->
-        <div class="bg-white dark:bg-gray-900 rounded-lg border border-gray-200 dark:border-gray-800 p-6">
-          <h2 class="text-lg font-semibold text-gray-900 dark:text-white mb-4">
+        <div class="bg-white dark:bg-gray-900 rounded-2xl border border-gray-200 dark:border-gray-800 p-6 shadow-sm hover:shadow-xl hover:shadow-emerald-500/5 transition-all duration-300">
+          <h2 class="text-lg font-bold text-gray-900 dark:text-white mb-6">
             System Performance Metrics
           </h2>
           <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
-            <div class="p-4 bg-gray-50 dark:bg-gray-800 rounded-lg">
-              <div class="text-sm text-gray-600 dark:text-gray-400">Messages Ingested</div>
-              <div class="mt-2 text-2xl font-semibold text-gray-900 dark:text-white">
+            <div class="p-5 bg-gradient-to-br from-gray-50 to-gray-100/50 dark:from-gray-800 dark:to-gray-800/50 rounded-xl border border-gray-200 dark:border-gray-700">
+              <div class="text-sm text-gray-600 dark:text-gray-400 font-medium">Messages Ingested</div>
+              <div class="mt-2 text-2xl font-bold text-gray-900 dark:text-white">
                 {{ (data?.messagesIngested || 0).toLocaleString() }}
               </div>
             </div>
             
-            <div class="p-4 bg-gray-50 dark:bg-gray-800 rounded-lg">
-              <div class="text-sm text-gray-600 dark:text-gray-400">Messages Processed</div>
-              <div class="mt-2 text-2xl font-semibold text-gray-900 dark:text-white">
+            <div class="p-5 bg-gradient-to-br from-gray-50 to-gray-100/50 dark:from-gray-800 dark:to-gray-800/50 rounded-xl border border-gray-200 dark:border-gray-700">
+              <div class="text-sm text-gray-600 dark:text-gray-400 font-medium">Messages Processed</div>
+              <div class="mt-2 text-2xl font-bold text-gray-900 dark:text-white">
                 {{ (data?.messagesProcessed || 0).toLocaleString() }}
               </div>
             </div>
             
-            <div class="p-4 bg-gray-50 dark:bg-gray-800 rounded-lg">
-              <div class="text-sm text-gray-600 dark:text-gray-400">Messages Failed</div>
-              <div class="mt-2 text-2xl font-semibold text-red-600 dark:text-red-400">
+            <div class="p-5 bg-gradient-to-br from-gray-50 to-gray-100/50 dark:from-gray-800 dark:to-gray-800/50 rounded-xl border border-gray-200 dark:border-gray-700">
+              <div class="text-sm text-gray-600 dark:text-gray-400 font-medium">Messages Failed</div>
+              <div class="mt-2 text-2xl font-bold text-red-600 dark:text-red-400">
                 {{ (data?.messagesFailed || 0).toLocaleString() }}
               </div>
             </div>
             
-            <div class="p-4 bg-gray-50 dark:bg-gray-800 rounded-lg">
-              <div class="text-sm text-gray-600 dark:text-gray-400">Success Rate</div>
-              <div class="mt-2 text-2xl font-semibold text-green-600 dark:text-green-400">
+            <div class="p-5 bg-gradient-to-br from-gray-50 to-gray-100/50 dark:from-gray-800 dark:to-gray-800/50 rounded-xl border border-gray-200 dark:border-gray-700">
+              <div class="text-sm text-gray-600 dark:text-gray-400 font-medium">Success Rate</div>
+              <div class="mt-2 text-2xl font-bold text-emerald-600 dark:text-emerald-400">
                 {{ data?.successRate || 0 }}%
               </div>
             </div>
@@ -548,16 +548,18 @@ const throughputChartData = computed(() => {
       {
         label: 'Ingested',
         data: ingested,
-        backgroundColor: 'rgba(59, 130, 246, 0.8)',
+        backgroundColor: 'rgba(59, 130, 246, 0.9)',
         borderColor: 'rgb(59, 130, 246)',
-        borderWidth: 2
+        borderWidth: 0,
+        borderRadius: 6
       },
       {
         label: 'Processed',
         data: processed,
-        backgroundColor: 'rgba(34, 197, 94, 0.8)',
-        borderColor: 'rgb(34, 197, 94)',
-        borderWidth: 2
+        backgroundColor: 'rgba(16, 185, 129, 0.9)',
+        borderColor: 'rgb(16, 185, 129)',
+        borderWidth: 0,
+        borderRadius: 6
       }
     ]
   };
@@ -572,11 +574,12 @@ const errorChartData = computed(() => {
     labels,
     datasets: [
       {
-        label: 'Errors',
+        label: 'Failed Messages',
         data: counts,
-        backgroundColor: 'rgba(239, 68, 68, 0.8)',
+        backgroundColor: 'rgba(239, 68, 68, 0.9)',
         borderColor: 'rgb(239, 68, 68)',
-        borderWidth: 2
+        borderWidth: 0,
+        borderRadius: 6
       }
     ]
   };
@@ -597,9 +600,10 @@ const latencyChartData = computed(() => {
           latency.p95 || 0,
           latency.p99 || 0
         ],
-        backgroundColor: 'rgba(168, 85, 247, 0.8)',
-        borderColor: 'rgb(168, 85, 247)',
-        borderWidth: 2
+        backgroundColor: 'rgba(139, 92, 246, 0.9)',
+        borderColor: 'rgb(139, 92, 246)',
+        borderWidth: 0,
+        borderRadius: 6
       }
     ]
   };
@@ -613,18 +617,41 @@ const chartOptions = {
       display: true,
       position: 'top',
       labels: {
-        color: 'rgba(156, 163, 175, 0.8)'
+        color: 'rgba(100, 116, 139, 0.8)',
+        padding: 16,
+        font: {
+          size: 13,
+          weight: '500'
+        },
+        usePointStyle: true,
+        pointStyle: 'circle'
       }
+    },
+    tooltip: {
+      backgroundColor: 'rgba(17, 24, 39, 0.95)',
+      padding: 12,
+      titleColor: 'rgba(255, 255, 255, 0.9)',
+      bodyColor: 'rgba(255, 255, 255, 0.8)',
+      borderColor: 'rgba(16, 185, 129, 0.5)',
+      borderWidth: 1,
+      cornerRadius: 8
     }
   },
   scales: {
     y: {
       beginAtZero: true,
       grid: {
-        color: 'rgba(156, 163, 175, 0.1)'
+        color: 'rgba(148, 163, 184, 0.08)',
+        lineWidth: 1
       },
       ticks: {
-        color: 'rgba(156, 163, 175, 0.8)'
+        color: 'rgba(100, 116, 139, 0.7)',
+        font: {
+          size: 12
+        }
+      },
+      border: {
+        display: false
       }
     },
     x: {
@@ -632,7 +659,16 @@ const chartOptions = {
         display: false
       },
       ticks: {
-        color: 'rgba(156, 163, 175, 0.8)'
+        color: 'rgba(100, 116, 139, 0.7)',
+        font: {
+          size: 11,
+          weight: '500'
+        },
+        maxRotation: 45,
+        minRotation: 45
+      },
+      border: {
+        display: false
       }
     }
   }

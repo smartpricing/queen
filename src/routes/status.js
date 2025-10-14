@@ -513,10 +513,16 @@ export const createStatusRoutes = (pool) => {
     const params = [queueName, timeRange.from, timeRange.to];
     let paramCount = 4;
     
+    // Note: V2 schema doesn't have a messages_status table
+    // Status must be inferred from partition_consumers and dead_letter_queue
     if (status) {
-      conditions.push(`ms.status = $${paramCount}`);
-      params.push(status);
-      paramCount++;
+      if (status === 'failed') {
+        conditions.push(`EXISTS (SELECT 1 FROM queen.dead_letter_queue dlq WHERE dlq.message_id = m.id)`);
+      } else if (status === 'completed') {
+        conditions.push(`(m.created_at, m.id) <= (pc.last_consumed_created_at, pc.last_consumed_id)`);
+      } else if (status === 'pending') {
+        conditions.push(`(m.created_at, m.id) > (COALESCE(pc.last_consumed_created_at, '1970-01-01'::timestamptz), COALESCE(pc.last_consumed_id, '00000000-0000-0000-0000-000000000000'::uuid))`);
+      }
     }
     
     if (partition) {
@@ -536,21 +542,28 @@ export const createStatusRoutes = (pool) => {
         m.is_encrypted,
         m.payload,
         p.name as partition,
-        ms.status,
-        ms.worker_id,
-        ms.locked_at,
-        ms.completed_at,
-        ms.failed_at,
-        ms.error_message,
-        ms.retry_count,
-        ms.processing_at,
-        EXTRACT(EPOCH FROM (ms.completed_at - m.created_at)) as processing_time_seconds,
+        CASE 
+          WHEN EXISTS (SELECT 1 FROM queen.dead_letter_queue dlq WHERE dlq.message_id = m.id) THEN 'failed'
+          WHEN (m.created_at, m.id) <= (COALESCE(pc.last_consumed_created_at, '1970-01-01'::timestamptz), COALESCE(pc.last_consumed_id, '00000000-0000-0000-0000-000000000000'::uuid)) THEN 'completed'
+          WHEN pc.lease_expires_at IS NOT NULL AND pc.lease_expires_at > NOW() THEN 'processing'
+          ELSE 'pending'
+        END as status,
+        pc.worker_id,
+        pc.lease_acquired_at as locked_at,
+        pc.last_consumed_at as completed_at,
+        dlq.failed_at,
+        dlq.error_message,
+        dlq.retry_count,
+        pc.lease_acquired_at as processing_at,
+        NULL::numeric as processing_time_seconds,
         EXTRACT(EPOCH FROM (NOW() - m.created_at)) as age_seconds
       FROM queen.messages m
       JOIN queen.partitions p ON p.id = m.partition_id
       JOIN queen.queues q ON q.id = p.queue_id
-      LEFT JOIN queen.partition_consumers pc ON pc.partition_id = p.id AND pc.consumer_group = '__QUEUE_MODE__' 
-        AND ms.consumer_group IS NULL
+      LEFT JOIN queen.partition_consumers pc ON pc.partition_id = p.id 
+        AND pc.consumer_group = '__QUEUE_MODE__'
+      LEFT JOIN queen.dead_letter_queue dlq ON dlq.message_id = m.id
+        AND dlq.consumer_group = '__QUEUE_MODE__'
       WHERE ${conditions.join(' AND ')}
       ORDER BY m.created_at DESC
       LIMIT $${paramCount} OFFSET $${paramCount + 1}
@@ -561,8 +574,10 @@ export const createStatusRoutes = (pool) => {
       FROM queen.messages m
       JOIN queen.partitions p ON p.id = m.partition_id
       JOIN queen.queues q ON q.id = p.queue_id
-      LEFT JOIN queen.partition_consumers pc ON pc.partition_id = p.id AND pc.consumer_group = '__QUEUE_MODE__' 
-        AND ms.consumer_group IS NULL
+      LEFT JOIN queen.partition_consumers pc ON pc.partition_id = p.id 
+        AND pc.consumer_group = '__QUEUE_MODE__'
+      LEFT JOIN queen.dead_letter_queue dlq ON dlq.message_id = m.id
+        AND dlq.consumer_group = '__QUEUE_MODE__'
       WHERE ${conditions.join(' AND ')}
     `;
     
@@ -689,21 +704,27 @@ export const createStatusRoutes = (pool) => {
         SELECT 
           ts.bucket as timestamp,
           COUNT(DISTINCT m.id) as ingested,
-          COUNT(DISTINCT CASE WHEN ms.status = 'completed' THEN m.id END) as processed,
-          COUNT(DISTINCT CASE WHEN ms.status = 'failed' THEN m.id END) as failed
+          COALESCE(SUM(pc.total_messages_consumed), 0) as processed,
+          COUNT(DISTINCT dlq.id) as failed
         FROM time_series ts
         LEFT JOIN queen.messages m ON DATE_TRUNC('${interval}', m.created_at) = ts.bucket
           AND m.created_at >= $1::timestamp AND m.created_at <= $2::timestamp
         LEFT JOIN queen.partitions p ON p.id = m.partition_id
         LEFT JOIN queen.queues q ON q.id = p.queue_id
-        LEFT JOIN queen.partition_consumers pc ON pc.partition_id = p.id AND pc.consumer_group = '__QUEUE_MODE__' 
-          AND ms.consumer_group IS NULL
+        LEFT JOIN queen.partition_consumers pc ON pc.partition_id = p.id 
+          AND pc.consumer_group = '__QUEUE_MODE__'
+          AND DATE_TRUNC('${interval}', pc.last_consumed_at) = ts.bucket
+        LEFT JOIN queen.dead_letter_queue dlq ON dlq.partition_id = p.id
+          AND DATE_TRUNC('${interval}', dlq.failed_at) = ts.bucket
+          AND dlq.consumer_group = '__QUEUE_MODE__'
         WHERE 1=1 ${filterInfo.whereClause}
         GROUP BY ts.bucket
         ORDER BY ts.bucket DESC
       `;
       
       // Query 2: Latency percentiles time series
+      // Note: In V2 schema, we don't track individual message completion times
+      // This would require additional instrumentation. For now, return empty latency data.
       const latencyQuery = `
         WITH time_series AS (
           SELECT generate_series(
@@ -711,34 +732,17 @@ export const createStatusRoutes = (pool) => {
             DATE_TRUNC('${interval}', $2::timestamp),
             '${sqlInterval}'::interval
           ) AS bucket
-        ),
-        processing_times AS (
-          SELECT 
-            DATE_TRUNC('${interval}', m.created_at) as bucket,
-            EXTRACT(EPOCH FROM (ms.completed_at - m.created_at)) as duration
-          FROM queen.messages m
-          JOIN queen.partitions p ON p.id = m.partition_id
-          JOIN queen.queues q ON q.id = p.queue_id
-          JOIN queen.partition_consumers pc ON pc.partition_id = p.id AND pc.consumer_group = '__QUEUE_MODE__' 
-            AND ms.consumer_group IS NULL
-            AND ms.status IN ('completed', 'failed')
-            AND ms.completed_at IS NOT NULL
-          WHERE m.created_at >= $1::timestamp 
-            AND m.created_at <= $2::timestamp
-            ${filterInfo.whereClause}
         )
         SELECT 
           ts.bucket as timestamp,
-          PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY pt.duration) as p50,
-          PERCENTILE_CONT(0.95) WITHIN GROUP (ORDER BY pt.duration) as p95,
-          PERCENTILE_CONT(0.99) WITHIN GROUP (ORDER BY pt.duration) as p99,
-          AVG(pt.duration) as avg,
-          MIN(pt.duration) as min,
-          MAX(pt.duration) as max,
-          COUNT(*) as sample_count
+          NULL::numeric as p50,
+          NULL::numeric as p95,
+          NULL::numeric as p99,
+          NULL::numeric as avg,
+          NULL::numeric as min,
+          NULL::numeric as max,
+          0 as sample_count
         FROM time_series ts
-        LEFT JOIN processing_times pt ON pt.bucket = ts.bucket
-        GROUP BY ts.bucket
         ORDER BY ts.bucket DESC
       `;
       
@@ -747,17 +751,19 @@ export const createStatusRoutes = (pool) => {
         SELECT 
           q.name,
           q.namespace,
-          COUNT(DISTINCT CASE WHEN ms.status = 'completed' THEN m.id END) as messages_processed,
-          AVG(CASE WHEN ms.status = 'completed' AND ms.completed_at IS NOT NULL 
-            THEN EXTRACT(EPOCH FROM (ms.completed_at - m.created_at)) END) as avg_processing_time,
-          COUNT(DISTINCT CASE WHEN ms.status = 'failed' THEN m.id END)::float / 
-            NULLIF(COUNT(DISTINCT CASE WHEN ms.status IN ('completed', 'failed') THEN m.id END), 0) as error_rate
+          COALESCE(SUM(pc.total_messages_consumed), 0) as messages_processed,
+          0 as avg_processing_time,
+          COUNT(DISTINCT dlq.id)::float / 
+            NULLIF(COALESCE(SUM(pc.total_messages_consumed), 0) + COUNT(DISTINCT dlq.id), 0) as error_rate
         FROM queen.queues q
         LEFT JOIN queen.partitions p ON p.queue_id = q.id
         LEFT JOIN queen.messages m ON m.partition_id = p.id
           AND m.created_at >= $1 AND m.created_at <= $2
-        LEFT JOIN queen.partition_consumers pc ON pc.partition_id = p.id AND pc.consumer_group = '__QUEUE_MODE__' 
-          AND ms.consumer_group IS NULL
+        LEFT JOIN queen.partition_consumers pc ON pc.partition_id = p.id 
+          AND pc.consumer_group = '__QUEUE_MODE__'
+        LEFT JOIN queen.dead_letter_queue dlq ON dlq.partition_id = p.id
+          AND dlq.consumer_group = '__QUEUE_MODE__'
+          AND dlq.failed_at >= $1 AND dlq.failed_at <= $2
         WHERE 1=1 ${filterInfo.whereClause}
         GROUP BY q.id, q.name, q.namespace
         HAVING COUNT(DISTINCT m.id) > 0
@@ -906,13 +912,12 @@ export const createStatusRoutes = (pool) => {
       // Calculate queue depths (current state)
       const depthQuery = `
         SELECT 
-          COUNT(DISTINCT CASE WHEN ms.status = 'pending' THEN m.id END) as pending,
-          COUNT(DISTINCT CASE WHEN ms.status = 'processing' THEN m.id END) as processing
-        FROM queen.messages m
-        LEFT JOIN queen.partitions p ON p.id = m.partition_id
-        LEFT JOIN queen.queues q ON q.id = p.queue_id
-        LEFT JOIN queen.partition_consumers pc ON pc.partition_id = p.id AND pc.consumer_group = '__QUEUE_MODE__' 
-          AND ms.consumer_group IS NULL
+          COALESCE(SUM(pc.pending_estimate), 0) as pending,
+          COALESCE(SUM(CASE WHEN pc.lease_expires_at IS NOT NULL AND pc.lease_expires_at > NOW() THEN pc.batch_size ELSE 0 END), 0) as processing
+        FROM queen.queues q
+        LEFT JOIN queen.partitions p ON p.queue_id = q.id
+        LEFT JOIN queen.partition_consumers pc ON pc.partition_id = p.id 
+          AND pc.consumer_group = '__QUEUE_MODE__'
         WHERE 1=1 ${filterInfo.whereClause}
       `;
       

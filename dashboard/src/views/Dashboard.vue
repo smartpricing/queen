@@ -34,11 +34,17 @@
         </div>
         
         <!-- Throughput Chart -->
-        <div class="bg-white dark:bg-gray-900 rounded-lg border border-gray-200 dark:border-gray-800 p-6">
-          <h2 class="text-lg font-semibold text-gray-900 dark:text-white mb-4">
-            Message Throughput
-          </h2>
-          <div class="h-64">
+        <div class="bg-white dark:bg-gray-900 rounded-2xl border border-gray-200 dark:border-gray-800 p-6 shadow-sm hover:shadow-xl hover:shadow-emerald-500/5 transition-all duration-300">
+          <div class="flex items-center justify-between mb-6">
+            <h2 class="text-lg font-bold text-gray-900 dark:text-white">
+              Message Distribution
+            </h2>
+            <div class="flex items-center space-x-2 text-sm text-gray-500 dark:text-gray-400">
+              <div class="w-2 h-2 bg-emerald-500 rounded-full animate-pulse"></div>
+              <span>Live</span>
+            </div>
+          </div>
+          <div class="h-72">
             <Bar v-if="chartData" :data="chartData" :options="chartOptions" />
           </div>
         </div>
@@ -46,72 +52,75 @@
         <!-- Two Column Layout -->
         <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
           <!-- Active Queues -->
-          <div class="bg-white dark:bg-gray-900 rounded-lg border border-gray-200 dark:border-gray-800 p-6">
-            <h2 class="text-lg font-semibold text-gray-900 dark:text-white mb-4">
+          <div class="bg-white dark:bg-gray-900 rounded-2xl border border-gray-200 dark:border-gray-800 p-6 shadow-sm hover:shadow-xl hover:shadow-emerald-500/5 transition-all duration-300">
+            <h2 class="text-lg font-bold text-gray-900 dark:text-white mb-4">
               Active Queues
             </h2>
-            <div class="space-y-3">
+            <div class="space-y-2">
               <div 
                 v-for="queue in activeQueues" 
                 :key="queue.name"
-                class="flex items-center justify-between p-3 rounded-lg hover:bg-gray-50 dark:hover:bg-gray-800 cursor-pointer transition-colors"
+                class="group flex items-center justify-between p-4 rounded-xl hover:bg-gradient-to-r hover:from-emerald-50 hover:to-transparent dark:hover:from-emerald-900/10 dark:hover:to-transparent cursor-pointer transition-all border border-transparent hover:border-emerald-200 dark:hover:border-emerald-800"
                 @click="$router.push(`/queues/${queue.name}`)"
               >
                 <div class="flex-1">
-                  <div class="font-medium text-gray-900 dark:text-white">
+                  <div class="font-semibold text-gray-900 dark:text-white group-hover:text-emerald-600 dark:group-hover:text-emerald-400 transition-colors">
                     {{ queue.name }}
                   </div>
-                  <div class="text-sm text-gray-500 dark:text-gray-400">
+                  <div class="text-sm text-gray-500 dark:text-gray-400 mt-1">
                     {{ queue.partitions || 0 }} partitions
                   </div>
                 </div>
                 <div class="text-right">
-                  <div class="text-sm font-medium text-gray-900 dark:text-white">
+                  <div class="text-sm font-semibold text-gray-900 dark:text-white mb-1">
                     {{ queue.pendingMessages || 0 }} pending
                   </div>
                   <StatusBadge :status="queue.status || 'active'" />
                 </div>
               </div>
               
-              <div v-if="!activeQueues || activeQueues.length === 0" class="text-center py-8 text-gray-500 dark:text-gray-400">
-                No active queues
+              <div v-if="!activeQueues || activeQueues.length === 0" class="text-center py-12">
+                <svg class="w-12 h-12 mx-auto text-gray-300 dark:text-gray-700" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M20 13V6a2 2 0 00-2-2H6a2 2 0 00-2 2v7m16 0v5a2 2 0 01-2 2H6a2 2 0 01-2-2v-5m16 0h-2.586a1 1 0 00-.707.293l-2.414 2.414a1 1 0 01-.707.293h-3.172a1 1 0 01-.707-.293l-2.414-2.414A1 1 0 006.586 13H4" />
+                </svg>
+                <p class="mt-3 text-gray-500 dark:text-gray-400">No active queues</p>
               </div>
             </div>
           </div>
           
           <!-- System Stats -->
-          <div class="bg-white dark:bg-gray-900 rounded-lg border border-gray-200 dark:border-gray-800 p-6">
-            <h2 class="text-lg font-semibold text-gray-900 dark:text-white mb-4">
+          <div class="bg-white dark:bg-gray-900 rounded-2xl border border-gray-200 dark:border-gray-800 p-6 shadow-sm hover:shadow-xl hover:shadow-emerald-500/5 transition-all duration-300">
+            <h2 class="text-lg font-bold text-gray-900 dark:text-white mb-6">
               System Statistics
             </h2>
             <div class="space-y-4">
-              <div class="flex justify-between items-center">
-                <span class="text-gray-600 dark:text-gray-400">Total Queues</span>
-                <span class="font-semibold text-gray-900 dark:text-white">
+              <div class="flex justify-between items-center p-3 rounded-xl hover:bg-gray-50 dark:hover:bg-gray-800 transition-colors">
+                <span class="text-gray-600 dark:text-gray-400 font-medium">Total Queues</span>
+                <span class="text-lg font-bold text-gray-900 dark:text-white">
                   {{ data.totalQueues || 0 }}
                 </span>
               </div>
-              <div class="flex justify-between items-center">
-                <span class="text-gray-600 dark:text-gray-400">Active Leases</span>
-                <span class="font-semibold text-gray-900 dark:text-white">
+              <div class="flex justify-between items-center p-3 rounded-xl hover:bg-gray-50 dark:hover:bg-gray-800 transition-colors">
+                <span class="text-gray-600 dark:text-gray-400 font-medium">Active Leases</span>
+                <span class="text-lg font-bold text-emerald-600 dark:text-emerald-400">
                   {{ data.activeLeases || 0 }}
                 </span>
               </div>
-              <div class="flex justify-between items-center">
-                <span class="text-gray-600 dark:text-gray-400">Dead Letter Messages</span>
-                <span class="font-semibold text-red-600 dark:text-red-400">
+              <div class="flex justify-between items-center p-3 rounded-xl hover:bg-gray-50 dark:hover:bg-gray-800 transition-colors">
+                <span class="text-gray-600 dark:text-gray-400 font-medium">Dead Letter Messages</span>
+                <span class="text-lg font-bold text-red-600 dark:text-red-400">
                   {{ data.deadLetterMessages || 0 }}
                 </span>
               </div>
-              <div class="flex justify-between items-center">
-                <span class="text-gray-600 dark:text-gray-400">Avg Processing Time</span>
-                <span class="font-semibold text-gray-900 dark:text-white">
+              <div class="flex justify-between items-center p-3 rounded-xl hover:bg-gray-50 dark:hover:bg-gray-800 transition-colors">
+                <span class="text-gray-600 dark:text-gray-400 font-medium">Avg Processing Time</span>
+                <span class="text-lg font-bold text-gray-900 dark:text-white">
                   {{ formatDuration(data.avgProcessingTime) }}
                 </span>
               </div>
-              <div class="flex justify-between items-center">
-                <span class="text-gray-600 dark:text-gray-400">System Uptime</span>
-                <span class="font-semibold text-gray-900 dark:text-white">
+              <div class="flex justify-between items-center p-3 rounded-xl hover:bg-gray-50 dark:hover:bg-gray-800 transition-colors">
+                <span class="text-gray-600 dark:text-gray-400 font-medium">System Uptime</span>
+                <span class="text-lg font-bold text-gray-900 dark:text-white">
                   {{ formatDuration(data.uptime) }}
                 </span>
               </div>
@@ -224,18 +233,19 @@ const chartData = computed(() => {
           data.value?.failedMessages || 0
         ],
         backgroundColor: [
-          'rgba(234, 179, 8, 0.8)',   // Yellow
-          'rgba(34, 197, 94, 0.8)',   // Green
-          'rgba(59, 130, 246, 0.8)',  // Blue
-          'rgba(239, 68, 68, 0.8)'    // Red
+          'rgba(245, 158, 11, 0.9)',    // Amber
+          'rgba(59, 130, 246, 0.9)',    // Blue
+          'rgba(16, 185, 129, 0.9)',    // Emerald
+          'rgba(239, 68, 68, 0.9)'      // Red
         ],
         borderColor: [
-          'rgb(234, 179, 8)',
-          'rgb(34, 197, 94)',
+          'rgb(245, 158, 11)',
           'rgb(59, 130, 246)',
+          'rgb(16, 185, 129)',
           'rgb(239, 68, 68)'
         ],
-        borderWidth: 2
+        borderWidth: 0,
+        borderRadius: 8
       }
     ]
   };
@@ -250,16 +260,32 @@ const chartOptions = {
     },
     title: {
       display: false
+    },
+    tooltip: {
+      backgroundColor: 'rgba(17, 24, 39, 0.95)',
+      padding: 12,
+      titleColor: 'rgba(255, 255, 255, 0.9)',
+      bodyColor: 'rgba(255, 255, 255, 0.8)',
+      borderColor: 'rgba(16, 185, 129, 0.5)',
+      borderWidth: 1,
+      cornerRadius: 8
     }
   },
   scales: {
     y: {
       beginAtZero: true,
       grid: {
-        color: 'rgba(156, 163, 175, 0.1)'
+        color: 'rgba(148, 163, 184, 0.08)',
+        lineWidth: 1
       },
       ticks: {
-        color: 'rgba(156, 163, 175, 0.8)'
+        color: 'rgba(100, 116, 139, 0.7)',
+        font: {
+          size: 12
+        }
+      },
+      border: {
+        display: false
       }
     },
     x: {
@@ -267,7 +293,14 @@ const chartOptions = {
         display: false
       },
       ticks: {
-        color: 'rgba(156, 163, 175, 0.8)'
+        color: 'rgba(100, 116, 139, 0.7)',
+        font: {
+          size: 12,
+          weight: '500'
+        }
+      },
+      border: {
+        display: false
       }
     }
   }
