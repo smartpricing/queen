@@ -3,17 +3,17 @@ import { createRouter, createWebHistory } from 'vue-router';
 const routes = [
   {
     path: '/',
-    component: () => import('./views/Dashboard.vue'),
+    component: () => import('./views/DashboardV2.vue'),
     meta: { title: 'Dashboard' }
   },
   {
     path: '/queues',
-    component: () => import('./views/Queues.vue'),
+    component: () => import('./views/QueuesV3.vue'),
     meta: { title: 'Queues' }
   },
   {
     path: '/queues/:queueName',
-    component: () => import('./views/QueueDetail.vue'),
+    component: () => import('./views/QueueDetailV2.vue'),
     meta: { title: 'Queue Detail' }
   },
   {
@@ -23,12 +23,12 @@ const routes = [
   },
   {
     path: '/analytics',
-    component: () => import('./views/Analytics.vue'),
+    component: () => import('./views/AnalyticsV2.vue'),
     meta: { title: 'Analytics' }
   },
   {
     path: '/settings',
-    component: () => import('./views/Settings.vue'),
+    component: () => import('./views/SettingsV2.vue'),
     meta: { title: 'Settings' }
   }
 ];

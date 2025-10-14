@@ -1338,7 +1338,7 @@ Queen includes a comprehensive web dashboard for monitoring and management.
 ### Access
 
 1. Start the server: `npm start`
-2. Open browser: `http://localhost:6632`
+2. Open browser: `http://localhost:4000`
 3. WebSocket connection provides real-time updates
 
 ### Features
@@ -2134,15 +2134,8 @@ Apache License 2.0 - see [LICENSE.md](LICENSE.md) for details.
 
 ## 🎯 Roadmap
 
-- [ ] **Horizontal Scaling**: Better support for multiple server instances
 - [ ] **Message Scheduling**: Cron-like scheduling for recurring jobs
-- [ ] **Priority Lanes**: Dynamic priority adjustment based on load
-- [ ] **Metrics Export**: Prometheus/Grafana integration
-- [ ] **Admin API**: REST API for queue management
 - [ ] **Client Libraries**: Python, Go, Java clients
-- [ ] **Message Tracing**: Distributed tracing integration
-- [ ] **Queue Templates**: Pre-configured queue patterns
-- [ ] **GraphQL API**: Alternative to REST API
 - [ ] **Kubernetes Operator**: Native K8s support
 
 ---
@@ -2151,6 +2144,6 @@ Apache License 2.0 - see [LICENSE.md](LICENSE.md) for details.
 
 **Queen Message Queue System** - Built for performance, reliability, and developer happiness 🚀
 
-Made with ❤️ by [Smartpricing](https://github.com/smartpricing)
+Made with ❤️ by [Smartness](https://github.com/smartpricing)
 
 </div>

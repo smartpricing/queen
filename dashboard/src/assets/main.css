@@ -11,9 +11,9 @@
   color-scheme: dark;
 }
 
-/* Smooth transitions for theme changes - only for colors */
+/* Removed theme transition for instant switching */
 html {
-  transition: background-color 0.2s ease, border-color 0.2s ease, color 0.2s ease;
+  /* No transitions for better performance */
 }
 
 body {
@@ -60,14 +60,24 @@ body {
   backdrop-saturate: 180%;
 }
 
+.glass-card {
+  @apply backdrop-blur-md bg-white/60 dark:bg-gray-900/60;
+  backdrop-saturate: 150%;
+}
+
 /* Professional gradient text */
 .gradient-text {
   @apply bg-gradient-to-br from-gray-900 to-gray-700 dark:from-white dark:to-gray-200 bg-clip-text text-transparent;
 }
 
-/* Smooth hover transitions for interactive elements */
+/* Simplified gradient backgrounds - no animation */
+.gradient-glow {
+  /* Just a class name for styling - no heavy animations */
+}
+
+/* Simplified transitions - only colors */
 button, a, [role="button"] {
-  transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+  transition: background-color 0.15s ease, color 0.15s ease;
 }
 
 /* Focus ring improvements */
@@ -79,6 +89,7 @@ button, a, [role="button"] {
 .metric-value {
   font-variant-numeric: tabular-nums;
   letter-spacing: -0.02em;
+  font-feature-settings: 'tnum' 1;
 }
 
 /* Professional table styling */
@@ -90,5 +101,57 @@ table {
 /* Chart container improvements */
 canvas {
   @apply rounded-lg;
+}
+
+/* Enhanced card elevation system with color tints */
+.card-elevation-primary {
+  box-shadow: 0 4px 6px -1px rgba(59, 130, 246, 0.1), 0 2px 4px -1px rgba(59, 130, 246, 0.06);
+}
+
+.card-elevation-primary:hover {
+  box-shadow: 0 20px 25px -5px rgba(59, 130, 246, 0.15), 0 10px 10px -5px rgba(59, 130, 246, 0.08);
+}
+
+/* Removed heavy animations for better performance */
+
+/* Removed page transitions for better performance */
+
+/* Modern badge styles */
+.badge {
+  @apply inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-bold;
+}
+
+.badge-primary {
+  @apply bg-primary-100 text-primary-800 dark:bg-primary-900/30 dark:text-primary-300;
+}
+
+.badge-success {
+  @apply bg-emerald-100 text-emerald-800 dark:bg-emerald-900/30 dark:text-emerald-300;
+}
+
+.badge-warning {
+  @apply bg-amber-100 text-amber-800 dark:bg-amber-900/30 dark:text-amber-300;
+}
+
+.badge-danger {
+  @apply bg-red-100 text-red-800 dark:bg-red-900/30 dark:text-red-300;
+}
+
+/* Simplified skeleton loaders - no animation */
+.skeleton {
+  @apply bg-gray-200 dark:bg-gray-800;
+}
+
+/* Text gradient utilities */
+.text-gradient-blue {
+  @apply bg-gradient-to-r from-blue-600 to-cyan-500 bg-clip-text text-transparent;
+}
+
+.text-gradient-purple {
+  @apply bg-gradient-to-r from-purple-600 to-pink-500 bg-clip-text text-transparent;
+}
+
+.text-gradient-green {
+  @apply bg-gradient-to-r from-emerald-600 to-teal-500 bg-clip-text text-transparent;
 }
 
