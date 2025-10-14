@@ -1,88 +1,28 @@
 <template>
-  <div class="app-layout">
-    <div class="layout-main">
-      <AppSidebar v-model:visible="sidebarVisible" />
-      <div class="layout-content">
-        <router-view />
-      </div>
+  <div class="flex h-screen overflow-hidden bg-gray-50 dark:bg-gray-950">
+    <!-- Sidebar -->
+    <AppSidebar :is-open="isSidebarOpen" @close="isSidebarOpen = false" />
+    
+    <!-- Main content area -->
+    <div class="flex flex-col flex-1 overflow-hidden">
+      <!-- Header -->
+      <AppHeader @toggle-sidebar="isSidebarOpen = !isSidebarOpen" />
+      
+      <!-- Page content -->
+      <main class="flex-1 overflow-y-auto bg-gray-50 dark:bg-gray-950">
+        <div class="container mx-auto px-4 py-6">
+          <slot />
+        </div>
+      </main>
     </div>
   </div>
 </template>
 
 <script setup>
-import { ref, provide } from 'vue'
-import AppSidebar from './AppSidebar.vue'
+import { ref } from 'vue';
+import AppHeader from './AppHeader.vue';
+import AppSidebar from './AppSidebar.vue';
 
-const sidebarVisible = ref(false)
-
-// Provide sidebar visibility to header
-provide('toggleSidebar', () => {
-  sidebarVisible.value = !sidebarVisible.value
-})
+const isSidebarOpen = ref(false);
 </script>
 
-<style scoped>
-.app-layout {
-  min-height: 100vh;
-  display: flex;
-  flex-direction: column;
-  background: var(--surface-0);
-}
-
-.layout-main {
-  flex: 1;
-  display: flex;
-  position: relative;
-}
-
-.layout-content {
-  flex: 1;
-  padding: 2rem;
-  margin-left: 80px;
-  transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
-  background: #0c0a09;
-  min-height: 100vh;
-  position: relative;
-}
-
-.layout-main:has(.sidebar-wrapper.collapsed) .layout-content {
-  margin-left: 80px;
-}
-
-.layout-main:has(.sidebar-wrapper.expanded) .layout-content {
-  margin-left: 250px;
-}
-
-/* Fade transition */
-.fade-enter-active,
-.fade-leave-active {
-  transition: opacity 0.2s ease;
-}
-
-.fade-enter-from,
-.fade-leave-to {
-  opacity: 0;
-}
-
-/* Loading container */
-.loading-container {
-  display: flex;
-  justify-content: center;
-  align-items: center;
-  min-height: 400px;
-  color: #ec4899;
-}
-
-/* Responsive */
-@media (max-width: 768px) {
-  .layout-content {
-    margin-left: 0 !important;
-    padding: 0.75rem;
-    background: var(--surface-0);
-  }
-  
-  .layout-main:has(.sidebar-wrapper:not(.collapsed)) .layout-content {
-    margin-left: 0 !important;
-  }
-}
-</style>

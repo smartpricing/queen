@@ -1,501 +1,292 @@
 <template>
-  <div class="queue-detail">
-    <div class="detail-header">
-      <div class="header-info">
-        <Button 
-          icon="pi pi-arrow-left" 
-          class="p-button-text back-btn"
-          @click="$router.push('/queues')"
-          v-tooltip="'Back to Queues'"
-        />
-        <h1>{{ queueName }}</h1>
-      </div>
-      <div class="header-actions">
-        <Select 
-          v-model="selectedTimeRange" 
-          :options="timeRangeOptions || []" 
-          optionLabel="label" 
-          optionValue="value"
-          placeholder="Time range"
-          @change="onTimeRangeChange"
-          class="time-filter"
-        />
-        <Button 
-          label="Refresh" 
-          icon="pi pi-refresh" 
-          class="btn-primary"
-          @click="fetchQueueDetails"
-          :loading="loading"
-        />
-      </div>
-    </div>
-
-    <!-- Queue Information Card -->
-    <div class="card-v3 info-card">
-      <h3 class="card-title">Queue Information</h3>
-      <div class="info-grid">
-        <div class="info-item">
-          <span class="info-label">Namespace:</span>
-          <span class="info-value">{{ queueInfo.namespace || '-' }}</span>
+  <AppLayout>
+    <LoadingState :loading="loading" :error="error" @retry="fetchQueueDetail">
+      <div v-if="data" class="space-y-6">
+        <!-- Header -->
+        <div class="flex items-center justify-between">
+          <div>
+            <button 
+              @click="$router.back()"
+              class="text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-white mb-2 inline-flex items-center"
+            >
+              <svg class="w-5 h-5 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 19l-7-7 7-7" />
+              </svg>
+              Back to Queues
+            </button>
+            <h1 class="text-3xl font-bold text-gray-900 dark:text-white">
+              {{ queueName }}
+            </h1>
+            <p v-if="data.namespace" class="text-gray-600 dark:text-gray-400 mt-1">
+              Namespace: {{ data.namespace }}
+            </p>
+          </div>
+          
+          <button
+            @click="$router.push(`/queues/${queueName}/messages`)"
+            class="px-4 py-2 bg-green-600 hover:bg-green-700 text-white rounded-lg transition-colors"
+          >
+            View Messages
+          </button>
         </div>
-        <div class="info-item">
-          <span class="info-label">Task:</span>
-          <span class="info-value">{{ queueInfo.task || '-' }}</span>
+        
+        <!-- Summary Cards -->
+        <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-6">
+          <MetricCard
+            title="Total Messages"
+            :value="data.totalMessages || 0"
+          />
+          
+          <MetricCard
+            title="Pending"
+            :value="data.pendingMessages || 0"
+            icon-color="yellow"
+          />
+          
+          <MetricCard
+            title="Processing"
+            :value="data.processingMessages || 0"
+            icon-color="blue"
+          />
+          
+          <MetricCard
+            title="Completed"
+            :value="data.completedMessages || 0"
+            icon-color="green"
+          />
+          
+          <MetricCard
+            title="Failed"
+            :value="data.failedMessages || 0"
+            icon-color="red"
+          />
         </div>
-        <div class="info-item">
-          <span class="info-label">Created:</span>
-          <span class="info-value">{{ formatDate(queueInfo.created) }}</span>
-        </div>
-        <div class="info-item">
-          <span class="info-label">Total Messages:</span>
-          <span class="info-value highlight">{{ queueInfo.totalMessages || 0 }}</span>
-        </div>
-      </div>
-    </div>
-
-    <!-- Partitions Table -->
-    <div class="card-v3">
-      <h3 class="card-title">Partitions</h3>
-      <DataTable 
-        :value="partitions" 
-        :loading="loading"
-        class="dark-table-v3"
-      >
-        <Column field="name" header="PARTITION NAME">
-          <template #body="{ data }">
-            <span class="partition-name">{{ data.name }}</span>
-          </template>
-        </Column>
-        <Column field="priority" header="PRIORITY">
-          <template #body="{ data }">
-            <span class="priority-value">{{ data.priority }}</span>
-          </template>
-        </Column>
-        <Column header="STATS">
-          <template #body="{ data }">
-            <div class="stats-badges">
-              <span class="status-pending">{{ data.pending || 0 }} pending</span>
-              <span class="status-processing">{{ data.processing || 0 }} processing</span>
-              <span class="status-completed">{{ data.completed || 0 }} completed</span>
+        
+        <!-- Configuration -->
+        <div class="bg-white dark:bg-gray-900 rounded-lg border border-gray-200 dark:border-gray-800 p-6">
+          <h2 class="text-lg font-semibold text-gray-900 dark:text-white mb-4">
+            Configuration
+          </h2>
+          <div class="grid grid-cols-1 md:grid-cols-3 gap-6">
+            <div>
+              <span class="text-gray-600 dark:text-gray-400 text-sm">Lease Time</span>
+              <p class="text-lg font-medium text-gray-900 dark:text-white mt-1">
+                {{ data.leaseTime || 'N/A' }}ms
+              </p>
             </div>
-          </template>
-        </Column>
-      </DataTable>
-    </div>
-
-    <!-- Message Activity Chart -->
-    <div class="chart-container" style="margin-top: 1.5rem;">
-      <div class="chart-header">
-        <h3 class="chart-title">Message Activity</h3>
-        <Button 
-          icon="pi pi-refresh" 
-          class="p-button-text p-button-sm"
-          @click="fetchQueueDetails"
-          v-tooltip="'Refresh'"
-        />
+            <div>
+              <span class="text-gray-600 dark:text-gray-400 text-sm">Retry Limit</span>
+              <p class="text-lg font-medium text-gray-900 dark:text-white mt-1">
+                {{ data.retryLimit || 'N/A' }}
+              </p>
+            </div>
+            <div>
+              <span class="text-gray-600 dark:text-gray-400 text-sm">TTL</span>
+              <p class="text-lg font-medium text-gray-900 dark:text-white mt-1">
+                {{ data.ttl || 'N/A' }}ms
+              </p>
+            </div>
+          </div>
+        </div>
+        
+        <!-- Partitions -->
+        <div class="bg-white dark:bg-gray-900 rounded-lg border border-gray-200 dark:border-gray-800 p-6">
+          <h2 class="text-lg font-semibold text-gray-900 dark:text-white mb-4">
+            Partitions
+          </h2>
+          
+          <div class="overflow-x-auto">
+            <table class="w-full">
+              <thead class="bg-gray-50 dark:bg-gray-800 border-b border-gray-200 dark:border-gray-700">
+                <tr>
+                  <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">
+                    Partition
+                  </th>
+                  <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">
+                    Pending
+                  </th>
+                  <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">
+                    Processing
+                  </th>
+                  <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">
+                    Completed
+                  </th>
+                  <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">
+                    Failed
+                  </th>
+                  <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">
+                    Lag
+                  </th>
+                </tr>
+              </thead>
+              <tbody class="divide-y divide-gray-200 dark:divide-gray-700">
+                <tr 
+                  v-for="partition in data.partitions" 
+                  :key="partition.partition"
+                  class="hover:bg-gray-50 dark:hover:bg-gray-800"
+                >
+                  <td class="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900 dark:text-white">
+                    Partition {{ partition.partition }}
+                  </td>
+                  <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-900 dark:text-white">
+                    {{ (partition.pending || 0).toLocaleString() }}
+                  </td>
+                  <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-900 dark:text-white">
+                    {{ (partition.processing || 0).toLocaleString() }}
+                  </td>
+                  <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-900 dark:text-white">
+                    {{ (partition.completed || 0).toLocaleString() }}
+                  </td>
+                  <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-900 dark:text-white">
+                    {{ (partition.failed || 0).toLocaleString() }}
+                  </td>
+                  <td class="px-6 py-4 whitespace-nowrap text-sm">
+                    <span :class="getLagColor(partition.lag)">
+                      {{ (partition.lag || 0).toLocaleString() }}
+                    </span>
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+            
+            <div v-if="!data.partitions || data.partitions.length === 0" class="text-center py-12">
+              <p class="text-gray-500 dark:text-gray-400">No partition data available</p>
+            </div>
+          </div>
+        </div>
+        
+        <!-- Status Distribution Chart -->
+        <div class="bg-white dark:bg-gray-900 rounded-lg border border-gray-200 dark:border-gray-800 p-6">
+          <h2 class="text-lg font-semibold text-gray-900 dark:text-white mb-4">
+            Message Distribution
+          </h2>
+          <div class="h-64">
+            <Bar v-if="chartData" :data="chartData" :options="chartOptions" />
+          </div>
+        </div>
       </div>
-      <ThroughputChart :data="activityData" :loading="loading" />
-    </div>
-  </div>
+    </LoadingState>
+  </AppLayout>
 </template>
 
 <script setup>
-import { ref, onMounted, computed, watch } from 'vue'
-import { useRoute } from 'vue-router'
-import { useToast } from 'primevue/usetoast'
-import DataTable from 'primevue/datatable'
-import Column from 'primevue/column'
-import Button from 'primevue/button'
-import Select from 'primevue/select'
-import ThroughputChart from '../components/charts/ThroughputChart.vue'
-import api from '../services/api.js'
+import { ref, computed, onMounted, onUnmounted } from 'vue';
+import { useRoute } from 'vue-router';
+import { Bar } from 'vue-chartjs';
+import { Chart as ChartJS, CategoryScale, LinearScale, BarElement, Title, Tooltip, Legend } from 'chart.js';
+import AppLayout from '../components/layout/AppLayout.vue';
+import MetricCard from '../components/common/MetricCard.vue';
+import LoadingState from '../components/common/LoadingState.vue';
+import { useApi } from '../composables/useApi';
+import { usePolling } from '../composables/usePolling';
 
-const route = useRoute()
-const toast = useToast()
-const loading = ref(false)
+ChartJS.register(CategoryScale, LinearScale, BarElement, Title, Tooltip, Legend);
 
-const queueName = computed(() => route.params.name || 'Unknown Queue')
+const route = useRoute();
+const queueName = computed(() => route.params.queueName);
 
-// Time range filter
-const selectedTimeRange = ref('1h')
-const timeRangeOptions = ref([
-  { label: 'Last Hour', value: '1h' },
-  { label: 'Last 6 Hours', value: '6h' },
-  { label: 'Last 24 Hours', value: '24h' },
-  { label: 'Last 7 Days', value: '7d' },
-  { label: 'Last 30 Days', value: '30d' }
-])
+const { loading, error, execute, client } = useApi();
+const data = ref(null);
 
-const queueInfo = ref({
-  namespace: null,
-  task: null,
-  created: null,
-  totalMessages: 0
-})
-
-const partitions = ref([])
-
-const activityData = ref({
-  labels: [],
-  datasets: []
-})
-
-const fetchQueueDetails = async () => {
+const fetchQueueDetail = async () => {
   try {
-    loading.value = true
-    
-    // Build time range filter
-    const filters = {}
-    const now = new Date()
-    const from = new Date()
-    
-    switch (selectedTimeRange.value) {
-      case '1h':
-        from.setHours(from.getHours() - 1)
-        break
-      case '6h':
-        from.setHours(from.getHours() - 6)
-        break
-      case '24h':
-        from.setDate(from.getDate() - 1)
-        break
-      case '7d':
-        from.setDate(from.getDate() - 7)
-        break
-      case '30d':
-        from.setDate(from.getDate() - 30)
-        break
-    }
-    
-    filters.fromDateTime = from.toISOString()
-    filters.toDateTime = now.toISOString()
-    
-    // Fetch real queue data from API with filters
-    const [queueData, analyticsData, partitionData] = await Promise.all([
-      api.getQueueDetail(queueName.value).catch(() => null),
-      api.getQueueAnalytics(queueName.value, filters).catch(() => null),
-      api.getPartitions({ queue: queueName.value }).catch(() => null)
-    ])
-    
-    // Update queue info
-    if (queueData) {
-      queueInfo.value = {
-        namespace: queueData.namespace || null,
-        task: queueData.task || null,
-        created: queueData.created || new Date().toISOString(),
-        totalMessages: queueData.stats?.total || 
-                      (queueData.stats?.pending || 0) + 
-                      (queueData.stats?.processing || 0) + 
-                      (queueData.stats?.completed || 0) + 
-                      (queueData.stats?.failed || 0)
-      }
-    }
-    
-    // Process partition data
-    if (partitionData && partitionData.partitions) {
-      partitions.value = partitionData.partitions.map(p => ({
-        name: p.name || p.id || 'Unknown',
-        priority: p.priority || 0,
-        pending: p.stats?.pending || 0,
-        processing: p.stats?.processing || 0,
-        completed: p.stats?.completed || 0
-      }))
-    } else {
-      // Default partitions if no data
-      partitions.value = [
-        { name: 'Default', priority: 0, pending: 0, processing: 0, completed: 0 }
-      ]
-    }
-    
-    // Process throughput data for activity chart
-    if (analyticsData && analyticsData.throughput && analyticsData.throughput.length > 0) {
-      const recentData = analyticsData.throughput.slice(-12)
-      
-      activityData.value = {
-        labels: recentData.map(item => {
-          const date = new Date(item.timestamp)
-          return date.toLocaleTimeString('en-US', { 
-            hour: 'numeric', 
-            minute: '2-digit' 
-          })
-        }),
-        datasets: [
-          {
-            label: 'Incoming Messages',
-            data: recentData.map(item => item.incoming || 0)
-          },
-          {
-            label: 'Completed Messages',
-            data: recentData.map(item => item.completed || 0)
-          },
-          {
-            label: 'Failed Messages',
-            data: recentData.map(item => item.failed || 0)
-          }
-        ]
-      }
-    } else {
-      // Generate placeholder data if no real data available
-      const now = new Date()
-      const placeholderData = []
-      for (let i = 11; i >= 0; i--) {
-        const time = new Date(now.getTime() - i * 5 * 60 * 1000)
-        placeholderData.push({
-          timestamp: time.toISOString(),
-          incoming: 0,
-          completed: 0,
-          failed: 0
-        })
-      }
-      
-      activityData.value = {
-        labels: placeholderData.map(item => {
-          const date = new Date(item.timestamp)
-          return date.toLocaleTimeString('en-US', { 
-            hour: 'numeric', 
-            minute: '2-digit' 
-          })
-        }),
-        datasets: [
-          {
-            label: 'Incoming Messages',
-            data: placeholderData.map(() => 0)
-          },
-          {
-            label: 'Completed Messages',
-            data: placeholderData.map(() => 0)
-          },
-          {
-            label: 'Failed Messages',
-            data: placeholderData.map(() => 0)
-          }
-        ]
-      }
-    }
-    
-  } catch (error) {
-    console.error('Failed to fetch queue details:', error)
-    toast.add({
-      severity: 'error',
-      summary: 'Error',
-      detail: 'Failed to load queue details',
-      life: 3000
-    })
-  } finally {
-    loading.value = false
+    const result = await execute(client.getQueueDetail.bind(client), queueName.value);
+    data.value = result || {
+      totalMessages: 0,
+      pendingMessages: 0,
+      processingMessages: 0,
+      completedMessages: 0,
+      failedMessages: 0,
+      partitions: []
+    };
+  } catch (err) {
+    console.error('Failed to fetch queue detail:', err);
+    data.value = {
+      totalMessages: 0,
+      pendingMessages: 0,
+      processingMessages: 0,
+      completedMessages: 0,
+      failedMessages: 0,
+      partitions: []
+    };
   }
-}
+};
 
-const formatDate = (dateString) => {
-  if (!dateString) return '-'
-  const date = new Date(dateString)
-  return date.toLocaleString()
-}
+const { startPolling, stopPolling } = usePolling(fetchQueueDetail, 5000);
 
-// Handle time range change
-const onTimeRangeChange = () => {
-  fetchQueueDetails()
-}
+const getLagColor = (lag) => {
+  if (!lag || lag === 0) return 'text-gray-900 dark:text-white';
+  if (lag < 100) return 'text-green-600 dark:text-green-400';
+  if (lag < 1000) return 'text-yellow-600 dark:text-yellow-400';
+  return 'text-red-600 dark:text-red-400 font-semibold';
+};
 
-// Watch for queue name changes
-watch(() => route.params.name, (newName) => {
-  if (newName) {
-    fetchQueueDetails()
+const chartData = computed(() => {
+  return {
+    labels: ['Pending', 'Processing', 'Completed', 'Failed'],
+    datasets: [
+      {
+        label: 'Messages',
+        data: [
+          data.value?.pendingMessages || 0,
+          data.value?.processingMessages || 0,
+          data.value?.completedMessages || 0,
+          data.value?.failedMessages || 0
+        ],
+        backgroundColor: [
+          'rgba(234, 179, 8, 0.8)',
+          'rgba(34, 197, 94, 0.8)',
+          'rgba(59, 130, 246, 0.8)',
+          'rgba(239, 68, 68, 0.8)'
+        ],
+        borderColor: [
+          'rgb(234, 179, 8)',
+          'rgb(34, 197, 94)',
+          'rgb(59, 130, 246)',
+          'rgb(239, 68, 68)'
+        ],
+        borderWidth: 2
+      }
+    ]
+  };
+});
+
+const chartOptions = {
+  responsive: true,
+  maintainAspectRatio: false,
+  plugins: {
+    legend: {
+      display: false
+    }
+  },
+  scales: {
+    y: {
+      beginAtZero: true,
+      grid: {
+        color: 'rgba(156, 163, 175, 0.1)'
+      },
+      ticks: {
+        color: 'rgba(156, 163, 175, 0.8)'
+      }
+    },
+    x: {
+      grid: {
+        display: false
+      },
+      ticks: {
+        color: 'rgba(156, 163, 175, 0.8)'
+      }
+    }
   }
-})
+};
 
-onMounted(() => {
-  fetchQueueDetails()
-})
+onMounted(async () => {
+  await fetchQueueDetail();
+  // Don't auto-refresh by default
+});
+
+onUnmounted(() => {
+  stopPolling();
+});
 </script>
 
-<style scoped>
-.queue-detail {
-  padding: 0;
-}
-
-.detail-header {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  margin-bottom: 1.5rem;
-}
-
-.header-actions {
-  display: flex;
-  gap: 1rem;
-  align-items: center;
-}
-
-.time-filter {
-  min-width: 150px;
-}
-
-.time-filter :deep(.p-select) {
-  background: rgba(255, 255, 255, 0.05);
-  border: 1px solid rgba(255, 255, 255, 0.1);
-  border-radius: 8px;
-}
-
-.time-filter :deep(.p-select:hover) {
-  border-color: rgba(236, 72, 153, 0.5);
-}
-
-.time-filter :deep(.p-select-label) {
-  color: #ffffff;
-}
-
-.header-info {
-  display: flex;
-  align-items: center;
-  gap: 1rem;
-}
-
-.header-info h1 {
-  font-size: 1.5rem;
-  font-weight: 600;
-  color: var(--surface-700);
-  margin: 0;
-}
-
-.back-btn {
-  color: var(--surface-500) !important;
-}
-
-.back-btn:hover {
-  background: rgba(236, 72, 153, 0.1) !important;
-  color: var(--primary-500) !important;
-}
-
-.card-v3 {
-  background: transparent;
-  border: 1px solid rgba(255, 255, 255, 0.1);
-  border-radius: 16px;
-  padding: 1.5rem;
-  position: relative;
-  overflow: hidden;
-  margin-bottom: 1.5rem;
-}
-
-.card-title {
-  font-size: 1.125rem;
-  font-weight: 600;
-  color: var(--surface-700);
-  margin: 0 0 1.5rem 0;
-}
-
-.info-card {
-  margin-bottom: 1.5rem;
-}
-
-.info-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
-  gap: 1.5rem;
-}
-
-.info-item {
-  display: flex;
-  flex-direction: column;
-  gap: 0.5rem;
-}
-
-.info-label {
-  font-size: 0.75rem;
-  color: var(--surface-400);
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
-  font-weight: 500;
-}
-
-.info-value {
-  font-size: 1rem;
-  color: var(--surface-600);
-  font-weight: 500;
-}
-
-.info-value.highlight {
-  color: var(--primary-500);
-  font-size: 1.25rem;
-  font-weight: 600;
-}
-
-.partition-name {
-  color: var(--surface-600);
-  font-weight: 500;
-}
-
-.priority-value {
-  color: var(--surface-500);
-}
-
-.stats-badges {
-  display: flex;
-  gap: 0.75rem;
-}
-
-.chart-container {
-  background: transparent;
-  border: 1px solid rgba(255, 255, 255, 0.1);
-  border-radius: 16px;
-  padding: 1.5rem;
-  height: 400px;
-  display: flex;
-  flex-direction: column;
-}
-
-.chart-header {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  margin-bottom: 1.5rem;
-}
-
-.chart-title {
-  font-size: 1.125rem;
-  font-weight: 600;
-  color: var(--surface-700);
-  margin: 0;
-}
-
-/* DataTable dark theme overrides */
-:deep(.dark-table-v3) {
-  background: transparent !important;
-  border: none !important;
-}
-
-:deep(.dark-table-v3 .p-datatable-thead > tr > th) {
-  background: transparent !important;
-  color: var(--surface-400) !important;
-  border-color: rgba(255, 255, 255, 0.1) !important;
-  text-transform: uppercase;
-  font-size: 0.75rem;
-  letter-spacing: 0.05em;
-}
-
-:deep(.dark-table-v3 .p-datatable-tbody > tr) {
-  background: transparent !important;
-}
-
-:deep(.dark-table-v3 .p-datatable-tbody > tr:hover) {
-  background: rgba(236, 72, 153, 0.05) !important;
-}
-
-:deep(.dark-table-v3 .p-datatable-tbody > tr > td) {
-  color: var(--surface-600) !important;
-  border-color: rgba(255, 255, 255, 0.05) !important;
-}
-
-/* Responsive */
-@media (max-width: 768px) {
-  .info-grid {
-    grid-template-columns: repeat(2, 1fr);
-  }
-}
-
-@media (max-width: 480px) {
-  .info-grid {
-    grid-template-columns: 1fr;
-  }
-}
-</style>

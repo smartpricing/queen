@@ -17,6 +17,7 @@ import { createConfigureRoute } from './routes/configure.js';
 import { createAnalyticsRoutes } from './routes/analytics.js';
 import { createMessagesRoutes } from './routes/messages.js';
 import { createResourcesRoutes } from './routes/resources.js';
+import { createStatusRoutes } from './routes/status.js';
 import { createWebSocketServer } from './websocket/wsServer.js';
 import { initEncryption } from './services/encryptionService.js';
 import { startRetentionJob } from './services/retentionService.js';
@@ -54,6 +55,7 @@ const queueManager = createOptimizedQueueManager(pool, resourceCache, eventManag
 const analyticsRoutes = createAnalyticsRoutes(queueManager);
 const messagesRoutes = createMessagesRoutes(pool, queueManager);
 const resourcesRoutes = createResourcesRoutes(pool, systemEventManager);
+const statusRoutes = createStatusRoutes(pool);
 
 // Initialize database with migrations
 const initDatabaseWithMigrations = async () => {
@@ -1148,6 +1150,185 @@ app.del('/api/v1/resources/queues/:queue', (res, req) => {
   }).catch(error => {
     if (aborted) return;
     log('Delete queue error:', error);
+    res.cork(() => {
+      setCorsHeaders(res);
+      res.writeStatus(config.HTTP_STATUS.INTERNAL_SERVER_ERROR.toString()).end(JSON.stringify({ error: error.message }));
+    });
+  });
+});
+
+// ============================================================================
+// Status/Dashboard Routes (New unified API)
+// ============================================================================
+
+// 1. Dashboard Status - GET /api/v1/status
+app.get('/api/v1/status', (res, req) => {
+  const query = new URLSearchParams(req.getQuery());
+  
+  let aborted = false;
+  res.onAborted(() => {
+    aborted = true;
+    log('Status request aborted');
+  });
+  
+  const filters = {
+    from: query.get('from'),
+    to: query.get('to'),
+    queue: query.get('queue'),
+    namespace: query.get('namespace'),
+    task: query.get('task')
+  };
+  
+  statusRoutes.getStatus(filters).then(result => {
+    if (aborted) return;
+    res.cork(() => {
+      setCorsHeaders(res);
+      res.writeStatus(config.HTTP_STATUS.OK.toString()).end(JSON.stringify(result));
+    });
+  }).catch(error => {
+    if (aborted) return;
+    log('Status error:', error);
+    res.cork(() => {
+      setCorsHeaders(res);
+      res.writeStatus(config.HTTP_STATUS.INTERNAL_SERVER_ERROR.toString()).end(JSON.stringify({ error: error.message }));
+    });
+  });
+});
+
+// 2. Queues List - GET /api/v1/status/queues
+app.get('/api/v1/status/queues', (res, req) => {
+  const query = new URLSearchParams(req.getQuery());
+  
+  let aborted = false;
+  res.onAborted(() => {
+    aborted = true;
+    log('Status queues request aborted');
+  });
+  
+  const filters = {
+    from: query.get('from'),
+    to: query.get('to'),
+    namespace: query.get('namespace'),
+    task: query.get('task'),
+    limit: query.get('limit'),
+    offset: query.get('offset')
+  };
+  
+  statusRoutes.getQueues(filters).then(result => {
+    if (aborted) return;
+    res.cork(() => {
+      setCorsHeaders(res);
+      res.writeStatus(config.HTTP_STATUS.OK.toString()).end(JSON.stringify(result));
+    });
+  }).catch(error => {
+    if (aborted) return;
+    log('Status queues error:', error);
+    res.cork(() => {
+      setCorsHeaders(res);
+      res.writeStatus(config.HTTP_STATUS.INTERNAL_SERVER_ERROR.toString()).end(JSON.stringify({ error: error.message }));
+    });
+  });
+});
+
+// 3. Queue Detail - GET /api/v1/status/queues/:queueName
+app.get('/api/v1/status/queues/:queue', (res, req) => {
+  const queueName = req.getParameter(0);
+  const query = new URLSearchParams(req.getQuery());
+  
+  let aborted = false;
+  res.onAborted(() => {
+    aborted = true;
+    log('Status queue detail request aborted');
+  });
+  
+  const filters = {
+    from: query.get('from'),
+    to: query.get('to')
+  };
+  
+  statusRoutes.getQueueDetail(queueName, filters).then(result => {
+    if (aborted) return;
+    res.cork(() => {
+      setCorsHeaders(res);
+      res.writeStatus(config.HTTP_STATUS.OK.toString()).end(JSON.stringify(result));
+    });
+  }).catch(error => {
+    if (aborted) return;
+    log('Status queue detail error:', error);
+    const statusCode = error.message === 'Queue not found' 
+      ? config.HTTP_STATUS.NOT_FOUND 
+      : config.HTTP_STATUS.INTERNAL_SERVER_ERROR;
+    res.cork(() => {
+      setCorsHeaders(res);
+      res.writeStatus(statusCode.toString()).end(JSON.stringify({ error: error.message }));
+    });
+  });
+});
+
+// 4. Queue Messages - GET /api/v1/status/queues/:queueName/messages
+app.get('/api/v1/status/queues/:queue/messages', (res, req) => {
+  const queueName = req.getParameter(0);
+  const query = new URLSearchParams(req.getQuery());
+  
+  let aborted = false;
+  res.onAborted(() => {
+    aborted = true;
+    log('Status queue messages request aborted');
+  });
+  
+  const filters = {
+    status: query.get('status'),
+    partition: query.get('partition'),
+    from: query.get('from'),
+    to: query.get('to'),
+    limit: query.get('limit'),
+    offset: query.get('offset')
+  };
+  
+  statusRoutes.getQueueMessages(queueName, filters).then(result => {
+    if (aborted) return;
+    res.cork(() => {
+      setCorsHeaders(res);
+      res.writeStatus(config.HTTP_STATUS.OK.toString()).end(JSON.stringify(result));
+    });
+  }).catch(error => {
+    if (aborted) return;
+    log('Status queue messages error:', error);
+    res.cork(() => {
+      setCorsHeaders(res);
+      res.writeStatus(config.HTTP_STATUS.INTERNAL_SERVER_ERROR.toString()).end(JSON.stringify({ error: error.message }));
+    });
+  });
+});
+
+// 5. Analytics - GET /api/v1/status/analytics
+app.get('/api/v1/status/analytics', (res, req) => {
+  const query = new URLSearchParams(req.getQuery());
+  
+  let aborted = false;
+  res.onAborted(() => {
+    aborted = true;
+    log('Status analytics request aborted');
+  });
+  
+  const filters = {
+    from: query.get('from'),
+    to: query.get('to'),
+    queue: query.get('queue'),
+    namespace: query.get('namespace'),
+    task: query.get('task'),
+    interval: query.get('interval') || 'hour'
+  };
+  
+  statusRoutes.getAnalytics(filters).then(result => {
+    if (aborted) return;
+    res.cork(() => {
+      setCorsHeaders(res);
+      res.writeStatus(config.HTTP_STATUS.OK.toString()).end(JSON.stringify(result));
+    });
+  }).catch(error => {
+    if (aborted) return;
+    log('Status analytics error:', error);
     res.cork(() => {
       setCorsHeaders(res);
       res.writeStatus(config.HTTP_STATUS.INTERNAL_SERVER_ERROR.toString()).end(JSON.stringify({ error: error.message }));

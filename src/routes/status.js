@@ -1,0 +1,960 @@
+export const createStatusRoutes = (pool) => {
+  
+  // Helper to format duration in human-readable format
+  const formatDuration = (seconds) => {
+    if (!seconds || seconds === 0) return '0s';
+    if (seconds < 60) return `${seconds.toFixed(1)}s`;
+    if (seconds < 3600) {
+      const mins = Math.floor(seconds / 60);
+      const secs = Math.floor(seconds % 60);
+      return `${mins}m ${secs}s`;
+    }
+    if (seconds < 86400) {
+      const hours = Math.floor(seconds / 3600);
+      const mins = Math.floor((seconds % 3600) / 60);
+      return `${hours}h ${mins}m`;
+    }
+    const days = Math.floor(seconds / 86400);
+    const hours = Math.floor((seconds % 86400) / 3600);
+    return `${days}d ${hours}h`;
+  };
+  
+  // Helper to get default time range (last hour)
+  const getTimeRange = (from, to) => {
+    const toDate = to ? new Date(to) : new Date();
+    const fromDate = from ? new Date(from) : new Date(toDate.getTime() - 60 * 60 * 1000);
+    return { from: fromDate, to: toDate };
+  };
+  
+  // 1. Dashboard Status Endpoint
+  const getStatus = async (filters = {}) => {
+    const { from, to, queue, namespace, task } = filters;
+    const timeRange = getTimeRange(from, to);
+    
+    // Build filter conditions
+    const buildFilters = (startParam = 3) => {
+      const conditions = [];
+      const params = [timeRange.from, timeRange.to];
+      let paramCount = startParam;
+      
+      if (queue) {
+        conditions.push(`q.name = $${paramCount}`);
+        params.push(queue);
+        paramCount++;
+      }
+      if (namespace) {
+        conditions.push(`q.namespace = $${paramCount}`);
+        params.push(namespace);
+        paramCount++;
+      }
+      if (task) {
+        conditions.push(`q.task = $${paramCount}`);
+        params.push(task);
+        paramCount++;
+      }
+      
+      return { conditions, params, whereClause: conditions.length > 0 ? `AND ${conditions.join(' AND ')}` : '' };
+    };
+    
+    try {
+      // Query 1: Throughput per minute
+      const filterInfo = buildFilters(3);
+      const throughputQuery = `
+        WITH time_series AS (
+          SELECT generate_series(
+            DATE_TRUNC('minute', $1::timestamp),
+            DATE_TRUNC('minute', $2::timestamp),
+            '1 minute'::interval
+          ) AS minute
+        )
+        SELECT 
+          ts.minute,
+          COALESCE(COUNT(DISTINCT m.id), 0) as messages_ingested,
+          COALESCE(COUNT(DISTINCT CASE 
+            WHEN ms.status = 'completed' 
+            AND ms.completed_at >= ts.minute 
+            AND ms.completed_at < ts.minute + INTERVAL '1 minute' 
+            THEN m.id 
+          END), 0) as messages_processed
+        FROM time_series ts
+        LEFT JOIN queen.messages m ON DATE_TRUNC('minute', m.created_at) = ts.minute
+          AND m.created_at >= $1::timestamp
+          AND m.created_at <= $2::timestamp
+        LEFT JOIN queen.partitions p ON p.id = m.partition_id
+        LEFT JOIN queen.queues q ON q.id = p.queue_id
+        LEFT JOIN queen.messages_status ms ON ms.message_id = m.id 
+          AND ms.consumer_group IS NULL
+        WHERE 1=1 ${filterInfo.whereClause}
+        GROUP BY ts.minute
+        ORDER BY ts.minute DESC
+      `;
+      
+      // Query 2: Active queues in time range
+      const queuesQuery = `
+        SELECT 
+          q.id, q.name, q.namespace, q.task,
+          COUNT(DISTINCT p.id) as partition_count,
+          COALESCE(SUM(pc.total_messages_consumed), 0) as total_consumed
+        FROM queen.queues q
+        LEFT JOIN queen.partitions p ON p.queue_id = q.id
+        LEFT JOIN queen.partition_cursors pc ON pc.partition_id = p.id
+          AND pc.consumer_group = '__QUEUE_MODE__'
+        LEFT JOIN queen.messages m ON m.partition_id = p.id
+          AND m.created_at >= $1 AND m.created_at <= $2
+        WHERE 1=1 ${filterInfo.whereClause}
+        GROUP BY q.id, q.name, q.namespace, q.task
+        HAVING COUNT(DISTINCT m.id) > 0
+        ORDER BY q.name
+      `;
+      
+      // Query 3: Message counts by status
+      const countsQuery = `
+        SELECT 
+          COUNT(DISTINCT m.id) as total_messages,
+          COUNT(DISTINCT CASE WHEN ms.status = 'pending' THEN m.id END) as pending,
+          COUNT(DISTINCT CASE WHEN ms.status = 'processing' THEN m.id END) as processing,
+          COUNT(DISTINCT CASE WHEN ms.status = 'completed' THEN m.id END) as completed,
+          COUNT(DISTINCT CASE WHEN ms.status = 'failed' THEN m.id END) as failed,
+          COUNT(DISTINCT dlq.id) as dead_letter
+        FROM queen.messages m
+        LEFT JOIN queen.partitions p ON p.id = m.partition_id
+        LEFT JOIN queen.queues q ON q.id = p.queue_id
+        LEFT JOIN queen.messages_status ms ON ms.message_id = m.id 
+          AND ms.consumer_group IS NULL
+        LEFT JOIN queen.dead_letter_queue dlq ON dlq.message_id = m.id
+          AND (dlq.consumer_group IS NULL OR dlq.consumer_group = '__QUEUE_MODE__')
+        WHERE m.created_at >= $1 AND m.created_at <= $2
+          ${filterInfo.whereClause}
+      `;
+      
+      // Query 4: Active leases
+      const leasesQuery = `
+        SELECT 
+          COUNT(*) as active_leases,
+          COUNT(DISTINCT partition_id) as partitions_with_leases,
+          SUM(batch_size) as total_batch_size,
+          SUM(acked_count) as total_acked
+        FROM queen.partition_leases
+        WHERE lease_expires_at > NOW() AND released_at IS NULL
+      `;
+      
+      // Query 5: DLQ stats
+      const dlqQuery = `
+        SELECT 
+          COUNT(*) as total_dlq_messages,
+          COUNT(DISTINCT partition_id) as affected_partitions,
+          error_message,
+          COUNT(*) as error_count
+        FROM queen.dead_letter_queue dlq
+        LEFT JOIN queen.partitions p ON p.id = dlq.partition_id
+        LEFT JOIN queen.queues q ON q.id = p.queue_id
+        WHERE dlq.failed_at >= $1 AND dlq.failed_at <= $2
+          ${filterInfo.whereClause}
+        GROUP BY error_message
+        ORDER BY error_count DESC
+        LIMIT 5
+      `;
+      
+      // Execute all queries in parallel
+      const [throughputResult, queuesResult, countsResult, leasesResult, dlqResult] = await Promise.all([
+        pool.query(throughputQuery, filterInfo.params),
+        pool.query(queuesQuery, filterInfo.params),
+        pool.query(countsQuery, filterInfo.params),
+        pool.query(leasesQuery),
+        pool.query(dlqQuery, filterInfo.params)
+      ]);
+      
+      // Format throughput data
+      const throughput = throughputResult.rows.map(row => ({
+        timestamp: row.minute,
+        ingested: parseInt(row.messages_ingested),
+        processed: parseInt(row.messages_processed),
+        ingestedPerSecond: parseFloat((parseInt(row.messages_ingested) / 60).toFixed(2)),
+        processedPerSecond: parseFloat((parseInt(row.messages_processed) / 60).toFixed(2))
+      }));
+      
+      // Format queues data
+      const queues = queuesResult.rows.map(row => ({
+        id: row.id,
+        name: row.name,
+        namespace: row.namespace,
+        task: row.task,
+        partitions: parseInt(row.partition_count),
+        totalConsumed: parseInt(row.total_consumed || 0)
+      }));
+      
+      // Format message counts
+      const counts = countsResult.rows[0] || {};
+      const messages = {
+        total: parseInt(counts.total_messages || 0),
+        pending: parseInt(counts.pending || 0),
+        processing: parseInt(counts.processing || 0),
+        completed: parseInt(counts.completed || 0),
+        failed: parseInt(counts.failed || 0),
+        deadLetter: parseInt(counts.dead_letter || 0)
+      };
+      
+      // Format leases data
+      const leaseData = leasesResult.rows[0] || {};
+      const leases = {
+        active: parseInt(leaseData.active_leases || 0),
+        partitionsWithLeases: parseInt(leaseData.partitions_with_leases || 0),
+        totalBatchSize: parseInt(leaseData.total_batch_size || 0),
+        totalAcked: parseInt(leaseData.total_acked || 0)
+      };
+      
+      // Get DLQ totals and top errors
+      const dlqTotal = dlqResult.rows.reduce((sum, row) => sum + parseInt(row.error_count || 0), 0);
+      const dlqPartitions = new Set(dlqResult.rows.map(row => row.partition_id)).size;
+      const topErrors = dlqResult.rows
+        .filter(row => row.error_message)
+        .map(row => ({
+          error: row.error_message,
+          count: parseInt(row.error_count)
+        }));
+      
+      return {
+        timeRange: {
+          from: timeRange.from.toISOString(),
+          to: timeRange.to.toISOString()
+        },
+        throughput,
+        queues,
+        messages,
+        leases,
+        deadLetterQueue: {
+          totalMessages: dlqTotal,
+          affectedPartitions: dlqPartitions,
+          topErrors
+        }
+      };
+      
+    } catch (error) {
+      console.error('Error in getStatus:', error);
+      throw error;
+    }
+  };
+  
+  // 2. Queues List Endpoint
+  const getQueues = async (filters = {}) => {
+    const { from, to, namespace, task, limit = 100, offset = 0 } = filters;
+    const timeRange = getTimeRange(from, to);
+    
+    const conditions = [];
+    const params = [timeRange.from, timeRange.to];
+    let paramCount = 3;
+    
+    if (namespace) {
+      conditions.push(`q.namespace = $${paramCount}`);
+      params.push(namespace);
+      paramCount++;
+    }
+    if (task) {
+      conditions.push(`q.task = $${paramCount}`);
+      params.push(task);
+      paramCount++;
+    }
+    
+    params.push(limit, offset);
+    const whereClause = conditions.length > 0 ? `AND ${conditions.join(' AND ')}` : '';
+    
+    const query = `
+      SELECT 
+        q.id,
+        q.name,
+        q.namespace,
+        q.task,
+        q.priority,
+        q.created_at,
+        COUNT(DISTINCT p.id) as partition_count,
+        COUNT(DISTINCT m.id) as total_messages,
+        COUNT(DISTINCT CASE WHEN ms.status = 'pending' THEN m.id END) as pending,
+        COUNT(DISTINCT CASE WHEN ms.status = 'processing' THEN m.id END) as processing,
+        COUNT(DISTINCT CASE WHEN ms.status = 'completed' THEN m.id END) as completed,
+        COUNT(DISTINCT CASE WHEN ms.status = 'failed' THEN m.id END) as failed,
+        COUNT(DISTINCT dlq.id) as dead_letter,
+        EXTRACT(EPOCH FROM (NOW() - MIN(CASE WHEN ms.status = 'pending' 
+          THEN m.created_at END))) as lag_seconds,
+        AVG(CASE WHEN ms.status = 'completed' AND ms.completed_at IS NOT NULL 
+          THEN EXTRACT(EPOCH FROM (ms.completed_at - m.created_at)) END) as avg_processing_time_seconds
+      FROM queen.queues q
+      LEFT JOIN queen.partitions p ON p.queue_id = q.id
+      LEFT JOIN queen.messages m ON m.partition_id = p.id 
+        AND m.created_at >= $1 AND m.created_at <= $2
+      LEFT JOIN queen.messages_status ms ON ms.message_id = m.id 
+        AND ms.consumer_group IS NULL
+      LEFT JOIN queen.dead_letter_queue dlq ON dlq.message_id = m.id
+        AND (dlq.consumer_group IS NULL OR dlq.consumer_group = '__QUEUE_MODE__')
+      WHERE 1=1 ${whereClause}
+      GROUP BY q.id, q.name, q.namespace, q.task, q.priority, q.created_at
+      ORDER BY q.priority DESC, q.name
+      LIMIT $${paramCount} OFFSET $${paramCount + 1}
+    `;
+    
+    const countQuery = `
+      SELECT COUNT(DISTINCT q.id) as total
+      FROM queen.queues q
+      WHERE 1=1 ${whereClause.replace(/\$\d+/g, (match) => {
+        const num = parseInt(match.substring(1));
+        return num <= 2 ? match : `$${num - 2}`;
+      })}
+    `;
+    
+    const [result, countResult] = await Promise.all([
+      pool.query(query, params),
+      pool.query(countQuery, params.slice(2, paramCount - 2))
+    ]);
+    
+    const queues = result.rows.map(row => ({
+      id: row.id,
+      name: row.name,
+      namespace: row.namespace,
+      task: row.task,
+      priority: row.priority,
+      createdAt: row.created_at,
+      partitions: parseInt(row.partition_count),
+      messages: {
+        total: parseInt(row.total_messages || 0),
+        pending: parseInt(row.pending || 0),
+        processing: parseInt(row.processing || 0),
+        completed: parseInt(row.completed || 0),
+        failed: parseInt(row.failed || 0),
+        deadLetter: parseInt(row.dead_letter || 0)
+      },
+      lag: row.lag_seconds ? {
+        seconds: parseFloat(row.lag_seconds),
+        formatted: formatDuration(parseFloat(row.lag_seconds))
+      } : null,
+      performance: row.avg_processing_time_seconds ? {
+        avgProcessingTimeSeconds: parseFloat(row.avg_processing_time_seconds),
+        avgProcessingTimeFormatted: formatDuration(parseFloat(row.avg_processing_time_seconds))
+      } : null
+    }));
+    
+    return {
+      queues,
+      pagination: {
+        limit: parseInt(limit),
+        offset: parseInt(offset),
+        total: parseInt(countResult.rows[0]?.total || 0)
+      },
+      timeRange: {
+        from: timeRange.from.toISOString(),
+        to: timeRange.to.toISOString()
+      }
+    };
+  };
+  
+  // 3. Queue Detail Endpoint
+  const getQueueDetail = async (queueName, filters = {}) => {
+    const { from, to } = filters;
+    const timeRange = getTimeRange(from, to);
+    
+    const query = `
+      SELECT 
+        q.id, q.name, q.namespace, q.task, q.priority,
+        q.lease_time, q.retry_limit, q.ttl, q.max_queue_size,
+        q.created_at,
+        p.id as partition_id,
+        p.name as partition_name,
+        p.created_at as partition_created_at,
+        p.last_activity as partition_last_activity,
+        COUNT(DISTINCT m.id) as partition_total_messages,
+        COUNT(DISTINCT CASE WHEN ms.status = 'pending' THEN m.id END) as partition_pending,
+        COUNT(DISTINCT CASE WHEN ms.status = 'processing' THEN m.id END) as partition_processing,
+        COUNT(DISTINCT CASE WHEN ms.status = 'completed' THEN m.id END) as partition_completed,
+        COUNT(DISTINCT CASE WHEN ms.status = 'failed' THEN m.id END) as partition_failed,
+        pc.total_messages_consumed,
+        pc.total_batches_consumed,
+        pc.last_consumed_at,
+        pl.lease_expires_at,
+        pl.batch_size as lease_batch_size,
+        pl.acked_count as lease_acked_count,
+        MIN(m.created_at) FILTER (WHERE ms.status = 'pending') as oldest_pending,
+        MAX(m.created_at) as newest_message
+      FROM queen.queues q
+      LEFT JOIN queen.partitions p ON p.queue_id = q.id
+      LEFT JOIN queen.messages m ON m.partition_id = p.id 
+        AND m.created_at >= $2 AND m.created_at <= $3
+      LEFT JOIN queen.messages_status ms ON ms.message_id = m.id 
+        AND ms.consumer_group IS NULL
+      LEFT JOIN queen.partition_cursors pc ON pc.partition_id = p.id 
+        AND pc.consumer_group = '__QUEUE_MODE__'
+      LEFT JOIN queen.partition_leases pl ON pl.partition_id = p.id 
+        AND pl.consumer_group = '__QUEUE_MODE__' 
+        AND pl.released_at IS NULL
+      WHERE q.name = $1
+      GROUP BY q.id, q.name, q.namespace, q.task, q.priority, q.lease_time, 
+               q.retry_limit, q.ttl, q.max_queue_size, q.created_at,
+               p.id, p.name, p.created_at, p.last_activity,
+               pc.total_messages_consumed, pc.total_batches_consumed, pc.last_consumed_at,
+               pl.lease_expires_at, pl.batch_size, pl.acked_count
+      ORDER BY p.name
+    `;
+    
+    const result = await pool.query(query, [queueName, timeRange.from, timeRange.to]);
+    
+    if (result.rows.length === 0) {
+      throw new Error('Queue not found');
+    }
+    
+    const firstRow = result.rows[0];
+    const queue = {
+      id: firstRow.id,
+      name: firstRow.name,
+      namespace: firstRow.namespace,
+      task: firstRow.task,
+      priority: firstRow.priority,
+      config: {
+        leaseTime: firstRow.lease_time,
+        retryLimit: firstRow.retry_limit,
+        ttl: firstRow.ttl,
+        maxQueueSize: firstRow.max_queue_size
+      },
+      createdAt: firstRow.created_at
+    };
+    
+    // Aggregate totals
+    const totals = {
+      messages: {
+        total: 0,
+        pending: 0,
+        processing: 0,
+        completed: 0,
+        failed: 0
+      },
+      partitions: result.rows.filter(r => r.partition_id).length,
+      consumed: 0,
+      batches: 0
+    };
+    
+    const partitions = result.rows
+      .filter(row => row.partition_id)
+      .map(row => {
+        const total = parseInt(row.partition_total_messages || 0);
+        const pending = parseInt(row.partition_pending || 0);
+        const processing = parseInt(row.partition_processing || 0);
+        const completed = parseInt(row.partition_completed || 0);
+        const failed = parseInt(row.partition_failed || 0);
+        
+        totals.messages.total += total;
+        totals.messages.pending += pending;
+        totals.messages.processing += processing;
+        totals.messages.completed += completed;
+        totals.messages.failed += failed;
+        totals.consumed += parseInt(row.total_messages_consumed || 0);
+        totals.batches += parseInt(row.total_batches_consumed || 0);
+        
+        const partition = {
+          id: row.partition_id,
+          name: row.partition_name,
+          createdAt: row.partition_created_at,
+          lastActivity: row.partition_last_activity,
+          messages: {
+            total,
+            pending,
+            processing,
+            completed,
+            failed
+          },
+          cursor: {
+            totalConsumed: parseInt(row.total_messages_consumed || 0),
+            batchesConsumed: parseInt(row.total_batches_consumed || 0),
+            lastConsumedAt: row.last_consumed_at
+          }
+        };
+        
+        if (row.lease_expires_at) {
+          partition.lease = {
+            active: new Date(row.lease_expires_at) > new Date(),
+            expiresAt: row.lease_expires_at,
+            batchSize: parseInt(row.lease_batch_size || 0),
+            ackedCount: parseInt(row.lease_acked_count || 0)
+          };
+        }
+        
+        if (row.oldest_pending) {
+          const lagSeconds = (new Date() - new Date(row.oldest_pending)) / 1000;
+          partition.lag = {
+            oldestPending: row.oldest_pending,
+            lagSeconds: parseFloat(lagSeconds.toFixed(1))
+          };
+        }
+        
+        return partition;
+      });
+    
+    return {
+      queue,
+      totals,
+      partitions,
+      timeRange: {
+        from: timeRange.from.toISOString(),
+        to: timeRange.to.toISOString()
+      }
+    };
+  };
+  
+  // 4. Queue Messages Endpoint
+  const getQueueMessages = async (queueName, filters = {}) => {
+    const { status, partition, from, to, limit = 50, offset = 0 } = filters;
+    const timeRange = getTimeRange(from, to);
+    
+    const conditions = ['q.name = $1', 'm.created_at >= $2', 'm.created_at <= $3'];
+    const params = [queueName, timeRange.from, timeRange.to];
+    let paramCount = 4;
+    
+    if (status) {
+      conditions.push(`ms.status = $${paramCount}`);
+      params.push(status);
+      paramCount++;
+    }
+    
+    if (partition) {
+      conditions.push(`p.name = $${paramCount}`);
+      params.push(partition);
+      paramCount++;
+    }
+    
+    params.push(limit, offset);
+    
+    const query = `
+      SELECT 
+        m.id,
+        m.transaction_id,
+        m.trace_id,
+        m.created_at,
+        m.is_encrypted,
+        m.payload,
+        p.name as partition,
+        ms.status,
+        ms.worker_id,
+        ms.locked_at,
+        ms.completed_at,
+        ms.failed_at,
+        ms.error_message,
+        ms.retry_count,
+        ms.processing_at,
+        EXTRACT(EPOCH FROM (ms.completed_at - m.created_at)) as processing_time_seconds,
+        EXTRACT(EPOCH FROM (NOW() - m.created_at)) as age_seconds
+      FROM queen.messages m
+      JOIN queen.partitions p ON p.id = m.partition_id
+      JOIN queen.queues q ON q.id = p.queue_id
+      LEFT JOIN queen.messages_status ms ON ms.message_id = m.id 
+        AND ms.consumer_group IS NULL
+      WHERE ${conditions.join(' AND ')}
+      ORDER BY m.created_at DESC
+      LIMIT $${paramCount} OFFSET $${paramCount + 1}
+    `;
+    
+    const countQuery = `
+      SELECT COUNT(*) as total
+      FROM queen.messages m
+      JOIN queen.partitions p ON p.id = m.partition_id
+      JOIN queen.queues q ON q.id = p.queue_id
+      LEFT JOIN queen.messages_status ms ON ms.message_id = m.id 
+        AND ms.consumer_group IS NULL
+      WHERE ${conditions.join(' AND ')}
+    `;
+    
+    const [result, countResult] = await Promise.all([
+      pool.query(query, params),
+      pool.query(countQuery, params.slice(0, paramCount - 2))
+    ]);
+    
+    const messages = result.rows.map(row => {
+      const message = {
+        id: row.id,
+        transactionId: row.transaction_id,
+        traceId: row.trace_id,
+        partition: row.partition,
+        createdAt: row.created_at,
+        status: row.status,
+        retryCount: row.retry_count || 0,
+        isEncrypted: row.is_encrypted
+      };
+      
+      if (!row.is_encrypted) {
+        message.payload = row.payload;
+      }
+      
+      if (row.status === 'pending' || row.status === 'processing') {
+        message.age = {
+          seconds: parseFloat(row.age_seconds),
+          formatted: formatDuration(parseFloat(row.age_seconds))
+        };
+      }
+      
+      if (row.status === 'completed' || row.status === 'failed') {
+        message.completedAt = row.completed_at || row.failed_at;
+        if (row.processing_time_seconds) {
+          message.processingTime = {
+            seconds: parseFloat(row.processing_time_seconds),
+            formatted: formatDuration(parseFloat(row.processing_time_seconds))
+          };
+        }
+      }
+      
+      if (row.worker_id) {
+        message.workerId = row.worker_id;
+      }
+      
+      if (row.error_message) {
+        message.errorMessage = row.error_message;
+      }
+      
+      return message;
+    });
+    
+    return {
+      messages,
+      pagination: {
+        limit: parseInt(limit),
+        offset: parseInt(offset),
+        total: parseInt(countResult.rows[0]?.total || 0)
+      },
+      queue: queueName,
+      filters: {
+        status: status || null,
+        partition: partition || null
+      },
+      timeRange: {
+        from: timeRange.from.toISOString(),
+        to: timeRange.to.toISOString()
+      }
+    };
+  };
+  
+  // 5. Analytics Endpoint
+  const getAnalytics = async (filters = {}) => {
+    const { from, to, queue, namespace, task, interval = 'hour' } = filters;
+    
+    // Default to last 24 hours for analytics
+    const toDate = to ? new Date(to) : new Date();
+    const fromDate = from ? new Date(from) : new Date(toDate.getTime() - 24 * 60 * 60 * 1000);
+    
+    // Determine interval
+    const intervalMap = {
+      'minute': '1 minute',
+      'hour': '1 hour',
+      'day': '1 day'
+    };
+    const sqlInterval = intervalMap[interval] || '1 hour';
+    
+    const buildFilters = (startParam = 3) => {
+      const conditions = [];
+      const params = [fromDate, toDate];
+      let paramCount = startParam;
+      
+      if (queue) {
+        conditions.push(`q.name = $${paramCount}`);
+        params.push(queue);
+        paramCount++;
+      }
+      if (namespace) {
+        conditions.push(`q.namespace = $${paramCount}`);
+        params.push(namespace);
+        paramCount++;
+      }
+      if (task) {
+        conditions.push(`q.task = $${paramCount}`);
+        params.push(task);
+        paramCount++;
+      }
+      
+      return { conditions, params, whereClause: conditions.length > 0 ? `AND ${conditions.join(' AND ')}` : '' };
+    };
+    
+    const filterInfo = buildFilters(3);
+    
+    try {
+      // Query 1: Throughput time series
+      const throughputQuery = `
+        WITH time_series AS (
+          SELECT generate_series(
+            DATE_TRUNC('${interval}', $1::timestamp),
+            DATE_TRUNC('${interval}', $2::timestamp),
+            '${sqlInterval}'::interval
+          ) AS bucket
+        )
+        SELECT 
+          ts.bucket as timestamp,
+          COUNT(DISTINCT m.id) as ingested,
+          COUNT(DISTINCT CASE WHEN ms.status = 'completed' THEN m.id END) as processed,
+          COUNT(DISTINCT CASE WHEN ms.status = 'failed' THEN m.id END) as failed
+        FROM time_series ts
+        LEFT JOIN queen.messages m ON DATE_TRUNC('${interval}', m.created_at) = ts.bucket
+          AND m.created_at >= $1::timestamp AND m.created_at <= $2::timestamp
+        LEFT JOIN queen.partitions p ON p.id = m.partition_id
+        LEFT JOIN queen.queues q ON q.id = p.queue_id
+        LEFT JOIN queen.messages_status ms ON ms.message_id = m.id 
+          AND ms.consumer_group IS NULL
+        WHERE 1=1 ${filterInfo.whereClause}
+        GROUP BY ts.bucket
+        ORDER BY ts.bucket DESC
+      `;
+      
+      // Query 2: Latency percentiles time series
+      const latencyQuery = `
+        WITH time_series AS (
+          SELECT generate_series(
+            DATE_TRUNC('${interval}', $1::timestamp),
+            DATE_TRUNC('${interval}', $2::timestamp),
+            '${sqlInterval}'::interval
+          ) AS bucket
+        ),
+        processing_times AS (
+          SELECT 
+            DATE_TRUNC('${interval}', m.created_at) as bucket,
+            EXTRACT(EPOCH FROM (ms.completed_at - m.created_at)) as duration
+          FROM queen.messages m
+          JOIN queen.partitions p ON p.id = m.partition_id
+          JOIN queen.queues q ON q.id = p.queue_id
+          JOIN queen.messages_status ms ON ms.message_id = m.id 
+            AND ms.consumer_group IS NULL
+            AND ms.status IN ('completed', 'failed')
+            AND ms.completed_at IS NOT NULL
+          WHERE m.created_at >= $1::timestamp 
+            AND m.created_at <= $2::timestamp
+            ${filterInfo.whereClause}
+        )
+        SELECT 
+          ts.bucket as timestamp,
+          PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY pt.duration) as p50,
+          PERCENTILE_CONT(0.95) WITHIN GROUP (ORDER BY pt.duration) as p95,
+          PERCENTILE_CONT(0.99) WITHIN GROUP (ORDER BY pt.duration) as p99,
+          AVG(pt.duration) as avg,
+          MIN(pt.duration) as min,
+          MAX(pt.duration) as max,
+          COUNT(*) as sample_count
+        FROM time_series ts
+        LEFT JOIN processing_times pt ON pt.bucket = ts.bucket
+        GROUP BY ts.bucket
+        ORDER BY ts.bucket DESC
+      `;
+      
+      // Query 3: Top queues by volume
+      const topQueuesQuery = `
+        SELECT 
+          q.name,
+          q.namespace,
+          COUNT(DISTINCT CASE WHEN ms.status = 'completed' THEN m.id END) as messages_processed,
+          AVG(CASE WHEN ms.status = 'completed' AND ms.completed_at IS NOT NULL 
+            THEN EXTRACT(EPOCH FROM (ms.completed_at - m.created_at)) END) as avg_processing_time,
+          COUNT(DISTINCT CASE WHEN ms.status = 'failed' THEN m.id END)::float / 
+            NULLIF(COUNT(DISTINCT CASE WHEN ms.status IN ('completed', 'failed') THEN m.id END), 0) as error_rate
+        FROM queen.queues q
+        LEFT JOIN queen.partitions p ON p.queue_id = q.id
+        LEFT JOIN queen.messages m ON m.partition_id = p.id
+          AND m.created_at >= $1 AND m.created_at <= $2
+        LEFT JOIN queen.messages_status ms ON ms.message_id = m.id 
+          AND ms.consumer_group IS NULL
+        WHERE 1=1 ${filterInfo.whereClause}
+        GROUP BY q.id, q.name, q.namespace
+        HAVING COUNT(DISTINCT m.id) > 0
+        ORDER BY messages_processed DESC
+        LIMIT 10
+      `;
+      
+      // Query 4: DLQ time series
+      const dlqQuery = `
+        WITH time_series AS (
+          SELECT generate_series(
+            DATE_TRUNC('${interval}', $1::timestamp),
+            DATE_TRUNC('${interval}', $2::timestamp),
+            '${sqlInterval}'::interval
+          ) AS bucket
+        )
+        SELECT 
+          ts.bucket as timestamp,
+          COUNT(DISTINCT dlq.id) as messages
+        FROM time_series ts
+        LEFT JOIN queen.dead_letter_queue dlq ON DATE_TRUNC('${interval}', dlq.failed_at) = ts.bucket
+          AND dlq.failed_at >= $1::timestamp AND dlq.failed_at <= $2::timestamp
+          AND (dlq.consumer_group IS NULL OR dlq.consumer_group = '__QUEUE_MODE__')
+        LEFT JOIN queen.partitions p ON p.id = dlq.partition_id
+        LEFT JOIN queen.queues q ON q.id = p.queue_id
+        WHERE 1=1 ${filterInfo.whereClause}
+        GROUP BY ts.bucket
+        ORDER BY ts.bucket DESC
+      `;
+      
+      // Query 5: DLQ top errors
+      const dlqErrorsQuery = `
+        SELECT 
+          error_message,
+          COUNT(*) as count
+        FROM queen.dead_letter_queue dlq
+        LEFT JOIN queen.partitions p ON p.id = dlq.partition_id
+        LEFT JOIN queen.queues q ON q.id = p.queue_id
+        WHERE dlq.failed_at >= $1 AND dlq.failed_at <= $2
+          AND (dlq.consumer_group IS NULL OR dlq.consumer_group = '__QUEUE_MODE__')
+          ${filterInfo.whereClause}
+        GROUP BY error_message
+        ORDER BY count DESC
+        LIMIT 10
+      `;
+      
+      // Execute all queries in parallel
+      const [throughputResult, latencyResult, topQueuesResult, dlqResult, dlqErrorsResult] = await Promise.all([
+        pool.query(throughputQuery, filterInfo.params),
+        pool.query(latencyQuery, filterInfo.params),
+        pool.query(topQueuesQuery, filterInfo.params),
+        pool.query(dlqQuery, filterInfo.params),
+        pool.query(dlqErrorsQuery, filterInfo.params)
+      ]);
+      
+      // Calculate seconds per bucket for rate calculations
+      const secondsPerBucket = interval === 'minute' ? 60 : interval === 'hour' ? 3600 : 86400;
+      
+      // Format throughput data
+      const throughputTimeSeries = throughputResult.rows.map(row => ({
+        timestamp: row.timestamp,
+        ingested: parseInt(row.ingested || 0),
+        processed: parseInt(row.processed || 0),
+        failed: parseInt(row.failed || 0),
+        ingestedPerSecond: parseFloat((parseInt(row.ingested || 0) / secondsPerBucket).toFixed(2)),
+        processedPerSecond: parseFloat((parseInt(row.processed || 0) / secondsPerBucket).toFixed(2))
+      }));
+      
+      const throughputTotals = throughputTimeSeries.reduce((acc, row) => ({
+        ingested: acc.ingested + row.ingested,
+        processed: acc.processed + row.processed,
+        failed: acc.failed + row.failed
+      }), { ingested: 0, processed: 0, failed: 0 });
+      
+      const totalSeconds = ((toDate - fromDate) / 1000);
+      throughputTotals.avgIngestedPerSecond = parseFloat((throughputTotals.ingested / totalSeconds).toFixed(2));
+      throughputTotals.avgProcessedPerSecond = parseFloat((throughputTotals.processed / totalSeconds).toFixed(2));
+      
+      // Format latency data
+      const latencyTimeSeries = latencyResult.rows
+        .filter(row => row.sample_count > 0)
+        .map(row => ({
+          timestamp: row.timestamp,
+          p50: parseFloat(row.p50 || 0),
+          p95: parseFloat(row.p95 || 0),
+          p99: parseFloat(row.p99 || 0),
+          avg: parseFloat(row.avg || 0),
+          min: parseFloat(row.min || 0),
+          max: parseFloat(row.max || 0)
+        }));
+      
+      // Calculate overall latency
+      const allSamples = latencyResult.rows.filter(row => row.sample_count > 0);
+      const latencyOverall = allSamples.length > 0 ? {
+        p50: parseFloat((allSamples.reduce((sum, row) => sum + parseFloat(row.p50 || 0), 0) / allSamples.length).toFixed(2)),
+        p95: parseFloat((allSamples.reduce((sum, row) => sum + parseFloat(row.p95 || 0), 0) / allSamples.length).toFixed(2)),
+        p99: parseFloat((allSamples.reduce((sum, row) => sum + parseFloat(row.p99 || 0), 0) / allSamples.length).toFixed(2)),
+        avg: parseFloat((allSamples.reduce((sum, row) => sum + parseFloat(row.avg || 0), 0) / allSamples.length).toFixed(2))
+      } : null;
+      
+      // Format error rates
+      const errorRatesTimeSeries = throughputTimeSeries.map(row => {
+        const total = row.processed + row.failed;
+        const rate = total > 0 ? row.failed / total : 0;
+        return {
+          timestamp: row.timestamp,
+          failed: row.failed,
+          processed: row.processed,
+          rate: parseFloat(rate.toFixed(4)),
+          ratePercent: `${(rate * 100).toFixed(2)}%`
+        };
+      });
+      
+      const errorRatesOverall = {
+        failed: throughputTotals.failed,
+        processed: throughputTotals.processed,
+        rate: throughputTotals.processed > 0 ? 
+          parseFloat((throughputTotals.failed / throughputTotals.processed).toFixed(4)) : 0
+      };
+      errorRatesOverall.ratePercent = `${(errorRatesOverall.rate * 100).toFixed(2)}%`;
+      
+      // Format top queues
+      const topQueues = topQueuesResult.rows.map(row => ({
+        name: row.name,
+        namespace: row.namespace,
+        messagesProcessed: parseInt(row.messages_processed || 0),
+        avgProcessingTime: parseFloat(row.avg_processing_time || 0),
+        errorRate: parseFloat(row.error_rate || 0)
+      }));
+      
+      // Format DLQ data
+      const dlqTimeSeries = dlqResult.rows.map(row => ({
+        timestamp: row.timestamp,
+        messages: parseInt(row.messages || 0)
+      }));
+      
+      const dlqTotal = dlqTimeSeries.reduce((sum, row) => sum + row.messages, 0);
+      const totalErrors = dlqErrorsResult.rows.reduce((sum, row) => sum + parseInt(row.count || 0), 0);
+      
+      const dlqTopErrors = dlqErrorsResult.rows.map(row => ({
+        error: row.error_message,
+        count: parseInt(row.count || 0),
+        percentage: totalErrors > 0 ? parseFloat(((parseInt(row.count || 0) / totalErrors) * 100).toFixed(1)) : 0
+      }));
+      
+      // Calculate queue depths (current state)
+      const depthQuery = `
+        SELECT 
+          COUNT(DISTINCT CASE WHEN ms.status = 'pending' THEN m.id END) as pending,
+          COUNT(DISTINCT CASE WHEN ms.status = 'processing' THEN m.id END) as processing
+        FROM queen.messages m
+        LEFT JOIN queen.partitions p ON p.id = m.partition_id
+        LEFT JOIN queen.queues q ON q.id = p.queue_id
+        LEFT JOIN queen.messages_status ms ON ms.message_id = m.id 
+          AND ms.consumer_group IS NULL
+        WHERE 1=1 ${filterInfo.whereClause}
+      `;
+      
+      const depthResult = await pool.query(depthQuery, filterInfo.params.slice(2));
+      const currentDepth = {
+        pending: parseInt(depthResult.rows[0]?.pending || 0),
+        processing: parseInt(depthResult.rows[0]?.processing || 0)
+      };
+      
+      return {
+        timeRange: {
+          from: fromDate.toISOString(),
+          to: toDate.toISOString(),
+          interval
+        },
+        throughput: {
+          timeSeries: throughputTimeSeries,
+          totals: throughputTotals
+        },
+        latency: {
+          timeSeries: latencyTimeSeries,
+          overall: latencyOverall
+        },
+        errorRates: {
+          timeSeries: errorRatesTimeSeries,
+          overall: errorRatesOverall
+        },
+        queueDepths: {
+          timeSeries: [], // Could add historical depth tracking if needed
+          current: currentDepth
+        },
+        topQueues,
+        deadLetterQueue: {
+          timeSeries: dlqTimeSeries,
+          total: dlqTotal,
+          topErrors: dlqTopErrors
+        }
+      };
+      
+    } catch (error) {
+      console.error('Error in getAnalytics:', error);
+      throw error;
+    }
+  };
+  
+  return {
+    getStatus,
+    getQueues,
+    getQueueDetail,
+    getQueueMessages,
+    getAnalytics
+  };
+};
+

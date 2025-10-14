@@ -1,437 +1,317 @@
 <template>
-  <div class="messages-view">
-    <Card class="messages-card">
-      <template #content>
-        <DataTable 
-          :value="messages" 
-          :loading="loading"
-          :paginator="true"
-          :rows="20"
-          :rowsPerPageOptions="[20, 50, 100]"
-          responsiveLayout="scroll"
-          class="dark-table-v3"
+  <AppLayout>
+    <div class="space-y-6">
+      <!-- Header -->
+      <div>
+        <button 
+          @click="$router.back()"
+          class="text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-white mb-2 inline-flex items-center"
         >
-          <template #header>
-            <div class="table-header">
-              <h2>Message Browser</h2>
-              <div class="table-actions">
-                <Select 
-                  v-model="selectedQueue" 
-                  :options="queues || []" 
-                  optionLabel="name" 
-                  optionValue="name"
-                  placeholder="Select Queue"
-                  class="queue-dropdown"
-                  @change="fetchMessages"
-                />
-                <Select 
-                  v-model="selectedStatus" 
-                  :options="statusOptions" 
-                  optionLabel="label" 
-                  optionValue="value"
-                  placeholder="Status"
-                  class="status-dropdown"
-                  @change="fetchMessages"
-                />
-                <Button 
-                  icon="pi pi-refresh" 
-                  @click="fetchMessages" 
-                  :loading="loading" 
-                  class="p-button-text"
-                  v-tooltip="'Refresh'"
-                />
+          <svg class="w-5 h-5 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 19l-7-7 7-7" />
+          </svg>
+          Back
+        </button>
+        <h1 class="text-3xl font-bold text-gray-900 dark:text-white">
+          Messages: {{ queueName }}
+        </h1>
+      </div>
+      
+      <!-- Filters -->
+      <div class="bg-white dark:bg-gray-900 rounded-lg border border-gray-200 dark:border-gray-800 p-4">
+        <div class="grid grid-cols-1 md:grid-cols-4 gap-4">
+          <!-- Status Filter -->
+          <div>
+            <label class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+              Status
+            </label>
+            <select
+              v-model="statusFilter"
+              class="w-full px-4 py-2 rounded-lg border border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-800 text-gray-900 dark:text-white focus:ring-2 focus:ring-green-500 focus:border-transparent"
+            >
+              <option value="all">All</option>
+              <option value="pending">Pending</option>
+              <option value="processing">Processing</option>
+              <option value="completed">Completed</option>
+              <option value="failed">Failed</option>
+            </select>
+          </div>
+          
+          <!-- Partition Filter -->
+          <div>
+            <label class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+              Partition
+            </label>
+            <select
+              v-model="partitionFilter"
+              class="w-full px-4 py-2 rounded-lg border border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-800 text-gray-900 dark:text-white focus:ring-2 focus:ring-green-500 focus:border-transparent"
+            >
+              <option value="all">All</option>
+              <option v-for="p in partitions" :key="p" :value="p">
+                Partition {{ p }}
+              </option>
+            </select>
+          </div>
+          
+          <!-- Limit -->
+          <div>
+            <label class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+              Limit
+            </label>
+            <select
+              v-model="limit"
+              class="w-full px-4 py-2 rounded-lg border border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-800 text-gray-900 dark:text-white focus:ring-2 focus:ring-green-500 focus:border-transparent"
+            >
+              <option :value="50">50</option>
+              <option :value="100">100</option>
+              <option :value="250">250</option>
+              <option :value="500">500</option>
+            </select>
+          </div>
+          
+          <!-- Apply Filters Button -->
+          <div class="flex items-end">
+            <button
+              @click="fetchMessages"
+              class="w-full px-4 py-2 bg-green-600 hover:bg-green-700 text-white rounded-lg transition-colors"
+            >
+              Apply Filters
+            </button>
+          </div>
+        </div>
+      </div>
+      
+      <!-- Messages Table -->
+      <LoadingState :loading="loading" :error="error" @retry="fetchMessages">
+        <div class="bg-white dark:bg-gray-900 rounded-lg border border-gray-200 dark:border-gray-800 overflow-hidden">
+          <div class="overflow-x-auto">
+            <table class="w-full">
+              <thead class="bg-gray-50 dark:bg-gray-800 border-b border-gray-200 dark:border-gray-700">
+                <tr>
+                  <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">
+                    Transaction ID
+                  </th>
+                  <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">
+                    Partition
+                  </th>
+                  <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">
+                    Status
+                  </th>
+                  <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">
+                    Created At
+                  </th>
+                  <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">
+                    Retries
+                  </th>
+                  <th class="px-6 py-3 text-right text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">
+                    Actions
+                  </th>
+                </tr>
+              </thead>
+              <tbody class="divide-y divide-gray-200 dark:divide-gray-700">
+                <tr 
+                  v-for="message in messages" 
+                  :key="message.transactionId"
+                  class="hover:bg-gray-50 dark:hover:bg-gray-800 cursor-pointer transition-colors"
+                  @click="openMessageDetail(message)"
+                >
+                  <td class="px-6 py-4 whitespace-nowrap">
+                    <div class="text-sm font-mono text-gray-900 dark:text-white">
+                      {{ truncateId(message.transactionId) }}
+                    </div>
+                  </td>
+                  <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-900 dark:text-white">
+                    {{ message.partition }}
+                  </td>
+                  <td class="px-6 py-4 whitespace-nowrap">
+                    <StatusBadge :status="message.status" />
+                  </td>
+                  <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-900 dark:text-white">
+                    {{ formatDate(message.createdAt) }}
+                  </td>
+                  <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-900 dark:text-white">
+                    {{ message.retryCount || 0 }}
+                  </td>
+                  <td class="px-6 py-4 whitespace-nowrap text-right text-sm font-medium">
+                    <button
+                      @click.stop="copyToClipboard(message.transactionId)"
+                      class="text-green-600 dark:text-green-400 hover:text-green-800 dark:hover:text-green-300"
+                    >
+                      Copy ID
+                    </button>
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+            
+            <div v-if="!messages || messages.length === 0" class="text-center py-12">
+              <p class="text-gray-500 dark:text-gray-400">No messages found</p>
+            </div>
+          </div>
+        </div>
+      </LoadingState>
+    </div>
+    
+    <!-- Message Detail Modal -->
+    <div 
+      v-if="selectedMessage"
+      class="fixed inset-0 z-50 overflow-y-auto"
+      @click.self="selectedMessage = null"
+    >
+      <div class="flex items-center justify-center min-h-screen px-4">
+        <div class="fixed inset-0 bg-gray-900/50 backdrop-blur-sm" @click="selectedMessage = null"></div>
+        
+        <div class="relative bg-white dark:bg-gray-900 rounded-lg border border-gray-200 dark:border-gray-800 max-w-3xl w-full max-h-[90vh] overflow-hidden">
+          <!-- Modal Header -->
+          <div class="flex items-center justify-between p-6 border-b border-gray-200 dark:border-gray-800">
+            <h2 class="text-xl font-semibold text-gray-900 dark:text-white">
+              Message Details
+            </h2>
+            <button
+              @click="selectedMessage = null"
+              class="text-gray-400 hover:text-gray-600 dark:hover:text-gray-300"
+            >
+              <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" />
+              </svg>
+            </button>
+          </div>
+          
+          <!-- Modal Body -->
+          <div class="p-6 overflow-y-auto max-h-[calc(90vh-140px)] space-y-4">
+            <div>
+              <label class="text-sm font-medium text-gray-600 dark:text-gray-400">Transaction ID</label>
+              <p class="mt-1 text-sm font-mono text-gray-900 dark:text-white">{{ selectedMessage.transactionId }}</p>
+            </div>
+            
+            <div v-if="selectedMessage.traceId">
+              <label class="text-sm font-medium text-gray-600 dark:text-gray-400">Trace ID</label>
+              <p class="mt-1 text-sm font-mono text-gray-900 dark:text-white">{{ selectedMessage.traceId }}</p>
+            </div>
+            
+            <div class="grid grid-cols-2 gap-4">
+              <div>
+                <label class="text-sm font-medium text-gray-600 dark:text-gray-400">Status</label>
+                <div class="mt-1">
+                  <StatusBadge :status="selectedMessage.status" />
+                </div>
+              </div>
+              
+              <div>
+                <label class="text-sm font-medium text-gray-600 dark:text-gray-400">Partition</label>
+                <p class="mt-1 text-sm text-gray-900 dark:text-white">{{ selectedMessage.partition }}</p>
               </div>
             </div>
-          </template>
-
-          <Column field="transactionId" header="Transaction ID">
-            <template #body="{ data }">
-              <span class="transaction-id">{{ data.transactionId.substring(0, 8) }}...</span>
-            </template>
-          </Column>
-          
-          <Column field="queue" header="Queue">
-            <template #body="{ data }">
-              <div class="queue-name-cell">
-                <div class="queue-icon-small">Q</div>
-                <span>{{ data.queue }}</span>
+            
+            <div class="grid grid-cols-2 gap-4">
+              <div>
+                <label class="text-sm font-medium text-gray-600 dark:text-gray-400">Created At</label>
+                <p class="mt-1 text-sm text-gray-900 dark:text-white">{{ formatDate(selectedMessage.createdAt, true) }}</p>
               </div>
-            </template>
-          </Column>
-          
-          <Column field="status" header="Status">
-            <template #body="{ data }">
-              <span :class="`status-${data.status}`">{{ data.status }}</span>
-            </template>
-          </Column>
-          
-          <Column field="created" header="Created">
-            <template #body="{ data }">
-              <span class="timestamp">{{ formatDate(data.created) }}</span>
-            </template>
-          </Column>
-          
-          <Column field="attempts" header="Attempts">
-            <template #body="{ data }">
-              <Tag :value="data.attempts || 0" :severity="getAttemptSeverity(data.attempts)" />
-            </template>
-          </Column>
-          
-          <Column header="Actions" :exportable="false">
-            <template #body="{ data }">
-              <Button 
-                icon="pi pi-eye" 
-                class="p-button-text p-button-sm action-btn"
-                @click="viewMessage(data)"
-                v-tooltip="'View Details'"
-              />
-              <Button 
-                icon="pi pi-replay" 
-                class="p-button-text p-button-sm action-btn"
-                @click="retryMessage(data)"
-                v-tooltip="'Retry'"
-                :disabled="data.status !== 'failed'"
-              />
-            </template>
-          </Column>
-        </DataTable>
-      </template>
-    </Card>
-
-    <!-- Message Detail Dialog -->
-    <Dialog 
-      v-model:visible="showDetail" 
-      :header="`Message: ${selectedMessage?.transactionId}`"
-      :style="{ width: '50vw' }"
-      :modal="true"
-      class="message-dialog"
-    >
-      <div v-if="selectedMessage" class="message-detail">
-        <div class="detail-row">
-          <span class="detail-label">Transaction ID:</span>
-          <span class="detail-value">{{ selectedMessage.transactionId }}</span>
+              
+              <div>
+                <label class="text-sm font-medium text-gray-600 dark:text-gray-400">Retry Count</label>
+                <p class="mt-1 text-sm text-gray-900 dark:text-white">{{ selectedMessage.retryCount || 0 }}</p>
+              </div>
+            </div>
+            
+            <div v-if="selectedMessage.payload">
+              <label class="text-sm font-medium text-gray-600 dark:text-gray-400">Payload</label>
+              <pre class="mt-1 p-4 bg-gray-50 dark:bg-gray-800 rounded-lg text-sm text-gray-900 dark:text-white overflow-x-auto">{{ JSON.stringify(selectedMessage.payload, null, 2) }}</pre>
+            </div>
+            
+            <div v-if="selectedMessage.error">
+              <label class="text-sm font-medium text-red-600 dark:text-red-400">Error</label>
+              <pre class="mt-1 p-4 bg-red-50 dark:bg-red-900/20 rounded-lg text-sm text-red-900 dark:text-red-300 overflow-x-auto">{{ selectedMessage.error }}</pre>
+            </div>
+          </div>
         </div>
-        <div class="detail-row">
-          <span class="detail-label">Queue:</span>
-          <span class="detail-value">{{ selectedMessage.queue }}</span>
-        </div>
-        <div class="detail-row">
-          <span class="detail-label">Status:</span>
-          <span :class="`status-${selectedMessage.status}`">{{ selectedMessage.status }}</span>
-        </div>
-        <div class="detail-row">
-          <span class="detail-label">Created:</span>
-          <span class="detail-value">{{ formatDate(selectedMessage.created) }}</span>
-        </div>
-        <div class="detail-row">
-          <span class="detail-label">Payload:</span>
-        </div>
-        <pre class="payload-viewer">{{ JSON.stringify(selectedMessage.payload, null, 2) }}</pre>
       </div>
-    </Dialog>
-  </div>
+    </div>
+  </AppLayout>
 </template>
 
 <script setup>
-import { ref, onMounted } from 'vue'
-import { useToast } from 'primevue/usetoast'
-import DataTable from 'primevue/datatable'
-import Column from 'primevue/column'
-import Button from 'primevue/button'
-import Select from 'primevue/select'
-import Tag from 'primevue/tag'
-import Card from 'primevue/card'
-import Dialog from 'primevue/dialog'
-import api from '../services/api.js'
+import { ref, computed, onMounted } from 'vue';
+import { useRoute } from 'vue-router';
+import AppLayout from '../components/layout/AppLayout.vue';
+import StatusBadge from '../components/common/StatusBadge.vue';
+import LoadingState from '../components/common/LoadingState.vue';
+import { useApi } from '../composables/useApi';
 
-const toast = useToast()
-const loading = ref(false)
-const messages = ref([])
-const queues = ref([])
-const selectedQueue = ref(null)
-const selectedStatus = ref(null)
-const selectedMessage = ref(null)
-const showDetail = ref(false)
+const route = useRoute();
+const queueName = computed(() => route.params.queueName);
 
-const statusOptions = [
-  { label: 'All', value: null },
-  { label: 'Pending', value: 'pending' },
-  { label: 'Processing', value: 'processing' },
-  { label: 'Completed', value: 'completed' },
-  { label: 'Failed', value: 'failed' },
-  { label: 'Dead Letter', value: 'dead_letter' }
-]
-
-const fetchQueues = async () => {
-  try {
-    const data = await api.getQueues()
-    queues.value = data.queues || []
-  } catch (error) {
-    console.error('Failed to fetch queues:', error)
-  }
-}
+const { loading, error, execute, client } = useApi();
+const messages = ref([]);
+const selectedMessage = ref(null);
+const statusFilter = ref('all');
+const partitionFilter = ref('all');
+const limit = ref(50);
+const partitions = ref([0, 1, 2, 3]); // Default partitions
 
 const fetchMessages = async () => {
   try {
-    loading.value = true
+    const params = {
+      limit: limit.value
+    };
     
-    // Build API parameters
-    const params = {}
-    if (selectedQueue.value) {
-      params.queue = selectedQueue.value
-    }
-    if (selectedStatus.value) {
-      params.status = selectedStatus.value
+    if (statusFilter.value !== 'all') {
+      params.status = statusFilter.value;
     }
     
-    // Fetch real messages from API
-    const data = await api.getMessages(params)
-    
-    if (data && Array.isArray(data.messages)) {
-      // Process real API data
-      messages.value = data.messages.map(message => ({
-        transactionId: message.transactionId || message.id,
-        queue: message.queue,
-        status: message.status,
-        created: message.createdAt || message.created,
-        attempts: message.attempts || message.retryCount || 0,
-        payload: message.payload || message.data || {}
-      }))
-    } else if (data && Array.isArray(data)) {
-      // Handle if API returns array directly
-      messages.value = data.map(message => ({
-        transactionId: message.transactionId || message.id,
-        queue: message.queue,
-        status: message.status,
-        created: message.createdAt || message.created,
-        attempts: message.attempts || message.retryCount || 0,
-        payload: message.payload || message.data || {}
-      }))
-    } else {
-      // No data available
-      messages.value = []
+    if (partitionFilter.value !== 'all') {
+      params.partition = partitionFilter.value;
     }
     
-  } catch (error) {
-    console.error('Failed to fetch messages:', error)
-    toast.add({
-      severity: 'error',
-      summary: 'Error',
-      detail: 'Failed to load messages',
-      life: 3000
-    })
-    
-    // Show empty state on error
-    messages.value = []
-  } finally {
-    loading.value = false
+    const result = await execute(client.getQueueMessages.bind(client), queueName.value, params);
+    messages.value = result.messages || [];
+  } catch (err) {
+    console.error('Failed to fetch messages:', err);
   }
-}
+};
 
-const viewMessage = (message) => {
-  selectedMessage.value = message
-  showDetail.value = true
-}
+const openMessageDetail = (message) => {
+  selectedMessage.value = message;
+};
 
-const retryMessage = async (message) => {
+const truncateId = (id) => {
+  if (!id) return '';
+  return id.length > 16 ? `${id.substring(0, 16)}...` : id;
+};
+
+const formatDate = (dateStr, full = false) => {
+  if (!dateStr) return 'N/A';
+  
+  const date = new Date(dateStr);
+  if (full) {
+    return date.toLocaleString();
+  }
+  
+  const now = new Date();
+  const diff = now - date;
+  const seconds = Math.floor(diff / 1000);
+  const minutes = Math.floor(seconds / 60);
+  const hours = Math.floor(minutes / 60);
+  const days = Math.floor(hours / 24);
+  
+  if (days > 0) return `${days}d ago`;
+  if (hours > 0) return `${hours}h ago`;
+  if (minutes > 0) return `${minutes}m ago`;
+  return `${seconds}s ago`;
+};
+
+const copyToClipboard = async (text) => {
   try {
-    // API call to retry message
-    toast.add({
-      severity: 'success',
-      summary: 'Success',
-      detail: 'Message queued for retry',
-      life: 3000
-    })
-  } catch (error) {
-    toast.add({
-      severity: 'error',
-      summary: 'Error',
-      detail: 'Failed to retry message',
-      life: 3000
-    })
+    await navigator.clipboard.writeText(text);
+    // Could show a toast notification here
+  } catch (err) {
+    console.error('Failed to copy:', err);
   }
-}
-
-const formatDate = (dateString) => {
-  if (!dateString) return '-'
-  const date = new Date(dateString)
-  return date.toLocaleString()
-}
-
-const getAttemptSeverity = (attempts) => {
-  if (!attempts || attempts === 0) return 'success'
-  if (attempts <= 2) return 'warning'
-  return 'danger'
-}
+};
 
 onMounted(() => {
-  fetchQueues()
-  fetchMessages()
-})
+  fetchMessages();
+});
 </script>
 
-<style scoped>
-.messages-view {
-  padding: 0;
-}
-
-.messages-card {
-  background: transparent !important;
-  border: 1px solid rgba(255, 255, 255, 0.1);
-  border-radius: 16px;
-  box-shadow: none !important;
-}
-
-:deep(.p-card-content) {
-  padding: 0;
-}
-
-.table-header {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  padding: 1.5rem;
-  border-bottom: 1px solid rgba(255, 255, 255, 0.1);
-}
-
-.table-header h2 {
-  font-size: 1.25rem;
-  font-weight: 600;
-  color: var(--surface-700);
-  margin: 0;
-}
-
-.table-actions {
-  display: flex;
-  gap: 1rem;
-  align-items: center;
-}
-
-.queue-dropdown,
-.status-dropdown {
-  min-width: 150px;
-}
-
-:deep(.queue-dropdown .p-dropdown),
-:deep(.status-dropdown .p-dropdown) {
-  background: rgba(255, 255, 255, 0.05);
-  border: 1px solid rgba(255, 255, 255, 0.1);
-}
-
-.transaction-id {
-  font-family: 'Courier New', monospace;
-  font-size: 0.875rem;
-  color: var(--primary-500);
-}
-
-.queue-name-cell {
-  display: flex;
-  align-items: center;
-  gap: 0.5rem;
-}
-
-.queue-icon-small {
-  width: 24px;
-  height: 24px;
-  border-radius: 6px;
-  background: linear-gradient(135deg, #ec4899 0%, #db2777 100%);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  color: white;
-  font-weight: 600;
-  font-size: 0.75rem;
-}
-
-.timestamp {
-  color: var(--surface-500);
-  font-size: 0.875rem;
-}
-
-.action-btn {
-  color: var(--surface-500) !important;
-}
-
-.action-btn:hover {
-  background: rgba(236, 72, 153, 0.1) !important;
-  color: var(--primary-500) !important;
-}
-
-/* Message Detail Dialog */
-.message-dialog :deep(.p-dialog) {
-  background: var(--surface-50);
-  border: 1px solid rgba(255, 255, 255, 0.1);
-}
-
-.message-dialog :deep(.p-dialog-header) {
-  background: var(--surface-0);
-  border-bottom: 1px solid rgba(255, 255, 255, 0.1);
-}
-
-.message-detail {
-  padding: 1rem;
-}
-
-.detail-row {
-  display: flex;
-  align-items: center;
-  gap: 1rem;
-  margin-bottom: 1rem;
-}
-
-.detail-label {
-  font-weight: 600;
-  color: var(--surface-400);
-  min-width: 120px;
-}
-
-.detail-value {
-  color: var(--surface-600);
-}
-
-.payload-viewer {
-  background: var(--surface-0);
-  border: 1px solid rgba(255, 255, 255, 0.1);
-  border-radius: 8px;
-  padding: 1rem;
-  color: var(--surface-600);
-  font-family: 'Courier New', monospace;
-  font-size: 0.875rem;
-  overflow-x: auto;
-}
-
-/* DataTable dark theme overrides */
-:deep(.dark-table-v3) {
-  background: transparent !important;
-  border: none !important;
-}
-
-:deep(.dark-table-v3 .p-datatable-header) {
-  background: transparent !important;
-  border: none !important;
-}
-
-:deep(.dark-table-v3 .p-datatable-thead > tr > th) {
-  background: transparent !important;
-  color: var(--surface-400) !important;
-  border-color: rgba(255, 255, 255, 0.1) !important;
-}
-
-:deep(.dark-table-v3 .p-datatable-tbody > tr) {
-  background: transparent !important;
-}
-
-:deep(.dark-table-v3 .p-datatable-tbody > tr:hover) {
-  background: rgba(236, 72, 153, 0.05) !important;
-}
-
-:deep(.dark-table-v3 .p-datatable-tbody > tr > td) {
-  color: var(--surface-600) !important;
-  border-color: rgba(255, 255, 255, 0.05) !important;
-}
-
-:deep(.p-paginator) {
-  background: transparent !important;
-  border-top: 1px solid rgba(255, 255, 255, 0.1) !important;
-}
-</style>

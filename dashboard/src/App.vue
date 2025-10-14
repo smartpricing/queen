@@ -1,29 +1,17 @@
 <template>
-  <div id="app">
-    <Toast />
-    <ConfirmDialog />
-    <AppLayout />
+  <div class="min-h-screen bg-gray-50 dark:bg-gray-950">
+    <router-view />
   </div>
 </template>
 
 <script setup>
-import Toast from 'primevue/toast'
-import ConfirmDialog from 'primevue/confirmdialog'
-import AppLayout from './components/layout/AppLayout.vue'
-import { onMounted, onUnmounted } from 'vue'
-import websocket from './services/websocket.js'
+import { onMounted } from 'vue';
+import { useColorMode } from './composables/useColorMode';
 
-// Connect to WebSocket on app mount
+const { initColorMode } = useColorMode();
+
 onMounted(() => {
-  websocket.connect()
-})
-
-// Disconnect from WebSocket on app unmount
-onUnmounted(() => {
-  websocket.disconnect()
-})
+  initColorMode();
+});
 </script>
 
-<style>
-/* Remove default Vite styles */
-</style>

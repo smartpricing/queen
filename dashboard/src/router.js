@@ -1,54 +1,47 @@
-import { createRouter, createWebHistory } from 'vue-router'
-
-// Lazy load views for better performance
-const Dashboard = () => import('./views/Dashboard.vue')
-const Queues = () => import('./views/Queues.vue')
-const QueueDetail = () => import('./views/QueueDetail.vue')
-const Analytics = () => import('./views/Analytics.vue')
-const Messages = () => import('./views/Messages.vue')
+import { createRouter, createWebHistory } from 'vue-router';
 
 const routes = [
   {
     path: '/',
-    name: 'dashboard',
-    component: Dashboard,
+    component: () => import('./views/Dashboard.vue'),
     meta: { title: 'Dashboard' }
   },
   {
     path: '/queues',
-    name: 'queues',
-    component: Queues,
+    component: () => import('./views/Queues.vue'),
     meta: { title: 'Queues' }
   },
   {
-    path: '/queues/:name',
-    name: 'queue-detail',
-    component: QueueDetail,
+    path: '/queues/:queueName',
+    component: () => import('./views/QueueDetail.vue'),
     meta: { title: 'Queue Detail' }
   },
   {
+    path: '/queues/:queueName/messages',
+    component: () => import('./views/Messages.vue'),
+    meta: { title: 'Messages' }
+  },
+  {
     path: '/analytics',
-    name: 'analytics',
-    component: Analytics,
+    component: () => import('./views/Analytics.vue'),
     meta: { title: 'Analytics' }
   },
   {
-    path: '/messages',
-    name: 'messages',
-    component: Messages,
-    meta: { title: 'Messages' }
-  },
-]
+    path: '/settings',
+    component: () => import('./views/Settings.vue'),
+    meta: { title: 'Settings' }
+  }
+];
 
 const router = createRouter({
-  history: createWebHistory('/dashboard/'),
+  history: createWebHistory(),
   routes
-})
+});
 
-// Update page title on route change
 router.beforeEach((to, from, next) => {
-  document.title = `${to.meta.title || 'Queen'} - Queen Dashboard`
-  next()
-})
+  document.title = `${to.meta.title || 'Queen'} - Queen Dashboard`;
+  next();
+});
 
-export default router
+export default router;
+

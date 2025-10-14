@@ -1,912 +1,652 @@
 <template>
-  <div class="analytics-view">
-    <!-- Date/Time Filter Bar -->
-    <div class="filter-bar">
-      <div class="filter-group">
-        <label>Time Range:</label>
-        <Select 
-          v-model="selectedTimeRange" 
-          :options="timeRangeOptions" 
-          optionLabel="label" 
-          optionValue="value"
-          placeholder="Select time range"
-          @change="onTimeRangeChange"
-        />
-      </div>
-      <div class="filter-group" v-if="selectedTimeRange === 'custom'">
-        <label>From:</label>
-        <Calendar 
-          v-model="fromDateTime" 
-          showTime 
-          :showIcon="true"
-          dateFormat="yy-mm-dd"
-          placeholder="Start date/time"
-        />
-      </div>
-      <div class="filter-group" v-if="selectedTimeRange === 'custom'">
-        <label>To:</label>
-        <Calendar 
-          v-model="toDateTime" 
-          showTime 
-          :showIcon="true"
-          dateFormat="yy-mm-dd"
-          placeholder="End date/time"
-        />
-      </div>
-      <div class="filter-group">
-        <label>Queue:</label>
-        <Select 
-          v-model="selectedQueue" 
-          :options="queueOptions || []" 
-          optionLabel="label" 
-          optionValue="value"
-          placeholder="All queues"
-          :showClear="true"
-          @change="fetchAnalytics"
-        />
-      </div>
-      <div class="filter-group">
-        <label>Namespace:</label>
-        <Select 
-          v-model="selectedNamespace" 
-          :options="namespaceOptions || []" 
-          optionLabel="label" 
-          optionValue="value"
-          placeholder="All namespaces"
-          :showClear="true"
-          @change="fetchAnalytics"
-        />
-      </div>
-      <div class="filter-group">
-        <Button 
-          label="Apply Filters" 
-          icon="pi pi-filter"
-          @click="fetchAnalytics"
-          :loading="loading"
-        />
-      </div>
-    </div>
-    <div class="analytics-grid">
-      <div class="chart-container">
-        <div class="chart-header">
-          <h3 class="chart-title">System Throughput (Last Hour)</h3>
-          <div class="chart-actions">
-            <div class="realtime-indicator" v-tooltip="'Real-time updates via WebSocket'">
-              <i class="pi pi-circle-fill realtime-dot"></i>
-              <span class="realtime-text">Live</span>
+  <AppLayout>
+    <div class="space-y-6">
+      <!-- Filters -->
+      <div class="bg-white dark:bg-gray-900 rounded-lg border border-gray-200 dark:border-gray-800 p-4">
+        <div class="space-y-4">
+          <!-- Row 1: Time Range and Auto-refresh -->
+          <div class="flex flex-wrap items-center gap-4">
+            <!-- Time Range Quick Select -->
+            <div class="flex items-center space-x-2">
+              <label class="text-sm font-medium text-gray-700 dark:text-gray-300">
+                Time Range:
+              </label>
+              <div class="flex rounded-lg border border-gray-300 dark:border-gray-700 overflow-hidden">
+                <button
+                  v-for="range in timeRanges"
+                  :key="range.value"
+                  @click="selectedTimeRange = range.value; fetchAnalytics()"
+                  :class="[
+                    'px-4 py-2 text-sm font-medium transition-colors',
+                    selectedTimeRange === range.value
+                      ? 'bg-green-600 text-white'
+                      : 'bg-white dark:bg-gray-800 text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-700'
+                  ]"
+                >
+                  {{ range.label }}
+                </button>
+              </div>
             </div>
-            <Button 
-              icon="pi pi-refresh" 
-              class="p-button-text p-button-sm"
+            
+            <!-- Auto-refresh Toggle -->
+            <div class="flex items-center space-x-2">
+              <label class="text-sm font-medium text-gray-700 dark:text-gray-300">
+                Auto-refresh:
+              </label>
+              <button
+                @click="toggleAutoRefresh"
+                :class="[
+                  'relative inline-flex h-6 w-11 items-center rounded-full transition-colors',
+                  autoRefresh ? 'bg-green-600' : 'bg-gray-200 dark:bg-gray-700'
+                ]"
+              >
+                <span
+                  :class="[
+                    'inline-block h-4 w-4 transform rounded-full bg-white transition-transform',
+                    autoRefresh ? 'translate-x-6' : 'translate-x-1'
+                  ]"
+                />
+              </button>
+            </div>
+            
+            <!-- Manual Refresh -->
+            <button
               @click="fetchAnalytics"
-              :loading="loading"
-              v-tooltip="'Refresh'"
-            />
+              :disabled="loading"
+              class="px-4 py-2 bg-green-600 hover:bg-green-700 text-white rounded-lg text-sm font-medium transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              {{ loading ? 'Loading...' : 'Refresh' }}
+            </button>
+          </div>
+          
+          <!-- Row 2: Resource Filters -->
+          <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+            <!-- Namespace Filter -->
+            <div>
+              <label class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+                Namespace
+              </label>
+              <select
+                v-model="namespaceFilter"
+                @change="queueFilter = ''; fetchAnalytics()"
+                class="w-full px-4 py-2 rounded-lg border border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-800 text-gray-900 dark:text-white focus:ring-2 focus:ring-green-500 focus:border-transparent"
+              >
+                <option value="">All namespaces</option>
+                <option v-for="ns in availableNamespaces" :key="ns" :value="ns">
+                  {{ ns }}
+                </option>
+              </select>
+            </div>
+            
+            <!-- Queue Filter -->
+            <div>
+              <label class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+                Queue
+              </label>
+              <select
+                v-model="queueFilter"
+                @change="fetchAnalytics"
+                class="w-full px-4 py-2 rounded-lg border border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-800 text-gray-900 dark:text-white focus:ring-2 focus:ring-green-500 focus:border-transparent"
+              >
+                <option value="">All queues</option>
+                <option v-for="queue in availableQueues" :key="queue" :value="queue">
+                  {{ queue }}
+                </option>
+              </select>
+            </div>
+            
+            <!-- Task Filter -->
+            <div>
+              <label class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+                Task
+              </label>
+              <select
+                v-model="taskFilter"
+                @change="fetchAnalytics"
+                class="w-full px-4 py-2 rounded-lg border border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-800 text-gray-900 dark:text-white focus:ring-2 focus:ring-green-500 focus:border-transparent"
+              >
+                <option value="">All tasks</option>
+                <option v-for="task in availableTasks" :key="task" :value="task">
+                  {{ task }}
+                </option>
+              </select>
+            </div>
+          </div>
+          
+          <!-- Active Filters Display -->
+          <div v-if="hasActiveFilters" class="flex flex-wrap gap-2">
+            <span class="text-sm text-gray-600 dark:text-gray-400">Active filters:</span>
+            <span v-if="namespaceFilter" class="inline-flex items-center px-3 py-1 rounded-full text-sm bg-green-100 dark:bg-green-900/30 text-green-800 dark:text-green-300">
+              Namespace: {{ namespaceFilter }}
+              <button @click="namespaceFilter = ''; fetchAnalytics()" class="ml-2 hover:text-green-900 dark:hover:text-green-200">
+                <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" />
+                </svg>
+              </button>
+            </span>
+            <span v-if="queueFilter" class="inline-flex items-center px-3 py-1 rounded-full text-sm bg-green-100 dark:bg-green-900/30 text-green-800 dark:text-green-300">
+              Queue: {{ queueFilter }}
+              <button @click="queueFilter = ''; fetchAnalytics()" class="ml-2 hover:text-green-900 dark:hover:text-green-200">
+                <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" />
+                </svg>
+              </button>
+            </span>
+            <span v-if="taskFilter" class="inline-flex items-center px-3 py-1 rounded-full text-sm bg-green-100 dark:bg-green-900/30 text-green-800 dark:text-green-300">
+              Task: {{ taskFilter }}
+              <button @click="taskFilter = ''; fetchAnalytics()" class="ml-2 hover:text-green-900 dark:hover:text-green-200">
+                <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" />
+                </svg>
+              </button>
+            </span>
+            <button
+              @click="clearFilters"
+              class="text-sm text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-white"
+            >
+              Clear all
+            </button>
           </div>
         </div>
-        <ThroughputChart :data="throughputData" :loading="loading" />
       </div>
-
-      <div class="card-v3">
-        <h3 class="card-title">Queue Performance</h3>
-        <DataTable :value="queueStats" :loading="loading" size="small" class="dark-table-v3">
-          <Column field="queue" header="Queue" />
-          <Column field="throughput" header="Throughput">
-            <template #body="{ data }">
-              <span class="metric-value">{{ data.throughput }} msg/min</span>
-            </template>
-          </Column>
-          <Column field="successRate" header="Success Rate">
-            <template #body="{ data }">
-              <Tag :value="`${data.successRate}%`" :severity="getSuccessRateSeverity(data.successRate)" />
-            </template>
-          </Column>
-        </DataTable>
+      
+      <LoadingState :loading="loading" :error="error" @retry="fetchAnalytics">
+        <div class="space-y-6">
+          <!-- Summary Cards -->
+        <div class="grid grid-cols-1 md:grid-cols-4 gap-6">
+          <MetricCard
+            title="Total Throughput"
+            :value="(data?.totalThroughput || 0)"
+            unit="msg/s"
+            icon-color="blue"
+          />
+          
+          <MetricCard
+            title="Avg Latency"
+            :value="(data?.avgLatency || 0)"
+            unit="ms"
+            icon-color="green"
+          />
+          
+          <MetricCard
+            title="Error Rate"
+            :value="(data?.errorRate || 0)"
+            unit="%"
+            icon-color="red"
+          />
+          
+          <MetricCard
+            title="Active Queues"
+            :value="(data?.activeQueues || 0)"
+            icon-color="purple"
+          />
+        </div>
+        
+        <!-- Throughput Chart -->
+        <div class="bg-white dark:bg-gray-900 rounded-lg border border-gray-200 dark:border-gray-800 p-6">
+          <h2 class="text-lg font-semibold text-gray-900 dark:text-white mb-4">
+            Message Throughput Over Time
+          </h2>
+          <div class="h-80">
+            <Bar v-if="throughputChartData" :data="throughputChartData" :options="chartOptions" />
+          </div>
+        </div>
+        
+        <!-- Two Column Layout -->
+        <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
+          <!-- Error Distribution -->
+          <div class="bg-white dark:bg-gray-900 rounded-lg border border-gray-200 dark:border-gray-800 p-6">
+            <h2 class="text-lg font-semibold text-gray-900 dark:text-white mb-4">
+              Error Distribution
+            </h2>
+            <div class="h-64">
+              <Bar v-if="errorChartData" :data="errorChartData" :options="chartOptions" />
+            </div>
+          </div>
+          
+          <!-- Top Queues by Volume -->
+          <div class="bg-white dark:bg-gray-900 rounded-lg border border-gray-200 dark:border-gray-800 p-6">
+            <h2 class="text-lg font-semibold text-gray-900 dark:text-white mb-4">
+              Top Queues by Volume
+            </h2>
+            <div class="space-y-3">
+              <div 
+                v-for="(queue, index) in topQueues" 
+                :key="queue.name"
+                class="flex items-center justify-between p-3 rounded-lg hover:bg-gray-50 dark:hover:bg-gray-800 cursor-pointer transition-colors"
+                @click="$router.push(`/queues/${queue.name}`)"
+              >
+                <div class="flex items-center space-x-3">
+                  <span class="text-2xl font-bold text-gray-400 dark:text-gray-600">
+                    {{ index + 1 }}
+                  </span>
+                  <div>
+                    <div class="font-medium text-gray-900 dark:text-white">
+                      {{ queue.name }}
+                    </div>
+                    <div class="text-sm text-gray-500 dark:text-gray-400">
+                      {{ queue.namespace || 'default' }}
+                    </div>
+                  </div>
+                </div>
+                <div class="text-right">
+                  <div class="text-sm font-medium text-gray-900 dark:text-white">
+                    {{ (queue.messagesProcessed || 0).toLocaleString() }}
+                  </div>
+                  <div class="text-xs text-gray-500 dark:text-gray-400">
+                    processed
+                  </div>
+                </div>
+              </div>
+              
+              <div v-if="!topQueues || topQueues.length === 0" class="text-center py-8 text-gray-500 dark:text-gray-400">
+                No data available
+              </div>
+            </div>
+          </div>
+        </div>
+        
+        <!-- Latency Percentiles Chart -->
+        <div class="bg-white dark:bg-gray-900 rounded-lg border border-gray-200 dark:border-gray-800 p-6">
+          <h2 class="text-lg font-semibold text-gray-900 dark:text-white mb-4">
+            Processing Latency Percentiles
+          </h2>
+          <div class="h-64">
+            <Bar v-if="latencyChartData" :data="latencyChartData" :options="chartOptions" />
+          </div>
+        </div>
+        
+        <!-- System Performance Table -->
+        <div class="bg-white dark:bg-gray-900 rounded-lg border border-gray-200 dark:border-gray-800 p-6">
+          <h2 class="text-lg font-semibold text-gray-900 dark:text-white mb-4">
+            System Performance Metrics
+          </h2>
+          <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
+            <div class="p-4 bg-gray-50 dark:bg-gray-800 rounded-lg">
+              <div class="text-sm text-gray-600 dark:text-gray-400">Messages Ingested</div>
+              <div class="mt-2 text-2xl font-semibold text-gray-900 dark:text-white">
+                {{ (data?.messagesIngested || 0).toLocaleString() }}
+              </div>
+            </div>
+            
+            <div class="p-4 bg-gray-50 dark:bg-gray-800 rounded-lg">
+              <div class="text-sm text-gray-600 dark:text-gray-400">Messages Processed</div>
+              <div class="mt-2 text-2xl font-semibold text-gray-900 dark:text-white">
+                {{ (data?.messagesProcessed || 0).toLocaleString() }}
+              </div>
+            </div>
+            
+            <div class="p-4 bg-gray-50 dark:bg-gray-800 rounded-lg">
+              <div class="text-sm text-gray-600 dark:text-gray-400">Messages Failed</div>
+              <div class="mt-2 text-2xl font-semibold text-red-600 dark:text-red-400">
+                {{ (data?.messagesFailed || 0).toLocaleString() }}
+              </div>
+            </div>
+            
+            <div class="p-4 bg-gray-50 dark:bg-gray-800 rounded-lg">
+              <div class="text-sm text-gray-600 dark:text-gray-400">Success Rate</div>
+              <div class="mt-2 text-2xl font-semibold text-green-600 dark:text-green-400">
+                {{ data?.successRate || 0 }}%
+              </div>
+            </div>
+          </div>
+        </div>
       </div>
-
-      <!-- Queue Lag Analysis -->
-      <div class="lag-chart-wrapper full-width">
-        <QueueLagChart />
-      </div>
+      </LoadingState>
     </div>
-  </div>
+  </AppLayout>
 </template>
 
 <script setup>
-import { ref, onMounted, onUnmounted } from 'vue'
-import { useToast } from 'primevue/usetoast'
-import DataTable from 'primevue/datatable'
-import Column from 'primevue/column'
-import Button from 'primevue/button'
-import Tag from 'primevue/tag'
-import Select from 'primevue/select'
-import Calendar from 'primevue/calendar'
-import ThroughputChart from '../components/charts/ThroughputChart.vue'
-import QueueLagChart from '../components/charts/QueueLagChart.vue'
-import api from '../services/api.js'
-import websocket from '../services/websocket.js'
+import { ref, computed, onMounted, onUnmounted } from 'vue';
+import { Bar } from 'vue-chartjs';
+import { Chart as ChartJS, CategoryScale, LinearScale, BarElement, Title, Tooltip, Legend } from 'chart.js';
+import AppLayout from '../components/layout/AppLayout.vue';
+import MetricCard from '../components/common/MetricCard.vue';
+import LoadingState from '../components/common/LoadingState.vue';
+import { useApi } from '../composables/useApi';
+import { usePolling } from '../composables/usePolling';
 
-const toast = useToast()
-const loading = ref(false)
+ChartJS.register(CategoryScale, LinearScale, BarElement, Title, Tooltip, Legend);
 
-// Filter state
-const selectedTimeRange = ref('1h')
-const fromDateTime = ref(null)
-const toDateTime = ref(null)
-const selectedQueue = ref(null)
-const selectedNamespace = ref(null)
-const selectedTask = ref(null)
+const { loading, error, execute, client } = useApi();
+const data = ref(null);
+const allQueues = ref([]);
+const selectedTimeRange = ref('24h');
+const autoRefresh = ref(false);
+const namespaceFilter = ref('');
+const queueFilter = ref('');
+const taskFilter = ref('');
 
-// Filter options
-const timeRangeOptions = ref([
-  { label: 'Last Hour', value: '1h' },
-  { label: 'Last 6 Hours', value: '6h' },
-  { label: 'Last 24 Hours', value: '24h' },
-  { label: 'Last 7 Days', value: '7d' },
-  { label: 'Last 30 Days', value: '30d' },
-  { label: 'Custom Range', value: 'custom' }
-])
+const timeRanges = [
+  { label: '1h', value: '1h' },
+  { label: '6h', value: '6h' },
+  { label: '24h', value: '24h' },
+  { label: '7d', value: '7d' },
+  { label: '30d', value: '30d' }
+];
 
-const queueOptions = ref([])
-const namespaceOptions = ref([])
-
-// Data
-const throughputData = ref({
-  labels: [],
-  datasets: []
-})
-const queueStats = ref([])
-const systemMetrics = ref({})
-const topQueues = ref([])
-const errorSummary = ref([])
-
-// Real-time data tracking
-const realtimeMetrics = ref({
-  currentMinuteIncoming: 0,
-  currentMinuteCompleted: 0,
-  currentMinuteFailed: 0,
-  currentMinuteDeadLetter: 0,
-  lastMinuteTimestamp: null
-})
-
-// Queue depth cache for smooth updates
-const queueDepthCache = ref(new Map())
-
-// Smooth update functions
-const updateThroughputDataPoint = (timestamp, incoming = 0, completed = 0, failed = 0, deadLetter = 0) => {
-  const currentData = throughputData.value
-  if (!currentData.labels || currentData.labels.length === 0) return
-  
-  const timeLabel = new Date(timestamp).toLocaleTimeString('en-US', { 
-    hour: 'numeric', 
-    minute: '2-digit' 
-  })
-  
-  // Add new data point and remove oldest if we have more than 60 points
-  currentData.labels.push(timeLabel)
-  currentData.datasets[0].data.push(incoming)
-  currentData.datasets[1].data.push(completed)
-  currentData.datasets[2].data.push(failed)
-  currentData.datasets[3].data.push(deadLetter)
-  
-  // Keep only last 60 data points for smooth scrolling
-  if (currentData.labels.length > 60) {
-    currentData.labels.shift()
-    currentData.datasets.forEach(dataset => dataset.data.shift())
-  }
-  
-  // Trigger reactivity
-  throughputData.value = { ...currentData }
-}
-
-const smoothUpdateQueueStats = (queueName, newStats) => {
-  const currentStats = queueStats.value
-  const existingIndex = currentStats.findIndex(q => q.queue === queueName)
-  
-  if (existingIndex >= 0) {
-    // Smooth transition for existing queue
-    const existing = currentStats[existingIndex]
-    const updated = {
-      ...existing,
-      throughput: Math.round(newStats.completed / 60),
-      successRate: newStats.total > 0 ? ((newStats.completed / newStats.total) * 100).toFixed(1) : existing.successRate
+// Get unique namespaces from queues
+const availableNamespaces = computed(() => {
+  const namespaces = new Set();
+  allQueues.value.forEach(q => {
+    if (q.namespace) {
+      namespaces.add(q.namespace);
     }
-    
-    // Only update if values actually changed to avoid unnecessary re-renders
-    if (updated.throughput !== existing.throughput || updated.successRate !== existing.successRate) {
-      currentStats[existingIndex] = updated
-      queueStats.value = [...currentStats]
+  });
+  return Array.from(namespaces).sort();
+});
+
+// Get unique tasks from queues
+const availableTasks = computed(() => {
+  const tasks = new Set();
+  allQueues.value.forEach(q => {
+    if (q.task) {
+      tasks.add(q.task);
     }
-  } else if (newStats.total > 0) {
-    // Add new queue
-    currentStats.push({
-      queue: queueName,
-      throughput: Math.round(newStats.completed / 60),
-      successRate: newStats.total > 0 ? ((newStats.completed / newStats.total) * 100).toFixed(1) : 100
-    })
-    queueStats.value = currentStats.sort((a, b) => b.throughput - a.throughput).slice(0, 10)
-  }
-}
+  });
+  return Array.from(tasks).sort();
+});
 
-const incrementRealtimeMetrics = (eventType) => {
-  const now = new Date()
-  const currentMinute = new Date(now.getFullYear(), now.getMonth(), now.getDate(), now.getHours(), now.getMinutes())
-  
-  // Reset counters if we've moved to a new minute
-  if (!realtimeMetrics.value.lastMinuteTimestamp || 
-      realtimeMetrics.value.lastMinuteTimestamp.getTime() !== currentMinute.getTime()) {
-    
-    // If we have data from the previous minute, add it to the chart
-    if (realtimeMetrics.value.lastMinuteTimestamp) {
-      updateThroughputDataPoint(
-        realtimeMetrics.value.lastMinuteTimestamp,
-        realtimeMetrics.value.currentMinuteIncoming,
-        realtimeMetrics.value.currentMinuteCompleted,
-        realtimeMetrics.value.currentMinuteFailed,
-        realtimeMetrics.value.currentMinuteDeadLetter
-      )
-    }
-    
-    // Reset for new minute
-    realtimeMetrics.value.currentMinuteIncoming = 0
-    realtimeMetrics.value.currentMinuteCompleted = 0
-    realtimeMetrics.value.currentMinuteFailed = 0
-    realtimeMetrics.value.currentMinuteDeadLetter = 0
-    realtimeMetrics.value.lastMinuteTimestamp = currentMinute
+// Get queue names (filtered by namespace if set)
+const availableQueues = computed(() => {
+  let queues = allQueues.value;
+  if (namespaceFilter.value) {
+    queues = queues.filter(q => q.namespace === namespaceFilter.value);
   }
-  
-  // Increment appropriate counter
-  switch (eventType) {
-    case 'message.pushed':
-      realtimeMetrics.value.currentMinuteIncoming++
-      break
-    case 'message.completed':
-      realtimeMetrics.value.currentMinuteCompleted++
-      break
-    case 'message.failed':
-      realtimeMetrics.value.currentMinuteFailed++
-      break
-    case 'message.dead_letter':
-      realtimeMetrics.value.currentMinuteDeadLetter++
-      break
-  }
-}
+  return queues.map(q => q.name).sort();
+});
 
-// WebSocket event handlers
-const handleQueueDepthUpdate = (data) => {
-  // Update queue depth cache
-  queueDepthCache.value.set(data.queue, data)
-  
-  // Calculate aggregated stats for this queue
-  const totalStats = {
-    pending: data.totalDepth || 0,
-    processing: data.totalProcessing || 0,
-    completed: 0,
-    failed: 0,
-    total: 0
-  }
-  
-  // Add partition stats if available
-  if (data.partitions) {
-    Object.values(data.partitions).forEach(partition => {
-      totalStats.completed += partition.completed || 0
-      totalStats.failed += partition.failed || 0
-      totalStats.total += (partition.depth || 0) + (partition.processing || 0) + (partition.completed || 0) + (partition.failed || 0)
-    })
-  }
-  
-  // Smooth update queue stats
-  smoothUpdateQueueStats(data.queue, totalStats)
-}
+const hasActiveFilters = computed(() => {
+  return namespaceFilter.value || queueFilter.value || taskFilter.value;
+});
 
-const handleSystemStats = (data) => {
-  // Smooth update system metrics without full replacement
-  const current = systemMetrics.value
-  systemMetrics.value = {
-    ...current,
-    connections: data.connections || current.connections || 0,
-    // Only update if significantly different to avoid jitter
-    requestRate: Math.abs((data.recentCreated || 0) - (current.requestRate || 0)) > 5 
-      ? data.recentCreated || 0 
-      : current.requestRate || 0,
-    latency: current.latency || 0, // Keep existing latency
-    errorRate: current.errorRate || 0, // Keep existing error rate
-    memory: current.memory || 0, // Keep existing memory
-    uptime: current.uptime || 0 // Keep existing uptime
-  }
-}
+const clearFilters = () => {
+  namespaceFilter.value = '';
+  queueFilter.value = '';
+  taskFilter.value = '';
+  fetchAnalytics();
+};
 
-const handleWebSocketMessage = (wsMessage) => {
-  const { event, data } = wsMessage
-  
-  switch (event) {
-    case 'queue.depth':
-      handleQueueDepthUpdate(data)
-      break
-    case 'system.stats':
-      handleSystemStats(data)
-      break
-    case 'message.pushed':
-    case 'message.completed':
-    case 'message.failed':
-    case 'message.dead_letter':
-      incrementRealtimeMetrics(event)
-      break
-  }
-}
-
-// Fetch analytics data
-const fetchAnalytics = async (silent = false) => {
+// Fetch available queues for filters
+const fetchQueuesForFilters = async () => {
   try {
-    // Only show loading indicator for initial load, not for periodic refreshes
-    if (!silent) {
-      loading.value = true
-    }
-    
-    // Build filter parameters
-    const filters = {}
-    
-    // Handle time range
-    if (selectedTimeRange.value === 'custom') {
-      if (fromDateTime.value) filters.fromDateTime = fromDateTime.value.toISOString()
-      if (toDateTime.value) filters.toDateTime = toDateTime.value.toISOString()
-    } else {
-      // Calculate from/to based on selected range
-      const now = new Date()
-      const from = new Date()
-      
-      switch (selectedTimeRange.value) {
-        case '1h':
-          from.setHours(from.getHours() - 1)
-          break
-        case '6h':
-          from.setHours(from.getHours() - 6)
-          break
-        case '24h':
-          from.setDate(from.getDate() - 1)
-          break
-        case '7d':
-          from.setDate(from.getDate() - 7)
-          break
-        case '30d':
-          from.setDate(from.getDate() - 30)
-          break
-      }
-      
-      filters.fromDateTime = from.toISOString()
-      filters.toDateTime = now.toISOString()
-    }
-    
-    // Add other filters
-    if (selectedQueue.value) filters.queue = selectedQueue.value
-    if (selectedNamespace.value) filters.namespace = selectedNamespace.value
-    if (selectedTask.value) filters.task = selectedTask.value
-    
-    // Fetch throughput data with filters
-    const throughput = await api.getThroughput(filters)
-    processThroughputData(throughput?.throughput || [])
-    
-    // Fetch real queue stats with filters
-    try {
-      const queueStatsData = await api.getQueueStats(filters)
-      if (queueStatsData && Array.isArray(queueStatsData) && queueStatsData.length > 0) {
-        // Process the array of queue-partition data and aggregate by queue
-        const queueMap = new Map()
-        
-        queueStatsData.forEach(item => {
-          const queueName = item.queue
-          const stats = item.stats
-          
-          if (!queueMap.has(queueName)) {
-            queueMap.set(queueName, {
-              queue: queueName,
-              pending: 0,
-              processing: 0,
-              completed: 0,
-              failed: 0,
-              total: 0
-            })
-          }
-          
-          const aggregated = queueMap.get(queueName)
-          aggregated.pending += stats.pending || 0
-          aggregated.processing += stats.processing || 0
-          aggregated.completed += stats.completed || 0
-          aggregated.failed += stats.failed || 0
-          aggregated.total += stats.total || 0
-        })
-        
-        // Convert to array and calculate throughput and success rate
-        queueStats.value = Array.from(queueMap.values())
-          .filter(queue => queue.total > 0) // Only show queues with activity
-          .map(queue => ({
-            queue: queue.queue,
-            throughput: Math.round(queue.completed / 60), // Rough throughput estimate (completed per minute)
-            successRate: queue.total > 0 ? ((queue.completed / queue.total) * 100).toFixed(1) : 0
-          }))
-          .sort((a, b) => b.throughput - a.throughput) // Sort by throughput descending
-          .slice(0, 10) // Limit to top 10
-      } else {
-        // Fallback: try to get queue data and calculate stats
-        const queues = await api.getQueues()
-        if (queues?.queues && queues.queues.length > 0) {
-          queueStats.value = queues.queues
-            .filter(queue => queue.stats && (queue.stats.completed > 0 || queue.stats.pending > 0))
-            .map(queue => ({
-              queue: queue.name,
-              throughput: Math.round((queue.stats.completed || 0) / 60), // Convert to per minute
-              successRate: queue.stats.total > 0 ? ((queue.stats.completed / queue.stats.total) * 100).toFixed(1) : 100
-            }))
-            .slice(0, 10) // Limit to top 10
-        } else {
-          // Final fallback to mock data
-          queueStats.value = [
-            { queue: 'email-queue', throughput: 120, successRate: 98.5 },
-            { queue: 'notification-queue', throughput: 85, successRate: 99.2 },
-            { queue: 'analytics-queue', throughput: 200, successRate: 95.8 },
-            { queue: 'payment-queue', throughput: 45, successRate: 99.9 }
-          ]
-        }
-      }
-    } catch (error) {
-      console.error('Failed to fetch queue stats:', error)
-      // Show empty state on error
-      queueStats.value = []
-    }
-    
-    // Fetch real system metrics from API
-    try {
-      const health = await api.getHealth()
-      systemMetrics.value = {
-        connections: health?.connections || 0,
-        memory: health?.memory || 0,
-        requestRate: health?.requestRate || 0,
-        latency: health?.latency || 0,
-        errorRate: health?.errorRate || 0,
-        uptime: parseInt(health?.uptime) || 0
-      }
-    } catch (error) {
-      // Use defaults if API fails
-      systemMetrics.value = {
-        connections: 0,
-        memory: 0,
-        requestRate: 0,
-        latency: 0,
-        errorRate: 0,
-        uptime: 0
-      }
-    }
-    
-    // Initialize empty arrays - no mock data
-    topQueues.value = []
-    errorSummary.value = []
-    
-  } catch (error) {
-    console.error('Failed to fetch analytics:', error)
-    toast.add({
-      severity: 'error',
-      summary: 'Error',
-      detail: 'Failed to load analytics data',
-      life: 3000
-    })
-  } finally {
-    loading.value = false
+    const result = await client.getQueues({ limit: 1000 });
+    allQueues.value = result.queues || [];
+  } catch (err) {
+    console.error('Failed to fetch queues for filters:', err);
   }
-}
+};
 
-// Process throughput data for chart
-const processThroughputData = (data) => {
-  if (!data || data.length === 0) {
-    // Only generate mock data if we don't have existing data
-    if (!throughputData.value.labels || throughputData.value.labels.length === 0) {
-      const now = new Date()
-      const mockData = []
-      for (let i = 23; i >= 0; i--) {
-        const time = new Date(now.getTime() - i * 60 * 60 * 1000)
-        mockData.push({
-          timestamp: time.toISOString(),
-          incoming: { messagesPerMinute: Math.floor(Math.random() * 200) + 100 },
-          completed: { messagesPerMinute: Math.floor(Math.random() * 180) + 80 },
-          failed: { messagesPerMinute: Math.floor(Math.random() * 20) },
-          deadLetter: { messagesPerMinute: Math.floor(Math.random() * 5) }
-        })
-      }
-      data = mockData
-    } else {
-      // Keep existing data if API returns empty
-      return
-    }
-  }
-
-  // Take last 60 data points for recent view and reverse to show chronological order (oldest to newest)
-  const recentData = data.reverse().slice(-60)
-  
-  // Only update if we have significant changes to avoid unnecessary re-renders
-  const newLabels = recentData.map(item => {
-    const date = new Date(item.timestamp)
-    return date.toLocaleTimeString('en-US', { 
-      hour: 'numeric', 
-      minute: '2-digit' 
-    })
-  })
-  
-  // Check if data has actually changed
-  const currentLabels = throughputData.value.labels || []
-  const hasChanged = newLabels.length !== currentLabels.length || 
-    newLabels[newLabels.length - 1] !== currentLabels[currentLabels.length - 1]
-  
-  if (hasChanged) {
-    throughputData.value = {
-      labels: newLabels,
-        datasets: [
-          {
-            label: 'Incoming Messages',
-            data: recentData.map(item => item.incoming?.messagesPerMinute || 0)
-          },
-          {
-            label: 'Completed Messages',
-            data: recentData.map(item => item.completed?.messagesPerMinute || 0)
-          },
-          {
-            label: 'Failed Messages',
-            data: recentData.map(item => item.failed?.messagesPerMinute || 0)
-          },
-          {
-            label: 'Dead Letter Messages',
-            data: recentData.map(item => item.deadLetter?.messagesPerMinute || 0)
-          }
-        ]
-    }
-  }
-}
-
-// Get severity for success rate
-const getSuccessRateSeverity = (rate) => {
-  if (rate >= 99) return 'success'
-  if (rate >= 95) return 'warning'
-  return 'danger'
-}
-
-// Format bytes
-const formatBytes = (bytes) => {
-  if (!bytes) return '0 B'
-  const k = 1024
-  const sizes = ['B', 'KB', 'MB', 'GB']
-  const i = Math.floor(Math.log(bytes) / Math.log(k))
-  return Math.round(bytes / Math.pow(k, i) * 100) / 100 + ' ' + sizes[i]
-}
-
-// Format uptime
-const formatUptime = (seconds) => {
-  if (!seconds) return '-'
-  const days = Math.floor(seconds / 86400)
-  const hours = Math.floor((seconds % 86400) / 3600)
-  if (days > 0) {
-    return `${days}d ${hours}h`
-  }
-  return `${hours}h`
-}
-
-let refreshInterval = null
-
-// Function to handle time range change
-const onTimeRangeChange = () => {
-  if (selectedTimeRange.value !== 'custom') {
-    fromDateTime.value = null
-    toDateTime.value = null
-    fetchAnalytics()
-  }
-}
-
-// Function to load filter options
-const loadFilterOptions = async () => {
+const fetchAnalytics = async () => {
   try {
-    const [queues, namespaces] = await Promise.all([
-      api.getQueues(),
-      api.getNamespaces()
-    ])
+    // Calculate from/to timestamps based on selected range
+    const to = new Date();
+    let from;
+    let interval = 'hour';
     
-    // Format queue options
-    if (queues?.queues && Array.isArray(queues.queues)) {
-      queueOptions.value = queues.queues.map(q => ({
-        label: q.queue || 'Unknown',
-        value: q.queue || ''
-      }))
-    } else {
-      queueOptions.value = []
+    switch (selectedTimeRange.value) {
+      case '1h':
+        from = new Date(to.getTime() - 60 * 60 * 1000);
+        interval = 'minute';
+        break;
+      case '6h':
+        from = new Date(to.getTime() - 6 * 60 * 60 * 1000);
+        interval = 'hour';
+        break;
+      case '24h':
+        from = new Date(to.getTime() - 24 * 60 * 60 * 1000);
+        interval = 'hour';
+        break;
+      case '7d':
+        from = new Date(to.getTime() - 7 * 24 * 60 * 60 * 1000);
+        interval = 'day';
+        break;
+      case '30d':
+        from = new Date(to.getTime() - 30 * 24 * 60 * 60 * 1000);
+        interval = 'day';
+        break;
+      default:
+        from = new Date(to.getTime() - 24 * 60 * 60 * 1000);
     }
     
-    // Format namespace options - handle both array and object responses
-    if (namespaces) {
-      const namespaceList = Array.isArray(namespaces) ? namespaces : (namespaces.namespaces || [])
-      if (Array.isArray(namespaceList)) {
-        namespaceOptions.value = namespaceList.map(ns => ({
-          label: ns.namespace || 'Default',
-          value: ns.namespace || ''
-        }))
-      } else {
-        namespaceOptions.value = []
-      }
-    } else {
-      namespaceOptions.value = []
+    const params = {
+      from: from.toISOString(),
+      to: to.toISOString(),
+      interval
+    };
+    
+    // Add resource filters if set
+    if (namespaceFilter.value) {
+      params.namespace = namespaceFilter.value;
     }
-  } catch (error) {
-    console.error('Failed to load filter options:', error)
-    // Ensure arrays are set even on error
-    queueOptions.value = []
-    namespaceOptions.value = []
+    if (queueFilter.value) {
+      params.queue = queueFilter.value;
+    }
+    if (taskFilter.value) {
+      params.task = taskFilter.value;
+    }
+    
+    const result = await execute(client.getAnalytics.bind(client), params);
+    
+    // Transform API response to dashboard format
+    if (result) {
+      data.value = transformAnalyticsData(result);
+    } else {
+      data.value = getEmptyAnalyticsData();
+    }
+  } catch (err) {
+    console.error('Failed to fetch analytics:', err);
+    data.value = getEmptyAnalyticsData();
   }
-}
+};
 
-onMounted(() => {
-  loadFilterOptions()
-  fetchAnalytics()
+const getEmptyAnalyticsData = () => ({
+  totalThroughput: 0,
+  avgLatency: 0,
+  errorRate: 0,
+  activeQueues: 0,
+  throughputOverTime: { labels: [], ingested: [], processed: [] },
+  errorsByType: { labels: [], counts: [] },
+  latencyPercentiles: { p50: 0, p75: 0, p90: 0, p95: 0, p99: 0 },
+  topQueues: [],
+  messagesIngested: 0,
+  messagesProcessed: 0,
+  messagesFailed: 0,
+  successRate: 0
+});
+
+const transformAnalyticsData = (apiData) => {
+  // Extract throughput time series
+  const throughputSeries = apiData.throughput?.timeSeries || [];
+  const interval = apiData.timeRange?.interval || 'hour';
   
-  // Subscribe to WebSocket events for real-time updates
-  websocket.on('message', handleWebSocketMessage)
+  const labels = throughputSeries.map(item => {
+    const date = new Date(item.timestamp);
+    if (interval === 'minute') {
+      return date.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' });
+    } else if (interval === 'hour') {
+      return date.toLocaleString('en-US', { month: 'short', day: 'numeric', hour: '2-digit' });
+    } else {
+      return date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+    }
+  }).reverse();
   
-  // Reduced polling frequency - now every 5 minutes instead of 30 seconds
-  // WebSocket handles real-time updates, polling is just for data consistency
-  refreshInterval = setInterval(() => {
-    fetchAnalytics(true) // Silent refresh to avoid loading indicators
-  }, 300000) // 5 minutes
-})
+  const ingested = throughputSeries.map(item => item.ingested || 0).reverse();
+  const processed = throughputSeries.map(item => item.processed || 0).reverse();
+  
+  // Extract latency data
+  const latencyOverall = apiData.latency?.overall || {};
+  
+  // Extract error rates
+  const errorSeries = apiData.errorRates?.timeSeries || [];
+  const failedCounts = errorSeries.map(item => item.failed || 0).reverse();
+  
+  // Calculate metrics
+  const totals = apiData.throughput?.totals || {};
+  const totalIngested = totals.ingested || 0;
+  const totalProcessed = totals.processed || 0;
+  const totalFailed = apiData.errorRates?.overall?.failed || 0;
+  const successRate = totalProcessed > 0 
+    ? ((totalProcessed / (totalProcessed + totalFailed)) * 100).toFixed(2)
+    : 0;
+  
+  return {
+    totalThroughput: totals.avgIngestedPerSecond || 0,
+    avgLatency: latencyOverall.avg || 0,
+    errorRate: parseFloat(apiData.errorRates?.overall?.ratePercent || '0'),
+    activeQueues: apiData.topQueues?.length || 0,
+    throughputOverTime: {
+      labels,
+      ingested,
+      processed
+    },
+    errorsByType: {
+      labels: labels,
+      counts: failedCounts
+    },
+    latencyPercentiles: {
+      p50: latencyOverall.p50 || 0,
+      p75: 0, // API doesn't provide p75
+      p90: 0, // API doesn't provide p90
+      p95: latencyOverall.p95 || 0,
+      p99: latencyOverall.p99 || 0
+    },
+    topQueues: apiData.topQueues || [],
+    messagesIngested: totalIngested,
+    messagesProcessed: totalProcessed,
+    messagesFailed: totalFailed,
+    successRate
+  };
+};
+
+const { startPolling, stopPolling } = usePolling(fetchAnalytics, 10000);
+
+const toggleAutoRefresh = () => {
+  autoRefresh.value = !autoRefresh.value;
+  if (autoRefresh.value) {
+    startPolling();
+  } else {
+    stopPolling();
+  }
+};
+
+const topQueues = computed(() => {
+  if (!data.value?.topQueues) return [];
+  return data.value.topQueues.slice(0, 5);
+});
+
+const throughputChartData = computed(() => {
+  const timeData = data.value?.throughputOverTime || {};
+  const labels = timeData.labels || ['No Data'];
+  const ingested = timeData.ingested || [0];
+  const processed = timeData.processed || [0];
+  
+  return {
+    labels,
+    datasets: [
+      {
+        label: 'Ingested',
+        data: ingested,
+        backgroundColor: 'rgba(59, 130, 246, 0.8)',
+        borderColor: 'rgb(59, 130, 246)',
+        borderWidth: 2
+      },
+      {
+        label: 'Processed',
+        data: processed,
+        backgroundColor: 'rgba(34, 197, 94, 0.8)',
+        borderColor: 'rgb(34, 197, 94)',
+        borderWidth: 2
+      }
+    ]
+  };
+});
+
+const errorChartData = computed(() => {
+  const errors = data.value?.errorsByType || {};
+  const labels = errors.labels || ['No Errors'];
+  const counts = errors.counts || [0];
+  
+  return {
+    labels,
+    datasets: [
+      {
+        label: 'Errors',
+        data: counts,
+        backgroundColor: 'rgba(239, 68, 68, 0.8)',
+        borderColor: 'rgb(239, 68, 68)',
+        borderWidth: 2
+      }
+    ]
+  };
+});
+
+const latencyChartData = computed(() => {
+  const latency = data.value?.latencyPercentiles || {};
+  
+  return {
+    labels: ['p50', 'p75', 'p90', 'p95', 'p99'],
+    datasets: [
+      {
+        label: 'Latency (ms)',
+        data: [
+          latency.p50 || 0,
+          latency.p75 || 0,
+          latency.p90 || 0,
+          latency.p95 || 0,
+          latency.p99 || 0
+        ],
+        backgroundColor: 'rgba(168, 85, 247, 0.8)',
+        borderColor: 'rgb(168, 85, 247)',
+        borderWidth: 2
+      }
+    ]
+  };
+});
+
+const chartOptions = {
+  responsive: true,
+  maintainAspectRatio: false,
+  plugins: {
+    legend: {
+      display: true,
+      position: 'top',
+      labels: {
+        color: 'rgba(156, 163, 175, 0.8)'
+      }
+    }
+  },
+  scales: {
+    y: {
+      beginAtZero: true,
+      grid: {
+        color: 'rgba(156, 163, 175, 0.1)'
+      },
+      ticks: {
+        color: 'rgba(156, 163, 175, 0.8)'
+      }
+    },
+    x: {
+      grid: {
+        display: false
+      },
+      ticks: {
+        color: 'rgba(156, 163, 175, 0.8)'
+      }
+    }
+  }
+};
+
+onMounted(async () => {
+  await fetchQueuesForFilters();
+  await fetchAnalytics();
+});
 
 onUnmounted(() => {
-  // Clean up WebSocket listeners
-  websocket.off('message', handleWebSocketMessage)
-  
-  if (refreshInterval) {
-    clearInterval(refreshInterval)
+  if (autoRefresh.value) {
+    stopPolling();
   }
-})
+});
 </script>
 
-<style scoped>
-.analytics-view {
-  padding: 0;
-}
-
-/* Filter Bar */
-.filter-bar {
-  display: flex;
-  gap: 1rem;
-  padding: 1rem;
-  background: linear-gradient(135deg, #1e1e2e 0%, #2a2a3e 100%);
-  border-radius: 12px;
-  margin-bottom: 1.5rem;
-  flex-wrap: wrap;
-  align-items: flex-end;
-  box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
-}
-
-.filter-group {
-  display: flex;
-  flex-direction: column;
-  gap: 0.5rem;
-  min-width: 150px;
-}
-
-.filter-group label {
-  font-size: 0.875rem;
-  color: #a0a0a0;
-  font-weight: 500;
-}
-
-.filter-group :deep(.p-select),
-.filter-group :deep(.p-calendar) {
-  background: rgba(255, 255, 255, 0.05);
-  border: 1px solid rgba(255, 255, 255, 0.1);
-  border-radius: 8px;
-}
-
-.filter-group :deep(.p-select:hover),
-.filter-group :deep(.p-calendar:hover) {
-  border-color: rgba(236, 72, 153, 0.5);
-}
-
-.filter-group :deep(.p-select-label),
-.filter-group :deep(.p-inputtext) {
-  color: #ffffff;
-}
-
-.filter-group :deep(.p-button) {
-  background: linear-gradient(135deg, #ec4899 0%, #8b5cf6 100%);
-  border: none;
-  border-radius: 8px;
-  padding: 0.75rem 1.5rem;
-  font-weight: 500;
-  transition: all 0.3s ease;
-}
-
-.filter-group :deep(.p-button:hover) {
-  transform: translateY(-2px);
-  box-shadow: 0 4px 12px rgba(236, 72, 153, 0.3);
-}
-
-.analytics-grid {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 1.5rem;
-}
-
-.card-v3 {
-  background: transparent;
-  border: 1px solid rgba(255, 255, 255, 0.1);
-  border-radius: 16px;
-  padding: 1.5rem;
-  position: relative;
-  overflow: hidden;
-}
-
-.card-title {
-  font-size: 1.125rem;
-  font-weight: 600;
-  color: var(--surface-700);
-  margin: 0 0 1.5rem 0;
-}
-
-.chart-container {
-  background: transparent;
-  border: 1px solid rgba(255, 255, 255, 0.1);
-  border-radius: 16px;
-  padding: 1.5rem;
-  height: 100%;
-  display: flex;
-  flex-direction: column;
-}
-
-.chart-header {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  margin-bottom: 1.5rem;
-}
-
-.chart-title {
-  font-size: 1.125rem;
-  font-weight: 600;
-  color: var(--surface-700);
-  margin: 0;
-}
-
-.chart-actions {
-  display: flex;
-  align-items: center;
-  gap: 1rem;
-}
-
-.realtime-indicator {
-  display: flex;
-  align-items: center;
-  gap: 0.5rem;
-  padding: 0.25rem 0.75rem;
-  background: rgba(34, 197, 94, 0.1);
-  border: 1px solid rgba(34, 197, 94, 0.2);
-  border-radius: 12px;
-  font-size: 0.75rem;
-  font-weight: 500;
-}
-
-.realtime-dot {
-  color: #22c55e;
-  font-size: 0.5rem;
-  animation: pulse 2s infinite;
-}
-
-.realtime-text {
-  color: #22c55e;
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
-}
-
-@keyframes pulse {
-  0%, 100% {
-    opacity: 1;
-  }
-  50% {
-    opacity: 0.5;
-  }
-}
-
-.system-metrics-card {
-  margin-top: 1.5rem;
-}
-
-.metrics-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
-  gap: 1.5rem;
-}
-
-.metric-item {
-  display: flex;
-  flex-direction: column;
-  gap: 0.5rem;
-}
-
-.metric-label {
-  font-size: 0.75rem;
-  color: var(--surface-400);
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
-}
-
-.metric-value {
-  font-size: 1.25rem;
-  font-weight: 600;
-  color: var(--primary-500);
-}
-
-.queue-name-cell {
-  display: flex;
-  align-items: center;
-  gap: 0.5rem;
-}
-
-.queue-icon-small {
-  width: 24px;
-  height: 24px;
-  border-radius: 6px;
-  background: linear-gradient(135deg, #ec4899 0%, #db2777 100%);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  color: white;
-  font-weight: 600;
-  font-size: 0.75rem;
-}
-
-/* DataTable dark theme overrides */
-:deep(.dark-table-v3) {
-  background: transparent !important;
-  border: none !important;
-}
-
-:deep(.dark-table-v3 .p-datatable-thead > tr > th) {
-  background: transparent !important;
-  color: var(--surface-400) !important;
-  border-color: rgba(255, 255, 255, 0.1) !important;
-  padding: 0.75rem;
-}
-
-:deep(.dark-table-v3 .p-datatable-tbody > tr) {
-  background: transparent !important;
-}
-
-:deep(.dark-table-v3 .p-datatable-tbody > tr:hover) {
-  background: rgba(236, 72, 153, 0.05) !important;
-}
-
-:deep(.dark-table-v3 .p-datatable-tbody > tr > td) {
-  color: var(--surface-600) !important;
-  border-color: rgba(255, 255, 255, 0.05) !important;
-  padding: 0.625rem 0.75rem;
-}
-
-.full-width {
-  grid-column: 1 / -1;
-}
-
-.lag-chart-wrapper {
-  background: #0a0a0a;
-  border: 1px solid rgba(255, 255, 255, 0.1);
-  border-radius: 16px;
-  overflow: hidden;
-  position: relative;
-  z-index: 1;
-}
-
-/* Responsive */
-@media (max-width: 1024px) {
-  .analytics-grid {
-    grid-template-columns: 1fr;
-  }
-}
-
-@media (max-width: 768px) {
-  .metrics-grid {
-    grid-template-columns: repeat(2, 1fr);
-  }
-}
-</style>

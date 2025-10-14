@@ -1,7 +1,7 @@
-import { defineConfig } from 'vite'
-import vue from '@vitejs/plugin-vue'
+import { defineConfig } from 'vite';
+import vue from '@vitejs/plugin-vue';
+import path from 'path';
 
-// https://vite.dev/config/
 export default defineConfig({
   plugins: [vue()],
   server: {
@@ -10,21 +10,17 @@ export default defineConfig({
       '/api': {
         target: 'http://localhost:6632',
         changeOrigin: true
-      },
-      '/health': {
-        target: 'http://localhost:6632',
-        changeOrigin: true
-      },
-      '/metrics': {
-        target: 'http://localhost:6632',
-        changeOrigin: true
       }
     }
   },
-  base: '/dashboard/',
+  resolve: {
+    alias: {
+      '@': path.resolve(__dirname, './src')
+    }
+  },
   build: {
     outDir: 'dist',
-    assetsDir: 'assets',
-    sourcemap: false
+    sourcemap: true
   }
-})
+});
+
