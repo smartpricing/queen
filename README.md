@@ -9,9 +9,11 @@
 
 [Quick Start](#-quick-start) • [Client Examples](#-client-examples) • [Server Setup](#-server-setup) • [Core Concepts](#-core-concepts) • [API Reference](#-http-api-reference) • [Dashboard](#-dashboard)
 
-</div>
+<p align="center">
+  <img src="assets/queen-logo.svg" alt="Queen Logo" width="120" />
+</p>
 
-![Queen Logo](assets/queen-logo.svg)
+</div>
 
 ---
 
@@ -1330,6 +1332,8 @@ See [API.md](API.md) for complete API documentation.
 ## 📊 Dashboard
 
 Queen includes a comprehensive web dashboard for monitoring and management.
+
+[Dashboard](/assets/dashboard-01.png)
 
 ### Access
 

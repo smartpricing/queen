@@ -28,7 +28,7 @@ const statusConfig = {
     label: 'Processing'
   },
   'completed': {
-    class: 'bg-gradient-to-br from-emerald-100 to-green-100 dark:from-emerald-900/30 dark:to-green-900/30 text-emerald-800 dark:text-emerald-300 ring-1 ring-emerald-200 dark:ring-emerald-800',
+    class: 'bg-gradient-to-br from-primary-100 to-green-100 dark:from-primary-900/30 dark:to-green-900/30 text-primary-800 dark:text-primary-300 ring-1 ring-primary-200 dark:ring-primary-800',
     label: 'Completed'
   },
   'failed': {
@@ -36,7 +36,7 @@ const statusConfig = {
     label: 'Failed'
   },
   'active': {
-    class: 'bg-gradient-to-br from-emerald-100 to-emerald-50 dark:from-emerald-900/30 dark:to-emerald-900/20 text-emerald-800 dark:text-emerald-300 ring-1 ring-emerald-200 dark:ring-emerald-800',
+    class: 'bg-gradient-to-br from-primary-100 to-primary-50 dark:from-primary-900/30 dark:to-primary-900/20 text-primary-800 dark:text-primary-300 ring-1 ring-primary-200 dark:ring-primary-800',
     label: 'Active'
   },
   'inactive': {
@@ -47,7 +47,7 @@ const statusConfig = {
 
 const badgeClasses = computed(() => {
   const config = statusConfig[props.status] || statusConfig.inactive;
-  return `inline-flex items-center px-3 py-1 rounded-full text-xs font-semibold ${config.class}`;
+  return `inline-flex items-center px-2 py-0.5 rounded-full text-xs font-semibold ${config.class}`;
 });
 
 const label = computed(() => {

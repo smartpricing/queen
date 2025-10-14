@@ -24,7 +24,7 @@
           
           <button
             @click="$router.push(`/queues/${queueName}/messages`)"
-            class="px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg transition-colors"
+            class="px-4 py-2 bg-primary-600 hover:bg-primary-700 text-white rounded-lg transition-colors"
           >
             View Messages
           </button>
@@ -71,7 +71,7 @@
             <div>
               <span class="text-gray-600 dark:text-gray-400 text-sm">Lease Time</span>
               <p class="text-lg font-medium text-gray-900 dark:text-white mt-1">
-                {{ data.leaseTime || 'N/A' }}ms
+                {{ data.leaseTime ? `${data.leaseTime}s` : 'N/A' }}
               </p>
             </div>
             <div>
@@ -83,7 +83,7 @@
             <div>
               <span class="text-gray-600 dark:text-gray-400 text-sm">TTL</span>
               <p class="text-lg font-medium text-gray-900 dark:text-white mt-1">
-                {{ data.ttl || 'N/A' }}ms
+                {{ formatTTL(data.ttl) }}
               </p>
             </div>
           </div>
@@ -156,7 +156,7 @@
         </div>
         
         <!-- Status Distribution Chart -->
-        <div class="bg-white dark:bg-gray-900 rounded-2xl border border-gray-200 dark:border-gray-800 p-6 shadow-sm hover:shadow-xl hover:shadow-emerald-500/5 transition-all duration-300">
+        <div class="bg-white dark:bg-gray-900 rounded-2xl border border-gray-200 dark:border-gray-800 p-6 shadow-sm hover:shadow-xl hover:shadow-primary-500/5 transition-all duration-300">
           <h2 class="text-lg font-bold text-gray-900 dark:text-white mb-6">
             Message Distribution
           </h2>
@@ -241,9 +241,23 @@ const getEmptyData = () => ({
 
 const { startPolling, stopPolling } = usePolling(fetchQueueDetail, 5000);
 
+// Format TTL in human-readable format
+const formatTTL = (seconds) => {
+  if (!seconds) return 'N/A';
+  if (seconds < 60) return `${seconds}s`;
+  if (seconds < 3600) {
+    const mins = Math.floor(seconds / 60);
+    const secs = seconds % 60;
+    return secs > 0 ? `${mins}m ${secs}s` : `${mins}m`;
+  }
+  const hours = Math.floor(seconds / 3600);
+  const mins = Math.floor((seconds % 3600) / 60);
+  return mins > 0 ? `${hours}h ${mins}m` : `${hours}h`;
+};
+
 const getLagColor = (lag) => {
   if (!lag || lag === 0) return 'text-gray-900 dark:text-white';
-  if (lag < 100) return 'text-emerald-600 dark:text-emerald-400 font-semibold';
+  if (lag < 100) return 'text-primary-600 dark:text-primary-400 font-semibold';
   if (lag < 1000) return 'text-yellow-600 dark:text-yellow-400 font-semibold';
   return 'text-red-600 dark:text-red-400 font-semibold';
 };

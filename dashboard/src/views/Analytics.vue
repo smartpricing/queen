@@ -19,7 +19,7 @@
                   :class="[
                     'px-4 py-2 text-sm font-medium transition-colors',
                     selectedTimeRange === range.value
-                      ? 'bg-emerald-600 text-white'
+                      ? 'bg-primary-600 text-white'
                       : 'bg-white dark:bg-gray-800 text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-700'
                   ]"
                 >
@@ -37,7 +37,7 @@
                 @click="toggleAutoRefresh"
                 :class="[
                   'relative inline-flex h-6 w-11 items-center rounded-full transition-colors',
-                  autoRefresh ? 'bg-emerald-600' : 'bg-gray-200 dark:bg-gray-700'
+                  autoRefresh ? 'bg-primary-600' : 'bg-gray-200 dark:bg-gray-700'
                 ]"
               >
                 <span
@@ -53,7 +53,7 @@
             <button
               @click="fetchAnalytics"
               :disabled="loading"
-              class="px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-sm font-medium transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+              class="px-4 py-2 bg-primary-600 hover:bg-primary-700 text-white rounded-lg text-sm font-medium transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
             >
               {{ loading ? 'Loading...' : 'Refresh' }}
             </button>
@@ -69,7 +69,7 @@
               <select
                 v-model="namespaceFilter"
                 @change="queueFilter = ''; fetchAnalytics()"
-                class="w-full px-4 py-2 rounded-lg border border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-800 text-gray-900 dark:text-white focus:ring-2 focus:ring-emerald-500 focus:border-transparent"
+                class="w-full px-4 py-2 rounded-lg border border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-800 text-gray-900 dark:text-white focus:ring-2 focus:ring-primary-500 focus:border-transparent"
               >
                 <option value="">All namespaces</option>
                 <option v-for="ns in availableNamespaces" :key="ns" :value="ns">
@@ -86,7 +86,7 @@
               <select
                 v-model="queueFilter"
                 @change="fetchAnalytics"
-                class="w-full px-4 py-2 rounded-lg border border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-800 text-gray-900 dark:text-white focus:ring-2 focus:ring-emerald-500 focus:border-transparent"
+                class="w-full px-4 py-2 rounded-lg border border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-800 text-gray-900 dark:text-white focus:ring-2 focus:ring-primary-500 focus:border-transparent"
               >
                 <option value="">All queues</option>
                 <option v-for="queue in availableQueues" :key="queue" :value="queue">
@@ -103,7 +103,7 @@
               <select
                 v-model="taskFilter"
                 @change="fetchAnalytics"
-                class="w-full px-4 py-2 rounded-lg border border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-800 text-gray-900 dark:text-white focus:ring-2 focus:ring-emerald-500 focus:border-transparent"
+                class="w-full px-4 py-2 rounded-lg border border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-800 text-gray-900 dark:text-white focus:ring-2 focus:ring-primary-500 focus:border-transparent"
               >
                 <option value="">All tasks</option>
                 <option v-for="task in availableTasks" :key="task" :value="task">
@@ -116,25 +116,25 @@
           <!-- Active Filters Display -->
           <div v-if="hasActiveFilters" class="flex flex-wrap gap-2">
             <span class="text-sm text-gray-600 dark:text-gray-400">Active filters:</span>
-            <span v-if="namespaceFilter" class="inline-flex items-center px-3 py-1 rounded-full text-sm bg-emerald-100 dark:bg-emerald-900/30 text-emerald-800 dark:text-emerald-300">
+            <span v-if="namespaceFilter" class="inline-flex items-center px-3 py-1 rounded-full text-sm bg-primary-100 dark:bg-primary-900/30 text-primary-800 dark:text-primary-300">
               Namespace: {{ namespaceFilter }}
-              <button @click="namespaceFilter = ''; fetchAnalytics()" class="ml-2 hover:text-emerald-900 dark:hover:text-emerald-200">
+              <button @click="namespaceFilter = ''; fetchAnalytics()" class="ml-2 hover:text-primary-900 dark:hover:text-primary-200">
                 <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" />
                 </svg>
               </button>
             </span>
-            <span v-if="queueFilter" class="inline-flex items-center px-3 py-1 rounded-full text-sm bg-emerald-100 dark:bg-emerald-900/30 text-emerald-800 dark:text-emerald-300">
+            <span v-if="queueFilter" class="inline-flex items-center px-3 py-1 rounded-full text-sm bg-primary-100 dark:bg-primary-900/30 text-primary-800 dark:text-primary-300">
               Queue: {{ queueFilter }}
-              <button @click="queueFilter = ''; fetchAnalytics()" class="ml-2 hover:text-emerald-900 dark:hover:text-emerald-200">
+              <button @click="queueFilter = ''; fetchAnalytics()" class="ml-2 hover:text-primary-900 dark:hover:text-primary-200">
                 <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" />
                 </svg>
               </button>
             </span>
-            <span v-if="taskFilter" class="inline-flex items-center px-3 py-1 rounded-full text-sm bg-emerald-100 dark:bg-emerald-900/30 text-emerald-800 dark:text-emerald-300">
+            <span v-if="taskFilter" class="inline-flex items-center px-3 py-1 rounded-full text-sm bg-primary-100 dark:bg-primary-900/30 text-primary-800 dark:text-primary-300">
               Task: {{ taskFilter }}
-              <button @click="taskFilter = ''; fetchAnalytics()" class="ml-2 hover:text-emerald-900 dark:hover:text-emerald-200">
+              <button @click="taskFilter = ''; fetchAnalytics()" class="ml-2 hover:text-primary-900 dark:hover:text-primary-200">
                 <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" />
                 </svg>
@@ -183,7 +183,7 @@
         </div>
         
         <!-- Throughput Chart -->
-        <div class="bg-white dark:bg-gray-900 rounded-2xl border border-gray-200 dark:border-gray-800 p-6 shadow-sm hover:shadow-xl hover:shadow-emerald-500/5 transition-all duration-300">
+        <div class="bg-white dark:bg-gray-900 rounded-2xl border border-gray-200 dark:border-gray-800 p-6 shadow-sm hover:shadow-xl hover:shadow-primary-500/5 transition-all duration-300">
           <h2 class="text-lg font-bold text-gray-900 dark:text-white mb-6">
             Message Throughput Over Time
           </h2>
@@ -205,7 +205,7 @@
           </div>
           
           <!-- Top Queues by Volume -->
-          <div class="bg-white dark:bg-gray-900 rounded-2xl border border-gray-200 dark:border-gray-800 p-6 shadow-sm hover:shadow-xl hover:shadow-emerald-500/5 transition-all duration-300">
+          <div class="bg-white dark:bg-gray-900 rounded-2xl border border-gray-200 dark:border-gray-800 p-6 shadow-sm hover:shadow-xl hover:shadow-primary-500/5 transition-all duration-300">
             <h2 class="text-lg font-bold text-gray-900 dark:text-white mb-6">
               Top Queues by Volume
             </h2>
@@ -213,7 +213,7 @@
               <div 
                 v-for="(queue, index) in topQueues" 
                 :key="queue.name"
-                class="group flex items-center justify-between p-4 rounded-xl hover:bg-gradient-to-r hover:from-emerald-50 hover:to-transparent dark:hover:from-emerald-900/10 dark:hover:to-transparent cursor-pointer transition-all border border-transparent hover:border-emerald-200 dark:hover:border-emerald-800"
+                class="group flex items-center justify-between p-4 rounded-xl hover:bg-gradient-to-r hover:from-primary-50 hover:to-transparent dark:hover:from-primary-900/10 dark:hover:to-transparent cursor-pointer transition-all border border-transparent hover:border-primary-200 dark:hover:border-primary-800"
                 @click="$router.push(`/queues/${queue.name}`)"
               >
                 <div class="flex items-center space-x-3">
@@ -257,7 +257,7 @@
         </div>
         
         <!-- System Performance Table -->
-        <div class="bg-white dark:bg-gray-900 rounded-2xl border border-gray-200 dark:border-gray-800 p-6 shadow-sm hover:shadow-xl hover:shadow-emerald-500/5 transition-all duration-300">
+        <div class="bg-white dark:bg-gray-900 rounded-2xl border border-gray-200 dark:border-gray-800 p-6 shadow-sm hover:shadow-xl hover:shadow-primary-500/5 transition-all duration-300">
           <h2 class="text-lg font-bold text-gray-900 dark:text-white mb-6">
             System Performance Metrics
           </h2>
@@ -285,7 +285,7 @@
             
             <div class="p-5 bg-gradient-to-br from-gray-50 to-gray-100/50 dark:from-gray-800 dark:to-gray-800/50 rounded-xl border border-gray-200 dark:border-gray-700">
               <div class="text-sm text-gray-600 dark:text-gray-400 font-medium">Success Rate</div>
-              <div class="mt-2 text-2xl font-bold text-emerald-600 dark:text-emerald-400">
+              <div class="mt-2 text-2xl font-bold text-primary-600 dark:text-primary-400">
                 {{ data?.successRate || 0 }}%
               </div>
             </div>

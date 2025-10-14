@@ -246,8 +246,8 @@ export const createStatusRoutes = (pool) => {
     const timeRange = getTimeRange(from, to);
     
     const conditions = [];
-    const params = [timeRange.from, timeRange.to];
-    let paramCount = 3;
+    const params = [];
+    let paramCount = 1;
     
     if (namespace) {
       conditions.push(`q.namespace = $${paramCount}`);
@@ -272,8 +272,11 @@ export const createStatusRoutes = (pool) => {
         q.priority,
         q.created_at,
         COUNT(DISTINCT p.id) as partition_count,
-        COUNT(DISTINCT m.id) as total_messages,
-        COALESCE(SUM(DISTINCT pc.pending_estimate), 0) as pending,
+        (SELECT COUNT(DISTINCT m2.id)
+         FROM queen.messages m2
+         JOIN queen.partitions p2 ON p2.id = m2.partition_id
+         WHERE p2.queue_id = q.id
+        ) as total_messages,
         COUNT(DISTINCT CASE WHEN pc.lease_expires_at IS NOT NULL AND pc.lease_expires_at > NOW() THEN p.id END) as processing,
         COALESCE(SUM(DISTINCT pc.total_messages_consumed), 0) as completed,
         0 as failed,
@@ -291,8 +294,6 @@ export const createStatusRoutes = (pool) => {
         0 as avg_processing_time_seconds
       FROM queen.queues q
       LEFT JOIN queen.partitions p ON p.queue_id = q.id
-      LEFT JOIN queen.messages m ON m.partition_id = p.id 
-        AND m.created_at >= $1 AND m.created_at <= $2
       LEFT JOIN queen.partition_consumers pc ON pc.partition_id = p.id
         AND pc.consumer_group = '__QUEUE_MODE__'
       WHERE 1=1 ${whereClause}
@@ -304,42 +305,48 @@ export const createStatusRoutes = (pool) => {
     const countQuery = `
       SELECT COUNT(DISTINCT q.id) as total
       FROM queen.queues q
-      WHERE 1=1 ${whereClause.replace(/\$\d+/g, (match) => {
-        const num = parseInt(match.substring(1));
-        return num <= 2 ? match : `$${num - 2}`;
-      })}
+      WHERE 1=1 ${whereClause}
     `;
     
     const [result, countResult] = await Promise.all([
       pool.query(query, params),
-      pool.query(countQuery, params.slice(2, -2))
+      pool.query(countQuery, params.slice(0, -2))
     ]);
     
-    const queues = result.rows.map(row => ({
-      id: row.id,
-      name: row.name,
-      namespace: row.namespace,
-      task: row.task,
-      priority: row.priority,
-      createdAt: row.created_at,
-      partitions: parseInt(row.partition_count),
-      messages: {
-        total: parseInt(row.total_messages || 0),
-        pending: parseInt(row.pending || 0),
-        processing: parseInt(row.processing || 0),
-        completed: parseInt(row.completed || 0),
-        failed: parseInt(row.failed || 0),
-        deadLetter: parseInt(row.dead_letter || 0)
-      },
-      lag: row.lag_seconds ? {
-        seconds: parseFloat(row.lag_seconds),
-        formatted: formatDuration(parseFloat(row.lag_seconds))
-      } : null,
-      performance: row.avg_processing_time_seconds ? {
-        avgProcessingTimeSeconds: parseFloat(row.avg_processing_time_seconds),
-        avgProcessingTimeFormatted: formatDuration(parseFloat(row.avg_processing_time_seconds))
-      } : null
-    }));
+    const queues = result.rows.map(row => {
+      const total = parseInt(row.total_messages || 0);
+      const completed = parseInt(row.completed || 0);
+      const processing = parseInt(row.processing || 0);
+      const failed = parseInt(row.failed || 0);
+      // Calculate pending as: total - completed - processing - failed
+      const pending = Math.max(0, total - completed - processing - failed);
+      
+      return {
+        id: row.id,
+        name: row.name,
+        namespace: row.namespace,
+        task: row.task,
+        priority: row.priority,
+        createdAt: row.created_at,
+        partitions: parseInt(row.partition_count),
+        messages: {
+          total,
+          pending,
+          processing,
+          completed,
+          failed,
+          deadLetter: parseInt(row.dead_letter || 0)
+        },
+        lag: row.lag_seconds ? {
+          seconds: parseFloat(row.lag_seconds),
+          formatted: formatDuration(parseFloat(row.lag_seconds))
+        } : null,
+        performance: row.avg_processing_time_seconds ? {
+          avgProcessingTimeSeconds: parseFloat(row.avg_processing_time_seconds),
+          avgProcessingTimeFormatted: formatDuration(parseFloat(row.avg_processing_time_seconds))
+        } : null
+      };
+    });
     
     return {
       queues,
@@ -370,7 +377,12 @@ export const createStatusRoutes = (pool) => {
         p.created_at as partition_created_at,
         p.last_activity as partition_last_activity,
         COUNT(DISTINCT m.id) as partition_total_messages,
-        COALESCE(pc.pending_estimate, 0) as partition_pending,
+        -- Calculate pending dynamically: count messages after last consumed
+        (SELECT COUNT(*) FROM queen.messages m2 
+         WHERE m2.partition_id = p.id
+           AND (m2.created_at, m2.id) > (COALESCE(pc.last_consumed_created_at, '1970-01-01'::timestamptz),
+                                          COALESCE(pc.last_consumed_id, '00000000-0000-0000-0000-000000000000'::uuid))
+        ) as partition_pending,
         CASE WHEN pc.lease_expires_at IS NOT NULL AND pc.lease_expires_at > NOW() THEN 1 ELSE 0 END as partition_processing,
         COALESCE(pc.total_messages_consumed, 0) as partition_completed,
         0 as partition_failed,
@@ -388,8 +400,7 @@ export const createStatusRoutes = (pool) => {
         MAX(m.created_at) as newest_message
       FROM queen.queues q
       LEFT JOIN queen.partitions p ON p.queue_id = q.id
-      LEFT JOIN queen.messages m ON m.partition_id = p.id 
-        AND m.created_at >= $2 AND m.created_at <= $3
+      LEFT JOIN queen.messages m ON m.partition_id = p.id
       LEFT JOIN queen.partition_consumers pc ON pc.partition_id = p.id 
         AND pc.consumer_group = '__QUEUE_MODE__'
       WHERE q.name = $1
@@ -397,11 +408,11 @@ export const createStatusRoutes = (pool) => {
                q.retry_limit, q.ttl, q.max_queue_size, q.created_at,
                p.id, p.name, p.created_at, p.last_activity,
                pc.total_messages_consumed, pc.total_batches_consumed, pc.last_consumed_at,
-               pc.lease_expires_at, pc.batch_size, pc.acked_count, pc.pending_estimate, pc.last_consumed_created_at, pc.last_consumed_id
+               pc.lease_expires_at, pc.batch_size, pc.acked_count, pc.last_consumed_created_at, pc.last_consumed_id
       ORDER BY p.name
     `;
     
-    const result = await pool.query(query, [queueName, timeRange.from, timeRange.to]);
+    const result = await pool.query(query, [queueName]);
     
     if (result.rows.length === 0) {
       throw new Error('Queue not found');
@@ -441,10 +452,11 @@ export const createStatusRoutes = (pool) => {
       .filter(row => row.partition_id)
       .map(row => {
         const total = parseInt(row.partition_total_messages || 0);
-        const pending = parseInt(row.partition_pending || 0);
-        const processing = parseInt(row.partition_processing || 0);
         const completed = parseInt(row.partition_completed || 0);
+        const processing = parseInt(row.partition_processing || 0);
         const failed = parseInt(row.partition_failed || 0);
+        // Calculate pending correctly: total - completed - processing - failed
+        const pending = Math.max(0, total - completed - processing - failed);
         
         totals.messages.total += total;
         totals.messages.pending += pending;
@@ -486,7 +498,8 @@ export const createStatusRoutes = (pool) => {
           const lagSeconds = (new Date() - new Date(row.oldest_pending)) / 1000;
           partition.lag = {
             oldestPending: row.oldest_pending,
-            lagSeconds: parseFloat(lagSeconds.toFixed(1))
+            seconds: parseFloat(lagSeconds.toFixed(1)),
+            formatted: formatDuration(parseFloat(lagSeconds.toFixed(1)))
           };
         }
         

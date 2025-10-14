@@ -4,10 +4,7 @@
 
 :root {
   color-scheme: light;
-  --primary-50: 236, 253, 245;
-  --primary-500: 16, 185, 129;
-  --primary-600: 5, 150, 105;
-  --primary-700: 4, 120, 87;
+  /* Primary color CSS variables are set dynamically by theme.js */
 }
 
 .dark {
@@ -75,7 +72,7 @@ button, a, [role="button"] {
 
 /* Focus ring improvements */
 *:focus-visible {
-  @apply outline-none ring-2 ring-emerald-500 ring-offset-2 dark:ring-offset-gray-900;
+  @apply outline-none ring-2 ring-primary-500 ring-offset-2 dark:ring-offset-gray-900;
 }
 
 /* Better number display */

@@ -30,7 +30,9 @@
           @click="$emit('close')"
           :class="[
             'group relative flex items-center justify-center w-10 h-10 mx-auto rounded-lg transition-all duration-200',
-            isActive(item.path) ? activeNavClass : inactiveNavClass
+            isActive(item.path)
+              ? 'bg-gradient-to-br from-primary-500 to-primary-600 text-white shadow-lg shadow-primary-500/20'
+              : 'text-gray-600 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-800 hover:text-primary-600 dark:hover:text-primary-400'
           ]"
         >
           <component :is="item.icon" class="w-5 h-5 flex-shrink-0" />
@@ -45,7 +47,7 @@
         <!-- Theme Toggle -->
         <button
           @click="toggleTheme"
-          :class="['group relative flex items-center justify-center w-10 h-10 mx-auto rounded-lg text-gray-600 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-800 transition-all duration-200', hoverTextClass]"
+          class="group relative flex items-center justify-center w-10 h-10 mx-auto rounded-lg text-gray-600 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-800 hover:text-primary-600 dark:hover:text-primary-400 transition-all duration-200"
           title="Toggle theme"
         >
           <svg v-if="colorMode === 'light'" class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -63,7 +65,7 @@
         <button
           v-if="isOpen"
           @click="$emit('toggle-sidebar')"
-          :class="['lg:hidden group relative flex items-center justify-center w-10 h-10 mx-auto rounded-lg text-gray-600 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-800 transition-all duration-200', hoverTextClass]"
+          class="lg:hidden group relative flex items-center justify-center w-10 h-10 mx-auto rounded-lg text-gray-600 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-800 hover:text-primary-600 dark:hover:text-primary-400 transition-all duration-200"
         >
           <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" />
@@ -119,17 +121,6 @@ const props = defineProps({
 const emit = defineEmits(['close', 'toggle-sidebar']);
 const route = useRoute();
 const { colorMode, toggleColorMode } = useColorMode();
-
-// Dynamic theme classes
-const activeNavClass = computed(() => 
-  `bg-gradient-to-br ${theme.classes.primaryGradient} text-white shadow-lg ${theme.classes.primaryShadow}`
-);
-
-const inactiveNavClass = computed(() => 
-  `text-gray-600 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-800 ${theme.classes.primaryText.replace('text-', 'hover:text-').replace(' dark:text-', ' dark:hover:text-')}`
-);
-
-const hoverTextClass = computed(() => theme.classes.primaryText.replace('text-', 'hover:text-').replace(' dark:text-', ' dark:hover:text-'));
 
 const toggleTheme = () => {
   toggleColorMode();

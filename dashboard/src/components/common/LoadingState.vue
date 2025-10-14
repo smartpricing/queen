@@ -3,7 +3,7 @@
     <div class="text-center">
       <div class="relative inline-block">
         <div class="animate-spin rounded-full h-14 w-14 border-4 border-gray-200 dark:border-gray-800"></div>
-        <div class="absolute inset-0 animate-spin rounded-full h-14 w-14 border-4 border-transparent border-t-emerald-600 dark:border-t-emerald-400" style="animation-duration: 0.8s"></div>
+        <div class="absolute inset-0 animate-spin rounded-full h-14 w-14 border-4 border-transparent border-t-primary-600 dark:border-t-primary-400" style="animation-duration: 0.8s"></div>
       </div>
       <p class="mt-5 text-sm font-medium text-gray-600 dark:text-gray-400 animate-pulse">
         {{ message || 'Loading...' }}

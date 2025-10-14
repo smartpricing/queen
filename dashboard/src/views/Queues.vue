@@ -13,7 +13,7 @@
               v-model="searchQuery"
               type="text"
               placeholder="Search queues..."
-              class="w-full px-4 py-2 rounded-lg border border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-800 text-gray-900 dark:text-white focus:ring-2 focus:ring-emerald-500 focus:border-transparent"
+              class="w-full px-4 py-2 rounded-lg border border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-800 text-gray-900 dark:text-white focus:ring-2 focus:ring-primary-500 focus:border-transparent"
             />
           </div>
           
@@ -24,7 +24,7 @@
             </label>
             <select
               v-model="statusFilter"
-              class="w-full px-4 py-2 rounded-lg border border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-800 text-gray-900 dark:text-white focus:ring-2 focus:ring-emerald-500 focus:border-transparent"
+              class="w-full px-4 py-2 rounded-lg border border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-800 text-gray-900 dark:text-white focus:ring-2 focus:ring-primary-500 focus:border-transparent"
             >
               <option value="all">All</option>
               <option value="active">Active</option>
@@ -39,7 +39,7 @@
             </label>
             <select
               v-model="sortBy"
-              class="w-full px-4 py-2 rounded-lg border border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-800 text-gray-900 dark:text-white focus:ring-2 focus:ring-emerald-500 focus:border-transparent"
+              class="w-full px-4 py-2 rounded-lg border border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-800 text-gray-900 dark:text-white focus:ring-2 focus:ring-primary-500 focus:border-transparent"
             >
               <option value="name">Name</option>
               <option value="pending">Pending Messages</option>
@@ -127,7 +127,7 @@
                   <td class="px-6 py-4 whitespace-nowrap text-right text-sm font-medium">
                     <button
                       @click.stop="$router.push(`/queues/${queue.name}/messages`)"
-                      class="text-emerald-600 dark:text-emerald-400 hover:text-emerald-800 dark:hover:text-emerald-300"
+                      class="text-primary-600 dark:text-primary-400 hover:text-primary-800 dark:hover:text-primary-300"
                     >
                       View Messages
                     </button>
@@ -165,24 +165,13 @@ const fetchQueues = async () => {
     const result = await execute(client.getQueues.bind(client));
     // Map API response with nested messages to flat structure
     queues.value = (result.queues || []).map(q => {
-      const total = q.messages?.total || 0;
-      const pending = q.messages?.pending || 0;
-      const processing = q.messages?.processing || 0;
-      const completed = q.messages?.completed || 0;
-      const failed = q.messages?.failed || 0;
-      
-      // Calculate unaccounted messages (treat as pending)
-      const accountedFor = pending + processing + completed + failed;
-      const unaccountedMessages = Math.max(0, total - accountedFor);
-      const actualPending = pending + unaccountedMessages;
-      
       return {
         ...q,
-        pendingMessages: actualPending,
-        processingMessages: processing,
-        completedMessages: completed,
-        failedMessages: failed,
-        totalMessages: total,
+        pendingMessages: q.messages?.pending || 0,
+        processingMessages: q.messages?.processing || 0,
+        completedMessages: q.messages?.completed || 0,
+        failedMessages: q.messages?.failed || 0,
+        totalMessages: q.messages?.total || 0,
         lagSeconds: q.lag?.seconds || 0,
         lagFormatted: q.lag?.formatted || null
       };

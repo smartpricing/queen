@@ -14,7 +14,7 @@
         </button>
         
         <!-- Page title with gradient accent -->
-        <h1 class="text-xl font-bold bg-gradient-to-r from-emerald-600 to-emerald-500 bg-clip-text text-transparent">
+        <h1 class="text-xl font-bold bg-gradient-to-r from-primary-600 to-primary-500 bg-clip-text text-transparent">
           {{ pageTitle }}
         </h1>
       </div>
@@ -25,7 +25,7 @@
         <button
           @click="handleRefresh"
           :class="[
-            'p-2 rounded-xl hover:bg-emerald-50 dark:hover:bg-emerald-900/20 text-gray-600 dark:text-gray-400 hover:text-emerald-600 dark:hover:text-emerald-400 transition-all',
+            'p-2 rounded-xl hover:bg-primary-50 dark:hover:bg-primary-900/20 text-gray-600 dark:text-gray-400 hover:text-primary-600 dark:hover:text-primary-400 transition-all',
             { 'animate-spin': isRefreshing }
           ]"
           title="Refresh"
@@ -38,7 +38,7 @@
         <!-- Theme toggle -->
         <button
           @click="toggleTheme"
-          class="p-2 rounded-xl hover:bg-emerald-50 dark:hover:bg-emerald-900/20 text-gray-600 dark:text-gray-400 hover:text-emerald-600 dark:hover:text-emerald-400 transition-all"
+          class="p-2 rounded-xl hover:bg-primary-50 dark:hover:bg-primary-900/20 text-gray-600 dark:text-gray-400 hover:text-primary-600 dark:hover:text-primary-400 transition-all"
           title="Toggle theme"
         >
           <svg v-if="colorMode === 'light'" class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">

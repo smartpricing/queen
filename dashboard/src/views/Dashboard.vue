@@ -1,9 +1,9 @@
 <template>
   <AppLayout>
     <LoadingState :loading="loading" :error="error" @retry="fetchData">
-      <div v-if="data" class="space-y-6">
+      <div v-if="data" class="space-y-4">
         <!-- Metrics Grid -->
-        <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-6">
+        <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-4">
           <MetricCard
             title="Total Messages"
             :value="data.totalMessages || 0"
@@ -41,87 +41,87 @@
         </div>
         
         <!-- Throughput Chart -->
-        <div class="bg-white dark:bg-gray-900 rounded-2xl border border-gray-200 dark:border-gray-800 p-6 shadow-sm hover:shadow-xl hover:shadow-emerald-500/5 transition-all duration-300">
-          <div class="flex items-center justify-between mb-6">
-            <h2 class="text-lg font-bold text-gray-900 dark:text-white">
+        <div class="bg-white dark:bg-gray-900 rounded-xl border border-gray-200 dark:border-gray-800 p-4 shadow-sm hover:shadow-lg hover:shadow-primary-500/5 transition-all duration-200">
+          <div class="flex items-center justify-between mb-4">
+            <h2 class="text-base font-bold text-gray-900 dark:text-white">
               Message Distribution
             </h2>
-            <div class="flex items-center space-x-2 text-sm text-gray-500 dark:text-gray-400">
-              <div class="w-2 h-2 bg-emerald-500 rounded-full animate-pulse"></div>
+            <div class="flex items-center space-x-2 text-xs text-gray-500 dark:text-gray-400">
+              <div class="w-1.5 h-1.5 bg-primary-500 rounded-full animate-pulse"></div>
               <span>Live</span>
             </div>
           </div>
-          <div class="h-72">
+          <div class="h-56">
             <Bar v-if="chartData" :data="chartData" :options="chartOptions" />
           </div>
         </div>
         
         <!-- Two Column Layout -->
-        <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
+        <div class="grid grid-cols-1 lg:grid-cols-2 gap-4">
           <!-- Active Queues -->
-          <div class="bg-white dark:bg-gray-900 rounded-2xl border border-gray-200 dark:border-gray-800 p-6 shadow-sm hover:shadow-xl hover:shadow-emerald-500/5 transition-all duration-300">
-            <h2 class="text-lg font-bold text-gray-900 dark:text-white mb-4">
+          <div class="bg-white dark:bg-gray-900 rounded-xl border border-gray-200 dark:border-gray-800 p-4 shadow-sm hover:shadow-lg hover:shadow-primary-500/5 transition-all duration-200">
+            <h2 class="text-base font-bold text-gray-900 dark:text-white mb-3">
               Active Queues
             </h2>
-            <div class="space-y-2">
+            <div class="space-y-1.5">
               <div 
                 v-for="queue in activeQueues" 
                 :key="queue.name"
-                class="group flex items-center justify-between p-4 rounded-xl hover:bg-gradient-to-r hover:from-emerald-50 hover:to-transparent dark:hover:from-emerald-900/10 dark:hover:to-transparent cursor-pointer transition-all border border-transparent hover:border-emerald-200 dark:hover:border-emerald-800"
+                class="group flex items-center justify-between p-3 rounded-lg hover:bg-gradient-to-r hover:from-primary-50 hover:to-transparent dark:hover:from-primary-900/10 dark:hover:to-transparent cursor-pointer transition-all border border-transparent hover:border-primary-200 dark:hover:border-primary-800"
                 @click="$router.push(`/queues/${queue.name}`)"
               >
                 <div class="flex-1">
-                  <div class="font-semibold text-gray-900 dark:text-white group-hover:text-emerald-600 dark:group-hover:text-emerald-400 transition-colors">
+                  <div class="text-sm font-semibold text-gray-900 dark:text-white group-hover:text-primary-600 dark:group-hover:text-primary-400 transition-colors">
                     {{ queue.name }}
                   </div>
-                  <div class="text-sm text-gray-500 dark:text-gray-400 mt-1">
+                  <div class="text-xs text-gray-500 dark:text-gray-400 mt-0.5">
                     {{ queue.partitions || 0 }} partitions
                   </div>
                 </div>
                 <div class="text-right">
-                  <div class="text-sm font-semibold text-gray-900 dark:text-white mb-1">
+                  <div class="text-xs font-semibold text-gray-900 dark:text-white mb-1">
                     {{ queue.pendingMessages || 0 }} pending
                   </div>
                   <StatusBadge :status="queue.status || 'active'" />
                 </div>
               </div>
               
-              <div v-if="!activeQueues || activeQueues.length === 0" class="text-center py-12">
-                <svg class="w-12 h-12 mx-auto text-gray-300 dark:text-gray-700" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <div v-if="!activeQueues || activeQueues.length === 0" class="text-center py-8">
+                <svg class="w-10 h-10 mx-auto text-gray-300 dark:text-gray-700" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M20 13V6a2 2 0 00-2-2H6a2 2 0 00-2 2v7m16 0v5a2 2 0 01-2 2H6a2 2 0 01-2-2v-5m16 0h-2.586a1 1 0 00-.707.293l-2.414 2.414a1 1 0 01-.707.293h-3.172a1 1 0 01-.707-.293l-2.414-2.414A1 1 0 006.586 13H4" />
                 </svg>
-                <p class="mt-3 text-gray-500 dark:text-gray-400">No active queues</p>
+                <p class="mt-2 text-sm text-gray-500 dark:text-gray-400">No active queues</p>
               </div>
             </div>
           </div>
           
           <!-- System Stats -->
-          <div class="bg-white dark:bg-gray-900 rounded-2xl border border-gray-200 dark:border-gray-800 p-6 shadow-sm hover:shadow-xl hover:shadow-emerald-500/5 transition-all duration-300">
-            <h2 class="text-lg font-bold text-gray-900 dark:text-white mb-6">
+          <div class="bg-white dark:bg-gray-900 rounded-xl border border-gray-200 dark:border-gray-800 p-4 shadow-sm hover:shadow-lg hover:shadow-primary-500/5 transition-all duration-200">
+            <h2 class="text-base font-bold text-gray-900 dark:text-white mb-3">
               System Statistics
             </h2>
-            <div class="space-y-4">
-              <div class="flex justify-between items-center p-3 rounded-xl hover:bg-gray-50 dark:hover:bg-gray-800 transition-colors">
-                <span class="text-gray-600 dark:text-gray-400 font-medium">Total Queues</span>
-                <span class="text-lg font-bold text-gray-900 dark:text-white">
+            <div class="space-y-2">
+              <div class="flex justify-between items-center p-2 rounded-lg hover:bg-gray-50 dark:hover:bg-gray-800 transition-colors">
+                <span class="text-sm text-gray-600 dark:text-gray-400 font-medium">Total Queues</span>
+                <span class="text-base font-bold text-gray-900 dark:text-white">
                   {{ data.totalQueues || 0 }}
                 </span>
               </div>
-              <div class="flex justify-between items-center p-3 rounded-xl hover:bg-gray-50 dark:hover:bg-gray-800 transition-colors">
-                <span class="text-gray-600 dark:text-gray-400 font-medium">Active Leases</span>
-                <span class="text-lg font-bold text-blue-600 dark:text-blue-400">
+              <div class="flex justify-between items-center p-2 rounded-lg hover:bg-gray-50 dark:hover:bg-gray-800 transition-colors">
+                <span class="text-sm text-gray-600 dark:text-gray-400 font-medium">Active Leases</span>
+                <span class="text-base font-bold text-blue-600 dark:text-blue-400">
                   {{ data.activeLeases || 0 }}
                 </span>
               </div>
-              <div class="flex justify-between items-center p-3 rounded-xl hover:bg-gray-50 dark:hover:bg-gray-800 transition-colors">
-                <span class="text-gray-600 dark:text-gray-400 font-medium">Processing</span>
-                <span class="text-lg font-bold text-purple-600 dark:text-purple-400">
+              <div class="flex justify-between items-center p-2 rounded-lg hover:bg-gray-50 dark:hover:bg-gray-800 transition-colors">
+                <span class="text-sm text-gray-600 dark:text-gray-400 font-medium">Processing</span>
+                <span class="text-base font-bold text-purple-600 dark:text-purple-400">
                   {{ data.processingMessages || 0 }}
                 </span>
               </div>
-              <div class="flex justify-between items-center p-3 rounded-xl hover:bg-gray-50 dark:hover:bg-gray-800 transition-colors">
-                <span class="text-gray-600 dark:text-gray-400 font-medium">Messages/Sec</span>
-                <span class="text-lg font-bold text-gray-900 dark:text-white">
+              <div class="flex justify-between items-center p-2 rounded-lg hover:bg-gray-50 dark:hover:bg-gray-800 transition-colors">
+                <span class="text-sm text-gray-600 dark:text-gray-400 font-medium">Messages/Sec</span>
+                <span class="text-base font-bold text-gray-900 dark:text-white">
                   0
                 </span>
               </div>
@@ -243,22 +243,14 @@ const { startPolling, stopPolling } = usePolling(fetchData, 5000);
 const activeQueues = computed(() => {
   if (!data.value?.queues || data.value.queues.length === 0) return [];
   
-  // If we have pending messages in the system, show the queues
-  // The status endpoint doesn't include per-queue message counts,
-  // so we approximate by showing queues when system has pending messages
-  if (data.value.pendingMessages > 0) {
-    return data.value.queues.map(q => ({
-      name: q.name,
-      namespace: q.namespace,
-      partitions: q.partitions || 0,
-      // Approximate: distribute pending messages across queues
-      // In reality, we'd need to call the detailed queues endpoint for accurate counts
-      pendingMessages: Math.floor(data.value.pendingMessages / data.value.queues.length),
-      status: 'active'
-    })).slice(0, 5);
-  }
-  
-  return [];
+  // Show queues with their actual pending message counts
+  return data.value.queues.map(q => ({
+    name: q.name,
+    namespace: q.namespace,
+    partitions: q.partitions || 0,
+    pendingMessages: q.pending || 0,
+    status: q.pending > 0 ? 'active' : 'inactive'
+  })).slice(0, 5);
 });
 
 const chartData = computed(() => {
