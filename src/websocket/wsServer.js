@@ -191,10 +191,17 @@ export const createWebSocketServer = (app, eventManager) => {
     try {
       const result = await pool.query(`
         SELECT
-          (SELECT COUNT(*) FROM queen.messages_status WHERE status = 'pending' AND consumer_group IS NULL) as pending,
-          (SELECT COUNT(*) FROM queen.messages_status WHERE status = 'processing' AND consumer_group IS NULL) as processing,
+          (SELECT COALESCE(SUM(pending_estimate), 0)::integer FROM queen.partition_consumers 
+           WHERE consumer_group = '__QUEUE_MODE__') as pending,
+          (SELECT COUNT(*) FROM queen.partition_consumers 
+           WHERE consumer_group = '__QUEUE_MODE__' 
+           AND lease_expires_at IS NOT NULL 
+           AND lease_expires_at > NOW()) as processing,
           (SELECT COUNT(*) FROM queen.messages WHERE created_at > NOW() - INTERVAL '1 minute') as recent_created,
-          (SELECT COUNT(*) FROM queen.messages_status WHERE completed_at > NOW() - INTERVAL '1 minute' AND consumer_group IS NULL) as recent_completed
+          (SELECT COALESCE(SUM(CASE WHEN last_consumed_at > NOW() - INTERVAL '1 minute' 
+                                    THEN total_batches_consumed ELSE 0 END), 0)::integer 
+           FROM queen.partition_consumers 
+           WHERE consumer_group = '__QUEUE_MODE__') as recent_completed
       `);
       
       const stats = result.rows[0];

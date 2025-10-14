@@ -70,20 +70,19 @@ export const createStatusRoutes = (pool) => {
         SELECT 
           ts.minute,
           COALESCE(COUNT(DISTINCT m.id), 0) as messages_ingested,
-          COALESCE(COUNT(DISTINCT CASE 
-            WHEN ms.status = 'completed' 
-            AND ms.completed_at >= ts.minute 
-            AND ms.completed_at < ts.minute + INTERVAL '1 minute' 
-            THEN m.id 
-          END), 0) as messages_processed
+          COALESCE((
+            SELECT SUM(total_batches_consumed) 
+            FROM queen.partition_consumers pc
+            WHERE pc.consumer_group = '__QUEUE_MODE__'
+              AND pc.last_consumed_at >= ts.minute
+              AND pc.last_consumed_at < ts.minute + INTERVAL '1 minute'
+          ), 0) as messages_processed
         FROM time_series ts
         LEFT JOIN queen.messages m ON DATE_TRUNC('minute', m.created_at) = ts.minute
           AND m.created_at >= $1::timestamp
           AND m.created_at <= $2::timestamp
         LEFT JOIN queen.partitions p ON p.id = m.partition_id
         LEFT JOIN queen.queues q ON q.id = p.queue_id
-        LEFT JOIN queen.messages_status ms ON ms.message_id = m.id 
-          AND ms.consumer_group IS NULL
         WHERE 1=1 ${filterInfo.whereClause}
         GROUP BY ts.minute
         ORDER BY ts.minute DESC
@@ -97,7 +96,7 @@ export const createStatusRoutes = (pool) => {
           COALESCE(SUM(pc.total_messages_consumed), 0) as total_consumed
         FROM queen.queues q
         LEFT JOIN queen.partitions p ON p.queue_id = q.id
-        LEFT JOIN queen.partition_cursors pc ON pc.partition_id = p.id
+        LEFT JOIN queen.partition_consumers pc ON pc.partition_id = p.id
           AND pc.consumer_group = '__QUEUE_MODE__'
         LEFT JOIN queen.messages m ON m.partition_id = p.id
           AND m.created_at >= $1 AND m.created_at <= $2
@@ -107,22 +106,28 @@ export const createStatusRoutes = (pool) => {
         ORDER BY q.name
       `;
       
-      // Query 3: Message counts by status
+      // Query 3: Message counts (using partition_consumers estimates)
       const countsQuery = `
         SELECT 
           COUNT(DISTINCT m.id) as total_messages,
-          COUNT(DISTINCT CASE WHEN ms.status = 'pending' THEN m.id END) as pending,
-          COUNT(DISTINCT CASE WHEN ms.status = 'processing' THEN m.id END) as processing,
-          COUNT(DISTINCT CASE WHEN ms.status = 'completed' THEN m.id END) as completed,
-          COUNT(DISTINCT CASE WHEN ms.status = 'failed' THEN m.id END) as failed,
-          COUNT(DISTINCT dlq.id) as dead_letter
+          (SELECT COALESCE(SUM(pending_estimate), 0)::integer 
+           FROM queen.partition_consumers 
+           WHERE consumer_group = '__QUEUE_MODE__') as pending,
+          (SELECT COUNT(*) 
+           FROM queen.partition_consumers 
+           WHERE consumer_group = '__QUEUE_MODE__' 
+           AND lease_expires_at IS NOT NULL 
+           AND lease_expires_at > NOW()) as processing,
+          (SELECT COALESCE(SUM(total_messages_consumed), 0)::integer 
+           FROM queen.partition_consumers 
+           WHERE consumer_group = '__QUEUE_MODE__') as completed,
+          0 as failed,
+          (SELECT COUNT(*) 
+           FROM queen.dead_letter_queue 
+           WHERE consumer_group IS NULL OR consumer_group = '__QUEUE_MODE__') as dead_letter
         FROM queen.messages m
         LEFT JOIN queen.partitions p ON p.id = m.partition_id
         LEFT JOIN queen.queues q ON q.id = p.queue_id
-        LEFT JOIN queen.messages_status ms ON ms.message_id = m.id 
-          AND ms.consumer_group IS NULL
-        LEFT JOIN queen.dead_letter_queue dlq ON dlq.message_id = m.id
-          AND (dlq.consumer_group IS NULL OR dlq.consumer_group = '__QUEUE_MODE__')
         WHERE m.created_at >= $1 AND m.created_at <= $2
           ${filterInfo.whereClause}
       `;
@@ -134,8 +139,8 @@ export const createStatusRoutes = (pool) => {
           COUNT(DISTINCT partition_id) as partitions_with_leases,
           SUM(batch_size) as total_batch_size,
           SUM(acked_count) as total_acked
-        FROM queen.partition_leases
-        WHERE lease_expires_at > NOW() AND released_at IS NULL
+        FROM queen.partition_consumers
+        WHERE lease_expires_at IS NOT NULL AND lease_expires_at > NOW()
       `;
       
       // Query 5: DLQ stats
@@ -268,23 +273,28 @@ export const createStatusRoutes = (pool) => {
         q.created_at,
         COUNT(DISTINCT p.id) as partition_count,
         COUNT(DISTINCT m.id) as total_messages,
-        COUNT(DISTINCT CASE WHEN ms.status = 'pending' THEN m.id END) as pending,
-        COUNT(DISTINCT CASE WHEN ms.status = 'processing' THEN m.id END) as processing,
-        COUNT(DISTINCT CASE WHEN ms.status = 'completed' THEN m.id END) as completed,
-        COUNT(DISTINCT CASE WHEN ms.status = 'failed' THEN m.id END) as failed,
-        COUNT(DISTINCT dlq.id) as dead_letter,
-        EXTRACT(EPOCH FROM (NOW() - MIN(CASE WHEN ms.status = 'pending' 
-          THEN m.created_at END))) as lag_seconds,
-        AVG(CASE WHEN ms.status = 'completed' AND ms.completed_at IS NOT NULL 
-          THEN EXTRACT(EPOCH FROM (ms.completed_at - m.created_at)) END) as avg_processing_time_seconds
+        COALESCE(SUM(DISTINCT pc.pending_estimate), 0) as pending,
+        COUNT(DISTINCT CASE WHEN pc.lease_expires_at IS NOT NULL AND pc.lease_expires_at > NOW() THEN p.id END) as processing,
+        COALESCE(SUM(DISTINCT pc.total_messages_consumed), 0) as completed,
+        0 as failed,
+        (SELECT COUNT(*) FROM queen.dead_letter_queue dlq 
+         WHERE dlq.consumer_group = '__QUEUE_MODE__') as dead_letter,
+        (SELECT EXTRACT(EPOCH FROM (NOW() - MIN(m2.created_at)))
+         FROM queen.messages m2
+         JOIN queen.partitions p2 ON p2.id = m2.partition_id
+         LEFT JOIN queen.partition_consumers pc2 ON pc2.partition_id = p2.partition_id 
+           AND pc2.consumer_group = '__QUEUE_MODE__'
+         WHERE p2.queue_id = q.id
+           AND (m2.created_at, m2.id) > (COALESCE(pc2.last_consumed_created_at, '1970-01-01'::timestamptz),
+                                          COALESCE(pc2.last_consumed_id, '00000000-0000-0000-0000-000000000000'::uuid))
+        ) as lag_seconds,
+        0 as avg_processing_time_seconds
       FROM queen.queues q
       LEFT JOIN queen.partitions p ON p.queue_id = q.id
       LEFT JOIN queen.messages m ON m.partition_id = p.id 
         AND m.created_at >= $1 AND m.created_at <= $2
-      LEFT JOIN queen.messages_status ms ON ms.message_id = m.id 
-        AND ms.consumer_group IS NULL
-      LEFT JOIN queen.dead_letter_queue dlq ON dlq.message_id = m.id
-        AND (dlq.consumer_group IS NULL OR dlq.consumer_group = '__QUEUE_MODE__')
+      LEFT JOIN queen.partition_consumers pc ON pc.partition_id = p.id
+        AND pc.consumer_group = '__QUEUE_MODE__'
       WHERE 1=1 ${whereClause}
       GROUP BY q.id, q.name, q.namespace, q.task, q.priority, q.created_at
       ORDER BY q.priority DESC, q.name
@@ -360,35 +370,34 @@ export const createStatusRoutes = (pool) => {
         p.created_at as partition_created_at,
         p.last_activity as partition_last_activity,
         COUNT(DISTINCT m.id) as partition_total_messages,
-        COUNT(DISTINCT CASE WHEN ms.status = 'pending' THEN m.id END) as partition_pending,
-        COUNT(DISTINCT CASE WHEN ms.status = 'processing' THEN m.id END) as partition_processing,
-        COUNT(DISTINCT CASE WHEN ms.status = 'completed' THEN m.id END) as partition_completed,
-        COUNT(DISTINCT CASE WHEN ms.status = 'failed' THEN m.id END) as partition_failed,
+        COALESCE(pc.pending_estimate, 0) as partition_pending,
+        CASE WHEN pc.lease_expires_at IS NOT NULL AND pc.lease_expires_at > NOW() THEN 1 ELSE 0 END as partition_processing,
+        COALESCE(pc.total_messages_consumed, 0) as partition_completed,
+        0 as partition_failed,
         pc.total_messages_consumed,
         pc.total_batches_consumed,
         pc.last_consumed_at,
-        pl.lease_expires_at,
-        pl.batch_size as lease_batch_size,
-        pl.acked_count as lease_acked_count,
-        MIN(m.created_at) FILTER (WHERE ms.status = 'pending') as oldest_pending,
+        pc.lease_expires_at,
+        pc.batch_size as lease_batch_size,
+        pc.acked_count as lease_acked_count,
+        (SELECT MIN(created_at) FROM queen.messages m2 
+         WHERE m2.partition_id = p.id
+           AND (m2.created_at, m2.id) > (COALESCE(pc.last_consumed_created_at, '1970-01-01'::timestamptz),
+                                          COALESCE(pc.last_consumed_id, '00000000-0000-0000-0000-000000000000'::uuid))
+        ) as oldest_pending,
         MAX(m.created_at) as newest_message
       FROM queen.queues q
       LEFT JOIN queen.partitions p ON p.queue_id = q.id
       LEFT JOIN queen.messages m ON m.partition_id = p.id 
         AND m.created_at >= $2 AND m.created_at <= $3
-      LEFT JOIN queen.messages_status ms ON ms.message_id = m.id 
-        AND ms.consumer_group IS NULL
-      LEFT JOIN queen.partition_cursors pc ON pc.partition_id = p.id 
+      LEFT JOIN queen.partition_consumers pc ON pc.partition_id = p.id 
         AND pc.consumer_group = '__QUEUE_MODE__'
-      LEFT JOIN queen.partition_leases pl ON pl.partition_id = p.id 
-        AND pl.consumer_group = '__QUEUE_MODE__' 
-        AND pl.released_at IS NULL
       WHERE q.name = $1
       GROUP BY q.id, q.name, q.namespace, q.task, q.priority, q.lease_time, 
                q.retry_limit, q.ttl, q.max_queue_size, q.created_at,
                p.id, p.name, p.created_at, p.last_activity,
                pc.total_messages_consumed, pc.total_batches_consumed, pc.last_consumed_at,
-               pl.lease_expires_at, pl.batch_size, pl.acked_count
+               pc.lease_expires_at, pc.batch_size, pc.acked_count, pc.pending_estimate, pc.last_consumed_created_at, pc.last_consumed_id
       ORDER BY p.name
     `;
     
@@ -540,7 +549,7 @@ export const createStatusRoutes = (pool) => {
       FROM queen.messages m
       JOIN queen.partitions p ON p.id = m.partition_id
       JOIN queen.queues q ON q.id = p.queue_id
-      LEFT JOIN queen.messages_status ms ON ms.message_id = m.id 
+      LEFT JOIN queen.partition_consumers pc ON pc.partition_id = p.id AND pc.consumer_group = '__QUEUE_MODE__' 
         AND ms.consumer_group IS NULL
       WHERE ${conditions.join(' AND ')}
       ORDER BY m.created_at DESC
@@ -552,7 +561,7 @@ export const createStatusRoutes = (pool) => {
       FROM queen.messages m
       JOIN queen.partitions p ON p.id = m.partition_id
       JOIN queen.queues q ON q.id = p.queue_id
-      LEFT JOIN queen.messages_status ms ON ms.message_id = m.id 
+      LEFT JOIN queen.partition_consumers pc ON pc.partition_id = p.id AND pc.consumer_group = '__QUEUE_MODE__' 
         AND ms.consumer_group IS NULL
       WHERE ${conditions.join(' AND ')}
     `;
@@ -687,7 +696,7 @@ export const createStatusRoutes = (pool) => {
           AND m.created_at >= $1::timestamp AND m.created_at <= $2::timestamp
         LEFT JOIN queen.partitions p ON p.id = m.partition_id
         LEFT JOIN queen.queues q ON q.id = p.queue_id
-        LEFT JOIN queen.messages_status ms ON ms.message_id = m.id 
+        LEFT JOIN queen.partition_consumers pc ON pc.partition_id = p.id AND pc.consumer_group = '__QUEUE_MODE__' 
           AND ms.consumer_group IS NULL
         WHERE 1=1 ${filterInfo.whereClause}
         GROUP BY ts.bucket
@@ -710,7 +719,7 @@ export const createStatusRoutes = (pool) => {
           FROM queen.messages m
           JOIN queen.partitions p ON p.id = m.partition_id
           JOIN queen.queues q ON q.id = p.queue_id
-          JOIN queen.messages_status ms ON ms.message_id = m.id 
+          JOIN queen.partition_consumers pc ON pc.partition_id = p.id AND pc.consumer_group = '__QUEUE_MODE__' 
             AND ms.consumer_group IS NULL
             AND ms.status IN ('completed', 'failed')
             AND ms.completed_at IS NOT NULL
@@ -747,7 +756,7 @@ export const createStatusRoutes = (pool) => {
         LEFT JOIN queen.partitions p ON p.queue_id = q.id
         LEFT JOIN queen.messages m ON m.partition_id = p.id
           AND m.created_at >= $1 AND m.created_at <= $2
-        LEFT JOIN queen.messages_status ms ON ms.message_id = m.id 
+        LEFT JOIN queen.partition_consumers pc ON pc.partition_id = p.id AND pc.consumer_group = '__QUEUE_MODE__' 
           AND ms.consumer_group IS NULL
         WHERE 1=1 ${filterInfo.whereClause}
         GROUP BY q.id, q.name, q.namespace
@@ -902,7 +911,7 @@ export const createStatusRoutes = (pool) => {
         FROM queen.messages m
         LEFT JOIN queen.partitions p ON p.id = m.partition_id
         LEFT JOIN queen.queues q ON q.id = p.queue_id
-        LEFT JOIN queen.messages_status ms ON ms.message_id = m.id 
+        LEFT JOIN queen.partition_consumers pc ON pc.partition_id = p.id AND pc.consumer_group = '__QUEUE_MODE__' 
           AND ms.consumer_group IS NULL
         WHERE 1=1 ${filterInfo.whereClause}
       `;

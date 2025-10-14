@@ -236,14 +236,12 @@ export const createOptimizedQueueManager = (pool, resourceCache, eventManager, s
         // Check queue capacity if max_queue_size is set
         if (queueConfig.maxQueueSize > 0) {
           const capacityCheck = await client.query(
-            `SELECT COUNT(m.id) as current_depth
-             FROM queen.messages m
-             JOIN queen.partitions p ON m.partition_id = p.id
-             JOIN queen.queues q ON p.queue_id = q.id
-             LEFT JOIN queen.messages_status ms ON m.id = ms.message_id 
-               AND ms.consumer_group = '__QUEUE_MODE__'
-             WHERE q.name = $1
-               AND (ms.status IS NULL OR ms.status IN ('pending', 'processing'))`,
+            `SELECT COALESCE(SUM(pc.pending_estimate), 0)::integer as current_depth
+             FROM queen.queues q
+             LEFT JOIN queen.partitions p ON p.queue_id = q.id
+             LEFT JOIN queen.partition_consumers pc ON pc.partition_id = p.id
+               AND pc.consumer_group = '__QUEUE_MODE__'
+             WHERE q.name = $1`,
             [queueName]
           );
           
@@ -441,6 +439,7 @@ export const createOptimizedQueueManager = (pool, resourceCache, eventManager, s
   
   // Batch acknowledge messages with cursor-based advancement
   const acknowledgeMessages = async (acknowledgments, consumerGroup = null) => {
+    const ackStartTime = Date.now();
     const results = [];
     const actualConsumerGroup = consumerGroup || '__QUEUE_MODE__';
     
@@ -473,7 +472,10 @@ export const createOptimizedQueueManager = (pool, resourceCache, eventManager, s
         // TOTAL BATCH FAILURE: Don't advance cursor, allow retry
         // ═══════════════════════════════════════════════════════════════
         log(`[CURSOR] Total batch failure - cursor NOT advanced, same batch will retry on next POP`);
-        log(`${LogTypes.ACK_BATCH} | Total batch failure (${failedCount} messages) - cursor NOT advanced, batch will retry | ConsumerGroup: ${consumerGroup || 'QUEUE_MODE'}`);
+        const ackTime = Date.now() - ackStartTime;
+        const throughput = ackTime > 0 ? (totalMessages / (ackTime / 1000)).toFixed(0) : 0;
+        
+        log(`[${LogTypes.ACK_BATCH}] Total batch failure: ${failedCount} msgs | ${throughput} msg/s | ${ackTime}ms | ConsumerGroup: ${consumerGroup || 'QUEUE_MODE'}`);
         
         // Just release the lease - next POP will get same batch
         const allIds = acknowledgments.map(a => a.transactionId);
@@ -483,15 +485,15 @@ export const createOptimizedQueueManager = (pool, resourceCache, eventManager, s
             FROM queen.messages m
             WHERE m.transaction_id = ANY($1::varchar[])
           )
-          UPDATE queen.partition_leases pl
-          SET released_at = NOW(), 
+          UPDATE queen.partition_consumers pc
+          SET lease_expires_at = NULL,
+              lease_acquired_at = NULL,
               message_batch = NULL,
               batch_size = 0,
               acked_count = 0
           FROM affected_partitions ap
-          WHERE pl.partition_id = ap.partition_id
-            AND pl.consumer_group = $2
-            AND pl.released_at IS NULL
+          WHERE pc.partition_id = ap.partition_id
+            AND pc.consumer_group = $2
         `, [allIds, actualConsumerGroup]);
         
         grouped.failed.forEach(ack => {
@@ -527,23 +529,57 @@ export const createOptimizedQueueManager = (pool, resourceCache, eventManager, s
         const partitionId = lastMessage.partition_id;
         const partitionName = lastMessage.partition_name;
         
-        // Advance cursor to last message in batch (regardless of success/failure)
+        // Advance cursor + update lease atomically in partition_consumers
         const cursorUpdateResult = await client.query(`
-          INSERT INTO queen.partition_cursors (partition_id, consumer_group, last_consumed_created_at, last_consumed_id, total_messages_consumed, total_batches_consumed, last_consumed_at)
-          VALUES ($4, $5, $1, $2, $3, 1, NOW())
-          ON CONFLICT (partition_id, consumer_group) DO UPDATE
-          SET last_consumed_created_at = EXCLUDED.last_consumed_created_at,
-              last_consumed_id = EXCLUDED.last_consumed_id,
-              total_messages_consumed = queen.partition_cursors.total_messages_consumed + EXCLUDED.total_messages_consumed,
-              total_batches_consumed = queen.partition_cursors.total_batches_consumed + 1,
-              last_consumed_at = NOW()
-          RETURNING total_messages_consumed, total_batches_consumed
+          UPDATE queen.partition_consumers
+          SET 
+              -- Advance cursor (regardless of success/failure)
+              last_consumed_created_at = $1,
+              last_consumed_id = $2,
+              total_messages_consumed = total_messages_consumed + $3,
+              total_batches_consumed = total_batches_consumed + 1,
+              last_consumed_at = NOW(),
+              
+              -- Update pending estimate
+              pending_estimate = GREATEST(0, pending_estimate - $3),
+              last_stats_update = NOW(),
+              
+              -- Update/release lease
+              acked_count = acked_count + $3,
+              lease_expires_at = CASE 
+                  WHEN acked_count + $3 >= batch_size AND batch_size > 0 
+                  THEN NULL 
+                  ELSE lease_expires_at 
+              END,
+              lease_acquired_at = CASE 
+                  WHEN acked_count + $3 >= batch_size AND batch_size > 0 
+                  THEN NULL 
+                  ELSE lease_acquired_at 
+              END,
+              message_batch = CASE 
+                  WHEN acked_count + $3 >= batch_size AND batch_size > 0 
+                  THEN NULL 
+                  ELSE message_batch 
+              END,
+              batch_size = CASE 
+                  WHEN acked_count + $3 >= batch_size AND batch_size > 0 
+                  THEN 0 
+                  ELSE batch_size 
+              END
+          WHERE partition_id = $4 
+            AND consumer_group = $5
+          RETURNING total_messages_consumed, total_batches_consumed, 
+                    (lease_expires_at IS NULL) as lease_released
         `, [lastMessage.created_at, lastMessage.id, totalMessages, partitionId, actualConsumerGroup]);
         
         const newTotalConsumed = cursorUpdateResult.rows[0]?.total_messages_consumed || 0;
         const newTotalBatches = cursorUpdateResult.rows[0]?.total_batches_consumed || 0;
+        const leaseReleased = cursorUpdateResult.rows[0]?.lease_released || false;
         
-        log(`${LogTypes.ACK_BATCH} | Success: ${successCount} | Failed: ${failedCount} | Cursor: ${newTotalConsumed} msgs | ConsumerGroup: ${consumerGroup || 'QUEUE_MODE'}`);
+        const ackTime = Date.now() - ackStartTime;
+        const throughput = ackTime > 0 ? (totalMessages / (ackTime / 1000)).toFixed(0) : 0;
+        
+        log(`[${LogTypes.ACK_BATCH}] Success: ${successCount} | Failed: ${failedCount} | ${throughput} msg/s | ${ackTime}ms | Cursor: ${newTotalConsumed} msgs | Lease: ${leaseReleased ? 'Released' : 'Active'} | ConsumerGroup: ${consumerGroup || 'QUEUE_MODE'}`);
         
         // Move failed messages to DLQ (individual failures, not batch retry)
         if (grouped.failed.length > 0) {
@@ -565,44 +601,8 @@ export const createOptimizedQueueManager = (pool, resourceCache, eventManager, s
             ON CONFLICT DO NOTHING
           `, [failedIds, actualConsumerGroup, failedErrors]);
           
-          log(`${LogTypes.ACK_BATCH} | Moved ${failedCount} failed messages to DLQ | ConsumerGroup: ${consumerGroup || 'QUEUE_MODE'}`);
+          log(`[${LogTypes.ACK_BATCH}] Moved ${failedCount} failed messages to DLQ | ConsumerGroup: ${consumerGroup || 'QUEUE_MODE'}`);
         }
-        
-        // Increment acked_count and release partition lease ONLY if all messages are ACKed
-        const leaseReleaseResult = await client.query(`
-          UPDATE queen.partition_leases
-          SET 
-              -- Increment acked count and conditionally release when batch complete
-              acked_count = CASE 
-                WHEN acked_count + $3 >= batch_size AND batch_size > 0 
-                THEN 0
-                ELSE acked_count + $3
-              END,
-              released_at = CASE 
-                WHEN acked_count + $3 >= batch_size AND batch_size > 0 
-                THEN NOW() 
-                ELSE released_at 
-              END,
-              message_batch = CASE 
-                WHEN acked_count + $3 >= batch_size AND batch_size > 0 
-                THEN NULL 
-                ELSE message_batch 
-              END,
-              batch_size = CASE 
-                WHEN acked_count + $3 >= batch_size AND batch_size > 0 
-                THEN 0 
-                ELSE batch_size 
-              END
-          WHERE partition_id = $1
-            AND consumer_group = $2
-            AND released_at IS NULL
-          RETURNING (acked_count = 0 AND released_at IS NOT NULL) as lease_released
-            `, [partitionId, actualConsumerGroup, totalMessages]);
-        
-        // Optionally log lease release for debugging
-        // if (leaseReleaseResult.rows[0]?.lease_released) {
-        //   log(`[ACK] Partition lease released after completing batch`);
-        // }
         
         // Add results
         grouped.completed.forEach(ack => {
@@ -618,52 +618,21 @@ export const createOptimizedQueueManager = (pool, resourceCache, eventManager, s
     return results;
   };
   
-  // Reclaim expired leases (now includes partition leases)
+  // Reclaim expired leases from partition_consumers
   const reclaimExpiredLeases = async () => {
     return withTransaction(pool, async (client) => {
-      // First, handle expired partition leases
-      // PERFORMANCE OPTIMIZATION: With our optimization, messages won't have 'processing' status
-      // The partition lease release is what matters - it makes messages available again
-      const partitionLeaseResult = await client.query(
-        `WITH expired_leases AS (
-          UPDATE queen.partition_leases
-          SET released_at = NOW()
-          WHERE lease_expires_at < NOW()
-            AND released_at IS NULL
-          RETURNING partition_id, consumer_group, message_batch
-        )
-        -- Reset message status for messages in expired leases (if status exists)
-        -- NOTE: With optimization, most messages won't have status, so this updates fewer rows
-        UPDATE queen.messages_status ms
-        SET status = 'pending',
-            retry_count = COALESCE(retry_count, 0) + 1,
-            failed_at = NOW(),
-            error_message = 'Partition lease expired',
-            lease_expires_at = NULL,
-            worker_id = NULL,
-            processing_at = NULL
-        FROM expired_leases el
-        WHERE ms.message_id = ANY(
-          SELECT jsonb_array_elements_text(el.message_batch)::uuid
-        )
-        AND ms.consumer_group = el.consumer_group
-        RETURNING ms.message_id`
-      );
-      
-      if (partitionLeaseResult.rows.length > 0) {
-        log(`${LogTypes.RECLAIM} | Expired partition leases reclaimed | Status rows updated: ${partitionLeaseResult.rows.length}`);
-      }
-      
-      // Then handle individual message lease expiration
+      // Clear expired leases from partition_consumers
       const result = await client.query(
-        `UPDATE queen.messages_status 
-         SET status = 'pending', 
-             lease_expires_at = NULL,
-             worker_id = NULL,
-             processing_at = NULL
-         WHERE status = 'processing' 
+        `UPDATE queen.partition_consumers
+         SET lease_expires_at = NULL,
+             lease_acquired_at = NULL,
+             message_batch = NULL,
+             batch_size = 0,
+             acked_count = 0,
+             worker_id = NULL
+         WHERE lease_expires_at IS NOT NULL
            AND lease_expires_at < NOW()
-         RETURNING message_id, consumer_group`
+         RETURNING partition_id, consumer_group`
       );
       
       if (result.rows.length > 0) {
@@ -674,7 +643,7 @@ export const createOptimizedQueueManager = (pool, resourceCache, eventManager, s
         });
         
         Object.entries(byGroup).forEach(([group, count]) => {
-          log(`Reclaimed ${count} expired leases for consumer group: ${group}`);
+          log(`${LogTypes.RECLAIM} | Reclaimed ${count} expired leases for consumer group: ${group}`);
         });
       }
       
@@ -682,7 +651,7 @@ export const createOptimizedQueueManager = (pool, resourceCache, eventManager, s
     });
   };
   
-  // Get queue statistics (updated for new structure)
+  // Get queue statistics (using partition_consumers for fast estimates)
   const getQueueStats = async (filters = {}) => {
     const { queue, namespace, task, fromDateTime, toDateTime } = filters;
     
@@ -692,20 +661,26 @@ export const createOptimizedQueueManager = (pool, resourceCache, eventManager, s
         q.namespace,
         q.task,
         p.name as partition,
-        cg.name as consumer_group,
-        COUNT(CASE WHEN ms.status = 'pending' THEN 1 END) as pending,
-        COUNT(CASE WHEN ms.status = 'processing' THEN 1 END) as processing,
-        COUNT(CASE WHEN ms.status = 'completed' THEN 1 END) as completed,
-        COUNT(CASE WHEN ms.status = 'failed' THEN 1 END) as failed,
-        COUNT(DISTINCT dlq.message_id) as dead_letter,
-        COUNT(m.id) as total_messages,
-        COUNT(DISTINCT cg.name) as consumer_groups_count
+        COALESCE(pc.pending_estimate, 0) as pending,
+        CASE WHEN pc.lease_expires_at IS NOT NULL THEN 1 ELSE 0 END as processing,
+        COALESCE(pc.total_messages_consumed, 0) as completed,
+        0 as failed,
+        (SELECT COUNT(*) FROM queen.dead_letter_queue dlq 
+         WHERE dlq.partition_id = p.id 
+         AND dlq.consumer_group = COALESCE(pc.consumer_group, '__QUEUE_MODE__')) as dead_letter,
+        (SELECT COUNT(*) FROM queen.messages m 
+         WHERE m.partition_id = p.id
+         ${fromDateTime ? 'AND m.created_at >= $' + (1 + (queue ? 1 : 0) + (namespace ? 1 : 0) + (task ? 1 : 0)) + '::timestamp' : ''}
+         ${toDateTime ? 'AND m.created_at <= $' + (1 + (queue ? 1 : 0) + (namespace ? 1 : 0) + (task ? 1 : 0) + (fromDateTime ? 1 : 0)) + '::timestamp' : ''}
+        ) as total_messages,
+        (SELECT COUNT(DISTINCT consumer_group) 
+         FROM queen.partition_consumers 
+         WHERE partition_id = p.id 
+         AND consumer_group != '__QUEUE_MODE__') as consumer_groups_count
       FROM queen.queues q
       LEFT JOIN queen.partitions p ON p.queue_id = q.id
-      LEFT JOIN queen.messages m ON m.partition_id = p.id
-      LEFT JOIN queen.messages_status ms ON ms.message_id = m.id
-      LEFT JOIN queen.dead_letter_queue dlq ON dlq.message_id = m.id
-      LEFT JOIN queen.consumer_groups cg ON cg.queue_id = q.id AND cg.active = true
+      LEFT JOIN queen.partition_consumers pc ON pc.partition_id = p.id 
+        AND pc.consumer_group = '__QUEUE_MODE__'
     `;
     
     const conditions = [];
@@ -726,14 +701,12 @@ export const createOptimizedQueueManager = (pool, resourceCache, eventManager, s
       params.push(task);
     }
     
-    // Add date/time filtering
+    // Add date params for subqueries
     if (fromDateTime) {
-      conditions.push(`m.created_at >= $${params.length + 1}::timestamp`);
       params.push(fromDateTime);
     }
     
     if (toDateTime) {
-      conditions.push(`m.created_at <= $${params.length + 1}::timestamp`);
       params.push(toDateTime);
     }
     
@@ -741,14 +714,13 @@ export const createOptimizedQueueManager = (pool, resourceCache, eventManager, s
       query += ` WHERE ${conditions.join(' AND ')}`;
     }
     
-    query += ` GROUP BY q.name, q.namespace, q.task, p.name, cg.name
-               ORDER BY q.name, p.name, cg.name`;
+    query += ` ORDER BY q.name, p.name`;
     
     const result = await pool.query(query, params);
     return result.rows;
   };
   
-  // Get queue lag statistics
+  // Get queue lag statistics (simplified with partition_consumers)
   const getQueueLag = async (filters = {}) => {
     const { queue, namespace, task, fromDateTime, toDateTime } = filters;
     
@@ -759,48 +731,31 @@ export const createOptimizedQueueManager = (pool, resourceCache, eventManager, s
           q.namespace,
           q.task,
           p.name as partition,
-          COUNT(CASE WHEN ms.status = 'pending' THEN 1 END) as pending_count,
-          COUNT(CASE WHEN ms.status = 'processing' THEN 1 END) as processing_count,
-          COUNT(CASE WHEN ms.status IN ('pending', 'processing') THEN 1 END) as total_backlog,
-          COUNT(CASE 
-            WHEN ms.status = 'completed' 
-            AND ms.completed_at >= COALESCE($1::timestamp, NOW() - INTERVAL '1 hour')
-            AND ms.completed_at <= COALESCE($2::timestamp, NOW())
-            THEN 1 
-          END) as completed_messages,
-          AVG(CASE 
-            WHEN ms.status = 'completed' AND ms.completed_at IS NOT NULL AND m.created_at IS NOT NULL
-            THEN EXTRACT(EPOCH FROM (ms.completed_at - m.created_at))
-            ELSE NULL
-          END) as avg_processing_time_seconds,
-          PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY 
-            CASE 
-              WHEN ms.status = 'completed' AND ms.completed_at IS NOT NULL AND m.created_at IS NOT NULL
-              THEN EXTRACT(EPOCH FROM (ms.completed_at - m.created_at))
-              ELSE NULL
-            END
-          ) as median_processing_time_seconds,
-          PERCENTILE_CONT(0.95) WITHIN GROUP (ORDER BY 
-            CASE 
-              WHEN ms.status = 'completed' AND ms.completed_at IS NOT NULL AND m.created_at IS NOT NULL
-              THEN EXTRACT(EPOCH FROM (ms.completed_at - m.created_at))
-              ELSE NULL
-            END
-          ) as p95_processing_time_seconds,
-          MIN(m.created_at) FILTER (WHERE ms.status IN ('pending', 'processing')) as oldest_unprocessed,
-          MAX(m.created_at) FILTER (WHERE ms.status = 'completed') as newest_completed
+          COALESCE(pc.pending_estimate, 0) as pending_count,
+          CASE WHEN pc.lease_expires_at IS NOT NULL THEN 1 ELSE 0 END as processing_count,
+          COALESCE(pc.pending_estimate, 0) + CASE WHEN pc.lease_expires_at IS NOT NULL THEN 1 ELSE 0 END as total_backlog,
+          COALESCE(pc.total_messages_consumed, 0) as completed_messages,
+          0 as avg_processing_time_seconds,
+          0 as median_processing_time_seconds,
+          0 as p95_processing_time_seconds,
+          (SELECT MIN(created_at) FROM queen.messages m 
+           WHERE m.partition_id = p.id 
+           AND (m.created_at, m.id) > (COALESCE(pc.last_consumed_created_at, '1970-01-01'::timestamptz), 
+                                        COALESCE(pc.last_consumed_id, '00000000-0000-0000-0000-000000000000'::uuid))
+          ) as oldest_unprocessed,
+          (SELECT MAX(created_at) FROM queen.messages m
+           WHERE m.partition_id = p.id
+           AND (m.created_at, m.id) <= (COALESCE(pc.last_consumed_created_at, NOW()::timestamptz), 
+                                         COALESCE(pc.last_consumed_id, gen_random_uuid()))
+          ) as newest_completed
         FROM queen.queues q
         LEFT JOIN queen.partitions p ON p.queue_id = q.id
-        LEFT JOIN queen.messages m ON m.partition_id = p.id
-        LEFT JOIN queen.messages_status ms ON ms.message_id = m.id AND ms.consumer_group = '__QUEUE_MODE__'
+        LEFT JOIN queen.partition_consumers pc ON pc.partition_id = p.id 
+          AND pc.consumer_group = '__QUEUE_MODE__'
     `;
     
     const conditions = [];
     const params = [];
-    
-    // Add date params first (they're referenced in the query above as $1 and $2)
-    params.push(fromDateTime || null);
-    params.push(toDateTime || null);
     
     if (queue) {
       conditions.push(`q.name = $${params.length + 1}`);
@@ -821,7 +776,9 @@ export const createOptimizedQueueManager = (pool, resourceCache, eventManager, s
       query += ` WHERE ${conditions.join(' AND ')}`;
     }
     
-    query += ` GROUP BY q.name, q.namespace, q.task, p.name
+    query += ` GROUP BY q.name, q.namespace, q.task, p.name, pc.pending_estimate, 
+                       pc.lease_expires_at, pc.total_messages_consumed, 
+                       pc.last_consumed_created_at, pc.last_consumed_id, p.id
       )
       SELECT 
         queue,
@@ -833,9 +790,9 @@ export const createOptimizedQueueManager = (pool, resourceCache, eventManager, s
           'processingCount', processing_count,
           'totalBacklog', total_backlog,
           'completedMessages', completed_messages,
-          'avgProcessingTimeSeconds', COALESCE(avg_processing_time_seconds, 0),
-          'medianProcessingTimeSeconds', COALESCE(median_processing_time_seconds, 0),
-          'p95ProcessingTimeSeconds', COALESCE(p95_processing_time_seconds, 0),
+          'avgProcessingTimeSeconds', avg_processing_time_seconds,
+          'medianProcessingTimeSeconds', median_processing_time_seconds,
+          'p95ProcessingTimeSeconds', p95_processing_time_seconds,
           'estimatedLagSeconds', CASE 
             WHEN oldest_unprocessed IS NOT NULL 
             THEN EXTRACT(EPOCH FROM (NOW() - oldest_unprocessed))
@@ -1063,12 +1020,14 @@ export const createOptimizedQueueManager = (pool, resourceCache, eventManager, s
             p.name as partition_name
           FROM queen.queues q
           JOIN queen.partitions p ON p.queue_id = q.id
-          LEFT JOIN queen.partition_leases pl ON p.id = pl.partition_id
-            AND pl.consumer_group = $1
-            AND pl.released_at IS NULL
-            AND pl.lease_expires_at > NOW()
           WHERE q.name = $2
-            AND pl.id IS NULL  -- Only unlocked partitions
+            AND NOT EXISTS (
+              SELECT 1 FROM queen.partition_consumers pc
+              WHERE pc.partition_id = p.id
+                AND pc.consumer_group = $1
+                AND pc.lease_expires_at IS NOT NULL
+                AND pc.lease_expires_at > NOW()
+            )
           ORDER BY RANDOM()
           LIMIT $3
         `, [actualConsumerGroup, queue, config.QUEUE.MAX_PARTITION_CANDIDATES]);
@@ -1096,12 +1055,10 @@ export const createOptimizedQueueManager = (pool, resourceCache, eventManager, s
           FROM queen.messages m
           JOIN queen.partitions p ON m.partition_id = p.id
           JOIN queen.queues q ON p.queue_id = q.id
-          LEFT JOIN queen.partition_cursors pc ON p.id = pc.partition_id
+          LEFT JOIN queen.partition_consumers pc ON p.id = pc.partition_id
             AND pc.consumer_group = $1
-          LEFT JOIN queen.partition_leases pl ON p.id = pl.partition_id 
-            AND pl.consumer_group = $1
           WHERE m.id > COALESCE(pc.last_consumed_id, '00000000-0000-0000-0000-000000000000'::uuid)
-            AND m.created_at <= NOW() - INTERVAL '1 second' * q.delayed_processing
+            AND (q.delayed_processing = 0 OR m.created_at <= NOW() - INTERVAL '1 second' * q.delayed_processing)
             AND (q.max_wait_time_seconds = 0 OR 
                  m.created_at > NOW() - INTERVAL '1 second' * q.max_wait_time_seconds)
             AND (q.window_buffer = 0 OR NOT EXISTS (
@@ -1109,7 +1066,13 @@ export const createOptimizedQueueManager = (pool, resourceCache, eventManager, s
               WHERE m2.partition_id = p.id 
                 AND m2.created_at > NOW() - INTERVAL '1 second' * q.window_buffer
             ))
-            AND (pl.id IS NULL OR pl.released_at IS NOT NULL OR pl.lease_expires_at <= NOW())
+            AND NOT EXISTS (
+              SELECT 1 FROM queen.partition_consumers pc2
+              WHERE pc2.partition_id = p.id
+                AND pc2.consumer_group = $1
+                AND pc2.lease_expires_at IS NOT NULL
+                AND pc2.lease_expires_at > NOW()
+            )
         `;
         
         const params = [actualConsumerGroup];
@@ -1148,11 +1111,6 @@ export const createOptimizedQueueManager = (pool, resourceCache, eventManager, s
         return { messages: [] };
       }
       
-      // Log partition selection for debugging (disabled to reduce noise)
-      // if (!partition && queueInfo && !queueInfo.queue_name.startsWith('__')) {
-      //   log(`DEBUG: Found ${candidatePartitions.length} candidate partitions for ${accessMode} mode`);
-      // }
-      
       // ─────────────────────────────────────────────────────────────────────
       // PHASE 2: Try to Acquire Lease on a Candidate Partition (shared logic)
       // ─────────────────────────────────────────────────────────────────────
@@ -1176,77 +1134,67 @@ export const createOptimizedQueueManager = (pool, resourceCache, eventManager, s
           // The key insight: released_at IS NULL means someone holds the lease
           // We can only acquire if: released_at IS NOT NULL OR lease expired
           try {
-            // First, try to INSERT (for new lease) or check if UPDATE is possible
+            // Get or create cursor position for this partition/consumer group
+            // Handle subscription modes for bus mode (new-only, from-timestamp, etc.)
+            let initialCursorId = '00000000-0000-0000-0000-000000000000';
+            let initialCursorTimestamp = null;
+            
+            // For bus mode with subscription preferences
+            if (consumerGroup && (subscriptionMode || subscriptionFrom)) {
+              if (subscriptionMode === 'new' || subscriptionMode === 'new-only' || subscriptionFrom === 'now') {
+                // Start from NOW - get the latest message ID to use as cursor
+                const latestMsg = await client.query(`
+                  SELECT id, created_at FROM queen.messages
+                  WHERE partition_id = $1
+                  ORDER BY created_at DESC, id DESC
+                  LIMIT 1
+                `, [candidate.partition_id]);
+                
+                if (latestMsg.rows.length > 0) {
+                  initialCursorId = latestMsg.rows[0].id;
+                  initialCursorTimestamp = latestMsg.rows[0].created_at;
+                }
+              }
+              // else: subscriptionFrom='all' or no preference → start from beginning (00000000...)
+            }
+            
+            // Step 1: Ensure cursor exists (idempotent)
+            await client.query(`
+              INSERT INTO queen.partition_consumers (
+                partition_id, 
+                consumer_group, 
+                last_consumed_id, 
+                last_consumed_created_at
+              )
+              VALUES ($1, $2, $3, $4)
+              ON CONFLICT (partition_id, consumer_group) DO NOTHING
+            `, [candidate.partition_id, actualConsumerGroup, initialCursorId, initialCursorTimestamp]);
+            
+            // Step 2: Try to acquire lease and get cursor position
             const leaseResult = await client.query(`
-              WITH attempted_acquire AS (
-                INSERT INTO queen.partition_leases (
-                  partition_id, 
-                  consumer_group, 
-                  lease_expires_at,
-                  batch_size,
-                  acked_count,
-                  message_batch,
-                  released_at
-                ) VALUES ($1, $2, NOW() + INTERVAL '1 second' * $3, 0, 0, NULL, NULL)
-                ON CONFLICT (partition_id, consumer_group) 
-                DO UPDATE SET 
-                  lease_expires_at = NOW() + INTERVAL '1 second' * $3,
-                  released_at = NULL,
+              UPDATE queen.partition_consumers
+              SET lease_expires_at = NOW() + INTERVAL '1 second' * $3,
+                  lease_acquired_at = NOW(),
                   message_batch = NULL,
                   batch_size = 0,
                   acked_count = 0
-                WHERE 
-                  -- Only acquire if lease is released OR expired
-                  queen.partition_leases.released_at IS NOT NULL 
-                  OR queen.partition_leases.lease_expires_at <= NOW()
-                RETURNING partition_id, true as acquired
-              )
-              SELECT 
-                CASE WHEN EXISTS (SELECT 1 FROM attempted_acquire) THEN true ELSE false END as acquired
+              WHERE partition_id = $1 
+                AND consumer_group = $2
+                AND (lease_expires_at IS NULL OR lease_expires_at <= NOW())
+              RETURNING partition_id, last_consumed_id, last_consumed_created_at, 
+                        total_messages_consumed, lease_expires_at
             `, [candidate.partition_id, actualConsumerGroup, candidate.lease_time]);
             
             // Check if we acquired the lease
+            const acquired = leaseResult.rows.length > 0;
             const result = leaseResult.rows[0];
-            const acquired = result && result.acquired;
             
             if (acquired) {
               // Lease acquired! Now check if this partition has messages
               // If not, release and try next candidate
               const messageQueryStart = Date.now();
               
-              // Get or create cursor position for this partition/consumer group
-              // Handle subscription modes for bus mode (new-only, from-timestamp, etc.)
-              let initialCursorId = '00000000-0000-0000-0000-000000000000';
-              let initialCursorTimestamp = null;
-              
-              // For bus mode with subscription preferences
-              if (consumerGroup && (subscriptionMode || subscriptionFrom)) {
-                if (subscriptionMode === 'new' || subscriptionMode === 'new-only' || subscriptionFrom === 'now') {
-                  // Start from NOW - get the latest message ID to use as cursor
-                  const latestMsg = await client.query(`
-                    SELECT id, created_at FROM queen.messages
-                    WHERE partition_id = $1
-                    ORDER BY created_at DESC, id DESC
-                    LIMIT 1
-                  `, [candidate.partition_id]);
-                  
-                  if (latestMsg.rows.length > 0) {
-                    initialCursorId = latestMsg.rows[0].id;
-                    initialCursorTimestamp = latestMsg.rows[0].created_at;
-                  }
-                }
-                // else: subscriptionFrom='all' or no preference → start from beginning (00000000...)
-              }
-              
-              const cursorResult = await client.query(`
-                INSERT INTO queen.partition_cursors (partition_id, consumer_group, last_consumed_id, last_consumed_created_at)
-                VALUES ($1, $2, $3, $4)
-                ON CONFLICT (partition_id, consumer_group) DO UPDATE
-                  SET last_consumed_at = NOW()
-                RETURNING last_consumed_created_at, last_consumed_id, total_messages_consumed
-              `, [candidate.partition_id, actualConsumerGroup, initialCursorId, initialCursorTimestamp]);
-              
-              const cursor = cursorResult.rows[0];
+              const cursor = result;
               const cursorId = cursor.last_consumed_id || '00000000-0000-0000-0000-000000000000';
               const totalConsumed = cursor.total_messages_consumed || 0;
               
@@ -1313,8 +1261,9 @@ export const createOptimizedQueueManager = (pool, resourceCache, eventManager, s
                 // No messages in this partition (cursor exhausted) - release lease and try next candidate
                 log(`[CURSOR] Partition ${candidate.partition_name} exhausted after ${totalConsumed} messages`);
                 await client.query(`
-                  UPDATE queen.partition_leases
-                  SET released_at = NOW()
+                  UPDATE queen.partition_consumers
+                  SET lease_expires_at = NULL,
+                      lease_acquired_at = NULL
                   WHERE partition_id = $1 AND consumer_group = $2
                 `, [candidate.partition_id, actualConsumerGroup]);
                 continue; // Try next candidate partition
@@ -1330,7 +1279,7 @@ export const createOptimizedQueueManager = (pool, resourceCache, eventManager, s
               const leaseUpdateStart = Date.now();
               const messageIds = messages.map(m => m.id);
               await client.query(`
-                UPDATE queen.partition_leases
+                UPDATE queen.partition_consumers
                 SET message_batch = $1::jsonb,
                     batch_size = $2::integer,
                     acked_count = 0
@@ -1378,8 +1327,9 @@ export const createOptimizedQueueManager = (pool, resourceCache, eventManager, s
               
               const totalTime = Date.now() - startTime;
               const overhead = totalTime - (connectionWaitTime + candidateQueryTime + messageQueryTime + leaseUpdateTime + decryptTime);
+              const throughput = totalTime > 0 ? (formattedMessages.length / (totalTime / 1000)).toFixed(0) : 0;
               
-              log(`${LogTypes.POP} | Mode: ${accessMode} | Count: ${formattedMessages.length} | ConsumerGroup: ${actualConsumerGroup === '__QUEUE_MODE__' ? 'QUEUE_MODE' : actualConsumerGroup}`);
+              log(`[${LogTypes.POP}] Mode: ${accessMode} | Count: ${formattedMessages.length} | ${throughput} msg/s | ConsumerGroup: ${actualConsumerGroup === '__QUEUE_MODE__' ? 'QUEUE_MODE' : actualConsumerGroup}`);
               log(`  ⏱️  ConnWait:${connectionWaitTime.toFixed(0)}ms CandidateQ:${candidateQueryTime.toFixed(0)}ms MsgQuery:${messageQueryTime.toFixed(0)}ms LeaseUpd:${leaseUpdateTime.toFixed(0)}ms Decrypt:${decryptTime.toFixed(0)}ms Overhead:${overhead.toFixed(0)}ms Total:${totalTime.toFixed(0)}ms`);
               
               return { messages: formattedMessages };

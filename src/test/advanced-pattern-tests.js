@@ -217,12 +217,12 @@ export async function testDeadLetterQueuePattern(client) {
       
       for (const msg of messages) {
         if (msg.data.shouldFail) {
-          // Check retry count
+          // Check if message is in DLQ
           const retryCheck = await dbPool.query(`
-            SELECT ms.retry_count 
-            FROM queen.messages_status ms
-            JOIN queen.messages m ON ms.message_id = m.id
-            WHERE m.transaction_id = $1 AND ms.consumer_group = '__QUEUE_MODE__'
+            SELECT dlq.retry_count 
+            FROM queen.dead_letter_queue dlq
+            JOIN queen.messages m ON dlq.message_id = m.id
+            WHERE m.transaction_id = $1 AND dlq.consumer_group = '__QUEUE_MODE__'
           `, [msg.transactionId]);
           
           const retryCount = retryCheck.rows[0]?.retry_count || 0;

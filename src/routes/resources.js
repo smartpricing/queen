@@ -15,12 +15,12 @@ export const createResourcesRoutes = (pool, systemEventManager) => {
         q.created_at as queue_created_at,
         COUNT(DISTINCT p.id) as partition_count,
         COUNT(DISTINCT m.id) as message_count,
-        COUNT(DISTINCT CASE WHEN ms.status = 'pending' THEN m.id END) as pending_count,
-        COUNT(DISTINCT CASE WHEN ms.status = 'processing' THEN m.id END) as processing_count
+        COALESCE(SUM(DISTINCT pc.pending_estimate), 0) as pending_count,
+        COUNT(DISTINCT CASE WHEN pc.lease_expires_at IS NOT NULL AND pc.lease_expires_at > NOW() THEN p.id END) as processing_count
       FROM queen.queues q
       LEFT JOIN queen.partitions p ON p.queue_id = q.id
       LEFT JOIN queen.messages m ON m.partition_id = p.id
-      LEFT JOIN queen.messages_status ms ON ms.message_id = m.id AND ms.consumer_group IS NULL
+      LEFT JOIN queen.partition_consumers pc ON pc.partition_id = p.id AND pc.consumer_group = '__QUEUE_MODE__'
       WHERE 1=1
     `;
     
@@ -74,26 +74,27 @@ export const createResourcesRoutes = (pool, systemEventManager) => {
     
     const queue = queueResult.rows[0];
     
-    // Get partitions with stats (partitions no longer have options or priority)
+    // Get partitions with stats using partition_consumers
     const partitionsResult = await pool.query(`
       SELECT 
         p.id,
         p.name,
         p.created_at,
         COUNT(DISTINCT m.id) as message_count,
-        COUNT(DISTINCT CASE WHEN ms.status = 'pending' THEN m.id END) as pending,
-        COUNT(DISTINCT CASE WHEN ms.status = 'processing' THEN m.id END) as processing,
-        COUNT(DISTINCT CASE WHEN ms.status = 'completed' THEN m.id END) as completed,
-        COUNT(DISTINCT CASE WHEN ms.status = 'failed' THEN m.id END) as failed,
-        COUNT(DISTINCT dlq.message_id) as dead_letter,
+        COALESCE(pc.pending_estimate, 0) as pending,
+        CASE WHEN pc.lease_expires_at IS NOT NULL AND pc.lease_expires_at > NOW() THEN 1 ELSE 0 END as processing,
+        COALESCE(pc.total_messages_consumed, 0) as completed,
+        0 as failed,
+        (SELECT COUNT(*) FROM queen.dead_letter_queue dlq 
+         WHERE dlq.partition_id = p.id 
+         AND (dlq.consumer_group IS NULL OR dlq.consumer_group = '__QUEUE_MODE__')) as dead_letter,
         MIN(m.created_at) as oldest_message,
         MAX(m.created_at) as newest_message
       FROM queen.partitions p
       LEFT JOIN queen.messages m ON m.partition_id = p.id
-      LEFT JOIN queen.messages_status ms ON ms.message_id = m.id AND ms.consumer_group IS NULL
-      LEFT JOIN queen.dead_letter_queue dlq ON dlq.message_id = m.id AND (dlq.consumer_group IS NULL OR dlq.consumer_group = '__QUEUE_MODE__')
+      LEFT JOIN queen.partition_consumers pc ON pc.partition_id = p.id AND pc.consumer_group = '__QUEUE_MODE__'
       WHERE p.queue_id = $1
-      GROUP BY p.id, p.name, p.created_at
+      GROUP BY p.id, p.name, p.created_at, pc.pending_estimate, pc.lease_expires_at, pc.total_messages_consumed
       ORDER BY p.name
     `, [queue.id]);
     
@@ -154,13 +155,13 @@ export const createResourcesRoutes = (pool, systemEventManager) => {
         q.namespace,
         q.task,
         q.priority,
-        COUNT(DISTINCT CASE WHEN ms.status = 'pending' THEN m.id END) as pending,
-        COUNT(DISTINCT CASE WHEN ms.status = 'processing' THEN m.id END) as processing,
+        COALESCE(pc.pending_estimate, 0) as pending,
+        CASE WHEN pc.lease_expires_at IS NOT NULL AND pc.lease_expires_at > NOW() THEN 1 ELSE 0 END as processing,
         COUNT(DISTINCT m.id) as total
       FROM queen.partitions p
       JOIN queen.queues q ON q.id = p.queue_id
       LEFT JOIN queen.messages m ON m.partition_id = p.id
-      LEFT JOIN queen.messages_status ms ON ms.message_id = m.id AND ms.consumer_group IS NULL
+      LEFT JOIN queen.partition_consumers pc ON pc.partition_id = p.id AND pc.consumer_group = '__QUEUE_MODE__'
       WHERE 1=1
     `;
     
@@ -171,11 +172,11 @@ export const createResourcesRoutes = (pool, systemEventManager) => {
     }
     
     query += ` GROUP BY p.id, p.name, p.created_at, 
-                        q.name, q.namespace, q.task, q.priority`;
+                        q.name, q.namespace, q.task, q.priority, pc.pending_estimate, pc.lease_expires_at`;
     
     if (minDepth) {
       params.push(minDepth);
-      query += ` HAVING COUNT(DISTINCT CASE WHEN ms.status = 'pending' THEN m.id END) >= $${params.length}`;
+      query += ` HAVING COALESCE(pc.pending_estimate, 0) >= $${params.length}`;
     }
     
     query += ` ORDER BY q.name, q.priority DESC, p.name`;
@@ -204,11 +205,11 @@ export const createResourcesRoutes = (pool, systemEventManager) => {
         COUNT(DISTINCT q.id) as queue_count,
         COUNT(DISTINCT p.id) as partition_count,
         COUNT(DISTINCT m.id) as message_count,
-        COUNT(DISTINCT CASE WHEN ms.status = 'pending' THEN m.id END) as pending_count
+        COALESCE(SUM(pc.pending_estimate), 0) as pending_count
       FROM queen.queues q
       LEFT JOIN queen.partitions p ON p.queue_id = q.id
       LEFT JOIN queen.messages m ON m.partition_id = p.id
-      LEFT JOIN queen.messages_status ms ON ms.message_id = m.id AND ms.consumer_group IS NULL
+      LEFT JOIN queen.partition_consumers pc ON pc.partition_id = p.id AND pc.consumer_group = '__QUEUE_MODE__'
       WHERE q.namespace IS NOT NULL
       GROUP BY q.namespace
       ORDER BY q.namespace
@@ -232,11 +233,11 @@ export const createResourcesRoutes = (pool, systemEventManager) => {
         COUNT(DISTINCT q.id) as queue_count,
         COUNT(DISTINCT p.id) as partition_count,
         COUNT(DISTINCT m.id) as message_count,
-        COUNT(DISTINCT CASE WHEN ms.status = 'pending' THEN m.id END) as pending_count
+        COALESCE(SUM(pc.pending_estimate), 0) as pending_count
       FROM queen.queues q
       LEFT JOIN queen.partitions p ON p.queue_id = q.id
       LEFT JOIN queen.messages m ON m.partition_id = p.id
-      LEFT JOIN queen.messages_status ms ON ms.message_id = m.id AND ms.consumer_group IS NULL
+      LEFT JOIN queen.partition_consumers pc ON pc.partition_id = p.id AND pc.consumer_group = '__QUEUE_MODE__'
       WHERE q.task IS NOT NULL
       GROUP BY q.task
       ORDER BY q.task
@@ -260,10 +261,15 @@ export const createResourcesRoutes = (pool, systemEventManager) => {
         (SELECT COUNT(*) FROM queen.queues) as total_queues,
         (SELECT COUNT(*) FROM queen.partitions) as total_partitions,
         (SELECT COUNT(*) FROM queen.messages) as total_messages,
-        (SELECT COUNT(*) FROM queen.messages_status WHERE status = 'pending' AND consumer_group IS NULL) as pending_messages,
-        (SELECT COUNT(*) FROM queen.messages_status WHERE status = 'processing' AND consumer_group IS NULL) as processing_messages,
-        (SELECT COUNT(*) FROM queen.messages_status WHERE status = 'completed' AND consumer_group IS NULL) as completed_messages,
-        (SELECT COUNT(*) FROM queen.messages_status WHERE status = 'failed' AND consumer_group IS NULL) as failed_messages,
+        (SELECT COALESCE(SUM(pending_estimate), 0)::integer FROM queen.partition_consumers 
+         WHERE consumer_group = '__QUEUE_MODE__') as pending_messages,
+        (SELECT COUNT(*) FROM queen.partition_consumers 
+         WHERE consumer_group = '__QUEUE_MODE__' 
+         AND lease_expires_at IS NOT NULL 
+         AND lease_expires_at > NOW()) as processing_messages,
+        (SELECT COALESCE(SUM(total_messages_consumed), 0)::integer FROM queen.partition_consumers 
+         WHERE consumer_group = '__QUEUE_MODE__') as completed_messages,
+        0 as failed_messages,
         (SELECT COUNT(*) FROM queen.dead_letter_queue WHERE consumer_group IS NULL OR consumer_group = '__QUEUE_MODE__') as dead_letter_messages,
         (SELECT COUNT(DISTINCT namespace) FROM queen.queues WHERE namespace IS NOT NULL) as namespaces,
         (SELECT COUNT(DISTINCT task) FROM queen.queues WHERE task IS NOT NULL) as tasks

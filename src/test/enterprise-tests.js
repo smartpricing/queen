@@ -184,13 +184,16 @@ export async function testMessageEviction(client) {
       timestamp: Date.now()
     });
     
-    // Verify message exists
+    // Verify message exists and is pending
     const pendingCheck = await dbPool.query(`
-      SELECT m.id, m.created_at, ms.status
+      SELECT m.id, m.created_at,
+             pc.last_consumed_id, pc.last_consumed_created_at,
+             dlq.id as dlq_id
       FROM queen.messages m
       JOIN queen.partitions p ON m.partition_id = p.id
       JOIN queen.queues q ON p.queue_id = q.id
-      LEFT JOIN queen.messages_status ms ON m.id = ms.message_id AND ms.consumer_group = '__QUEUE_MODE__'
+      LEFT JOIN queen.partition_consumers pc ON pc.partition_id = p.id AND pc.consumer_group = '__QUEUE_MODE__'
+      LEFT JOIN queen.dead_letter_queue dlq ON dlq.message_id = m.id AND dlq.consumer_group = '__QUEUE_MODE__'
       WHERE q.name = $1 AND p.name = 'eviction-partition'
       ORDER BY m.created_at DESC
       LIMIT 1
@@ -200,7 +203,14 @@ export async function testMessageEviction(client) {
       throw new Error('Message not found');
     }
     
-    const status = pendingCheck.rows[0].status || 'pending';
+    // Derive status from cursor position
+    const msg = pendingCheck.rows[0];
+    const isDLQ = msg.dlq_id != null;
+    const isConsumed = msg.last_consumed_id && 
+                       ((msg.created_at < msg.last_consumed_created_at) || 
+                        (msg.created_at.getTime() === msg.last_consumed_created_at?.getTime() && msg.id <= msg.last_consumed_id));
+    const status = isDLQ ? 'dead_letter' : (isConsumed ? 'completed' : 'pending');
+    
     if (status !== 'pending') {
       throw new Error(`Message not in pending status, got: ${status}`);
     }
@@ -215,13 +225,14 @@ export async function testMessageEviction(client) {
       gotMessage = true;
     }
     
-    // Check if message was evicted
+    // Check if message was evicted (moved to DLQ)
     const evictionCheck = await dbPool.query(`
-      SELECT m.id, ms.status, ms.error_message
+      SELECT m.id, dlq.error_message,
+             CASE WHEN dlq.id IS NOT NULL THEN 'evicted' ELSE 'pending' END as status
       FROM queen.messages m
       JOIN queen.partitions p ON m.partition_id = p.id
       JOIN queen.queues q ON p.queue_id = q.id
-      LEFT JOIN queen.messages_status ms ON m.id = ms.message_id AND ms.consumer_group = '__QUEUE_MODE__'
+      LEFT JOIN queen.dead_letter_queue dlq ON dlq.message_id = m.id AND dlq.consumer_group = '__QUEUE_MODE__'
       WHERE q.name = $1 AND p.name = 'eviction-partition'
       ORDER BY m.created_at DESC
       LIMIT 1
@@ -382,22 +393,32 @@ export async function testRetentionCompletedMessages(client) {
       throw new Error('Failed to take message for completion');
     }
     
-    // Verify message is marked as completed (cursor-based check)
+    // Verify message is marked as completed (cursor-based check using UUIDv7 ordering)
     const statusCheck = await dbPool.query(`
       SELECT 
+        m.id, m.created_at,
+        pc.last_consumed_id, pc.last_consumed_created_at,
         CASE 
-          WHEN m.id <= COALESCE(pc.last_consumed_id, '00000000-0000-0000-0000-000000000000'::uuid) THEN 'completed'
+          WHEN pc.last_consumed_id IS NOT NULL AND m.id <= pc.last_consumed_id
+          THEN 'completed'
           ELSE 'pending'
         END as status
       FROM queen.messages m
-      LEFT JOIN queen.partition_cursors pc 
+      LEFT JOIN queen.partition_consumers pc 
         ON pc.partition_id = m.partition_id 
         AND pc.consumer_group = '__QUEUE_MODE__'
       WHERE m.transaction_id = $1
     `, [transactionId]);
     
     if (!statusCheck.rows[0] || statusCheck.rows[0].status !== 'completed') {
-      throw new Error('Message not marked as completed');
+      const row = statusCheck.rows[0];
+      throw new Error(
+        `Message not marked as completed.\n` +
+        `  Status: ${row?.status}\n` +
+        `  Message ID: ${row?.id}\n` +
+        `  Cursor ID: ${row?.last_consumed_id}\n` +
+        `  Has cursor: ${row?.last_consumed_id != null}`
+      );
     }
     
     // Wait for retention period
@@ -411,9 +432,15 @@ export async function testRetentionCompletedMessages(client) {
     
     // Check if completed message still exists
     const retainedCheck = await dbPool.query(`
-      SELECT m.id, ms.status, ms.completed_at
+      SELECT m.id, 
+             CASE 
+               WHEN (m.created_at, m.id) <= (pc.last_consumed_created_at, COALESCE(pc.last_consumed_id, '00000000-0000-0000-0000-000000000000'::uuid)) 
+               THEN 'completed' 
+               ELSE 'pending' 
+             END as status,
+             pc.last_consumed_at as completed_at
       FROM queen.messages m
-      LEFT JOIN queen.messages_status ms ON m.id = ms.message_id AND ms.consumer_group = '__QUEUE_MODE__'
+      LEFT JOIN queen.partition_consumers pc ON pc.partition_id = m.partition_id AND pc.consumer_group = '__QUEUE_MODE__'
       WHERE m.transaction_id = $1
     `, [transactionId]);
     

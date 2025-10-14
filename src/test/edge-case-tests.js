@@ -268,12 +268,19 @@ export async function testLeaseExpiration(client) {
     // Wait for lease to expire (2 seconds + buffer)
     await sleep(2500);
     
-    // Check message status in database
+    // Check partition lease status in database
     const statusCheck = await dbPool.query(`
-      SELECT status, lease_expires_at 
-      FROM queen.messages_status ms
-      JOIN queen.messages m ON ms.message_id = m.id
-      WHERE m.transaction_id = $1 AND ms.consumer_group = '__QUEUE_MODE__'
+      SELECT pc.lease_expires_at,
+             CASE 
+               WHEN (m.created_at, m.id) <= (pc.last_consumed_created_at, COALESCE(pc.last_consumed_id, '00000000-0000-0000-0000-000000000000'::uuid)) 
+               THEN 'completed'
+               WHEN pc.lease_expires_at IS NOT NULL AND pc.lease_expires_at > NOW() 
+               THEN 'processing'
+               ELSE 'pending'
+             END as status
+      FROM queen.messages m
+      LEFT JOIN queen.partition_consumers pc ON pc.partition_id = m.partition_id AND pc.consumer_group = '__QUEUE_MODE__'
+      WHERE m.transaction_id = $1
     `, [firstTransactionId]);
     
     if (statusCheck.rows.length > 0) {

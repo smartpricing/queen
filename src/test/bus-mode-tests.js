@@ -336,8 +336,8 @@ export async function testConsumerGroupIsolation(client) {
           ELSE 'pending'
         END as group2_status
       FROM queen.messages m
-      LEFT JOIN queen.partition_cursors pc1 ON pc1.partition_id = m.partition_id AND pc1.consumer_group = 'group1'
-      LEFT JOIN queen.partition_cursors pc2 ON pc2.partition_id = m.partition_id AND pc2.consumer_group = 'group2'
+      LEFT JOIN queen.partition_consumers pc1 ON pc1.partition_id = m.partition_id AND pc1.consumer_group = 'group1'
+      LEFT JOIN queen.partition_consumers pc2 ON pc2.partition_id = m.partition_id AND pc2.consumer_group = 'group2'
       LEFT JOIN queen.dead_letter_queue dlq1 ON dlq1.message_id = m.id AND dlq1.consumer_group = 'group1'
       LEFT JOIN queen.dead_letter_queue dlq2 ON dlq2.message_id = m.id AND dlq2.consumer_group = 'group2'
       WHERE m.transaction_id = $1

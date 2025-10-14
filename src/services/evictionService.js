@@ -5,33 +5,46 @@ import config from '../config.js';
 const EVICTION_INTERVAL = config.JOBS.EVICTION_INTERVAL;
 
 // Evict messages that exceeded max wait time for a queue
+// Note: Eviction is already handled by POP query filtering old messages
+// This service optionally moves them to DLQ for visibility
 const evictMessages = async (client, queueName, maxWaitTimeSeconds) => {
   if (!maxWaitTimeSeconds || maxWaitTimeSeconds <= 0) return 0;
   
-  // For the new schema, we need to update or create status entries for evicted messages
+  // Find old messages that haven't been consumed and move to DLQ
   const result = await client.query(`
     WITH queue_partitions AS (
-      SELECT p.id
+      SELECT p.id, p.queue_id
       FROM queen.partitions p
       JOIN queen.queues q ON p.queue_id = q.id
       WHERE q.name = $1
     ),
-    eligible_messages AS (
-      SELECT m.id
+    old_unconsumed_messages AS (
+      SELECT m.id, m.partition_id, m.created_at
       FROM queen.messages m
       JOIN queue_partitions qp ON m.partition_id = qp.id
-      LEFT JOIN queen.messages_status ms ON m.id = ms.message_id AND ms.consumer_group IS NULL
+      LEFT JOIN queen.partition_consumers pc ON pc.partition_id = m.partition_id
+        AND pc.consumer_group = '__QUEUE_MODE__'
       WHERE m.created_at < NOW() - INTERVAL '1 second' * $2
-        AND (ms.status = 'pending' OR ms.status IS NULL)
+        -- Message has not been consumed yet
+        AND ((m.created_at, m.id) > (COALESCE(pc.last_consumed_created_at, '1970-01-01'::timestamptz),
+                                       COALESCE(pc.last_consumed_id, '00000000-0000-0000-0000-000000000000'::uuid))
+             OR pc.last_consumed_id IS NULL)
     )
-    INSERT INTO queen.messages_status (message_id, consumer_group, status, completed_at, error_message)
-    SELECT id, NULL, 'evicted', NOW(), 'Message exceeded maximum wait time'
-    FROM eligible_messages
-    ON CONFLICT (message_id, consumer_group) 
-    DO UPDATE SET 
-      status = 'evicted',
-      completed_at = NOW(),
-      error_message = 'Message exceeded maximum wait time'
+    INSERT INTO queen.dead_letter_queue (
+        message_id, 
+        partition_id, 
+        consumer_group, 
+        error_message, 
+        original_created_at
+    )
+    SELECT 
+        om.id,
+        om.partition_id,
+        '__QUEUE_MODE__',
+        'Message exceeded maximum wait time',
+        om.created_at
+    FROM old_unconsumed_messages om
+    ON CONFLICT DO NOTHING
     RETURNING message_id
   `, [queueName, maxWaitTimeSeconds]);
   

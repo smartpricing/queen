@@ -157,13 +157,14 @@ export const createMessagesRoutes = (pool, queueManager) => {
     return { deleted: true, transactionId };
   };
   
-  // Retry message
+  // Retry message (remove from DLQ - cursor will process it if not consumed yet)
   const retryMessage = async (transactionId) => {
     // Find the message
     const msgCheck = await pool.query(`
-      SELECT m.id, ms.consumer_group, ms.status, ms.retry_count
+      SELECT m.id, m.partition_id, m.created_at,
+             dlq.consumer_group, dlq.retry_count
       FROM queen.messages m
-      LEFT JOIN queen.messages_status ms ON ms.message_id = m.id
+      LEFT JOIN queen.dead_letter_queue dlq ON dlq.message_id = m.id
       WHERE m.transaction_id = $1
     `, [transactionId]);
     
@@ -172,61 +173,57 @@ export const createMessagesRoutes = (pool, queueManager) => {
     }
     
     const msg = msgCheck.rows[0];
-    const consumerGroup = msg.consumer_group || '__QUEUE_MODE__';
+    
+    if (!msg.consumer_group) {
+      throw new Error('Message is not in DLQ, cannot retry');
+    }
+    
+    const consumerGroup = msg.consumer_group;
     const newRetryCount = (msg.retry_count || 0) + 1;
     
-    // Check if message is in DLQ and remove it
-    await pool.query(`
+    // Remove from DLQ - message will be available for consumption if before cursor
+    const deleteResult = await pool.query(`
       DELETE FROM queen.dead_letter_queue
-      WHERE message_id = $1
-    `, [msg.id]);
+      WHERE message_id = $1 AND consumer_group = $2
+      RETURNING message_id
+    `, [msg.id, consumerGroup]);
     
-    // Update or create status as pending for retry
-    const result = await pool.query(`
-      INSERT INTO queen.messages_status (message_id, consumer_group, status, retry_count, worker_id, locked_at, lease_expires_at, error_message)
-      VALUES ($1, $2, 'pending', $3, NULL, NULL, NULL, NULL)
-      ON CONFLICT (message_id, consumer_group) 
-      DO UPDATE SET
-        status = 'pending',
-        worker_id = NULL,
-        locked_at = NULL,
-        lease_expires_at = NULL,
-        retry_count = EXCLUDED.retry_count,
-        error_message = NULL
-      RETURNING retry_count
-    `, [msg.id, consumerGroup, newRetryCount]);
+    if (deleteResult.rows.length === 0) {
+      throw new Error('Message not found in DLQ');
+    }
     
-    log(`${LogTypes.RETRY} | TransactionId: ${transactionId} | NewRetryCount: ${result.rows[0].retry_count}`);
-    return { retried: true, transactionId, newRetryCount: result.rows[0].retry_count };
+    log(`${LogTypes.RETRY} | TransactionId: ${transactionId} | ConsumerGroup: ${consumerGroup}`);
+    return { retried: true, transactionId, consumerGroup };
   };
   
   // Move message to DLQ
-  const moveToDLQ = async (transactionId) => {
-    // Find the message and check if it's in failed state
+  const moveToDLQ = async (transactionId, consumerGroup = '__QUEUE_MODE__', errorMessage = 'Manually moved to DLQ') => {
+    // Find the message
     const msgCheck = await pool.query(`
-      SELECT m.id, m.partition_id, ms.consumer_group, ms.error_message, ms.retry_count, m.created_at
+      SELECT m.id, m.partition_id, m.created_at
       FROM queen.messages m
-      LEFT JOIN queen.messages_status ms ON ms.message_id = m.id
       WHERE m.transaction_id = $1
-        AND (ms.status = 'failed' OR ms.status IS NULL)
     `, [transactionId]);
     
     if (msgCheck.rows.length === 0) {
-      throw new Error('Message not found or not in failed state');
+      throw new Error('Message not found');
     }
     
     const msg = msgCheck.rows[0];
-    const consumerGroup = msg.consumer_group || '__QUEUE_MODE__';
     
     // Insert into dead_letter_queue
     const result = await pool.query(`
       INSERT INTO queen.dead_letter_queue (message_id, partition_id, consumer_group, error_message, retry_count, original_created_at)
-      VALUES ($1, $2, $3, $4, $5, $6)
+      VALUES ($1, $2, $3, $4, 0, $5)
       ON CONFLICT DO NOTHING
       RETURNING id
-    `, [msg.id, msg.partition_id, consumerGroup, msg.error_message || 'Manually moved to DLQ', msg.retry_count || 0, msg.created_at]);
+    `, [msg.id, msg.partition_id, consumerGroup, errorMessage, msg.created_at]);
     
-    log(`${LogTypes.MANUAL_DLQ} | TransactionId: ${transactionId} | MessageId: ${msg.id}`);
+    if (result.rows.length === 0) {
+      throw new Error('Message already in DLQ for this consumer group');
+    }
+    
+    log(`${LogTypes.MANUAL_DLQ} | TransactionId: ${transactionId} | MessageId: ${msg.id} | ConsumerGroup: ${consumerGroup}`);
     return { movedToDLQ: true, transactionId, messageId: msg.id };
   };
   

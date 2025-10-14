@@ -16,30 +16,44 @@ const retentionQueue = async (client, queue) => {
   
   let totalDeleted = 0;
   
-  // Delete old pending messages from all partitions in this queue
+  // Delete old unconsumed messages from all partitions in this queue
   if (retentionSeconds > 0) {
     const result = await client.query(`
-      DELETE FROM queen.messages
-      WHERE partition_id IN (
+      DELETE FROM queen.messages m
+      WHERE m.partition_id IN (
         SELECT id FROM queen.partitions WHERE queue_id = $1
       )
-        AND status = 'pending'
-        AND created_at < NOW() - INTERVAL '1 second' * $2
+      AND m.created_at < NOW() - INTERVAL '1 second' * $2
+      AND NOT EXISTS (
+          -- Message has been consumed by at least one consumer
+          SELECT 1 
+          FROM queen.partition_consumers pc
+          WHERE pc.partition_id = m.partition_id
+            AND (m.created_at, m.id) <= (pc.last_consumed_created_at, pc.last_consumed_id)
+      )
       RETURNING id
     `, [queue.id, retentionSeconds]);
     
     totalDeleted += result.rowCount || 0;
   }
   
-  // Delete completed/failed/evicted messages from all partitions in this queue
+  // Delete old consumed messages from all partitions in this queue
+  // (messages consumed by ALL consumer groups on that partition)
   if (completedRetentionSeconds > 0) {
     const result = await client.query(`
-      DELETE FROM queen.messages
-      WHERE partition_id IN (
+      DELETE FROM queen.messages m
+      WHERE m.partition_id IN (
         SELECT id FROM queen.partitions WHERE queue_id = $1
       )
-        AND status IN ('completed', 'failed', 'evicted')
-        AND COALESCE(completed_at, failed_at, created_at) < NOW() - INTERVAL '1 second' * $2
+      AND m.created_at < NOW() - INTERVAL '1 second' * $2
+      AND NOT EXISTS (
+          -- No consumer group that hasn't consumed this message yet
+          SELECT 1 
+          FROM queen.partition_consumers pc
+          WHERE pc.partition_id = m.partition_id
+            AND ((m.created_at, m.id) > (pc.last_consumed_created_at, pc.last_consumed_id)
+                 OR pc.last_consumed_id IS NULL)
+      )
       RETURNING id
     `, [queue.id, completedRetentionSeconds]);
     
@@ -48,7 +62,6 @@ const retentionQueue = async (client, queue) => {
   
   // Log retention if messages were deleted
   if (totalDeleted > 0) {
-    // Note: We might need to update retention_history table to use queue_id instead
     log(`${LogTypes.RETENTION} | Queue: ${queue.name} | Count: ${totalDeleted} | RetentionSeconds: ${retentionSeconds} | CompletedRetentionSeconds: ${completedRetentionSeconds}`);
   }
   
