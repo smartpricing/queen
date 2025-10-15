@@ -2,14 +2,14 @@
   <div class="p-4 sm:p-6">
     <div class="space-y-4 sm:space-y-6 max-w-7xl mx-auto">
       <!-- Info Card -->
-      <div class="card bg-blue-50 dark:bg-blue-900/20 text-blue-900 dark:text-blue-100">
+      <div class="card bg-purple-50 dark:bg-purple-900/20 text-purple-900 dark:text-purple-100">
         <div class="flex gap-3">
           <svg class="w-5 h-5 flex-shrink-0 mt-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
           </svg>
           <div class="text-sm">
             <p class="font-semibold mb-1">Consumer Groups Overview</p>
-            <p class="text-blue-800 dark:text-blue-200">
+            <p class="text-purple-800 dark:text-purple-200">
               Consumer groups enable multiple consumers to process messages in parallel without duplication. 
               Each group maintains its own consumption cursor per partition.
             </p>

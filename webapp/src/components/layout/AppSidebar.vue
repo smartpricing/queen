@@ -6,7 +6,7 @@
         v-if="!isCollapsed" 
         class="flex items-center gap-3"
       >
-        <img src="/assets/queen-logo.svg" alt="Queen" class="h-8 w-8 flex-shrink-0" />
+        <img src="/assets/queen-logo-rose.svg" alt="Queen" class="h-8 w-8 flex-shrink-0" />
         <div class="min-w-0">
           <h1 class="text-base font-bold text-gray-900 dark:text-gray-100 truncate">Queen</h1>
           <p class="text-xs text-gray-500 dark:text-gray-400 truncate">Message Queue</p>
@@ -16,7 +16,7 @@
         v-else 
         class="flex items-center justify-center"
       >
-        <img src="/assets/queen-logo.svg" alt="Queen" class="h-8 w-8" />
+        <img src="/assets/queen-logo-rose.svg" alt="Queen" class="h-8 w-8" />
       </div>
     </div>
     
@@ -31,7 +31,7 @@
         class="flex items-center rounded-lg transition-all text-sm group relative"
         :class="[
           isActive(item.path)
-            ? 'bg-blue-50 dark:bg-blue-900/20 text-blue-600 dark:text-blue-400 font-medium'
+            ? 'bg-rose-50 dark:bg-rose-900/20 text-rose-600 dark:text-rose-400 font-medium'
             : 'text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-slate-700',
           isCollapsed ? 'px-3 py-3 justify-center' : 'px-3 py-2.5 gap-3'
         ]"

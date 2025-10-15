@@ -21,6 +21,7 @@ import {
   Legend,
   Filler,
 } from 'chart.js';
+import { colors } from '../../utils/colors';
 
 ChartJS.register(
   CategoryScale,
@@ -52,28 +53,28 @@ const chartData = computed(() => {
       {
         label: 'Ingested',
         data: throughput.map(t => t.ingestedPerSecond),
-        borderColor: 'rgb(59, 130, 246)',
-        backgroundColor: 'rgba(59, 130, 246, 0.1)',
+        borderColor: colors.charts.ingested.border,
+        backgroundColor: colors.charts.ingested.background,
         fill: true,
         tension: 0, // No splines - straight lines
         borderWidth: 2,
         pointRadius: 0,
         pointHoverRadius: 4,
-        pointHoverBackgroundColor: 'rgb(59, 130, 246)',
+        pointHoverBackgroundColor: colors.charts.ingested.border,
         pointHoverBorderColor: '#fff',
         pointHoverBorderWidth: 2,
       },
       {
         label: 'Processed',
         data: throughput.map(t => t.processedPerSecond),
-        borderColor: 'rgb(16, 185, 129)',
-        backgroundColor: 'rgba(16, 185, 129, 0.1)',
+        borderColor: colors.charts.processed.border,
+        backgroundColor: colors.charts.processed.background,
         fill: true,
         tension: 0, // No splines - straight lines
         borderWidth: 2,
         pointRadius: 0,
         pointHoverRadius: 4,
-        pointHoverBackgroundColor: 'rgb(16, 185, 129)',
+        pointHoverBackgroundColor: colors.charts.processed.border,
         pointHoverBorderColor: '#fff',
         pointHoverBorderWidth: 2,
       },

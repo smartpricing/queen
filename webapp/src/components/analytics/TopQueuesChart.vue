@@ -19,6 +19,7 @@ import {
   Tooltip,
   Legend,
 } from 'chart.js';
+import { colors } from '../../utils/colors';
 
 ChartJS.register(
   CategoryScale,
@@ -47,8 +48,8 @@ const chartData = computed(() => {
       {
         label: 'Total Messages',
         data: topQueues.map(q => q.messages?.total || 0),
-        backgroundColor: 'rgba(99, 102, 241, 0.8)',
-        borderColor: 'rgb(99, 102, 241)',
+        backgroundColor: colors.secondary.rgba(0.8),
+        borderColor: colors.secondary.rgb,
         borderWidth: 1,
         borderRadius: 6,
       },
