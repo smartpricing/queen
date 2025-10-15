@@ -1,6 +1,5 @@
 <template>
-  <div class="card">
-    <h3 class="text-base font-semibold mb-4">System Performance</h3>
+  <div>
     <div class="space-y-2.5">
       <div class="flex items-center justify-between text-sm">
         <span class="text-gray-600 dark:text-gray-400">Requests/sec</span>

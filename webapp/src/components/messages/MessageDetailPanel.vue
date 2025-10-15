@@ -1,13 +1,13 @@
 <template>
   <div
     v-if="isOpen"
-    class="fixed inset-y-0 right-0 w-full sm:w-[32rem] bg-white dark:bg-slate-800 shadow-xl z-40 overflow-y-auto scrollbar-thin transform transition-transform duration-300"
+    class="fixed inset-y-0 right-0 w-full sm:w-[32rem] bg-white dark:bg-slate-800 shadow-2xl z-40 overflow-y-auto scrollbar-thin transform transition-all duration-300 border-l border-gray-200 dark:border-gray-700"
     :class="isOpen ? 'translate-x-0' : 'translate-x-full'"
   >
     <!-- Backdrop for mobile -->
     <div
       v-if="isOpen"
-      class="sm:hidden fixed inset-0 bg-black bg-opacity-50 -z-10"
+      class="sm:hidden fixed inset-0 bg-black bg-opacity-50 backdrop-blur-sm -z-10 animate-fade-in"
       @click="close"
     ></div>
     

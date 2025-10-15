@@ -53,27 +53,59 @@ const chartData = computed(() => {
         label: 'Ingested',
         data: throughput.map(t => t.ingested || t.ingestedPerSecond || 0),
         borderColor: colors.charts.ingested.border,
-        backgroundColor: colors.charts.ingested.background,
+        backgroundColor: createGradient('rose'),
         fill: true,
         tension: 0,
         borderWidth: 2,
         pointRadius: 0,
-        pointHoverRadius: 4,
+        pointHoverRadius: 5,
+        pointHoverBackgroundColor: colors.charts.ingested.border,
+        pointHoverBorderColor: '#fff',
+        pointHoverBorderWidth: 2,
       },
       {
         label: 'Processed',
         data: throughput.map(t => t.processed || t.processedPerSecond || 0),
         borderColor: colors.charts.processed.border,
-        backgroundColor: colors.charts.processed.background,
+        backgroundColor: createGradient('purple'),
         fill: true,
         tension: 0,
         borderWidth: 2,
         pointRadius: 0,
-        pointHoverRadius: 4,
+        pointHoverRadius: 5,
+        pointHoverBackgroundColor: colors.charts.processed.border,
+        pointHoverBorderColor: '#fff',
+        pointHoverBorderWidth: 2,
       },
     ],
   };
 });
+
+// Create gradient fill for charts
+function createGradient(color) {
+  return (context) => {
+    const chart = context.chart;
+    const {ctx, chartArea} = chart;
+    
+    if (!chartArea) {
+      return null;
+    }
+    
+    const gradient = ctx.createLinearGradient(0, chartArea.top, 0, chartArea.bottom);
+    
+    if (color === 'rose') {
+      gradient.addColorStop(0, 'rgba(244, 63, 94, 0.3)');
+      gradient.addColorStop(0.5, 'rgba(244, 63, 94, 0.15)');
+      gradient.addColorStop(1, 'rgba(244, 63, 94, 0.05)');
+    } else if (color === 'purple') {
+      gradient.addColorStop(0, 'rgba(168, 85, 247, 0.3)');
+      gradient.addColorStop(0.5, 'rgba(168, 85, 247, 0.15)');
+      gradient.addColorStop(1, 'rgba(168, 85, 247, 0.05)');
+    }
+    
+    return gradient;
+  };
+}
 
 const chartOptions = {
   responsive: true,
@@ -154,4 +186,3 @@ const chartOptions = {
   },
 };
 </script>
-

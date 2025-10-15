@@ -1,5 +1,5 @@
 <template>
-  <span :class="badgeClass" class="flex items-center">
+  <span :class="badgeClass" class="flex items-center badge-glow">
     <span v-if="showDot" class="w-2 h-2 rounded-full mr-1.5" :class="dotClass"></span>
     {{ label }}
   </span>
@@ -26,7 +26,7 @@ const statusConfig = {
   error: { class: 'badge-danger', dot: 'bg-red-500', label: 'Error' },
   unhealthy: { class: 'badge-danger', dot: 'bg-red-500', label: 'Unhealthy' },
   pending: { class: 'badge-warning', dot: 'bg-yellow-500', label: 'Pending' },
-  processing: { class: 'bg-purple-100 text-purple-800 dark:bg-purple-900/30 dark:text-purple-400', dot: 'bg-purple-500', label: 'Processing' },
+  processing: { class: 'bg-purple-100 text-purple-800 dark:bg-purple-900/30 dark:text-purple-400', dot: 'bg-purple-500 animate-pulse', label: 'Processing' },
   completed: { class: 'badge-success', dot: 'bg-green-500', label: 'Completed' },
   failed: { class: 'badge-danger', dot: 'bg-red-500', label: 'Failed' },
   dead_letter: { class: 'bg-gray-100 text-gray-800 dark:bg-gray-700 dark:text-gray-300', dot: 'bg-gray-500', label: 'Dead Letter' },
@@ -38,3 +38,8 @@ const dotClass = computed(() => config.value.dot);
 const label = computed(() => config.value.label);
 </script>
 
+<style scoped>
+.badge-glow {
+  transition: all 0.2s ease;
+}
+</style>

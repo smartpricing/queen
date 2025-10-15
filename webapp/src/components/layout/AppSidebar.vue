@@ -6,7 +6,10 @@
         v-if="!isCollapsed" 
         class="flex items-center gap-3"
       >
-        <img src="/assets/queen-logo-rose.svg" alt="Queen" class="h-8 w-8 flex-shrink-0" />
+        <div class="relative">
+          <img src="/assets/queen-logo-rose.svg" alt="Queen" class="h-8 w-8 flex-shrink-0 transition-transform hover:scale-110" />
+          <div class="absolute inset-0 bg-rose-500 opacity-0 blur-xl transition-opacity hover:opacity-20 -z-10"></div>
+        </div>
         <div class="min-w-0">
           <h1 class="text-base font-bold text-gray-900 dark:text-gray-100 truncate">Queen</h1>
           <p class="text-xs text-gray-500 dark:text-gray-400 truncate">Message Queue</p>
@@ -14,9 +17,10 @@
       </div>
       <div 
         v-else 
-        class="flex items-center justify-center"
+        class="flex items-center justify-center relative"
       >
-        <img src="/assets/queen-logo-rose.svg" alt="Queen" class="h-8 w-8" />
+        <img src="/assets/queen-logo-rose.svg" alt="Queen" class="h-8 w-8 transition-transform hover:scale-110" />
+        <div class="absolute inset-0 bg-rose-500 opacity-0 blur-xl transition-opacity hover:opacity-20 -z-10"></div>
       </div>
     </div>
     
@@ -28,22 +32,27 @@
         :to="item.path"
         @click="$emit('close')"
         :title="item.name"
-        class="flex items-center rounded-lg transition-all text-sm group relative"
+        class="flex items-center rounded-lg transition-all duration-200 text-sm group relative"
         :class="[
           isActive(item.path)
-            ? 'bg-rose-50 dark:bg-rose-900/20 text-rose-600 dark:text-rose-400 font-medium'
+            ? 'bg-gradient-to-r from-rose-50 to-purple-50 dark:from-rose-900/20 dark:to-purple-900/20 text-rose-600 dark:text-rose-400 font-medium shadow-sm'
             : 'text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-slate-700',
           isCollapsed ? 'px-3 py-3 justify-center' : 'px-3 py-2.5 gap-3'
         ]"
       >
-        <svg 
-          class="flex-shrink-0 transition-transform group-hover:scale-110 w-5 h-5" 
-          fill="none" 
-          stroke="currentColor" 
-          viewBox="0 0 24 24"
-        >
-          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" :d="item.iconPath" />
-        </svg>
+        <div :class="[
+          'flex items-center justify-center rounded-md transition-all',
+          isActive(item.path) && !isCollapsed ? 'w-8 h-8 bg-gradient-to-br from-rose-500 to-purple-500 text-white shadow-sm' : ''
+        ]">
+          <svg 
+            class="flex-shrink-0 transition-transform group-hover:scale-110 w-5 h-5" 
+            fill="none" 
+            stroke="currentColor" 
+            viewBox="0 0 24 24"
+          >
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" :d="item.iconPath" />
+          </svg>
+        </div>
         
         <span 
           v-if="!isCollapsed" 
@@ -55,7 +64,7 @@
         <!-- Tooltip for collapsed state -->
         <div 
           v-if="isCollapsed"
-          class="absolute left-full ml-2 px-2 py-1 bg-gray-900 dark:bg-gray-700 text-white text-xs rounded opacity-0 pointer-events-none group-hover:opacity-100 transition-opacity whitespace-nowrap z-50"
+          class="absolute left-full ml-2 px-3 py-1.5 bg-gray-900 dark:bg-gray-700 text-white text-xs rounded-lg opacity-0 pointer-events-none group-hover:opacity-100 transition-opacity whitespace-nowrap z-50 shadow-lg"
         >
           {{ item.name }}
         </div>
@@ -66,12 +75,12 @@
     <div class="p-3 border-t border-gray-200 dark:border-gray-700 flex-shrink-0 hidden lg:block">
       <button 
         @click="$emit('toggle-collapse')"
-        class="w-full flex items-center rounded-lg transition-all text-sm text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-slate-700 group"
+        class="w-full flex items-center rounded-lg transition-all duration-200 text-sm text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-slate-700 group"
         :class="isCollapsed ? 'px-3 py-3 justify-center' : 'px-3 py-2.5 gap-3'"
         :title="isCollapsed ? 'Expand sidebar' : 'Collapse sidebar'"
       >
         <svg 
-          class="w-5 h-5 transition-transform duration-300 flex-shrink-0" 
+          class="w-5 h-5 transition-transform duration-300 flex-shrink-0 group-hover:scale-110" 
           :class="{ 'rotate-180': isCollapsed }"
           fill="none" 
           stroke="currentColor" 
@@ -87,7 +96,7 @@
         <!-- Tooltip for collapsed state -->
         <div 
           v-if="isCollapsed"
-          class="absolute left-full ml-2 px-2 py-1 bg-gray-900 dark:bg-gray-700 text-white text-xs rounded opacity-0 pointer-events-none group-hover:opacity-100 transition-opacity whitespace-nowrap z-50"
+          class="absolute left-full ml-2 px-3 py-1.5 bg-gray-900 dark:bg-gray-700 text-white text-xs rounded-lg opacity-0 pointer-events-none group-hover:opacity-100 transition-opacity whitespace-nowrap z-50 shadow-lg"
         >
           Expand sidebar
         </div>

@@ -1,5 +1,5 @@
 <template>
-  <div class="card">
+  <div class="metric-card animate-fade-in">
     <p class="metric-label">{{ title }}</p>
     <p class="metric-value">{{ formattedValue }}</p>
     <p v-if="subtitle || (secondaryValue !== undefined && secondaryValue !== null)" class="text-xs text-gray-500 dark:text-gray-400 mt-1.5">
@@ -40,3 +40,4 @@ const formattedSecondary = computed(() => {
   return '';
 });
 </script>
+

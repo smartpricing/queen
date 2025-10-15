@@ -48,14 +48,34 @@ const chartData = computed(() => {
       {
         label: 'Total Messages',
         data: topQueues.map(q => q.messages?.total || 0),
-        backgroundColor: colors.secondary.rgba(0.8),
-        borderColor: colors.secondary.rgb,
-        borderWidth: 1,
-        borderRadius: 6,
+        backgroundColor: createGradientBars(),
+        borderColor: 'transparent',
+        borderWidth: 0,
+        borderRadius: 8,
+        barThickness: 24,
       },
     ],
   };
 });
+
+// Create gradient for bars
+function createGradientBars() {
+  return (context) => {
+    const chart = context.chart;
+    const {ctx, chartArea} = chart;
+    
+    if (!chartArea) {
+      return colors.secondary.rgba(0.8);
+    }
+    
+    const gradient = ctx.createLinearGradient(chartArea.left, 0, chartArea.right, 0);
+    gradient.addColorStop(0, 'rgba(244, 63, 94, 0.8)');
+    gradient.addColorStop(0.5, 'rgba(236, 72, 153, 0.8)');
+    gradient.addColorStop(1, 'rgba(168, 85, 247, 0.8)');
+    
+    return gradient;
+  };
+}
 
 const chartOptions = {
   responsive: true,
@@ -110,4 +130,3 @@ const chartOptions = {
   },
 };
 </script>
-

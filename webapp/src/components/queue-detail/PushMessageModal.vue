@@ -1,14 +1,14 @@
 <template>
   <div v-if="isOpen" class="fixed inset-0 z-50 overflow-y-auto">
     <div class="flex items-center justify-center min-h-screen px-4">
-      <!-- Backdrop -->
+      <!-- Backdrop with blur -->
       <div 
-        class="fixed inset-0 bg-black bg-opacity-50 transition-opacity"
+        class="fixed inset-0 bg-black bg-opacity-50 backdrop-blur-sm transition-opacity animate-fade-in"
         @click="close"
       ></div>
       
       <!-- Modal -->
-      <div class="relative bg-white dark:bg-slate-800 rounded-xl shadow-xl max-w-2xl w-full p-6">
+      <div class="relative bg-white dark:bg-slate-800 rounded-xl shadow-2xl max-w-2xl w-full p-6 animate-scale-in border border-gray-200 dark:border-gray-700">
         <div class="flex items-center justify-between mb-4">
           <h3 class="text-lg font-bold">Push Message to {{ queueName }}</h3>
           <button @click="close" class="text-gray-400 hover:text-gray-600">
