@@ -1,144 +1,200 @@
 <template>
-  <div class="p-4 sm:p-6">
-    <div class="space-y-4 sm:space-y-6 max-w-7xl mx-auto">
-      <!-- Header with Create Button -->
-      <div class="flex items-center justify-end">
-        <button @click="showCreateModal = true" class="btn btn-primary">
-          <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4" />
-          </svg>
-          <span class="hidden sm:inline">New Queue</span>
-        </button>
-      </div>
+  <div class="page-flat">
+    <div class="p-4">
+      <div class="space-y-3 sm:space-y-4">
+        <!-- Filters with New Queue Button -->
+        <div class="filter-flat">
+          <div class="flex flex-col sm:flex-row gap-3">
+            <div class="flex-1">
+              <input
+                v-model="searchQuery"
+                type="text"
+                placeholder="Search queues..."
+                class="input"
+              />
+            </div>
+            
+            <select v-model="namespaceFilter" class="input sm:w-48">
+              <option value="">All Namespaces</option>
+              <option v-for="ns in namespaces" :key="ns.namespace" :value="ns.namespace">
+                {{ ns.namespace }} ({{ ns.queues }})
+              </option>
+            </select>
+            
+            <button
+              v-if="searchQuery || namespaceFilter"
+              @click="clearFilters"
+              class="btn btn-secondary whitespace-nowrap"
+            >
+              Clear Filters
+            </button>
+            
+            <button @click="showCreateModal = true" class="btn btn-primary whitespace-nowrap">
+              <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4" />
+              </svg>
+              <span class="hidden sm:inline">New Queue</span>
+            </button>
+          </div>
+        </div>
 
-      <!-- Filters -->
-      <QueueFilters
-        v-model:search="searchQuery"
-        v-model:namespace="namespaceFilter"
-        :namespaces="namespaces"
-      />
+        <LoadingSpinner v-if="loading && !queues.length" />
 
-      <LoadingSpinner v-if="loading && !queues.length" />
+        <div v-else-if="error" class="error-flat">
+          <p><strong>Error loading queues:</strong> {{ error }}</p>
+        </div>
 
-      <div v-else-if="error" class="card bg-red-50 dark:bg-red-900/20 text-red-600 text-sm">
-        <p><strong>Error loading queues:</strong> {{ error }}</p>
-      </div>
-
-      <!-- Queues Table -->
-      <div v-else class="card">
-        <div class="table-container scrollbar-thin">
-          <table class="table">
-            <thead>
-              <tr>
-                <th @click="sortBy('name')" class="cursor-pointer hover:text-gray-900 dark:hover:text-gray-100">
-                  <div class="flex items-center gap-1">
-                    Queue Name
-                    <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 16V4m0 0L3 8m4-4l4 4m6 0v12m0 0l4-4m-4 4l-4-4" />
-                    </svg>
-                  </div>
-                </th>
-                <th class="hidden md:table-cell">Namespace</th>
-                <th class="text-right">Partitions</th>
-                <th class="text-right">Pending</th>
-                <th class="text-right hidden sm:table-cell">Processing</th>
-                <th class="text-right">Total</th>
-                <th class="text-right">Actions</th>
-              </tr>
-            </thead>
-            <tbody>
-              <tr
-                v-for="queue in paginatedQueues"
-                :key="queue.id"
-                class="cursor-pointer"
-                @click="navigateToQueue(queue.name)"
-              >
-                <td>
-                  <div class="font-medium text-gray-900 dark:text-gray-100">{{ queue.name }}</div>
-                  <div v-if="queue.namespace" class="text-xs text-gray-500 dark:text-gray-400 md:hidden">
-                    {{ queue.namespace }}
-                  </div>
-                </td>
-                <td class="hidden md:table-cell">
-                  <span v-if="queue.namespace" class="badge badge-info">{{ queue.namespace }}</span>
-                  <span v-else class="text-gray-400">-</span>
-                </td>
-                <td class="text-right font-medium">{{ queue.partitions }}</td>
-                <td class="text-right font-medium">{{ formatNumber(queue.messages?.pending || 0) }}</td>
-                <td class="text-right font-medium hidden sm:table-cell">{{ formatNumber(queue.messages?.processing || 0) }}</td>
-                <td class="text-right font-medium">{{ formatNumber(queue.messages?.total || 0) }}</td>
-                <td class="text-right" @click.stop>
-                  <button
-                    @click="confirmDelete(queue)"
-                    class="p-1.5 rounded hover:bg-red-50 dark:hover:bg-red-900/20 text-red-600 dark:text-red-400 transition-colors"
-                    title="Delete queue"
-                  >
-                    <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
-                    </svg>
-                  </button>
-                </td>
-              </tr>
-            </tbody>
-          </table>
+        <!-- Queues Table -->
+        <div v-else class="table-flat">
+          <div class="table-container scrollbar-thin">
+            <table class="table">
+              <thead>
+                <tr>
+                  <th @click="sortBy('name')" class="cursor-pointer hover:text-rose-600 dark:hover:text-rose-400 transition-colors">
+                    <div class="flex items-center gap-1">
+                      Queue Name
+                      <svg class="w-3 h-3 transition-transform" :class="getSortClass('name')" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7" />
+                      </svg>
+                    </div>
+                  </th>
+                  <th @click="sortBy('namespace')" class="hidden md:table-cell cursor-pointer hover:text-rose-600 dark:hover:text-rose-400 transition-colors">
+                    <div class="flex items-center gap-1">
+                      Namespace
+                      <svg class="w-3 h-3 transition-transform" :class="getSortClass('namespace')" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7" />
+                      </svg>
+                    </div>
+                  </th>
+                  <th @click="sortBy('partitions')" class="text-right cursor-pointer hover:text-rose-600 dark:hover:text-rose-400 transition-colors">
+                    <div class="flex items-center justify-end gap-1">
+                      Partitions
+                      <svg class="w-3 h-3 transition-transform" :class="getSortClass('partitions')" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7" />
+                      </svg>
+                    </div>
+                  </th>
+                  <th @click="sortBy('pending')" class="text-right cursor-pointer hover:text-rose-600 dark:hover:text-rose-400 transition-colors">
+                    <div class="flex items-center justify-end gap-1">
+                      Pending
+                      <svg class="w-3 h-3 transition-transform" :class="getSortClass('pending')" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7" />
+                      </svg>
+                    </div>
+                  </th>
+                  <th @click="sortBy('processing')" class="text-right hidden sm:table-cell cursor-pointer hover:text-rose-600 dark:hover:text-rose-400 transition-colors">
+                    <div class="flex items-center justify-end gap-1">
+                      Processing
+                      <svg class="w-3 h-3 transition-transform" :class="getSortClass('processing')" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7" />
+                      </svg>
+                    </div>
+                  </th>
+                  <th @click="sortBy('total')" class="text-right cursor-pointer hover:text-rose-600 dark:hover:text-rose-400 transition-colors">
+                    <div class="flex items-center justify-end gap-1">
+                      Total
+                      <svg class="w-3 h-3 transition-transform" :class="getSortClass('total')" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7" />
+                      </svg>
+                    </div>
+                  </th>
+                  <th class="text-right">Actions</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr
+                  v-for="queue in paginatedQueues"
+                  :key="queue.id"
+                  class="cursor-pointer"
+                  @click="navigateToQueue(queue.name)"
+                >
+                  <td>
+                    <div class="font-medium text-gray-900 dark:text-gray-100">{{ queue.name }}</div>
+                    <div v-if="queue.namespace" class="text-xs text-gray-500 dark:text-gray-400 md:hidden">
+                      {{ queue.namespace }}
+                    </div>
+                  </td>
+                  <td class="hidden md:table-cell">
+                    <span v-if="queue.namespace" class="badge badge-info">{{ queue.namespace }}</span>
+                    <span v-else class="text-gray-400">-</span>
+                  </td>
+                  <td class="text-right font-medium">{{ queue.partitions }}</td>
+                  <td class="text-right font-medium">{{ formatNumber(queue.messages?.pending || 0) }}</td>
+                  <td class="text-right font-medium hidden sm:table-cell">{{ formatNumber(queue.messages?.processing || 0) }}</td>
+                  <td class="text-right font-medium">{{ formatNumber(queue.messages?.total || 0) }}</td>
+                  <td class="text-right" @click.stop>
+                    <button
+                      @click="confirmDelete(queue)"
+                      class="p-1.5 rounded hover:bg-red-50 dark:hover:bg-red-900/20 text-red-600 dark:text-red-400 transition-colors"
+                      title="Delete queue"
+                    >
+                      <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                      </svg>
+                    </button>
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+            
+            <div v-if="!filteredQueues.length" class="text-center py-12 text-gray-500 text-sm">
+              <svg class="w-12 h-12 mx-auto mb-3 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M20 13V6a2 2 0 00-2-2H6a2 2 0 00-2 2v7m16 0v5a2 2 0 01-2 2H6a2 2 0 01-2-2v-5m16 0h-2.586a1 1 0 00-.707.293l-2.414 2.414a1 1 0 01-.707.293h-3.172a1 1 0 01-.707-.293l-2.414-2.414A1 1 0 006.586 13H4" />
+              </svg>
+              <p>No queues found</p>
+              <button @click="showCreateModal = true" class="btn btn-primary mt-3">
+                Create your first queue
+              </button>
+            </div>
+          </div>
           
-          <div v-if="!filteredQueues.length" class="text-center py-12 text-gray-500 text-sm">
-            <svg class="w-12 h-12 mx-auto mb-3 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M20 13V6a2 2 0 00-2-2H6a2 2 0 00-2 2v7m16 0v5a2 2 0 01-2 2H6a2 2 0 01-2-2v-5m16 0h-2.586a1 1 0 00-.707.293l-2.414 2.414a1 1 0 01-.707.293h-3.172a1 1 0 01-.707-.293l-2.414-2.414A1 1 0 006.586 13H4" />
-            </svg>
-            <p>No queues found</p>
-            <button @click="showCreateModal = true" class="btn btn-primary mt-3">
-              Create your first queue
-            </button>
+          <!-- Pagination -->
+          <div v-if="totalPages > 1" class="flex items-center justify-between mt-4 pt-4 border-t border-gray-200/30 dark:border-gray-700/30">
+            <div class="text-sm text-gray-600 dark:text-gray-400">
+              Showing {{ startIndex + 1 }}-{{ endIndex }} of {{ filteredQueues.length }}
+            </div>
+            <div class="flex gap-2">
+              <button
+                @click="currentPage--"
+                :disabled="currentPage === 1"
+                class="btn btn-secondary px-3 py-1.5"
+              >
+                <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 19l-7-7 7-7" />
+                </svg>
+              </button>
+              <span class="px-3 py-1.5 text-sm">{{ currentPage }} / {{ totalPages }}</span>
+              <button
+                @click="currentPage++"
+                :disabled="currentPage === totalPages"
+                class="btn btn-secondary px-3 py-1.5"
+              >
+                <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7" />
+                </svg>
+              </button>
+            </div>
           </div>
         </div>
-        
-        <!-- Pagination -->
-        <div v-if="totalPages > 1" class="flex items-center justify-between mt-4 pt-4 border-t border-gray-200 dark:border-gray-700">
-          <div class="text-sm text-gray-600 dark:text-gray-400">
-            Showing {{ startIndex + 1 }}-{{ endIndex }} of {{ filteredQueues.length }}
-          </div>
-          <div class="flex gap-2">
-            <button
-              @click="currentPage--"
-              :disabled="currentPage === 1"
-              class="btn btn-secondary px-3 py-1.5"
-            >
-              <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 19l-7-7 7-7" />
-              </svg>
-            </button>
-            <span class="px-3 py-1.5 text-sm">{{ currentPage }} / {{ totalPages }}</span>
-            <button
-              @click="currentPage++"
-              :disabled="currentPage === totalPages"
-              class="btn btn-secondary px-3 py-1.5"
-            >
-              <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7" />
-              </svg>
-            </button>
-          </div>
-        </div>
+
+        <!-- Create Queue Modal -->
+        <CreateQueueModal
+          :is-open="showCreateModal"
+          @close="showCreateModal = false"
+          @created="onQueueCreated"
+        />
+
+        <!-- Delete Confirmation Modal -->
+        <ConfirmDialog
+          :is-open="showDeleteConfirm"
+          title="Delete Queue"
+          :message="`Are you sure you want to delete '${queueToDelete?.name}'? This action cannot be undone.`"
+          confirm-text="Delete"
+          confirm-class="btn-danger"
+          @confirm="deleteQueue"
+          @cancel="showDeleteConfirm = false"
+        />
       </div>
-
-      <!-- Create Queue Modal -->
-      <CreateQueueModal
-        :is-open="showCreateModal"
-        @close="showCreateModal = false"
-        @created="onQueueCreated"
-      />
-
-      <!-- Delete Confirmation Modal -->
-      <ConfirmDialog
-        :is-open="showDeleteConfirm"
-        title="Delete Queue"
-        :message="`Are you sure you want to delete '${queueToDelete?.name}'? This action cannot be undone.`"
-        confirm-text="Delete"
-        confirm-class="btn-danger"
-        @confirm="deleteQueue"
-        @cancel="showDeleteConfirm = false"
-      />
     </div>
   </div>
 </template>
@@ -150,7 +206,6 @@ import { queuesApi } from '../api/queues';
 import { resourcesApi } from '../api/resources';
 import { formatNumber } from '../utils/formatters';
 
-import QueueFilters from '../components/queues/QueueFilters.vue';
 import CreateQueueModal from '../components/queues/CreateQueueModal.vue';
 import ConfirmDialog from '../components/common/ConfirmDialog.vue';
 import LoadingSpinner from '../components/common/LoadingSpinner.vue';
@@ -175,7 +230,6 @@ const queueToDelete = ref(null);
 const filteredQueues = computed(() => {
   let filtered = queues.value;
   
-  // Filter by search
   if (searchQuery.value) {
     const search = searchQuery.value.toLowerCase();
     filtered = filtered.filter(q => 
@@ -184,19 +238,40 @@ const filteredQueues = computed(() => {
     );
   }
   
-  // Filter by namespace
   if (namespaceFilter.value) {
     filtered = filtered.filter(q => q.namespace === namespaceFilter.value);
   }
   
-  // Sort
   filtered = [...filtered].sort((a, b) => {
-    let aVal = a[sortColumn.value];
-    let bVal = b[sortColumn.value];
+    let aVal, bVal;
     
-    if (sortColumn.value === 'name') {
-      aVal = a.name.toLowerCase();
-      bVal = b.name.toLowerCase();
+    switch (sortColumn.value) {
+      case 'name':
+        aVal = a.name.toLowerCase();
+        bVal = b.name.toLowerCase();
+        break;
+      case 'namespace':
+        aVal = a.namespace?.toLowerCase() || '';
+        bVal = b.namespace?.toLowerCase() || '';
+        break;
+      case 'partitions':
+        aVal = a.partitions || 0;
+        bVal = b.partitions || 0;
+        break;
+      case 'pending':
+        aVal = a.messages?.pending || 0;
+        bVal = b.messages?.pending || 0;
+        break;
+      case 'processing':
+        aVal = a.messages?.processing || 0;
+        bVal = b.messages?.processing || 0;
+        break;
+      case 'total':
+        aVal = a.messages?.total || 0;
+        bVal = b.messages?.total || 0;
+        break;
+      default:
+        return 0;
     }
     
     if (aVal < bVal) return sortDirection.value === 'asc' ? -1 : 1;
@@ -219,6 +294,13 @@ function sortBy(column) {
     sortColumn.value = column;
     sortDirection.value = 'asc';
   }
+}
+
+function getSortClass(column) {
+  if (sortColumn.value !== column) {
+    return 'opacity-30';
+  }
+  return sortDirection.value === 'asc' ? '' : 'rotate-180';
 }
 
 function navigateToQueue(queueName) {
@@ -267,10 +349,14 @@ async function onQueueCreated() {
   await loadData();
 }
 
+function clearFilters() {
+  searchQuery.value = '';
+  namespaceFilter.value = '';
+}
+
 onMounted(() => {
   loadData();
   
-  // Register refresh callback for header button
   if (window.registerRefreshCallback) {
     window.registerRefreshCallback('/queues', loadData);
   }
@@ -282,3 +368,129 @@ onUnmounted(() => {
   }
 });
 </script>
+
+<style scoped>
+.page-flat {
+  min-height: 100%;
+}
+
+.filter-flat {
+  background: #ffffff;
+  border: none;
+  box-shadow: none;
+  border-radius: 0.75rem;
+  padding: 1rem;
+}
+
+.dark .filter-flat {
+  background: rgba(255, 255, 255, 0.03);
+}
+
+/* Override input styles for flat design */
+.filter-flat :deep(.input) {
+  background: transparent;
+  border: 1px solid rgba(156, 163, 175, 0.15);
+  transition: all 0.2s ease;
+}
+
+.filter-flat :deep(.input:hover) {
+  border-color: rgba(156, 163, 175, 0.25);
+}
+
+.filter-flat :deep(.input:focus) {
+  background: rgba(244, 63, 94, 0.02);
+  border-color: rgba(244, 63, 94, 0.4);
+  box-shadow: 0 0 0 3px rgba(244, 63, 94, 0.05);
+}
+
+.dark .filter-flat :deep(.input) {
+  border-color: rgba(156, 163, 175, 0.1);
+}
+
+.dark .filter-flat :deep(.input:hover) {
+  border-color: rgba(156, 163, 175, 0.2);
+}
+
+.dark .filter-flat :deep(.input:focus) {
+  background: rgba(244, 63, 94, 0.03);
+  border-color: rgba(244, 63, 94, 0.5);
+  box-shadow: 0 0 0 3px rgba(244, 63, 94, 0.08);
+}
+
+.table-flat {
+  background: #ffffff;
+  border: none;
+  box-shadow: none;
+  border-radius: 0.75rem;
+  padding: 0;
+}
+
+.dark .table-flat {
+  background: rgba(255, 255, 255, 0.03);
+}
+
+/* Flat table styling - zebra stripes, no borders */
+.table-flat :deep(.table) {
+  border-collapse: separate;
+  border-spacing: 0;
+}
+
+.table-flat :deep(.table thead) {
+  background: transparent;
+  border-bottom: 1px solid rgba(156, 163, 175, 0.08);
+}
+
+.dark .table-flat :deep(.table thead) {
+  border-bottom-color: rgba(156, 163, 175, 0.1);
+}
+
+.table-flat :deep(.table th) {
+  padding: 1rem 1rem;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+}
+
+.table-flat :deep(.table tbody tr) {
+  border: none;
+  transition: all 0.15s ease;
+}
+
+/* Zebra striping */
+.table-flat :deep(.table tbody tr:nth-child(even)) {
+  background: rgba(0, 0, 0, 0.015);
+}
+
+.dark .table-flat :deep(.table tbody tr:nth-child(even)) {
+  background: rgba(255, 255, 255, 0.02);
+}
+
+/* Hover effect with left accent */
+.table-flat :deep(.table tbody tr:hover) {
+  background: rgba(244, 63, 94, 0.03);
+  box-shadow: inset 3px 0 0 0 rgba(244, 63, 94, 0.6);
+}
+
+.dark .table-flat :deep(.table tbody tr:hover) {
+  background: rgba(244, 63, 94, 0.05);
+  box-shadow: inset 3px 0 0 0 rgba(244, 63, 94, 0.8);
+}
+
+.table-flat :deep(.table td) {
+  padding: 0.875rem 1rem;
+  border: none;
+}
+
+.error-flat {
+  background: transparent;
+  border: none;
+  box-shadow: none;
+  border-radius: 0.75rem;
+  padding: 1rem;
+  color: #dc2626;
+  font-size: 0.875rem;
+}
+
+.dark .error-flat {
+  color: #fca5a5;
+}
+</style>

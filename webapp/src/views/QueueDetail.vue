@@ -1,88 +1,272 @@
 <template>
-  <div class="p-4 sm:p-6">
-    <div class="space-y-4 sm:space-y-6 max-w-7xl mx-auto">
-      <LoadingSpinner v-if="loading && !queueData" />
+  <div class="page-flat">
+    <div class="p-4">
+      <div class="space-y-3 sm:space-y-4">
+        <LoadingSpinner v-if="loading && !queueData" />
 
-      <div v-else-if="error" class="card bg-red-50 dark:bg-red-900/20 text-red-600 text-sm">
-        <p><strong>Error loading queue:</strong> {{ error }}</p>
-      </div>
-
-      <template v-else-if="queueData">
-        <!-- Header -->
-        <QueueDetailHeader
-          :queue="statusData?.queue"
-          @push-message="showPushModal = true"
-          @clear-queue="confirmClear"
-        />
-
-        <!-- Metrics -->
-        <div class="grid grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4">
-          <MetricCard
-            title="Pending"
-            :value="calculatedPending"
-          />
-          <MetricCard
-            title="Processing"
-            :value="statusData?.totals?.messages?.processing || 0"
-          />
-          <MetricCard
-            title="Completed"
-            :value="statusData?.totals?.messages?.completed || 0"
-          />
-          <MetricCard
-            title="Failed"
-            :value="statusData?.totals?.messages?.failed || 0"
-          />
+        <div v-else-if="error" class="error-flat">
+          <p><strong>Error loading queue:</strong> {{ error }}</p>
         </div>
 
-        <!-- Queue Config -->
-        <QueueConfig :config="statusData?.queue?.config" />
+        <template v-else-if="queueData">
+          <!-- Queue Header Card -->
+          <div class="header-section">
+            <div class="flex items-center justify-between mb-2">
+              <div class="flex items-center gap-3">
+                <button @click="goBack" class="p-1.5 hover:bg-black/5 dark:hover:bg-white/5 rounded-lg transition-colors">
+                  <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 19l-7-7m0 0l7-7m-7 7h18" />
+                  </svg>
+                </button>
+                <h2 class="text-xl font-bold gradient-text">{{ statusData?.queue?.name }}</h2>
+              </div>
+              
+              <div class="flex gap-2">
+                <button @click="showPushModal = true" class="btn btn-primary">
+                  <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4" />
+                  </svg>
+                  Push Message
+                </button>
+                <button @click="confirmClear" class="btn btn-secondary">
+                  <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                  </svg>
+                  Clear Queue
+                </button>
+              </div>
+            </div>
+            
+            <div class="flex flex-wrap gap-x-6 gap-y-1 text-sm text-gray-600 dark:text-gray-400 mb-1">
+              <span><span class="text-gray-500 dark:text-gray-500">Namespace:</span> {{ statusData?.queue?.namespace || '-' }}</span>
+              <span><span class="text-gray-500 dark:text-gray-500">Task:</span> {{ statusData?.queue?.task || '-' }}</span>
+              <span><span class="text-gray-500 dark:text-gray-500">Priority:</span> {{ statusData?.queue?.priority || 0 }}</span>
+              <span class="text-xs text-gray-500">Created: {{ formatDate(statusData?.queue?.createdAt) }}</span>
+            </div>
+          </div>
 
-        <!-- Partitions -->
-        <PartitionList :partitions="statusData?.partitions" />
+          <!-- Status Metrics -->
+          <div class="grid grid-cols-2 lg:grid-cols-4 gap-2 sm:gap-3">
+            <div class="metric-flat">
+              <div class="flex items-start gap-3">
+                <div class="metric-icon-flat bg-yellow-500/10 dark:bg-yellow-500/20">
+                  <svg class="w-6 h-6 text-yellow-600 dark:text-yellow-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
+                  </svg>
+                </div>
+                <div class="flex-1">
+                  <p class="metric-label">Pending</p>
+                  <p class="metric-value-flat">{{ formatNumber(calculatedPending) }}</p>
+                </div>
+              </div>
+            </div>
+            <div class="metric-flat">
+              <div class="flex items-start gap-3">
+                <div class="metric-icon-flat bg-purple-500/10 dark:bg-purple-500/20">
+                  <svg class="w-6 h-6 text-purple-600 dark:text-purple-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4m0 4v.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                  </svg>
+                </div>
+                <div class="flex-1">
+                  <p class="metric-label">Processing</p>
+                  <p class="metric-value-flat">{{ formatNumber(statusData?.totals?.messages?.processing || 0) }}</p>
+                </div>
+              </div>
+            </div>
+            <div class="metric-flat">
+              <div class="flex items-start gap-3">
+                <div class="metric-icon-flat bg-green-500/10 dark:bg-green-500/20">
+                  <svg class="w-6 h-6 text-green-600 dark:text-green-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
+                  </svg>
+                </div>
+                <div class="flex-1">
+                  <p class="metric-label">Completed</p>
+                  <p class="metric-value-flat text-green-600 dark:text-green-400">{{ formatNumber(statusData?.totals?.messages?.completed || 0) }}</p>
+                </div>
+              </div>
+            </div>
+            <div class="metric-flat">
+              <div class="flex items-start gap-3">
+                <div class="metric-icon-flat bg-red-500/10 dark:bg-red-500/20">
+                  <svg class="w-6 h-6 text-red-600 dark:text-red-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+                  </svg>
+                </div>
+                <div class="flex-1">
+                  <p class="metric-label">Failed</p>
+                  <p class="metric-value-flat text-red-600 dark:text-red-400">{{ formatNumber(statusData?.totals?.messages?.failed || 0) }}</p>
+                </div>
+              </div>
+            </div>
+          </div>
 
-        <!-- Recent Messages -->
-        <RecentMessages
-          :messages="recentMessages?.messages"
-          @message-click="viewMessage"
+          <!-- Queue Configuration -->
+          <div class="config-section">
+            <div class="flex items-center gap-2 mb-3">
+              <div class="w-7 h-7 rounded-lg bg-gradient-to-br from-blue-500/10 to-cyan-500/20 flex items-center justify-center">
+                <svg class="w-4 h-4 text-blue-600 dark:text-blue-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+                </svg>
+              </div>
+              <h3 class="text-base font-semibold text-gray-900 dark:text-gray-100">Queue Configuration</h3>
+            </div>
+            <div class="grid grid-cols-2 md:grid-cols-3 gap-x-6 gap-y-3 text-sm">
+              <div>
+                <span class="text-gray-500 dark:text-gray-400 block mb-0.5">Lease Time</span>
+                <span class="font-semibold">{{ statusData?.queue?.config?.leaseTime || 0 }}s</span>
+              </div>
+              <div>
+                <span class="text-gray-500 dark:text-gray-400 block mb-0.5">TTL</span>
+                <span class="font-semibold">{{ formatDuration((statusData?.queue?.config?.ttl || 0) * 1000) }}</span>
+              </div>
+              <div>
+                <span class="text-gray-500 dark:text-gray-400 block mb-0.5">Max Queue Size</span>
+                <span class="font-semibold">{{ formatNumber(statusData?.queue?.config?.maxQueueSize || 0) }}</span>
+              </div>
+              <div>
+                <span class="text-gray-500 dark:text-gray-400 block mb-0.5">Retry Limit</span>
+                <span class="font-semibold">{{ statusData?.queue?.config?.retryLimit || 0 }}</span>
+              </div>
+              <div>
+                <span class="text-gray-500 dark:text-gray-400 block mb-0.5">Retry Delay</span>
+                <span class="font-semibold">{{ statusData?.queue?.config?.retryDelay || 0 }}ms</span>
+              </div>
+              <div>
+                <span class="text-gray-500 dark:text-gray-400 block mb-0.5">DLQ Enabled</span>
+                <span class="font-semibold">{{ statusData?.queue?.config?.deadLetterQueue ? 'Yes' : 'No' }}</span>
+              </div>
+            </div>
+          </div>
+
+          <!-- Partitions Table -->
+          <div class="partition-section">
+            <div class="flex items-center justify-between mb-2">
+              <div class="flex items-center gap-2">
+                <div class="w-7 h-7 rounded-lg bg-gradient-to-br from-indigo-500/10 to-violet-500/20 flex items-center justify-center">
+                  <svg class="w-4 h-4 text-indigo-600 dark:text-indigo-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 7v10c0 2.21 3.582 4 8 4s8-1.79 8-4V7M4 7c0 2.21 3.582 4 8 4s8-1.79 8-4M4 7c0-2.21 3.582-4 8-4s8 1.79 8 4m0 5c0 2.21-3.582 4-8 4s-8-1.79-8-4" />
+                  </svg>
+                </div>
+                <h3 class="text-base font-semibold text-gray-900 dark:text-gray-100">Partitions</h3>
+              </div>
+              <input
+                v-model="partitionSearch"
+                type="text"
+                placeholder="Search partitions..."
+                class="input w-48"
+              />
+            </div>
+            
+            <div class="table-container scrollbar-thin">
+              <table class="table">
+                <thead>
+                  <tr>
+                    <th @click="sortPartitions('name')" class="cursor-pointer hover:text-rose-600 dark:hover:text-rose-400 transition-colors">
+                      <div class="flex items-center gap-1">
+                        Partition
+                        <svg class="w-3 h-3 transition-transform" :class="getPartitionSortClass('name')" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7" />
+                        </svg>
+                      </div>
+                    </th>
+                    <th @click="sortPartitions('pending')" class="text-right cursor-pointer hover:text-rose-600 dark:hover:text-rose-400 transition-colors">
+                      <div class="flex items-center justify-end gap-1">
+                        Pending
+                        <svg class="w-3 h-3 transition-transform" :class="getPartitionSortClass('pending')" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7" />
+                        </svg>
+                      </div>
+                    </th>
+                    <th @click="sortPartitions('processing')" class="text-right cursor-pointer hover:text-rose-600 dark:hover:text-rose-400 transition-colors">
+                      <div class="flex items-center justify-end gap-1">
+                        Processing
+                        <svg class="w-3 h-3 transition-transform" :class="getPartitionSortClass('processing')" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7" />
+                        </svg>
+                      </div>
+                    </th>
+                    <th @click="sortPartitions('completed')" class="text-right cursor-pointer hover:text-rose-600 dark:hover:text-rose-400 transition-colors">
+                      <div class="flex items-center justify-end gap-1">
+                        Completed
+                        <svg class="w-3 h-3 transition-transform" :class="getPartitionSortClass('completed')" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7" />
+                        </svg>
+                      </div>
+                    </th>
+                    <th @click="sortPartitions('failed')" class="text-right cursor-pointer hover:text-rose-600 dark:hover:text-rose-400 transition-colors">
+                      <div class="flex items-center justify-end gap-1">
+                        Failed
+                        <svg class="w-3 h-3 transition-transform" :class="getPartitionSortClass('failed')" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7" />
+                        </svg>
+                      </div>
+                    </th>
+                    <th class="text-right">Consumed</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr v-for="partition in sortedPartitions" :key="partition.id">
+                    <td>
+                      <div class="font-medium">{{ partition.name }}</div>
+                      <div v-if="partition.lastActivity" class="text-xs text-gray-500 dark:text-gray-400">
+                        Last: {{ formatTime(partition.lastActivity) }}
+                      </div>
+                    </td>
+                    <td class="text-right font-medium">{{ formatNumber(partition.messages?.pending || 0) }}</td>
+                    <td class="text-right font-medium">{{ formatNumber(partition.messages?.processing || 0) }}</td>
+                    <td class="text-right font-medium text-green-600 dark:text-green-400">{{ formatNumber(partition.messages?.completed || 0) }}</td>
+                    <td class="text-right font-medium text-red-600 dark:text-red-400">{{ formatNumber(partition.messages?.failed || 0) }}</td>
+                    <td class="text-right">
+                      <div class="text-sm">{{ formatNumber(partition.cursor?.totalConsumed || 0) }}</div>
+                      <div class="text-xs text-gray-500 dark:text-gray-400">
+                        {{ partition.cursor?.batchesConsumed || 0 }} batches
+                      </div>
+                    </td>
+                  </tr>
+                </tbody>
+              </table>
+              
+              <div v-if="!sortedPartitions.length" class="text-center py-8 text-gray-500 text-sm">
+                No partitions found
+              </div>
+            </div>
+          </div>
+        </template>
+
+        <!-- Push Message Modal -->
+        <PushMessageModal
+          :is-open="showPushModal"
+          :queue-name="queueName"
+          @close="showPushModal = false"
+          @pushed="onMessagePushed"
         />
-      </template>
 
-      <!-- Push Message Modal -->
-      <PushMessageModal
-        :is-open="showPushModal"
-        :queue-name="queueName"
-        @close="showPushModal = false"
-        @pushed="onMessagePushed"
-      />
-
-      <!-- Clear Queue Confirmation -->
-      <ConfirmDialog
-        :is-open="showClearConfirm"
-        title="Clear Queue"
-        :message="`Are you sure you want to clear all messages from '${queueName}'? This action cannot be undone.`"
-        confirm-text="Clear Queue"
-        confirm-class="btn-danger"
-        @confirm="clearQueue"
-        @cancel="showClearConfirm = false"
-      />
+        <!-- Clear Queue Confirmation -->
+        <ConfirmDialog
+          :is-open="showClearConfirm"
+          title="Clear Queue"
+          :message="`Are you sure you want to clear all messages from '${queueName}'? This action cannot be undone.`"
+          confirm-text="Clear Queue"
+          confirm-class="btn-danger"
+          @confirm="clearQueue"
+          @cancel="showClearConfirm = false"
+        />
+      </div>
     </div>
   </div>
 </template>
 
 <script setup>
-import { ref, computed, onMounted, onUnmounted } from 'vue';
+import { ref, computed, onMounted } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import { queuesApi } from '../api/queues';
 import { analyticsApi } from '../api/analytics';
+import { formatNumber, formatDate, formatTime, formatDuration } from '../utils/formatters';
 
 import LoadingSpinner from '../components/common/LoadingSpinner.vue';
-import MetricCard from '../components/common/MetricCard.vue';
 import ConfirmDialog from '../components/common/ConfirmDialog.vue';
-import QueueDetailHeader from '../components/queue-detail/QueueDetailHeader.vue';
-import QueueConfig from '../components/queue-detail/QueueConfig.vue';
-import PartitionList from '../components/queue-detail/PartitionList.vue';
-import RecentMessages from '../components/queue-detail/RecentMessages.vue';
 import PushMessageModal from '../components/queue-detail/PushMessageModal.vue';
 
 const route = useRoute();
@@ -93,12 +277,13 @@ const loading = ref(false);
 const error = ref(null);
 const queueData = ref(null);
 const statusData = ref(null);
-const recentMessages = ref(null);
+const partitionSearch = ref('');
+const partitionSortColumn = ref('name');
+const partitionSortDirection = ref('asc');
 
 const showPushModal = ref(false);
 const showClearConfirm = ref(false);
 
-// Calculate pending
 const calculatedPending = computed(() => {
   if (!statusData.value?.totals?.messages) return 0;
   
@@ -110,20 +295,82 @@ const calculatedPending = computed(() => {
   return Math.max(0, total - completed - failed - processing);
 });
 
+const sortedPartitions = computed(() => {
+  let partitions = statusData.value?.partitions || [];
+  
+  // Filter by search
+  if (partitionSearch.value) {
+    const search = partitionSearch.value.toLowerCase();
+    partitions = partitions.filter(p => p.name.toLowerCase().includes(search));
+  }
+  
+  // Sort
+  return [...partitions].sort((a, b) => {
+    let aVal, bVal;
+    
+    switch (partitionSortColumn.value) {
+      case 'name':
+        aVal = a.name.toLowerCase();
+        bVal = b.name.toLowerCase();
+        break;
+      case 'pending':
+        aVal = a.messages?.pending || 0;
+        bVal = b.messages?.pending || 0;
+        break;
+      case 'processing':
+        aVal = a.messages?.processing || 0;
+        bVal = b.messages?.processing || 0;
+        break;
+      case 'completed':
+        aVal = a.messages?.completed || 0;
+        bVal = b.messages?.completed || 0;
+        break;
+      case 'failed':
+        aVal = a.messages?.failed || 0;
+        bVal = b.messages?.failed || 0;
+        break;
+      default:
+        return 0;
+    }
+    
+    if (aVal < bVal) return partitionSortDirection.value === 'asc' ? -1 : 1;
+    if (aVal > bVal) return partitionSortDirection.value === 'asc' ? 1 : -1;
+    return 0;
+  });
+});
+
+function sortPartitions(column) {
+  if (partitionSortColumn.value === column) {
+    partitionSortDirection.value = partitionSortDirection.value === 'asc' ? 'desc' : 'asc';
+  } else {
+    partitionSortColumn.value = column;
+    partitionSortDirection.value = 'asc';
+  }
+}
+
+function getPartitionSortClass(column) {
+  if (partitionSortColumn.value !== column) {
+    return 'opacity-30';
+  }
+  return partitionSortDirection.value === 'asc' ? '' : 'rotate-180';
+}
+
+function goBack() {
+  router.push('/queues');
+}
+
 async function loadData() {
   loading.value = true;
   error.value = null;
   
   try {
-    const [queueRes, statusRes, messagesRes] = await Promise.all([
+    const [queueRes, statusRes] = await Promise.all([
       queuesApi.getQueue(queueName.value),
       analyticsApi.getQueueDetail(queueName.value),
-      analyticsApi.getQueueMessages(queueName.value, { limit: 10 }),
     ]);
     
     queueData.value = queueRes.data;
     statusData.value = statusRes.data;
-    recentMessages.value = messagesRes.data;
   } catch (err) {
     error.value = err.message;
     console.error('Queue detail error:', err);
@@ -150,12 +397,186 @@ async function onMessagePushed() {
   await loadData();
 }
 
-function viewMessage(message) {
-  // Navigate to messages page with this message selected
-  router.push(`/messages?transactionId=${message.transactionId}`);
-}
-
 onMounted(() => {
   loadData();
 });
 </script>
+
+<style scoped>
+.page-flat {
+  min-height: 100%;
+}
+
+.header-section {
+  background: transparent;
+  padding: 0;
+}
+
+.config-section {
+  background: #ffffff;
+  border: none;
+  box-shadow: none;
+  border-radius: 0.75rem;
+  padding: 1rem;
+  transition: all 0.3s ease;
+}
+
+.dark .config-section {
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.config-section:hover {
+  background: #fafafa;
+}
+
+.dark .config-section:hover {
+  background: rgba(255, 255, 255, 0.05);
+}
+
+.partition-section {
+  background: #ffffff;
+  border: none;
+  box-shadow: none;
+  border-radius: 0.75rem;
+  padding: 1rem;
+}
+
+.dark .partition-section {
+  background: rgba(255, 255, 255, 0.03);
+}
+
+/* Flat inputs */
+.partition-section :deep(.input) {
+  background: transparent;
+  border: 1px solid rgba(156, 163, 175, 0.15);
+  transition: all 0.2s ease;
+}
+
+.partition-section :deep(.input:hover) {
+  border-color: rgba(156, 163, 175, 0.25);
+}
+
+.partition-section :deep(.input:focus) {
+  background: rgba(244, 63, 94, 0.02);
+  border-color: rgba(244, 63, 94, 0.4);
+  box-shadow: 0 0 0 3px rgba(244, 63, 94, 0.05);
+}
+
+.dark .partition-section :deep(.input) {
+  border-color: rgba(156, 163, 175, 0.1);
+}
+
+.dark .partition-section :deep(.input:focus) {
+  background: rgba(244, 63, 94, 0.03);
+  border-color: rgba(244, 63, 94, 0.5);
+  box-shadow: 0 0 0 3px rgba(244, 63, 94, 0.08);
+}
+
+/* Flat table styling */
+.partition-section :deep(.table) {
+  border-collapse: separate;
+  border-spacing: 0;
+}
+
+.partition-section :deep(.table thead) {
+  background: transparent;
+  border-bottom: 1px solid rgba(156, 163, 175, 0.08);
+}
+
+.dark .partition-section :deep(.table thead) {
+  border-bottom-color: rgba(156, 163, 175, 0.1);
+}
+
+.partition-section :deep(.table th) {
+  padding: 1rem 1rem;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+}
+
+.partition-section :deep(.table tbody tr) {
+  border: none;
+  transition: all 0.15s ease;
+}
+
+.partition-section :deep(.table tbody tr:nth-child(even)) {
+  background: rgba(0, 0, 0, 0.015);
+}
+
+.dark .partition-section :deep(.table tbody tr:nth-child(even)) {
+  background: rgba(255, 255, 255, 0.02);
+}
+
+.partition-section :deep(.table tbody tr:hover) {
+  background: rgba(244, 63, 94, 0.03);
+  box-shadow: inset 3px 0 0 0 rgba(244, 63, 94, 0.6);
+}
+
+.dark .partition-section :deep(.table tbody tr:hover) {
+  background: rgba(244, 63, 94, 0.05);
+  box-shadow: inset 3px 0 0 0 rgba(244, 63, 94, 0.8);
+}
+
+.partition-section :deep(.table td) {
+  padding: 0.875rem 1rem;
+  border: none;
+}
+
+.metric-flat {
+  background: #ffffff;
+  border: none;
+  box-shadow: none;
+  border-radius: 0.75rem;
+  padding: 1rem;
+  transition: all 0.3s ease;
+}
+
+.dark .metric-flat {
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.metric-flat:hover {
+  background: #fafafa;
+}
+
+.dark .metric-flat:hover {
+  background: rgba(255, 255, 255, 0.05);
+}
+
+.metric-icon-flat {
+  width: 2.5rem;
+  height: 2.5rem;
+  border-radius: 0.625rem;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  transition: all 0.3s ease;
+}
+
+.metric-flat:hover .metric-icon-flat {
+  transform: scale(1.05);
+}
+
+.metric-value-flat {
+  font-size: 1.75rem;
+  font-weight: 700;
+  line-height: 1.1;
+  margin-top: 0.25rem;
+  background: linear-gradient(135deg, #f43f5e 0%, #ec4899 50%, #a855f7 100%);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+  letter-spacing: -0.02em;
+}
+
+.error-flat {
+  background: transparent;
+  color: #dc2626;
+  font-size: 0.875rem;
+  padding: 1rem;
+}
+
+.dark .error-flat {
+  color: #fca5a5;
+}
+</style>

@@ -1,5 +1,5 @@
 <template>
-  <div class="card">
+  <div class="filter-container">
     <div class="flex flex-col sm:flex-row gap-3">
       <!-- Time Range -->
       <div class="flex items-center gap-2">
@@ -63,6 +63,20 @@
     </div>
   </div>
 </template>
+
+<style scoped>
+.filter-container {
+  background: #ffffff;
+  border: none;
+  box-shadow: none;
+  border-radius: 0.75rem;
+  padding: 1rem;
+}
+
+.dark .filter-container {
+  background: rgba(255, 255, 255, 0.03);
+}
+</style>
 
 <script setup>
 defineProps({

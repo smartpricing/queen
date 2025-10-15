@@ -1,5 +1,5 @@
 <template>
-  <div class="card">
+  <div class="config-container">
     <h3 class="text-base font-semibold mb-4">Queue Configuration</h3>
     <div class="grid grid-cols-2 md:grid-cols-3 gap-4 text-sm">
       <div>
@@ -29,6 +29,29 @@
     </div>
   </div>
 </template>
+
+<style scoped>
+.config-container {
+  background: #ffffff;
+  border: none;
+  box-shadow: none;
+  border-radius: 0.75rem;
+  padding: 1rem;
+  transition: all 0.3s ease;
+}
+
+.dark .config-container {
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.config-container:hover {
+  background: #fafafa;
+}
+
+.dark .config-container:hover {
+  background: rgba(255, 255, 255, 0.05);
+}
+</style>
 
 <script setup>
 import { formatNumber, formatDuration } from '../../utils/formatters';

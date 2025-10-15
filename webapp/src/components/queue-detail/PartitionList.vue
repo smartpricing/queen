@@ -1,5 +1,5 @@
 <template>
-  <div class="card">
+  <div class="partition-container">
     <h3 class="text-base font-semibold mb-4">Partitions</h3>
     <div class="space-y-3">
       <div
@@ -45,6 +45,29 @@
     </div>
   </div>
 </template>
+
+<style scoped>
+.partition-container {
+  background: #ffffff;
+  border: none;
+  box-shadow: none;
+  border-radius: 0.75rem;
+  padding: 1rem;
+  transition: all 0.3s ease;
+}
+
+.dark .partition-container {
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.partition-container:hover {
+  background: #fafafa;
+}
+
+.dark .partition-container:hover {
+  background: rgba(255, 255, 255, 0.05);
+}
+</style>
 
 <script setup>
 import { formatNumber, formatDate, formatTime } from '../../utils/formatters';

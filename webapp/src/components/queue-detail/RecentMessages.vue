@@ -1,5 +1,5 @@
 <template>
-  <div class="card">
+  <div class="messages-container">
     <h3 class="text-base font-semibold mb-4">Recent Messages</h3>
     
     <div class="table-container scrollbar-thin">
@@ -39,6 +39,29 @@
     </div>
   </div>
 </template>
+
+<style scoped>
+.messages-container {
+  background: #ffffff;
+  border: none;
+  box-shadow: none;
+  border-radius: 0.75rem;
+  padding: 1rem;
+  transition: all 0.3s ease;
+}
+
+.dark .messages-container {
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.messages-container:hover {
+  background: #fafafa;
+}
+
+.dark .messages-container:hover {
+  background: rgba(255, 255, 255, 0.05);
+}
+</style>
 
 <script setup>
 import { formatTime } from '../../utils/formatters';
