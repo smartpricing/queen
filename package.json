@@ -4,7 +4,6 @@
   "type": "module",
   "description": "High-performance message queue backed by PostgreSQL",
   "main": "src/client/index.js",
-
   "scripts": {
     "start": "node src/server.js",
     "start:cluster": "node src/cluster-server.js",
@@ -24,6 +23,8 @@
     "init": "node init-db.js"
   },
   "dependencies": {
+    "axios": "^1.12.2",
+    "chart.js": "^4.5.1",
     "pg": "^8.13.3",
     "uuid": "^13.0.0",
     "uWebSockets.js": "github:uNetworking/uWebSockets.js#v20.52.0",

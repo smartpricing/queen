@@ -3,7 +3,7 @@ import fs from 'fs';
 
 const NAMESPACE = 'benchmark';
 const NUMBER_OF_CONSUMERS = 10;
-const BATCH_SIZE = 10000;
+const BATCH_SIZE = 1;
 
 // Global metrics tracking
 const metrics = {

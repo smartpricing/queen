@@ -89,6 +89,23 @@ const cleanupEmptyPartitions = async (client) => {
   return result.rowCount;
 };
 
+// Clean up old metrics data (messages_consumed table)
+const cleanupOldMetrics = async (client) => {
+  const retentionDays = config.JOBS.METRICS_RETENTION_DAYS;
+  
+  // Delete metrics data older than the retention period
+  const result = await client.query(`
+    DELETE FROM queen.messages_consumed
+    WHERE acked_at < NOW() - INTERVAL '1 day' * $1
+  `, [retentionDays]);
+  
+  if (result.rowCount > 0) {
+    log(`📊 Deleted ${result.rowCount} old metrics records (older than ${retentionDays} days)`);
+  }
+  
+  return result.rowCount;
+};
+
 // Main retention function
 const performRetention = async (pool) => {
   const client = await pool.connect();
@@ -109,6 +126,9 @@ const performRetention = async (pool) => {
     
     // Cleanup empty partitions
     await cleanupEmptyPartitions(client);
+    
+    // Cleanup old metrics data
+    await cleanupOldMetrics(client);
     
     return totalDeleted;
   } catch (error) {

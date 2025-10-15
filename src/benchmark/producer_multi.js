@@ -4,8 +4,8 @@ import fs from 'fs';
 const TOTAL_MESSAGES = 100000;
 const NUM_QUEUES = 50;          // X: Number of queues
 const PARTITIONS_PER_QUEUE = 10; // Y: Partitions per queue
-const MAX_BATCH_SIZE = 1000;  
-const PUSH_PARALLEL = 10;      
+const MAX_BATCH_SIZE = 1;  
+const PUSH_PARALLEL = 1;      
 
 const q = new Queen({
   baseUrls: ['http://localhost:6632'],
@@ -17,7 +17,7 @@ console.log(`Creating ${NUM_QUEUES} queues with ${PARTITIONS_PER_QUEUE} partitio
 for (let queueIdx = 0; queueIdx < NUM_QUEUES; queueIdx++) {
   const queueName = `benchmark-queue-${String(queueIdx + 1).padStart(2, '0')}`;
   try {
-    await q.queueDelete(queueName);
+    //await q.queueDelete(queueName);
   } catch (e) {
     // Queue might not exist
   }

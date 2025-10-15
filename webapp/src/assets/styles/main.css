@@ -1,0 +1,189 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  * {
+    @apply border-gray-200 dark:border-gray-700;
+  }
+  
+  body {
+    @apply bg-gray-50 dark:bg-slate-900 text-gray-900 dark:text-gray-100 text-sm antialiased;
+  }
+  
+  h1 {
+    @apply text-xl font-semibold;
+  }
+  
+  h2 {
+    @apply text-lg font-semibold;
+  }
+  
+  h3 {
+    @apply text-base font-semibold;
+  }
+}
+
+@layer components {
+  .card {
+    @apply bg-white dark:bg-slate-800 rounded-xl shadow-sm border p-4 sm:p-5 transition-shadow hover:shadow-md;
+  }
+  
+  .btn {
+    @apply px-4 py-2 rounded-lg font-medium transition-all text-sm inline-flex items-center justify-center gap-2;
+  }
+  
+  .btn:active {
+    @apply scale-95;
+  }
+  
+  .btn-primary {
+    @apply bg-blue-600 hover:bg-blue-700 active:bg-blue-800 text-white shadow-sm hover:shadow disabled:opacity-50 disabled:cursor-not-allowed;
+  }
+  
+  .btn-secondary {
+    @apply bg-gray-100 hover:bg-gray-200 active:bg-gray-300 dark:bg-slate-700 dark:hover:bg-slate-600 dark:active:bg-slate-500 text-gray-900 dark:text-gray-100 disabled:opacity-50;
+  }
+  
+  .btn-danger {
+    @apply bg-red-600 hover:bg-red-700 active:bg-red-800 text-white shadow-sm hover:shadow disabled:opacity-50;
+  }
+  
+  .btn-ghost {
+    @apply hover:bg-gray-100 active:bg-gray-200 dark:hover:bg-slate-700 dark:active:bg-slate-600 text-gray-700 dark:text-gray-300;
+  }
+  
+  .badge {
+    @apply inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium;
+  }
+  
+  .badge-success {
+    @apply bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400 ring-1 ring-green-600/20 dark:ring-green-400/20;
+  }
+  
+  .badge-warning {
+    @apply bg-yellow-100 text-yellow-700 dark:bg-yellow-900/30 dark:text-yellow-400 ring-1 ring-yellow-600/20 dark:ring-yellow-400/20;
+  }
+  
+  .badge-danger {
+    @apply bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400 ring-1 ring-red-600/20 dark:ring-red-400/20;
+  }
+  
+  .badge-info {
+    @apply bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400 ring-1 ring-blue-600/20 dark:ring-blue-400/20;
+  }
+  
+  .input {
+    @apply w-full px-3 py-2 text-sm border rounded-lg bg-white dark:bg-slate-800 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-shadow;
+  }
+  
+  /* Table styles */
+  .table-container {
+    @apply overflow-x-auto -mx-4 sm:mx-0 rounded-lg;
+  }
+  
+  .table {
+    @apply w-full text-sm;
+  }
+  
+  .table thead {
+    @apply text-xs text-gray-500 dark:text-gray-400 border-b border-gray-200 dark:border-gray-700;
+  }
+  
+  .table th {
+    @apply pb-3 font-semibold text-left px-4 sm:px-3 first:pl-4 last:pr-4 uppercase tracking-wider;
+  }
+  
+  .table tbody tr {
+    @apply border-b border-gray-100 dark:border-gray-700/50 last:border-b-0 hover:bg-gray-50 dark:hover:bg-slate-700/30 transition-colors;
+  }
+  
+  .table td {
+    @apply py-3.5 px-4 sm:px-3 first:pl-4 last:pr-4;
+  }
+  
+  /* Metric card specific */
+  .metric-value {
+    @apply text-2xl sm:text-3xl font-bold mt-1.5 bg-gradient-to-br from-gray-900 to-gray-700 dark:from-gray-100 dark:to-gray-300 bg-clip-text text-transparent;
+  }
+  
+  .metric-label {
+    @apply text-xs text-gray-500 dark:text-gray-400 uppercase tracking-wider font-semibold;
+  }
+  
+  /* Chart container */
+  .chart-container {
+    @apply h-64 sm:h-72 md:h-80 w-full relative;
+  }
+  
+  /* Status indicators */
+  .status-dot {
+    @apply w-2 h-2 rounded-full animate-pulse;
+  }
+  
+  .status-dot.healthy {
+    @apply bg-green-500 shadow-sm shadow-green-500/50;
+  }
+  
+  .status-dot.unhealthy {
+    @apply bg-red-500 shadow-sm shadow-red-500/50;
+  }
+}
+
+/* Scrollbar styling */
+@layer utilities {
+  .scrollbar-thin::-webkit-scrollbar {
+    width: 6px;
+    height: 6px;
+  }
+  
+  .scrollbar-thin::-webkit-scrollbar-track {
+    @apply bg-gray-100 dark:bg-slate-800 rounded-full;
+  }
+  
+  .scrollbar-thin::-webkit-scrollbar-thumb {
+    @apply bg-gray-300 dark:bg-slate-600 rounded-full;
+  }
+  
+  .scrollbar-thin::-webkit-scrollbar-thumb:hover {
+    @apply bg-gray-400 dark:bg-slate-500;
+  }
+  
+  /* Custom utilities */
+  .text-balance {
+    text-wrap: balance;
+  }
+  
+  /* Smooth scrolling */
+  .smooth-scroll {
+    scroll-behavior: smooth;
+  }
+}
+
+/* Custom animations */
+@keyframes fadeIn {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.animate-fade-in {
+  animation: fadeIn 0.3s ease-out;
+}
+
+/* Focus visible for accessibility */
+:focus-visible {
+  @apply outline-2 outline-offset-2 outline-blue-500 rounded;
+}
+
+/* Selection color */
+::selection {
+  @apply bg-blue-200 dark:bg-blue-800/50 text-gray-900 dark:text-gray-100;
+}

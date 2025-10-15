@@ -12,23 +12,31 @@ export const createMessagesRoutes = (pool, queueManager) => {
         m.id,
         m.transaction_id,
         m.payload,
-        m.status,
-        m.worker_id,
         m.created_at,
-        m.locked_at,
-        m.completed_at,
-        m.failed_at,
-        m.error_message,
-        m.retry_count,
-        m.lease_expires_at,
+        m.trace_id,
         q.name || '/' || p.name as queue_path,
         q.name as queue_name,
         p.name as partition_name,
         q.namespace,
-        q.task
+        q.task,
+        q.priority as queue_priority,
+        pc.lease_expires_at,
+        pc.last_consumed_created_at,
+        pc.last_consumed_id,
+        CASE
+          WHEN dlq.message_id IS NOT NULL THEN 'dead_letter'
+          WHEN pc.lease_expires_at IS NOT NULL AND pc.lease_expires_at > NOW() THEN 'processing'
+          WHEN pc.last_consumed_created_at IS NOT NULL AND (
+            m.created_at < pc.last_consumed_created_at OR 
+            (m.created_at = pc.last_consumed_created_at AND m.id <= pc.last_consumed_id)
+          ) THEN 'completed'
+          ELSE 'pending'
+        END as message_status
       FROM queen.messages m
       JOIN queen.partitions p ON p.id = m.partition_id
       JOIN queen.queues q ON q.id = p.queue_id
+      LEFT JOIN queen.partition_consumers pc ON pc.partition_id = p.id AND pc.consumer_group = '__QUEUE_MODE__'
+      LEFT JOIN queen.dead_letter_queue dlq ON dlq.message_id = m.id
       WHERE 1=1
     `;
     
@@ -52,8 +60,17 @@ export const createMessagesRoutes = (pool, queueManager) => {
       query += ` AND q.task = $${++paramCount}`;
     }
     if (status) {
+      // Filter by computed status
       params.push(status);
-      query += ` AND m.status = $${++paramCount}`;
+      query += ` AND CASE
+          WHEN dlq.message_id IS NOT NULL THEN 'dead_letter'
+          WHEN pc.lease_expires_at IS NOT NULL AND pc.lease_expires_at > NOW() THEN 'processing'
+          WHEN pc.last_consumed_created_at IS NOT NULL AND (
+            m.created_at < pc.last_consumed_created_at OR 
+            (m.created_at = pc.last_consumed_created_at AND m.id <= pc.last_consumed_id)
+          ) THEN 'completed'
+          ELSE 'pending'
+        END = $${++paramCount}`;
     }
     
     query += ` ORDER BY m.created_at DESC, m.id DESC`;
@@ -75,14 +92,10 @@ export const createMessagesRoutes = (pool, queueManager) => {
       namespace: row.namespace,
       task: row.task,
       payload: row.payload,
-      status: row.status,
-      workerId: row.worker_id,
+      status: row.message_status,
+      traceId: row.trace_id,
+      queuePriority: row.queue_priority,
       createdAt: row.created_at,
-      lockedAt: row.locked_at,
-      completedAt: row.completed_at,
-      failedAt: row.failed_at,
-      errorMessage: row.error_message,
-      retryCount: row.retry_count,
       leaseExpiresAt: row.lease_expires_at
     }));
   };
@@ -91,7 +104,12 @@ export const createMessagesRoutes = (pool, queueManager) => {
   const getMessage = async (transactionId) => {
     const result = await pool.query(`
       SELECT 
-        m.*,
+        m.id,
+        m.transaction_id,
+        m.partition_id,
+        m.payload,
+        m.created_at,
+        m.trace_id,
         q.name || '/' || p.name as queue_path,
         q.name as queue_name,
         p.name as partition_name,
@@ -101,10 +119,26 @@ export const createMessagesRoutes = (pool, queueManager) => {
         q.retry_limit,
         q.retry_delay,
         q.ttl,
-        q.priority
+        q.priority as queue_priority,
+        pc.lease_expires_at,
+        pc.last_consumed_created_at,
+        pc.last_consumed_id,
+        dlq.error_message,
+        dlq.retry_count,
+        CASE
+          WHEN dlq.message_id IS NOT NULL THEN 'dead_letter'
+          WHEN pc.lease_expires_at IS NOT NULL AND pc.lease_expires_at > NOW() THEN 'processing'
+          WHEN pc.last_consumed_created_at IS NOT NULL AND (
+            m.created_at < pc.last_consumed_created_at OR 
+            (m.created_at = pc.last_consumed_created_at AND m.id <= pc.last_consumed_id)
+          ) THEN 'completed'
+          ELSE 'pending'
+        END as message_status
       FROM queen.messages m
       JOIN queen.partitions p ON p.id = m.partition_id
       JOIN queen.queues q ON q.id = p.queue_id
+      LEFT JOIN queen.partition_consumers pc ON pc.partition_id = p.id AND pc.consumer_group = '__QUEUE_MODE__'
+      LEFT JOIN queen.dead_letter_queue dlq ON dlq.message_id = m.id
       WHERE m.transaction_id = $1
     `, [transactionId]);
     
@@ -122,12 +156,9 @@ export const createMessagesRoutes = (pool, queueManager) => {
       namespace: row.namespace,
       task: row.task,
       payload: row.payload,
-      status: row.status,
-      workerId: row.worker_id,
+      status: row.message_status,
+      traceId: row.trace_id,
       createdAt: row.created_at,
-      lockedAt: row.locked_at,
-      completedAt: row.completed_at,
-      failedAt: row.failed_at,
       errorMessage: row.error_message,
       retryCount: row.retry_count,
       leaseExpiresAt: row.lease_expires_at,
@@ -136,7 +167,7 @@ export const createMessagesRoutes = (pool, queueManager) => {
         retryLimit: row.retry_limit,
         retryDelay: row.retry_delay,
         ttl: row.ttl,
-        priority: row.priority
+        priority: row.queue_priority
       }
     };
   };
@@ -246,10 +277,23 @@ export const createMessagesRoutes = (pool, queueManager) => {
     const result = await pool.query(`
       SELECT 
         m.transaction_id,
-        m.status,
         m.created_at,
-        m.payload
+        m.payload,
+        pc.lease_expires_at,
+        pc.last_consumed_created_at,
+        pc.last_consumed_id,
+        CASE
+          WHEN dlq.message_id IS NOT NULL THEN 'dead_letter'
+          WHEN pc.lease_expires_at IS NOT NULL AND pc.lease_expires_at > NOW() THEN 'processing'
+          WHEN pc.last_consumed_created_at IS NOT NULL AND (
+            m.created_at < pc.last_consumed_created_at OR 
+            (m.created_at = pc.last_consumed_created_at AND m.id <= pc.last_consumed_id)
+          ) THEN 'completed'
+          ELSE 'pending'
+        END as message_status
       FROM queen.messages m
+      LEFT JOIN queen.partition_consumers pc ON pc.partition_id = m.partition_id AND pc.consumer_group = '__QUEUE_MODE__'
+      LEFT JOIN queen.dead_letter_queue dlq ON dlq.message_id = m.id
       WHERE m.partition_id = $1
         AND m.transaction_id != $2
         AND m.created_at BETWEEN $3::timestamp - INTERVAL '1 hour' 
@@ -260,7 +304,7 @@ export const createMessagesRoutes = (pool, queueManager) => {
     
     return result.rows.map(row => ({
       transactionId: row.transaction_id,
-      status: row.status,
+      status: row.message_status,
       createdAt: row.created_at,
       payload: row.payload
     }));

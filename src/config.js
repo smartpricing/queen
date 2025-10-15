@@ -102,6 +102,9 @@ export const JOBS = {
   RETENTION_BATCH_SIZE: parseInt(process.env.RETENTION_BATCH_SIZE) || 1000,
   PARTITION_CLEANUP_DAYS: parseInt(process.env.PARTITION_CLEANUP_DAYS) || 7,
   
+  // Metrics retention (messages_consumed table)
+  METRICS_RETENTION_DAYS: parseInt(process.env.METRICS_RETENTION_DAYS) || 90, // Keep 90 days of metrics by default
+  
   // Eviction service
   EVICTION_INTERVAL: parseInt(process.env.EVICTION_INTERVAL) || 60000, // 1 minute
   EVICTION_BATCH_SIZE: parseInt(process.env.EVICTION_BATCH_SIZE) || 1000,

@@ -163,7 +163,37 @@ CREATE INDEX IF NOT EXISTS idx_partition_consumers_consumer_group
 ON queen.partition_consumers(consumer_group);
 
 -- ────────────────────────────────────────────────────────────────
--- 5. DEAD_LETTER_QUEUE - Failed messages
+-- 5. MESSAGES_CONSUMED - ACK tracking for metrics (time-series)
+-- ────────────────────────────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS queen.messages_consumed (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    partition_id UUID REFERENCES queen.partitions(id) ON DELETE CASCADE,
+    consumer_group VARCHAR(255) NOT NULL,
+    
+    -- Metrics for this ACK batch
+    messages_completed INTEGER DEFAULT 0,
+    messages_failed INTEGER DEFAULT 0,
+    
+    -- Timestamp for time-series aggregation
+    acked_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- Indexes for time-series queries
+CREATE INDEX IF NOT EXISTS idx_messages_consumed_acked_at 
+ON queen.messages_consumed(acked_at DESC);
+
+CREATE INDEX IF NOT EXISTS idx_messages_consumed_partition_acked 
+ON queen.messages_consumed(partition_id, acked_at DESC);
+
+CREATE INDEX IF NOT EXISTS idx_messages_consumed_consumer_acked 
+ON queen.messages_consumed(consumer_group, acked_at DESC);
+
+-- Composite index for filtering by queue (via partition join)
+CREATE INDEX IF NOT EXISTS idx_messages_consumed_partition_id
+ON queen.messages_consumed(partition_id);
+
+-- ────────────────────────────────────────────────────────────────
+-- 6. DEAD_LETTER_QUEUE - Failed messages
 -- ────────────────────────────────────────────────────────────────
 CREATE TABLE IF NOT EXISTS queen.dead_letter_queue (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -189,7 +219,7 @@ CREATE INDEX IF NOT EXISTS idx_dlq_message_consumer
 ON queen.dead_letter_queue(message_id, consumer_group);
 
 -- ────────────────────────────────────────────────────────────────
--- 6. RETENTION_HISTORY - Optional audit of cleanup operations
+-- 7. RETENTION_HISTORY - Optional audit of cleanup operations
 -- ────────────────────────────────────────────────────────────────
 CREATE TABLE IF NOT EXISTS queen.retention_history (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),

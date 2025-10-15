@@ -630,6 +630,12 @@ export const createOptimizedQueueManager = (pool, resourceCache, eventManager, s
           log(`[${LogTypes.ACK_BATCH}] Moved ${failedCount} failed messages to DLQ | ConsumerGroup: ${consumerGroup || 'QUEUE_MODE'}`);
         }
         
+        // Track consumption metrics for time-series analytics
+        await client.query(`
+          INSERT INTO queen.messages_consumed (partition_id, consumer_group, messages_completed, messages_failed)
+          VALUES ($1, $2, $3, $4)
+        `, [partitionId, actualConsumerGroup, successCount, failedCount]);
+        
         // Add results
         grouped.completed.forEach(ack => {
           results.push({ transactionId: ack.transactionId, status: 'completed' });

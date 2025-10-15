@@ -78,13 +78,26 @@ export const createStatusRoutes = (pool) => {
             AND m.created_at <= $2::timestamptz
             ${filterInfo.whereClause}
           GROUP BY DATE_TRUNC('minute', m.created_at)
+        ),
+        processed_per_minute AS (
+          SELECT 
+            DATE_TRUNC('minute', mc.acked_at) as minute,
+            SUM(mc.messages_completed) as messages_processed
+          FROM queen.messages_consumed mc
+          JOIN queen.partitions p ON p.id = mc.partition_id
+          JOIN queen.queues q ON q.id = p.queue_id
+          WHERE mc.acked_at >= $1::timestamptz
+            AND mc.acked_at <= $2::timestamptz
+            ${filterInfo.whereClause}
+          GROUP BY DATE_TRUNC('minute', mc.acked_at)
         )
         SELECT 
           ts.minute,
           COALESCE(ipm.messages_ingested, 0) as messages_ingested,
-          0 as messages_processed
+          COALESCE(ppm.messages_processed, 0) as messages_processed
         FROM time_series ts
         LEFT JOIN ingested_per_minute ipm ON ipm.minute = ts.minute
+        LEFT JOIN processed_per_minute ppm ON ppm.minute = ts.minute
         ORDER BY ts.minute DESC
       `;
       
@@ -706,9 +719,6 @@ export const createStatusRoutes = (pool) => {
     
     try {
       // Query 1: Throughput time series
-      // Note: V2 schema doesn't track per-message consumption timestamps,
-      // so we can only show ingested messages accurately. "Processed" would
-      // require tracking individual message acks with timestamps.
       const throughputQuery = `
         WITH time_series AS (
           SELECT generate_series(
@@ -729,6 +739,18 @@ export const createStatusRoutes = (pool) => {
             ${filterInfo.whereClause}
           GROUP BY DATE_TRUNC('${interval}', m.created_at)
         ),
+        processed_counts AS (
+          SELECT 
+            DATE_TRUNC('${interval}', mc.acked_at) as bucket,
+            SUM(mc.messages_completed) as processed
+          FROM queen.messages_consumed mc
+          JOIN queen.partitions p ON p.id = mc.partition_id
+          JOIN queen.queues q ON q.id = p.queue_id
+          WHERE mc.acked_at >= $1::timestamptz 
+            AND mc.acked_at <= $2::timestamptz
+            ${filterInfo.whereClause}
+          GROUP BY DATE_TRUNC('${interval}', mc.acked_at)
+        ),
         failed_counts AS (
           SELECT 
             DATE_TRUNC('${interval}', dlq.failed_at) as bucket,
@@ -745,10 +767,11 @@ export const createStatusRoutes = (pool) => {
         SELECT 
           ts.bucket as timestamp,
           COALESCE(ic.ingested, 0) as ingested,
-          0 as processed,
+          COALESCE(pc.processed, 0) as processed,
           COALESCE(fc.failed, 0) as failed
         FROM time_series ts
         LEFT JOIN ingested_counts ic ON ic.bucket = ts.bucket
+        LEFT JOIN processed_counts pc ON pc.bucket = ts.bucket
         LEFT JOIN failed_counts fc ON fc.bucket = ts.bucket
         ORDER BY ts.bucket DESC
       `;
