@@ -25,11 +25,11 @@ export const createMessagesRoutes = (pool, queueManager) => {
         pc.last_consumed_id,
         CASE
           WHEN dlq.message_id IS NOT NULL THEN 'dead_letter'
-          WHEN pc.lease_expires_at IS NOT NULL AND pc.lease_expires_at > NOW() THEN 'processing'
           WHEN pc.last_consumed_created_at IS NOT NULL AND (
             m.created_at < pc.last_consumed_created_at OR 
-            (m.created_at = pc.last_consumed_created_at AND m.id <= pc.last_consumed_id)
+            (DATE_TRUNC('milliseconds', m.created_at) = DATE_TRUNC('milliseconds', pc.last_consumed_created_at) AND m.id <= pc.last_consumed_id)
           ) THEN 'completed'
+          WHEN pc.lease_expires_at IS NOT NULL AND pc.lease_expires_at > NOW() THEN 'processing'
           ELSE 'pending'
         END as message_status
       FROM queen.messages m
@@ -64,11 +64,11 @@ export const createMessagesRoutes = (pool, queueManager) => {
       params.push(status);
       query += ` AND CASE
           WHEN dlq.message_id IS NOT NULL THEN 'dead_letter'
-          WHEN pc.lease_expires_at IS NOT NULL AND pc.lease_expires_at > NOW() THEN 'processing'
           WHEN pc.last_consumed_created_at IS NOT NULL AND (
             m.created_at < pc.last_consumed_created_at OR 
-            (m.created_at = pc.last_consumed_created_at AND m.id <= pc.last_consumed_id)
+            (DATE_TRUNC('milliseconds', m.created_at) = DATE_TRUNC('milliseconds', pc.last_consumed_created_at) AND m.id <= pc.last_consumed_id)
           ) THEN 'completed'
+          WHEN pc.lease_expires_at IS NOT NULL AND pc.lease_expires_at > NOW() THEN 'processing'
           ELSE 'pending'
         END = $${++paramCount}`;
     }
@@ -127,11 +127,11 @@ export const createMessagesRoutes = (pool, queueManager) => {
         dlq.retry_count,
         CASE
           WHEN dlq.message_id IS NOT NULL THEN 'dead_letter'
-          WHEN pc.lease_expires_at IS NOT NULL AND pc.lease_expires_at > NOW() THEN 'processing'
           WHEN pc.last_consumed_created_at IS NOT NULL AND (
             m.created_at < pc.last_consumed_created_at OR 
-            (m.created_at = pc.last_consumed_created_at AND m.id <= pc.last_consumed_id)
+            (DATE_TRUNC('milliseconds', m.created_at) = DATE_TRUNC('milliseconds', pc.last_consumed_created_at) AND m.id <= pc.last_consumed_id)
           ) THEN 'completed'
+          WHEN pc.lease_expires_at IS NOT NULL AND pc.lease_expires_at > NOW() THEN 'processing'
           ELSE 'pending'
         END as message_status
       FROM queen.messages m
@@ -284,11 +284,11 @@ export const createMessagesRoutes = (pool, queueManager) => {
         pc.last_consumed_id,
         CASE
           WHEN dlq.message_id IS NOT NULL THEN 'dead_letter'
-          WHEN pc.lease_expires_at IS NOT NULL AND pc.lease_expires_at > NOW() THEN 'processing'
           WHEN pc.last_consumed_created_at IS NOT NULL AND (
             m.created_at < pc.last_consumed_created_at OR 
-            (m.created_at = pc.last_consumed_created_at AND m.id <= pc.last_consumed_id)
+            (DATE_TRUNC('milliseconds', m.created_at) = DATE_TRUNC('milliseconds', pc.last_consumed_created_at) AND m.id <= pc.last_consumed_id)
           ) THEN 'completed'
+          WHEN pc.lease_expires_at IS NOT NULL AND pc.lease_expires_at > NOW() THEN 'processing'
           ELSE 'pending'
         END as message_status
       FROM queen.messages m

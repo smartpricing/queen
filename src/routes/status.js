@@ -545,9 +545,9 @@ export const createStatusRoutes = (pool) => {
       if (status === 'failed') {
         conditions.push(`EXISTS (SELECT 1 FROM queen.dead_letter_queue dlq WHERE dlq.message_id = m.id)`);
       } else if (status === 'completed') {
-        conditions.push(`(m.created_at, m.id) <= (pc.last_consumed_created_at, pc.last_consumed_id)`);
+        conditions.push(`(m.created_at < pc.last_consumed_created_at OR (DATE_TRUNC('milliseconds', m.created_at) = DATE_TRUNC('milliseconds', pc.last_consumed_created_at) AND m.id <= pc.last_consumed_id))`);
       } else if (status === 'pending') {
-        conditions.push(`(m.created_at, m.id) > (COALESCE(pc.last_consumed_created_at, '1970-01-01'::timestamptz), COALESCE(pc.last_consumed_id, '00000000-0000-0000-0000-000000000000'::uuid))`);
+        conditions.push(`(m.created_at > COALESCE(pc.last_consumed_created_at, '1970-01-01'::timestamptz) OR (DATE_TRUNC('milliseconds', m.created_at) = DATE_TRUNC('milliseconds', COALESCE(pc.last_consumed_created_at, '1970-01-01'::timestamptz)) AND m.id > COALESCE(pc.last_consumed_id, '00000000-0000-0000-0000-000000000000'::uuid)))`);
       }
     }
     
@@ -570,7 +570,7 @@ export const createStatusRoutes = (pool) => {
         p.name as partition,
         CASE 
           WHEN EXISTS (SELECT 1 FROM queen.dead_letter_queue dlq WHERE dlq.message_id = m.id) THEN 'failed'
-          WHEN (m.created_at, m.id) <= (COALESCE(pc.last_consumed_created_at, '1970-01-01'::timestamptz), COALESCE(pc.last_consumed_id, '00000000-0000-0000-0000-000000000000'::uuid)) THEN 'completed'
+          WHEN (m.created_at < COALESCE(pc.last_consumed_created_at, '1970-01-01'::timestamptz) OR (DATE_TRUNC('milliseconds', m.created_at) = DATE_TRUNC('milliseconds', COALESCE(pc.last_consumed_created_at, '1970-01-01'::timestamptz)) AND m.id <= COALESCE(pc.last_consumed_id, '00000000-0000-0000-0000-000000000000'::uuid))) THEN 'completed'
           WHEN pc.lease_expires_at IS NOT NULL AND pc.lease_expires_at > NOW() THEN 'processing'
           ELSE 'pending'
         END as status,
@@ -625,7 +625,7 @@ export const createStatusRoutes = (pool) => {
       };
       
       if (!row.is_encrypted) {
-        message.payload = row.payload;
+        message.data = row.payload;
       }
       
       if (row.status === 'pending' || row.status === 'processing') {

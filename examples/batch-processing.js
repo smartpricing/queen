@@ -14,7 +14,7 @@ for await (const message of q.take('demo-queue', {
   limit: 25,      // Process 25 total
   wait: false 
 })) {
-  console.log(`Message ${++count1}:`, message.payload);
+  console.log(`Message ${++count1}:`, message.data);
   await q.ack(message);
 }
 
@@ -29,7 +29,7 @@ for await (const messages of q.takeBatch('demo-queue', {
   
   // Process entire batch
   for (const msg of messages) {
-    console.log(`  - ${msg.payload}`);
+    console.log(`  - ${msg.data}`);
   }
   
   // Acknowledge entire batch at once

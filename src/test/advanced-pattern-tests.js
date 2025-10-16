@@ -1000,7 +1000,7 @@ export async function testMultipleConsumersSinglePartitionOrdering(client) {
               limit: batchSize, 
               batch: batchSize 
             })) {
-              const sequenceNumber = msg.payload.sequenceNumber;
+              const sequenceNumber = msg.data.sequenceNumber;
               consumerMessages.push({
                 consumerId,
                 sequenceNumber,

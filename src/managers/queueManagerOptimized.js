@@ -1029,6 +1029,11 @@ export const createOptimizedQueueManager = (pool, resourceCache, eventManager, s
           FROM queen.queues q
           JOIN queen.partitions p ON p.queue_id = q.id
           WHERE q.name = $1 AND p.name = $2
+            AND (q.window_buffer = 0 OR NOT EXISTS (
+              SELECT 1 FROM queen.messages m 
+              WHERE m.partition_id = p.id 
+                AND m.created_at > NOW() - INTERVAL '1 second' * q.window_buffer
+            ))
         `, [queue, partition]);
         
         if (result.rows.length > 0) {
@@ -1037,7 +1042,7 @@ export const createOptimizedQueueManager = (pool, resourceCache, eventManager, s
         }
         
       } else if (accessMode === 'queue') {
-        // CASE 2: Queue-level access - find unlocked partitions
+        // CASE 2: Queue-level access - find unlocked partitions WITH unconsumed messages
         const result = await client.query(`
           SELECT 
             q.id as queue_id,
@@ -1052,13 +1057,27 @@ export const createOptimizedQueueManager = (pool, resourceCache, eventManager, s
             p.name as partition_name
           FROM queen.queues q
           JOIN queen.partitions p ON p.queue_id = q.id
+          LEFT JOIN queen.partition_consumers pc ON pc.partition_id = p.id
+            AND pc.consumer_group = $1
           WHERE q.name = $2
             AND NOT EXISTS (
-              SELECT 1 FROM queen.partition_consumers pc
-              WHERE pc.partition_id = p.id
-                AND pc.consumer_group = $1
-                AND pc.lease_expires_at IS NOT NULL
-                AND pc.lease_expires_at > NOW()
+              SELECT 1 FROM queen.partition_consumers pc2
+              WHERE pc2.partition_id = p.id
+                AND pc2.consumer_group = $1
+                AND pc2.lease_expires_at IS NOT NULL
+                AND pc2.lease_expires_at > NOW()
+            )
+            AND (q.window_buffer = 0 OR NOT EXISTS (
+              SELECT 1 FROM queen.messages m 
+              WHERE m.partition_id = p.id 
+                AND m.created_at > NOW() - INTERVAL '1 second' * q.window_buffer
+            ))
+            AND EXISTS (
+              SELECT 1 FROM queen.messages m2
+              WHERE m2.partition_id = p.id
+                AND m2.id > COALESCE(pc.last_consumed_id, '00000000-0000-0000-0000-000000000000'::uuid)
+                AND (q.delayed_processing = 0 OR m2.created_at <= NOW() - INTERVAL '1 second' * q.delayed_processing)
+                AND (q.max_wait_time_seconds = 0 OR m2.created_at > NOW() - INTERVAL '1 second' * q.max_wait_time_seconds)
             )
           ORDER BY RANDOM()
           LIMIT $3
@@ -1071,29 +1090,23 @@ export const createOptimizedQueueManager = (pool, resourceCache, eventManager, s
         
       } else {
         // CASE 3: Filtered access - namespace/task
+        // Use CTE to first filter partitions by windowBuffer, then find messages
         let filterQuery = `
-          SELECT 
-            q.id as queue_id,
-            q.name as queue_name,
-            q.lease_time,
-            q.retry_limit,
-            q.delayed_processing,
-            q.max_wait_time_seconds,
-            q.window_buffer,
-            q.priority,
-            p.id as partition_id,
-            p.name as partition_name,
-            MIN(m.created_at) as oldest_message
-          FROM queen.messages m
-          JOIN queen.partitions p ON m.partition_id = p.id
-          JOIN queen.queues q ON p.queue_id = q.id
-          LEFT JOIN queen.partition_consumers pc ON p.id = pc.partition_id
-            AND pc.consumer_group = $1
-          WHERE m.id > COALESCE(pc.last_consumed_id, '00000000-0000-0000-0000-000000000000'::uuid)
-            AND (q.delayed_processing = 0 OR m.created_at <= NOW() - INTERVAL '1 second' * q.delayed_processing)
-            AND (q.max_wait_time_seconds = 0 OR 
-                 m.created_at > NOW() - INTERVAL '1 second' * q.max_wait_time_seconds)
-            AND (q.window_buffer = 0 OR NOT EXISTS (
+          WITH eligible_partitions AS (
+            SELECT DISTINCT
+              q.id as queue_id,
+              q.name as queue_name,
+              q.lease_time,
+              q.retry_limit,
+              q.delayed_processing,
+              q.max_wait_time_seconds,
+              q.window_buffer,
+              q.priority,
+              p.id as partition_id,
+              p.name as partition_name
+            FROM queen.queues q
+            JOIN queen.partitions p ON p.queue_id = q.id
+            WHERE (q.window_buffer = 0 OR NOT EXISTS (
               SELECT 1 FROM queen.messages m2 
               WHERE m2.partition_id = p.id 
                 AND m2.created_at > NOW() - INTERVAL '1 second' * q.window_buffer
@@ -1105,27 +1118,44 @@ export const createOptimizedQueueManager = (pool, resourceCache, eventManager, s
                 AND pc2.lease_expires_at IS NOT NULL
                 AND pc2.lease_expires_at > NOW()
             )
+          )
+          SELECT 
+            ep.*,
+            MIN(m.created_at) as oldest_message
+          FROM queen.messages m
+          JOIN eligible_partitions ep ON m.partition_id = ep.partition_id
+          LEFT JOIN queen.partition_consumers pc ON ep.partition_id = pc.partition_id
+            AND pc.consumer_group = $1
+          WHERE m.id > COALESCE(pc.last_consumed_id, '00000000-0000-0000-0000-000000000000'::uuid)
+            AND (ep.delayed_processing = 0 OR m.created_at <= NOW() - INTERVAL '1 second' * ep.delayed_processing)
+            AND (ep.max_wait_time_seconds = 0 OR 
+                 m.created_at > NOW() - INTERVAL '1 second' * ep.max_wait_time_seconds)
         `;
         
         const params = [actualConsumerGroup];
         
+        //Build namespace/task filters for the CTE
+        let cteFilters = '';
         if (namespace) {
           params.push(namespace);
-          filterQuery += ` AND q.namespace = $${params.length}`;
+          cteFilters += ` AND q.namespace = $${params.length}`;
         }
         
         if (task) {
           params.push(task);
-          filterQuery += ` AND q.task = $${params.length}`;
+          cteFilters += ` AND q.task = $${params.length}`;
         }
+        
+        // Insert CTE filters before the closing parenthesis
+        filterQuery = filterQuery.replace('            )\n          )', `            )${cteFilters}\n          )`);
         
         params.push(config.QUEUE.MAX_PARTITION_CANDIDATES);
         filterQuery += `
-          GROUP BY q.id, q.name, q.lease_time, q.retry_limit, q.delayed_processing,
-                   q.max_wait_time_seconds, q.window_buffer, q.priority,
-                   p.id, p.name
+          GROUP BY ep.queue_id, ep.queue_name, ep.lease_time, ep.retry_limit, ep.delayed_processing,
+                   ep.max_wait_time_seconds, ep.window_buffer, ep.priority,
+                   ep.partition_id, ep.partition_name
           HAVING COUNT(*) > 0
-          ORDER BY q.priority DESC, MIN(m.created_at) ASC, RANDOM()
+          ORDER BY ep.priority DESC, MIN(m.created_at) ASC, RANDOM()
           LIMIT $${params.length}
         `;
         
@@ -1344,7 +1374,6 @@ export const createOptimizedQueueManager = (pool, resourceCache, eventManager, s
                   queue: msg.queue_name,
                   partition: msg.partition_name,
                   data: payload,
-                  payload: payload,
                   retryCount: msg.retry_count || 0,
                   priority: msg.priority || 0,
                   createdAt: msg.created_at,

@@ -18,12 +18,14 @@
         </div>
 
         <!-- Filters -->
-        <MessageFilters
+        <div class="filter-flat">
+          <MessageFilters
           v-model:search="searchQuery"
           v-model:queue="queueFilter"
           v-model:status="statusFilter"
           :queues="queues"
-        />
+          />
+        </div>
 
         <LoadingSpinner v-if="loading && !messages.length" />
 

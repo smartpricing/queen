@@ -32,7 +32,8 @@ import {
   testQueueConfiguration,
   testTakeAndAcknowledgment,
   testDelayedProcessing,
-  testPartitionFIFOOrdering
+  testPartitionFIFOOrdering,
+  testWindowBuffer
 } from './core-tests.js';
 
 import {
@@ -168,6 +169,7 @@ async function runTests() {
       await runTest(() => testTakeAndAcknowledgment(client));
       await runTest(() => testDelayedProcessing(client));
       await runTest(() => testPartitionFIFOOrdering(client));
+      await runTest(() => testWindowBuffer(client));
     }
     
     // ============================================

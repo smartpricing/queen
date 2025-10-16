@@ -340,3 +340,113 @@ export async function testPartitionFIFOOrdering(client) {
   }
 }
 
+/**
+ * Test 8: Window Buffer
+ * Verifies that windowBuffer delays message consumption across all access modes
+ */
+export async function testWindowBuffer(client) {
+  startTest('Window Buffer');
+  
+  try {
+    const timestamp = Date.now();
+    const queueName = 'test-window-buffer-' + timestamp;
+    const partition = 'test-partition';
+    
+    // Test CASE 1: Direct partition access
+    await client.queue(queueName, { windowBuffer: 5 });
+    
+    // Push a message
+    await client.push(`${queueName}/${partition}`, { test: 'case1' });
+    
+    // Try to take immediately - should get nothing
+    let gotImmediate = false;
+    for await (const msg of client.take(`${queueName}/${partition}`, { limit: 1 })) {
+      gotImmediate = true;
+      await client.ack(msg);
+    }
+    
+    if (gotImmediate) {
+      throw new Error('Got message immediately in direct access - windowBuffer not working');
+    }
+    log('Direct partition access: windowBuffer correctly delayed message');
+    
+    // Wait for window to pass
+    await sleep(6000);
+    
+    // Now should get the message
+    let gotDelayed = false;
+    for await (const msg of client.take(`${queueName}/${partition}`, { limit: 1 })) {
+      gotDelayed = true;
+      await client.ack(msg);
+    }
+    
+    if (!gotDelayed) {
+      throw new Error('Did not get message after window expired');
+    }
+    log('Message available after window buffer expired');
+    
+    // Test CASE 2: Queue-level access
+    const queue2 = 'test-window-buffer-q2-' + timestamp;
+    await client.queue(queue2, { windowBuffer: 5 });
+    await client.push(`${queue2}/p1`, { test: 'case2' });
+    
+    let gotCase2Immediate = false;
+    for await (const msg of client.take(queue2, { limit: 1 })) {
+      gotCase2Immediate = true;
+      await client.ack(msg);
+    }
+    
+    if (gotCase2Immediate) {
+      throw new Error('Got message immediately in queue access - windowBuffer not working');
+    }
+    log('Queue-level access: windowBuffer correctly delayed message');
+    
+    await sleep(6000);
+    
+    let gotCase2Delayed = false;
+    for await (const msg of client.take(queue2, { limit: 1 })) {
+      gotCase2Delayed = true;
+      await client.ack(msg);
+    }
+    
+    if (!gotCase2Delayed) {
+      throw new Error('Did not get message after window expired (queue access)');
+    }
+    
+    // Test CASE 3: Namespace/task filtered access
+    const ns = `test-ns-${timestamp}`;
+    const task = `test-task-${timestamp}`;
+    const queue3 = 'test-window-buffer-filtered-' + timestamp;
+    
+    await client.queue(queue3, { windowBuffer: 5 }, ns, task);
+    await client.push(`${queue3}/p1`, { test: 'case3' });
+    
+    let gotCase3Immediate = false;
+    for await (const msg of client.take(`namespace:${ns}/task:${task}`, { limit: 1 })) {
+      gotCase3Immediate = true;
+      await client.ack(msg);
+    }
+    
+    if (gotCase3Immediate) {
+      throw new Error('Got message immediately in filtered access - windowBuffer not working');
+    }
+    log('Namespace/task filtered access: windowBuffer correctly delayed message');
+    
+    await sleep(6000);
+    
+    let gotCase3Delayed = false;
+    for await (const msg of client.take(`namespace:${ns}/task:${task}`, { limit: 1 })) {
+      gotCase3Delayed = true;
+      await client.ack(msg);
+    }
+    
+    if (!gotCase3Delayed) {
+      throw new Error('Did not get message after window expired (filtered access)');
+    }
+    
+    passTest('Window buffer works correctly across all access modes');
+  } catch (error) {
+    failTest(error);
+  }
+}
+

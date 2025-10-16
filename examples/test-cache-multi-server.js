@@ -120,7 +120,7 @@ async function testCacheConsistency() {
     log(`Server 1 returned ${pop1.messages?.length || 0} messages`, servers[0]);
     if (pop1.messages && pop1.messages.length > 0) {
       for (const msg of pop1.messages) {
-        log(`  - Message: ${JSON.stringify(msg.payload)}`, servers[0]);
+        log(`  - Message: ${JSON.stringify(msg.data)}`, servers[0]);
         await sessionClient1.ack(msg.transactionId, 'completed');
       }
     }
@@ -140,7 +140,7 @@ async function testCacheConsistency() {
     log(`Server 2 returned ${pop2.messages?.length || 0} messages`, servers[1]);
     if (pop2.messages && pop2.messages.length > 0) {
       for (const msg of pop2.messages) {
-        log(`  - Message: ${JSON.stringify(msg.payload)}`, servers[1]);
+        log(`  - Message: ${JSON.stringify(msg.data)}`, servers[1]);
         await sessionClient2.ack(msg.transactionId, 'completed');
       }
     }

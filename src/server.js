@@ -9,7 +9,7 @@ import { createResourceCache } from './managers/resourceCache.js';
 import { createEventManager } from './managers/eventManager.js';
 import { SystemEventManager, SYSTEM_QUEUE } from './managers/systemEventManager.js';
 import { syncSystemEvents } from './services/startupSync.js';
-import { createQueenClient } from './client/queenClient.js';
+//import { createQueenClient } from './client/queenClient.js';
 import { createPushRoute } from './routes/push.js';
 import { createPopRoute } from './routes/pop.js';
 import { createAckRoute } from './routes/ack.js';
@@ -1229,7 +1229,7 @@ app.listen(HOST, PORT, async (token) => {
     
     // Start system event synchronization and consumption (only if enabled)
     if (config.SYSTEM_EVENTS.ENABLED) {
-      try {
+      /*try { // TODO: Uncomment this when we have a way to synchronize system events
         // Create temporary client for synchronization
         const syncClient = createQueenClient({ 
           baseUrl: `http://localhost:${PORT}` 
@@ -1244,7 +1244,7 @@ app.listen(HOST, PORT, async (token) => {
           queue: SYSTEM_QUEUE,
           consumerGroup: SERVER_INSTANCE_ID,
           handler: async (message) => {
-            await systemEventManager.processSystemEvent(message.payload);
+            await systemEventManager.processSystemEvent(message.data);
           },
           options: {
             batch: 10,
@@ -1255,7 +1255,7 @@ app.listen(HOST, PORT, async (token) => {
         log(`✅ System event consumer started`);
       } catch (error) {
         log(`⚠️ Failed to start system event consumer: ${error.message}`);
-      }
+      }*/
     }
     
     log(`🎯 Ready to process messages with high performance!`);

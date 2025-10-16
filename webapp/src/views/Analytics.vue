@@ -317,27 +317,27 @@ onUnmounted(() => {
 }
 
 
-:deep(.filter-container .input) {
+.filter-flat :deep(.input) {
   background: transparent;
   border: 1px solid rgba(156, 163, 175, 0.15);
   transition: all 0.2s ease;
 }
 
-:deep(.filter-container .input:hover) {
+.filter-flat :deep(.input:hover) {
   border-color: rgba(156, 163, 175, 0.25);
 }
 
-:deep(.filter-container .input:focus) {
+.filter-flat :deep(.input:focus) {
   background: rgba(244, 63, 94, 0.02);
   border-color: rgba(244, 63, 94, 0.4);
   box-shadow: 0 0 0 3px rgba(244, 63, 94, 0.05);
 }
 
-.dark :deep(.filter-container .input) {
+.dark .filter-flat :deep(.input) {
   border-color: rgba(156, 163, 175, 0.1);
 }
 
-.dark :deep(.filter-container .input:focus) {
+.dark .filter-flat :deep(.input:focus) {
   background: rgba(244, 63, 94, 0.03);
   border-color: rgba(244, 63, 94, 0.5);
   box-shadow: 0 0 0 3px rgba(244, 63, 94, 0.08);

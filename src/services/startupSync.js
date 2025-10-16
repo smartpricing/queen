@@ -22,7 +22,7 @@ export async function syncSystemEvents(client, eventManager, consumerGroup) {
     }
     
     for (const message of result.messages) {
-      await eventManager.processSystemEvent(message.payload);
+      await eventManager.processSystemEvent(message.data);
       await client.ack(message.transactionId, 'completed', null, consumerGroup);
       processed++;
     }

@@ -4147,7 +4147,7 @@ async function testMultipleConsumersSinglePartitionOrdering() {
             
             // Process messages and track their sequence numbers
             for (const msg of result.messages) {
-              const sequenceNumber = msg.payload.sequenceNumber;
+              const sequenceNumber = msg.data.sequenceNumber;
               consumerMessages.push({
                 consumerId,
                 sequenceNumber,

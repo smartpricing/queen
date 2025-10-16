@@ -234,6 +234,7 @@ export class Queen {
     
     let totalCount = 0;
     let consecutiveEmptyResponses = 0;
+    let consecutiveNetworkErrors = 0;
     const maxConsecutiveEmpty = 3;
     let lastMessageTime = idleTimeout ? Date.now() : null;
     
@@ -304,8 +305,9 @@ export class Queen {
           }
         }
         
-        // Reset empty counter on successful fetch
+        // Reset counters on successful fetch
         consecutiveEmptyResponses = 0;
+        consecutiveNetworkErrors = 0;
         
         // Update last message time if tracking idle timeout
         if (idleTimeout) {
@@ -333,6 +335,30 @@ export class Queen {
         
         if (isTimeoutError && wait) {
           // For long polling timeout, immediately retry
+          continue;
+        }
+        
+        // Check if this is a network error (connection refused, socket closed, etc.)
+        const isNetworkError = error.message?.includes('fetch failed') ||
+                              error.message?.includes('ECONNREFUSED') ||
+                              error.message?.includes('ECONNRESET') ||
+                              error.message?.includes('closed') ||
+                              error.cause?.code === 'UND_ERR_SOCKET' ||
+                              error.code === 'ECONNREFUSED' ||
+                              error.code === 'ECONNRESET';
+        
+        if (isNetworkError) {
+          // Log the network error
+          console.warn(`Network error while polling queue: ${error.message}`);
+          
+          // Retry with exponential backoff (capped at 30 seconds)
+          const retryDelay = Math.min(this.#config.retryDelay * Math.pow(2, Math.min(consecutiveNetworkErrors, 10)), 30000);
+          console.warn(`Retrying in ${retryDelay}ms... (attempt ${consecutiveNetworkErrors + 1})`);
+          await new Promise(resolve => setTimeout(resolve, retryDelay));
+          
+          consecutiveNetworkErrors++;
+          
+          // Continue retrying indefinitely
           continue;
         }
         

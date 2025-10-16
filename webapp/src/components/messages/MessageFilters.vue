@@ -1,5 +1,5 @@
 <template>
-  <div class="filter-container">
+  <div>
     <div class="flex flex-col sm:flex-row gap-3">
       <!-- Search by Transaction ID -->
       <div class="flex-1">
@@ -49,19 +49,6 @@
   </div>
 </template>
 
-<style scoped>
-.filter-container {
-  background: #ffffff;
-  border: none;
-  box-shadow: none;
-  border-radius: 0.75rem;
-  padding: 1rem;
-}
-
-.dark .filter-container {
-  background: #0a0d14;
-}
-</style>
 
 <script setup>
 import { ref, watch } from 'vue';
