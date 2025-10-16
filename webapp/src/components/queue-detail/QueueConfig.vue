@@ -41,7 +41,7 @@
 }
 
 .dark .config-container {
-  background: rgba(255, 255, 255, 0.03);
+  background: #0a0d14;
 }
 
 .config-container:hover {
@@ -49,7 +49,7 @@
 }
 
 .dark .config-container:hover {
-  background: rgba(255, 255, 255, 0.05);
+  background: #0d1117;
 }
 </style>
 

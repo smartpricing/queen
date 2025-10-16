@@ -1,7 +1,7 @@
 <template>
   <div class="page-flat">
-    <div class="p-4">
-      <div class="space-y-3 sm:space-y-4">
+    <div class="py-4 px-3">
+      <div class="space-y-2.5">
         <!-- Filters with New Queue Button -->
         <div class="filter-flat">
           <div class="flex flex-col sm:flex-row gap-3">
@@ -383,7 +383,7 @@ onUnmounted(() => {
 }
 
 .dark .filter-flat {
-  background: rgba(255, 255, 255, 0.03);
+  background: #0a0d14;
 }
 
 /* Override input styles for flat design */
@@ -426,7 +426,7 @@ onUnmounted(() => {
 }
 
 .dark .table-flat {
-  background: rgba(255, 255, 255, 0.03);
+  background: #0a0d14;
 }
 
 /* Flat table styling - zebra stripes, no borders */

@@ -1,7 +1,7 @@
 <template>
   <div class="page-flat">
-    <div class="p-4">
-      <div class="space-y-3 sm:space-y-4">
+    <div class="py-4 px-3">
+      <div class="space-y-2.5">
         <!-- Info Card -->
         <div class="info-banner">
           <div class="flex gap-3">
@@ -54,11 +54,11 @@
         </div>
 
         <!-- Consumer Groups Stats -->
-        <div class="grid grid-cols-2 lg:grid-cols-4 gap-2 sm:gap-3">
+        <div class="grid grid-cols-2 lg:grid-cols-4 gap-2">
           <div class="metric-flat">
             <div class="flex items-start gap-3">
               <div class="metric-icon-flat bg-green-500/10 dark:bg-green-500/20">
-                <svg class="w-6 h-6 text-green-600 dark:text-green-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <svg class="w-5 h-5 text-green-600 dark:text-green-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
                 </svg>
               </div>
@@ -71,7 +71,7 @@
           <div class="metric-flat">
             <div class="flex items-start gap-3">
               <div class="metric-icon-flat bg-purple-500/10 dark:bg-purple-500/20">
-                <svg class="w-6 h-6 text-purple-600 dark:text-purple-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <svg class="w-5 h-5 text-purple-600 dark:text-purple-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0zm6 3a2 2 0 11-4 0 2 2 0 014 0zM7 10a2 2 0 11-4 0 2 2 0 014 0z" />
                 </svg>
               </div>
@@ -84,7 +84,7 @@
           <div class="metric-flat">
             <div class="flex items-start gap-3">
               <div class="metric-icon-flat bg-rose-500/10 dark:bg-rose-500/20">
-                <svg class="w-6 h-6 text-rose-600 dark:text-rose-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <svg class="w-5 h-5 text-rose-600 dark:text-rose-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 7h.01M7 3h5c.512 0 1.024.195 1.414.586l7 7a2 2 0 010 2.828l-7 7a2 2 0 01-2.828 0l-7-7A1.994 1.994 0 013 12V7a4 4 0 014-4z" />
                 </svg>
               </div>
@@ -97,7 +97,7 @@
           <div class="metric-flat">
             <div class="flex items-start gap-3">
               <div class="metric-icon-flat bg-orange-500/10 dark:bg-orange-500/20">
-                <svg class="w-6 h-6 text-orange-600 dark:text-orange-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <svg class="w-5 h-5 text-orange-600 dark:text-orange-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z" />
                 </svg>
               </div>
@@ -269,7 +269,7 @@ onUnmounted(() => {
 }
 
 .dark .info-banner {
-  background: rgba(255, 255, 255, 0.03);
+  background: #0a0d14;
   border-left-color: rgba(168, 85, 247, 0.5);
 }
 
@@ -282,7 +282,7 @@ onUnmounted(() => {
 }
 
 .dark .filter-flat {
-  background: rgba(255, 255, 255, 0.03);
+  background: #0a0d14;
 }
 
 .filter-flat :deep(.input) {
@@ -321,7 +321,7 @@ onUnmounted(() => {
 }
 
 .dark .metric-flat {
-  background: rgba(255, 255, 255, 0.03);
+  background: #0a0d14;
 }
 
 .metric-flat:hover {
@@ -329,14 +329,14 @@ onUnmounted(() => {
 }
 
 .dark .metric-flat:hover {
-  background: rgba(255, 255, 255, 0.05);
+  background: #0d1117;
 }
 
 .metric-value-flat {
-  font-size: 1.75rem;
+  font-size: 1.5rem;
   font-weight: 700;
   line-height: 1.1;
-  margin-top: 0.25rem;
+  margin-top: 0.125rem;
   background: linear-gradient(135deg, #f43f5e 0%, #ec4899 50%, #a855f7 100%);
   -webkit-background-clip: text;
   -webkit-text-fill-color: transparent;
@@ -353,13 +353,13 @@ onUnmounted(() => {
 }
 
 .dark .table-section {
-  background: rgba(255, 255, 255, 0.03);
+  background: #0a0d14;
 }
 
 .metric-icon-flat {
-  width: 2.5rem;
-  height: 2.5rem;
-  border-radius: 0.625rem;
+  width: 2rem;
+  height: 2rem;
+  border-radius: 0.5rem;
   display: flex;
   align-items: center;
   justify-content: center;

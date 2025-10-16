@@ -1,6 +1,6 @@
 <template>
   <div class="chart-container">
-    <Line v-if="chartData" :data="chartData" :options="chartOptions" />
+    <Bar v-if="chartData" :data="chartData" :options="chartOptions" />
     <div v-else class="flex items-center justify-center h-full text-gray-500 text-sm">
       No data available for this time range
     </div>
@@ -9,29 +9,25 @@
 
 <script setup>
 import { computed } from 'vue';
-import { Line } from 'vue-chartjs';
+import { Bar } from 'vue-chartjs';
 import {
   Chart as ChartJS,
   CategoryScale,
   LinearScale,
-  PointElement,
-  LineElement,
+  BarElement,
   Title,
   Tooltip,
   Legend,
-  Filler,
 } from 'chart.js';
 import { colors } from '../../utils/colors';
 
 ChartJS.register(
   CategoryScale,
   LinearScale,
-  PointElement,
-  LineElement,
+  BarElement,
   Title,
   Tooltip,
-  Legend,
-  Filler
+  Legend
 );
 
 const props = defineProps({
@@ -52,55 +48,44 @@ const chartData = computed(() => {
       {
         label: 'Ingested',
         data: throughput.map(t => t.ingested || t.ingestedPerSecond || 0),
-        borderColor: colors.charts.ingested.border,
-        backgroundColor: createGradient('rose'),
-        fill: true,
-        tension: 0,
-        borderWidth: 2,
-        pointRadius: 0,
-        pointHoverRadius: 5,
-        pointHoverBackgroundColor: colors.charts.ingested.border,
-        pointHoverBorderColor: '#fff',
-        pointHoverBorderWidth: 2,
+        backgroundColor: createGradientBars('rose'),
+        borderColor: 'transparent',
+        borderWidth: 0,
+        borderRadius: 4,
+        barPercentage: 0.9,
+        categoryPercentage: 0.95,
       },
       {
         label: 'Processed',
         data: throughput.map(t => t.processed || t.processedPerSecond || 0),
-        borderColor: colors.charts.processed.border,
-        backgroundColor: createGradient('purple'),
-        fill: true,
-        tension: 0,
-        borderWidth: 2,
-        pointRadius: 0,
-        pointHoverRadius: 5,
-        pointHoverBackgroundColor: colors.charts.processed.border,
-        pointHoverBorderColor: '#fff',
-        pointHoverBorderWidth: 2,
+        backgroundColor: createGradientBars('purple'),
+        borderColor: 'transparent',
+        borderWidth: 0,
+        borderRadius: 4,
+        barPercentage: 0.9,
+        categoryPercentage: 0.95,
       },
     ],
   };
 });
 
-// Create gradient fill for charts
-function createGradient(color) {
+function createGradientBars(color) {
   return (context) => {
     const chart = context.chart;
     const {ctx, chartArea} = chart;
     
     if (!chartArea) {
-      return null;
+      return color === 'rose' ? colors.charts.ingested.border : colors.charts.processed.border;
     }
     
     const gradient = ctx.createLinearGradient(0, chartArea.top, 0, chartArea.bottom);
     
     if (color === 'rose') {
-      gradient.addColorStop(0, 'rgba(244, 63, 94, 0.3)');
-      gradient.addColorStop(0.5, 'rgba(244, 63, 94, 0.15)');
-      gradient.addColorStop(1, 'rgba(244, 63, 94, 0.05)');
+      gradient.addColorStop(0, 'rgba(244, 63, 94, 0.9)');
+      gradient.addColorStop(1, 'rgba(244, 63, 94, 0.5)');
     } else if (color === 'purple') {
-      gradient.addColorStop(0, 'rgba(168, 85, 247, 0.3)');
-      gradient.addColorStop(0.5, 'rgba(168, 85, 247, 0.15)');
-      gradient.addColorStop(1, 'rgba(168, 85, 247, 0.05)');
+      gradient.addColorStop(0, 'rgba(168, 85, 247, 0.9)');
+      gradient.addColorStop(1, 'rgba(168, 85, 247, 0.5)');
     }
     
     return gradient;

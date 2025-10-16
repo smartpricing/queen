@@ -1,7 +1,7 @@
 <template>
   <div class="page-flat">
-    <div class="p-4">
-      <div class="space-y-3 sm:space-y-4">
+    <div class="py-4 px-3">
+      <div class="space-y-2.5">
         <!-- Info Banner (shown when API needs restart) -->
         <div v-if="apiNeedsRestart" class="warning-banner">
           <div class="flex gap-3">
@@ -246,7 +246,7 @@ onUnmounted(() => {
 }
 
 .dark .warning-banner {
-  background: rgba(255, 255, 255, 0.03);
+  background: #0a0d14;
   border-left-color: rgba(245, 158, 11, 0.7);
 }
 
@@ -259,7 +259,7 @@ onUnmounted(() => {
 }
 
 .dark .filter-flat {
-  background: rgba(255, 255, 255, 0.03);
+  background: #0a0d14;
 }
 
 .filter-flat :deep(.input) {
@@ -297,7 +297,7 @@ onUnmounted(() => {
 }
 
 .dark .table-flat {
-  background: rgba(255, 255, 255, 0.03);
+  background: #0a0d14;
 }
 
 .table-flat :deep(.table) {

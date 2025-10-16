@@ -1,9 +1,10 @@
 <template>
   <div class="page-flat">
-    <div class="p-4">
-      <div class="space-y-3 sm:space-y-4">
+    <div class="py-4 px-3">
+      <div class="space-y-2.5">
         <!-- Filters -->
-        <AnalyticsFilters
+        <div class="filter-flat">
+          <AnalyticsFilters
           v-model:time-range="timeRange"
           v-model:queue="queueFilter"
           v-model:namespace="namespaceFilter"
@@ -11,7 +12,8 @@
           :queues="allQueues"
           :namespaces="namespaces"
           :tasks="tasks"
-        />
+          />
+        </div>
 
         <LoadingSpinner v-if="loading && !statusData" />
 
@@ -35,42 +37,42 @@
 
           <!-- Message Flow Chart -->
           <div class="chart-flat">
-            <div class="flex items-center gap-2 mb-3">
+            <div class="flex items-center gap-2 mb-2">
               <div class="w-7 h-7 rounded-lg bg-gradient-to-br from-rose-500/10 to-purple-500/20 flex items-center justify-center">
                 <svg class="w-4 h-4 text-rose-600 dark:text-rose-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 12l3-3 3 3 4-4M8 21l4-4 4 4M3 4h18M4 4h16v12a1 1 0 01-1 1H5a1 1 0 01-1-1V4z" />
                 </svg>
               </div>
-              <h3 class="text-base font-semibold text-gray-900 dark:text-gray-100">Message Flow Over Time</h3>
+              <h3 class="text-sm font-semibold text-gray-900 dark:text-gray-100">Message Flow Over Time</h3>
             </div>
             <MessageFlowChart :data="statusData" />
           </div>
 
           <!-- Charts Row -->
-          <div class="grid grid-cols-1 lg:grid-cols-2 gap-3 sm:gap-4">
+          <div class="grid grid-cols-1 lg:grid-cols-2 gap-2">
             <!-- Top Queues Chart -->
             <div class="chart-flat">
-              <div class="flex items-center gap-2 mb-3">
+              <div class="flex items-center gap-2 mb-2">
                 <div class="w-7 h-7 rounded-lg bg-gradient-to-br from-indigo-500/10 to-violet-500/20 flex items-center justify-center">
                   <svg class="w-4 h-4 text-indigo-600 dark:text-indigo-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z" />
                   </svg>
                 </div>
-                <h3 class="text-base font-semibold text-gray-900 dark:text-gray-100">Top Queues by Volume</h3>
+                <h3 class="text-sm font-semibold text-gray-900 dark:text-gray-100">Top Queues by Volume</h3>
               </div>
               <TopQueuesChart :queues="filteredQueues" />
             </div>
             
             <!-- Message Distribution Chart -->
             <div class="chart-flat">
-              <div class="flex items-center gap-2 mb-3">
+              <div class="flex items-center gap-2 mb-2">
                 <div class="w-7 h-7 rounded-lg bg-gradient-to-br from-green-500/10 to-emerald-500/20 flex items-center justify-center">
                   <svg class="w-4 h-4 text-green-600 dark:text-green-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 3.055A9.001 9.001 0 1020.945 13H11V3.055z" />
                     <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M20.488 9H15V3.512A9.025 9.025 0 0120.488 9z" />
                   </svg>
                 </div>
-                <h3 class="text-base font-semibold text-gray-900 dark:text-gray-100">Message Status Distribution</h3>
+                <h3 class="text-sm font-semibold text-gray-900 dark:text-gray-100">Message Status Distribution</h3>
               </div>
               <MessageDistributionChart :messages="statusData?.messages" />
             </div>
@@ -78,28 +80,28 @@
 
           <!-- Performance Metrics -->
           <div class="info-flat">
-            <div class="flex items-center gap-2 mb-3">
+            <div class="flex items-center gap-2 mb-2">
               <div class="w-7 h-7 rounded-lg bg-gradient-to-br from-blue-500/10 to-cyan-500/20 flex items-center justify-center">
                 <svg class="w-4 h-4 text-blue-600 dark:text-blue-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z" />
                 </svg>
               </div>
-              <h3 class="text-base font-semibold text-gray-900 dark:text-gray-100">Performance Metrics</h3>
+              <h3 class="text-sm font-semibold text-gray-900 dark:text-gray-100">Performance Metrics</h3>
             </div>
             <AnalyticsMetrics :data="statusData" :messages="statusData?.messages" />
           </div>
 
           <!-- Detailed Stats -->
-          <div class="grid grid-cols-1 lg:grid-cols-2 gap-3 sm:gap-4">
+          <div class="grid grid-cols-1 lg:grid-cols-2 gap-2">
             <!-- Leases Info -->
             <div class="info-flat">
-              <div class="flex items-center gap-2 mb-3">
+              <div class="flex items-center gap-2 mb-2">
                 <div class="w-7 h-7 rounded-lg bg-gradient-to-br from-purple-500/10 to-indigo-500/20 flex items-center justify-center">
                   <svg class="w-4 h-4 text-purple-600 dark:text-purple-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" />
                   </svg>
                 </div>
-                <h3 class="text-base font-semibold">Active Leases</h3>
+                <h3 class="text-sm font-semibold">Active Leases</h3>
               </div>
               <div class="space-y-2.5">
                 <div class="flex items-center justify-between text-sm">
@@ -123,13 +125,13 @@
 
             <!-- Dead Letter Queue -->
             <div class="info-flat">
-              <div class="flex items-center gap-2 mb-3">
+              <div class="flex items-center gap-2 mb-2">
                 <div class="w-7 h-7 rounded-lg bg-gradient-to-br from-red-500/10 to-rose-500/20 flex items-center justify-center">
                   <svg class="w-4 h-4 text-red-600 dark:text-red-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
                   </svg>
                 </div>
-                <h3 class="text-base font-semibold">Dead Letter Queue</h3>
+                <h3 class="text-sm font-semibold">Dead Letter Queue</h3>
               </div>
               <div class="space-y-2.5">
                 <div class="flex items-center justify-between text-sm">
@@ -290,7 +292,7 @@ onUnmounted(() => {
 }
 
 .dark .chart-flat {
-  background: rgba(255, 255, 255, 0.03);
+  background: #0a0d14;
 }
 
 .chart-flat:hover {
@@ -298,18 +300,22 @@ onUnmounted(() => {
 }
 
 .dark .chart-flat:hover {
-  background: rgba(255, 255, 255, 0.05);
+  background: #0d1117;
 }
 
 /* Flat filters */
-:deep(.filter-container) {
-  background: #ffffff !important;
+.filter-flat {
+  background: #ffffff;
+  border: none;
+  box-shadow: none;
+  border-radius: 0.75rem;
   padding: 1rem;
 }
 
-.dark :deep(.filter-container) {
-  background: rgba(255, 255, 255, 0.03) !important;
+.dark .filter-flat {
+  background: #0a0d14;
 }
+
 
 :deep(.filter-container .input) {
   background: transparent;
@@ -347,7 +353,7 @@ onUnmounted(() => {
 }
 
 .dark .info-flat {
-  background: rgba(255, 255, 255, 0.03);
+  background: #0a0d14;
 }
 
 .info-flat:hover {
@@ -355,7 +361,7 @@ onUnmounted(() => {
 }
 
 .dark .info-flat:hover {
-  background: rgba(255, 255, 255, 0.05);
+  background: #0d1117;
 }
 
 .error-flat {

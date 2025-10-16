@@ -46,7 +46,7 @@
 }
 
 .dark .filter-container {
-  background: rgba(255, 255, 255, 0.03);
+  background: #0a0d14;
 }
 </style>
 

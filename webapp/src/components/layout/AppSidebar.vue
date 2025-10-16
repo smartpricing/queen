@@ -34,18 +34,21 @@
         :title="item.name"
         class="flex items-center rounded-lg transition-all duration-200 text-sm group relative"
         :class="[
-          isActive(item.path)
+          isActive(item.path) && !isCollapsed
             ? 'bg-rose-500/8 dark:bg-rose-500/10 text-rose-600 dark:text-rose-400 font-medium'
+            : isActive(item.path) && isCollapsed
+            ? 'text-rose-600 dark:text-rose-400 font-medium'
             : 'text-gray-700 dark:text-gray-300 hover:bg-black/5 dark:hover:bg-white/5',
           isCollapsed ? 'px-3 py-3 justify-center' : 'px-3 py-2.5 gap-3'
         ]"
       >
         <div :class="[
-          'flex items-center justify-center rounded-md transition-all',
-          isActive(item.path) && !isCollapsed ? 'w-8 h-8 bg-gradient-to-br from-rose-500 to-purple-500 text-white shadow-sm' : ''
+          'flex items-center justify-center rounded-md transition-all flex-shrink-0',
+          isActive(item.path) ? 'w-8 h-8 bg-gradient-to-br from-rose-500 to-purple-500 text-white shadow-sm' : 'w-5 h-5'
         ]">
           <svg 
-            class="flex-shrink-0 transition-transform group-hover:scale-110 w-5 h-5" 
+            class="transition-transform group-hover:scale-110" 
+            :class="isActive(item.path) ? 'w-4 h-4' : 'w-5 h-5'"
             fill="none" 
             stroke="currentColor" 
             viewBox="0 0 24 24"

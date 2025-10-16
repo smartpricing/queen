@@ -44,15 +44,25 @@ const chartData = computed(() => {
   // Only show chart if there's data
   if (data.every(v => v === 0)) return null;
   
-  const statusColors = getStatusColors();
-  
   return {
     labels: ['Pending', 'Processing', 'Completed', 'Failed', 'Dead Letter'],
     datasets: [
       {
         data: data,
-        backgroundColor: statusColors.backgrounds,
-        borderColor: statusColors.borders,
+        backgroundColor: [
+          'rgba(236, 72, 153, 0.8)',   // Pink - Pending
+          'rgba(168, 85, 247, 0.8)',   // Purple - Processing  
+          'rgba(139, 92, 246, 0.8)',   // Violet - Completed
+          'rgba(244, 63, 94, 0.8)',    // Rose - Failed
+          'rgba(192, 132, 252, 0.7)',  // Light Purple - Dead Letter
+        ],
+        borderColor: [
+          'rgb(236, 72, 153)',
+          'rgb(168, 85, 247)',
+          'rgb(139, 92, 246)',
+          'rgb(244, 63, 94)',
+          'rgb(192, 132, 252)',
+        ],
         borderWidth: 2,
       },
     ],

@@ -51,7 +51,7 @@
 }
 
 .dark .messages-container {
-  background: rgba(255, 255, 255, 0.03);
+  background: #0a0d14;
 }
 
 .messages-container:hover {
@@ -59,7 +59,7 @@
 }
 
 .dark .messages-container:hover {
-  background: rgba(255, 255, 255, 0.05);
+  background: #0d1117;
 }
 </style>
 

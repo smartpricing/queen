@@ -1,7 +1,7 @@
 <template>
   <div class="page-flat">
-    <div class="p-4">
-      <div class="space-y-3 sm:space-y-4">
+    <div class="py-4 px-3">
+      <div class="space-y-2.5">
         <LoadingSpinner v-if="loading && !queueData" />
 
         <div v-else-if="error" class="error-flat">
@@ -46,11 +46,11 @@
           </div>
 
           <!-- Status Metrics -->
-          <div class="grid grid-cols-2 lg:grid-cols-4 gap-2 sm:gap-3">
+          <div class="grid grid-cols-2 lg:grid-cols-4 gap-2">
             <div class="metric-flat">
               <div class="flex items-start gap-3">
                 <div class="metric-icon-flat bg-yellow-500/10 dark:bg-yellow-500/20">
-                  <svg class="w-6 h-6 text-yellow-600 dark:text-yellow-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <svg class="w-5 h-5 text-yellow-600 dark:text-yellow-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
                   </svg>
                 </div>
@@ -63,7 +63,7 @@
             <div class="metric-flat">
               <div class="flex items-start gap-3">
                 <div class="metric-icon-flat bg-purple-500/10 dark:bg-purple-500/20">
-                  <svg class="w-6 h-6 text-purple-600 dark:text-purple-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <svg class="w-5 h-5 text-purple-600 dark:text-purple-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4m0 4v.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
                   </svg>
                 </div>
@@ -76,7 +76,7 @@
             <div class="metric-flat">
               <div class="flex items-start gap-3">
                 <div class="metric-icon-flat bg-green-500/10 dark:bg-green-500/20">
-                  <svg class="w-6 h-6 text-green-600 dark:text-green-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <svg class="w-5 h-5 text-green-600 dark:text-green-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
                   </svg>
                 </div>
@@ -89,7 +89,7 @@
             <div class="metric-flat">
               <div class="flex items-start gap-3">
                 <div class="metric-icon-flat bg-red-500/10 dark:bg-red-500/20">
-                  <svg class="w-6 h-6 text-red-600 dark:text-red-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <svg class="w-5 h-5 text-red-600 dark:text-red-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
                   </svg>
                 </div>
@@ -422,7 +422,7 @@ onMounted(() => {
 }
 
 .dark .config-section {
-  background: rgba(255, 255, 255, 0.03);
+  background: #0a0d14;
 }
 
 .config-section:hover {
@@ -430,7 +430,7 @@ onMounted(() => {
 }
 
 .dark .config-section:hover {
-  background: rgba(255, 255, 255, 0.05);
+  background: #0d1117;
 }
 
 .partition-section {
@@ -442,7 +442,7 @@ onMounted(() => {
 }
 
 .dark .partition-section {
-  background: rgba(255, 255, 255, 0.03);
+  background: #0a0d14;
 }
 
 /* Flat inputs */
@@ -531,7 +531,7 @@ onMounted(() => {
 }
 
 .dark .metric-flat {
-  background: rgba(255, 255, 255, 0.03);
+  background: #0a0d14;
 }
 
 .metric-flat:hover {
@@ -539,13 +539,13 @@ onMounted(() => {
 }
 
 .dark .metric-flat:hover {
-  background: rgba(255, 255, 255, 0.05);
+  background: #0d1117;
 }
 
 .metric-icon-flat {
-  width: 2.5rem;
-  height: 2.5rem;
-  border-radius: 0.625rem;
+  width: 2rem;
+  height: 2rem;
+  border-radius: 0.5rem;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -558,10 +558,10 @@ onMounted(() => {
 }
 
 .metric-value-flat {
-  font-size: 1.75rem;
+  font-size: 1.5rem;
   font-weight: 700;
   line-height: 1.1;
-  margin-top: 0.25rem;
+  margin-top: 0.125rem;
   background: linear-gradient(135deg, #f43f5e 0%, #ec4899 50%, #a855f7 100%);
   -webkit-background-clip: text;
   -webkit-text-fill-color: transparent;

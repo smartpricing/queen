@@ -1,5 +1,5 @@
 <template>
-  <div class="flex h-screen bg-gray-100 dark:bg-[#0a0d14] overflow-hidden">
+  <div class="flex h-screen bg-gray-100 dark:bg-[#0d1117] overflow-hidden">
     <!-- Mobile overlay -->
     <div 
       v-if="isSidebarOpen && isMobile"
@@ -19,7 +19,7 @@
         :class="[
           'fixed lg:relative inset-y-0 left-0 z-30 lg:z-0',
           isCollapsed && !isMobile ? 'w-16' : 'w-64',
-          'bg-white dark:bg-white/[0.03]',
+          'bg-white dark:bg-[#0a0d14]',
           'transform transition-all duration-300',
           'flex flex-col'
         ]"
