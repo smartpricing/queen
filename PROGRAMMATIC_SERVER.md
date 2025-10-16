@@ -71,9 +71,12 @@ The `QueenServer()` function accepts an options object:
 
 ```javascript
 {
-  port: number,        // Server port (default: from config, typically 3000)
-  host: string,        // Server host (default: from config, typically '127.0.0.1')
-  workerId: string     // Worker ID for clustering (default: from config)
+  port: number,           // Server port (default: from config, typically 3000)
+  host: string,           // Server host (default: from config, typically '127.0.0.1')
+  workerId: string,       // Worker ID for clustering (default: from config)
+  serveWebapp: boolean,   // Serve built frontend from same server (default: false)
+  webappPath: string,     // Path to webapp dist folder (default: '../webapp/dist')
+  skipDatabaseMigration: boolean  // Skip database migration on startup (default: false)
 }
 ```
 
@@ -162,6 +165,52 @@ const server1 = await QueenServer({ port: 3001, workerId: 'worker-1' });
 const server2 = await QueenServer({ port: 3002, workerId: 'worker-2' });
 
 console.log('Multi-server setup running');
+```
+
+### 4. Serve Built Frontend (Single Deployment)
+
+Serve the Queen dashboard UI from the same server as the API:
+
+```javascript
+import { QueenServer } from 'queen-mq';
+
+// Build the frontend first: cd webapp && npm run build
+
+const server = await QueenServer({
+  port: 3000,
+  serveWebapp: true  // Enable static file serving
+});
+
+console.log(`Dashboard: http://localhost:${server.port}/`);
+console.log(`API:       http://localhost:${server.port}/api/v1/`);
+```
+
+**Benefits:**
+- ✅ Single port deployment (no CORS issues)
+- ✅ No separate web server needed (nginx, apache, etc.)
+- ✅ Simpler deployment and configuration
+- ✅ Production-ready with proper caching headers
+- ✅ SPA routing fully supported
+
+**How it works:**
+- Serves built files from `webapp/dist/`
+- Assets get long-term caching (fingerprinted files)
+- `index.html` always fresh (no caching)
+- SPA fallback for client-side routing
+- API routes always take precedence
+
+**Build the frontend:**
+```bash
+cd webapp
+npm install
+npm run build
+cd ..
+```
+
+**Start with frontend:**
+```bash
+node examples/server-with-frontend.js
+# Or programmatically with serveWebapp: true
 ```
 
 ## Traditional Usage

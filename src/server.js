@@ -32,15 +32,27 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
  * @param {number} options.port - Server port (default: from config)
  * @param {string} options.host - Server host (default: from config)
  * @param {string} options.workerId - Worker ID for clustering (default: from config)
+ * @param {boolean} options.serveWebapp - Serve the built frontend from /webapp/dist (default: false)
+ * @param {string} options.webappPath - Path to webapp dist folder (default: '../webapp/dist')
  * @returns {Promise<Object>} Server instance with shutdown method
  */
 export async function QueenServer(options = {}) {
   const PORT = options.port || config.SERVER.PORT;
   const HOST = options.host || config.SERVER.HOST;
+  const SERVE_WEBAPP = options.serveWebapp || false;
+  
+  // Default webapp path: try src/webapp-dist (npm package), fall back to ../webapp/dist (development)
+  let defaultWebappPath = path.join(__dirname, 'webapp-dist');
+  if (!fs.existsSync(defaultWebappPath)) {
+    defaultWebappPath = path.join(__dirname, '..', 'webapp', 'dist');
+  }
+  const WEBAPP_PATH = options.webappPath || defaultWebappPath;
 
   // Use WORKER_ID from config as the server instance ID for consumer groups
   // This ensures the same server (identified by WORKER_ID) maintains its position in the event stream
   const SERVER_INSTANCE_ID = options.workerId || config.SERVER.WORKER_ID;
+
+  const SKIP_DATABASE_MIGRATION = (options.skipDatabaseMigration  || process.env.SKIP_DATABASE_MIGRATION) || false;
 
   // Performance monitoring
   let requestCount = 0;
@@ -87,7 +99,9 @@ export async function QueenServer(options = {}) {
     }
   };
 
-  await initDatabaseWithMigrations();
+  if (!SKIP_DATABASE_MIGRATION) {
+    await initDatabaseWithMigrations();
+  }
 
   // Initialize system queue
   async function initializeSystemQueue() {
@@ -1221,6 +1235,169 @@ export async function QueenServer(options = {}) {
   });
 });
 
+  // ============================================================================
+  // Static File Serving (Optional - for serving built frontend)
+  // ============================================================================
+
+  if (SERVE_WEBAPP) {
+    // Check if webapp directory exists
+    if (!fs.existsSync(WEBAPP_PATH)) {
+      log(`❌ ERROR: Webapp directory not found at: ${WEBAPP_PATH}`);
+      log(`💡 To enable frontend serving:`);
+      log(`   1. Build the webapp: cd webapp && npm install && npm run build`);
+      log(`   2. Or specify a custom path: QueenServer({ webappPath: '/path/to/dist' })`);
+      log(`   3. Or disable frontend: QueenServer({ serveWebapp: false })`);
+      throw new Error(`Webapp directory not found: ${WEBAPP_PATH}`);
+    }
+
+    const indexPath = path.join(WEBAPP_PATH, 'index.html');
+    if (!fs.existsSync(indexPath)) {
+      log(`❌ ERROR: index.html not found in webapp directory: ${WEBAPP_PATH}`);
+      log(`💡 Make sure the webapp is built: cd webapp && npm run build`);
+      throw new Error(`index.html not found in: ${WEBAPP_PATH}`);
+    }
+
+    log(`📁 Enabling static file serving from: ${WEBAPP_PATH}`);
+
+    // MIME type mapping
+    const getMimeType = (filePath) => {
+      const ext = path.extname(filePath).toLowerCase();
+      const mimeTypes = {
+        '.html': 'text/html; charset=utf-8',
+        '.js': 'application/javascript; charset=utf-8',
+        '.css': 'text/css; charset=utf-8',
+        '.json': 'application/json; charset=utf-8',
+        '.png': 'image/png',
+        '.jpg': 'image/jpeg',
+        '.jpeg': 'image/jpeg',
+        '.gif': 'image/gif',
+        '.svg': 'image/svg+xml',
+        '.ico': 'image/x-icon',
+        '.woff': 'font/woff',
+        '.woff2': 'font/woff2',
+        '.ttf': 'font/ttf',
+        '.eot': 'application/vnd.ms-fontobject'
+      };
+      return mimeTypes[ext] || 'application/octet-stream';
+    };
+
+    // Helper to serve static files
+    const serveStaticFile = async (res, filePath) => {
+      try {
+        // Security check - prevent directory traversal
+        const normalizedPath = path.normalize(filePath);
+        if (!normalizedPath.startsWith(WEBAPP_PATH)) {
+          res.writeStatus('403').end('Forbidden');
+          return;
+        }
+
+        // Check if file exists
+        if (!fs.existsSync(filePath)) {
+          return false; // File not found, let caller handle it
+        }
+
+        const stat = fs.statSync(filePath);
+        if (!stat.isFile()) {
+          return false;
+        }
+
+        // Read file
+        const content = fs.readFileSync(filePath);
+        const mimeType = getMimeType(filePath);
+
+        // Set cache headers for assets (fingerprinted files can be cached forever)
+        const isFingerprintedAsset = /\.[a-f0-9]{8}\.(js|css)$/.test(filePath);
+        
+        res.cork(() => {
+          setCorsHeaders(res);
+          res.writeHeader('Content-Type', mimeType);
+          res.writeHeader('Content-Length', content.length.toString());
+          
+          if (isFingerprintedAsset) {
+            res.writeHeader('Cache-Control', 'public, max-age=31536000, immutable');
+          } else if (filePath.endsWith('index.html')) {
+            res.writeHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+          } else {
+            res.writeHeader('Cache-Control', 'public, max-age=3600');
+          }
+          
+          res.writeStatus(config.HTTP_STATUS.OK.toString()).end(content);
+        });
+        
+        return true;
+      } catch (error) {
+        log('Error serving static file:', error);
+        res.writeStatus(config.HTTP_STATUS.INTERNAL_SERVER_ERROR.toString()).end('Internal Server Error');
+        return true;
+      }
+    };
+
+    // Serve static assets (JS, CSS, images, fonts, etc.)
+    app.get('/assets/*', async (res, req) => {
+      let aborted = false;
+      res.onAborted(() => {
+        aborted = true;
+      });
+
+      if (aborted) return;
+
+      const url = req.getUrl();
+      const filePath = path.join(WEBAPP_PATH, url);
+      
+      const served = await serveStaticFile(res, filePath);
+      if (!served && !aborted) {
+        res.writeStatus('404').end('Not Found');
+      }
+    });
+
+    // Serve root index.html
+    app.get('/', async (res, req) => {
+      let aborted = false;
+      res.onAborted(() => {
+        aborted = true;
+      });
+
+      if (aborted) return;
+
+      const indexPath = path.join(WEBAPP_PATH, 'index.html');
+      await serveStaticFile(res, indexPath);
+    });
+
+    // SPA fallback - serve index.html for all non-API, non-asset routes
+    // This enables client-side routing to work
+    app.get('/*', async (res, req) => {
+      let aborted = false;
+      res.onAborted(() => {
+        aborted = true;
+      });
+
+      if (aborted) return;
+
+      const url = req.getUrl();
+      
+      // Don't serve index.html for API routes or special endpoints
+      if (url.startsWith('/api/') || 
+          url.startsWith('/health') || 
+          url.startsWith('/metrics') ||
+          url.startsWith('/ws/')) {
+        res.writeStatus('404').end('Not Found');
+        return;
+      }
+
+      // First try to serve as a direct file (e.g., favicon.ico)
+      const directPath = path.join(WEBAPP_PATH, url);
+      const served = await serveStaticFile(res, directPath);
+      
+      // If file doesn't exist, serve index.html for SPA routing
+      if (!served && !aborted) {
+        const indexPath = path.join(WEBAPP_PATH, 'index.html');
+        await serveStaticFile(res, indexPath);
+      }
+    });
+
+    log(`✅ Static file serving enabled at http://${HOST}:${PORT}/`);
+  }
+
 // Variable to hold system event consumer stop function
 let stopSystemEventConsumer = null;
 
@@ -1235,6 +1412,9 @@ app.listen(HOST, PORT, async (token) => {
     log(`   - Eviction: ✅`);
     log(`   - WebSocket Dashboard: ws://${HOST}:${PORT}/ws/dashboard`);
     log(`   - Server Instance ID: ${SERVER_INSTANCE_ID}`);
+    if (SERVE_WEBAPP) {
+      log(`   - Frontend Dashboard: http://${HOST}:${PORT}/ ✅`);
+    }
     
     // Start system event synchronization and consumption (only if enabled)
     if (config.SYSTEM_EVENTS.ENABLED) {

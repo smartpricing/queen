@@ -1,6 +1,11 @@
 import axios from 'axios';
 
-const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:6632';
+// Use environment variable if set, otherwise use current origin (for same-server deployment)
+// Falls back to localhost:6632 only in development when not served from Queen server
+const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 
+  (typeof window !== 'undefined' && window.location.origin !== 'http://localhost:4000' 
+    ? window.location.origin 
+    : 'http://localhost:6632');
 
 const apiClient = axios.create({
   baseURL: API_BASE_URL,
