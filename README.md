@@ -134,6 +134,33 @@ npm install
 node init-db.js
 ```
 
+### Running the Server
+
+**Option 1: Standalone Server (Traditional)**
+
+```bash
+npm start
+```
+
+**Option 2: Programmatic Server (New in v0.1.2)**
+
+```javascript
+import { QueenServer } from 'queen-mq';
+
+// Start server with default config
+const server = await QueenServer();
+
+// Or with custom options
+const server = await QueenServer({
+  port: 3000,
+  host: '127.0.0.1'
+});
+
+console.log(`Server running at http://${server.host}:${server.port}`);
+```
+
+This allows you to embed Queen MQ directly in your application, run multiple instances, or easily start/stop servers in tests. See [PROGRAMMATIC_SERVER.md](./PROGRAMMATIC_SERVER.md) for more details.
+
 ### Set Environment (Optional)
 
 ```bash

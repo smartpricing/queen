@@ -26,379 +26,388 @@ import { streamJSON, sendJSON, sendError } from './utils/streaming.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
-const PORT = config.SERVER.PORT;
-const HOST = config.SERVER.HOST;
+/**
+ * Start Queen MQ Server
+ * @param {Object} options - Server configuration options
+ * @param {number} options.port - Server port (default: from config)
+ * @param {string} options.host - Server host (default: from config)
+ * @param {string} options.workerId - Worker ID for clustering (default: from config)
+ * @returns {Promise<Object>} Server instance with shutdown method
+ */
+export async function QueenServer(options = {}) {
+  const PORT = options.port || config.SERVER.PORT;
+  const HOST = options.host || config.SERVER.HOST;
 
-// Use WORKER_ID from config as the server instance ID for consumer groups
-// This ensures the same server (identified by WORKER_ID) maintains its position in the event stream
-const SERVER_INSTANCE_ID = config.SERVER.WORKER_ID;
+  // Use WORKER_ID from config as the server instance ID for consumer groups
+  // This ensures the same server (identified by WORKER_ID) maintains its position in the event stream
+  const SERVER_INSTANCE_ID = options.workerId || config.SERVER.WORKER_ID;
 
-// Performance monitoring
-let requestCount = 0;
-let messageCount = 0;
-const startTime = Date.now();
+  // Performance monitoring
+  let requestCount = 0;
+  let messageCount = 0;
+  const startTime = Date.now();
 
-// Shutdown flag to prevent background jobs from running during shutdown
-let isShuttingDown = false;
+  // Shutdown flag to prevent background jobs from running during shutdown
+  let isShuttingDown = false;
 
-// Initialize components
-const pool = createPool();
-const resourceCache = createResourceCache();
-const eventManager = createEventManager();
+  // Initialize components
+  const pool = createPool();
+  const resourceCache = createResourceCache();
+  const eventManager = createEventManager();
 
-// Initialize system event manager
-const systemEventManager = new SystemEventManager(pool, SERVER_INSTANCE_ID);
+  // Initialize system event manager
+  const systemEventManager = new SystemEventManager(pool, SERVER_INSTANCE_ID);
 
-// Register cache event handlers
-resourceCache.registerEventHandlers(systemEventManager);
+  // Register cache event handlers
+  resourceCache.registerEventHandlers(systemEventManager);
 
-// Always use optimized queue manager - it's better for all scenarios
-const queueManager = createOptimizedQueueManager(pool, resourceCache, eventManager, systemEventManager);
-const messagesRoutes = createMessagesRoutes(pool, queueManager);
-const resourcesRoutes = createResourcesRoutes(pool, systemEventManager);
-const statusRoutes = createStatusRoutes(pool);
+  // Always use optimized queue manager - it's better for all scenarios
+  const queueManager = createOptimizedQueueManager(pool, resourceCache, eventManager, systemEventManager);
+  const messagesRoutes = createMessagesRoutes(pool, queueManager);
+  const resourcesRoutes = createResourcesRoutes(pool, systemEventManager);
+  const statusRoutes = createStatusRoutes(pool);
 
-// Initialize database with migrations
-const initDatabaseWithMigrations = async () => {
-  // Run base schema
-  await initDatabase(pool);
-  
-  // Run extension migrations
-  const migrationPath = path.join(__dirname, '..', 'migrations', '001-extend-features.sql');
-  if (fs.existsSync(migrationPath)) {
-    const migration = fs.readFileSync(migrationPath, 'utf8');
-    try {
-      await pool.query(migration);
-      log('✅ Extension features migration applied');
-    } catch (error) {
-      if (!error.message.includes('already exists')) {
-        log('Migration error:', error);
+  // Initialize database with migrations
+  const initDatabaseWithMigrations = async () => {
+    // Run base schema
+    await initDatabase(pool);
+    
+    // Run extension migrations
+    const migrationPath = path.join(__dirname, '..', 'migrations', '001-extend-features.sql');
+    if (fs.existsSync(migrationPath)) {
+      const migration = fs.readFileSync(migrationPath, 'utf8');
+      try {
+        await pool.query(migration);
+        log('✅ Extension features migration applied');
+      } catch (error) {
+        if (!error.message.includes('already exists')) {
+          log('Migration error:', error);
+        }
       }
     }
+  };
+
+  await initDatabaseWithMigrations();
+
+  // Initialize system queue
+  async function initializeSystemQueue() {
+    try {
+      // Direct database operation to create system queue
+      await pool.query(`
+        INSERT INTO queen.queues (name, ttl, priority, max_queue_size)
+        VALUES ($1, 300, 100, 10000)
+        ON CONFLICT (name) DO UPDATE SET
+          ttl = EXCLUDED.ttl,
+          priority = EXCLUDED.priority,
+          max_queue_size = EXCLUDED.max_queue_size
+      `, [SYSTEM_QUEUE]);
+      
+      await pool.query(`
+        INSERT INTO queen.partitions (queue_id, name)
+        SELECT id, 'Default' FROM queen.queues WHERE name = $1
+        ON CONFLICT (queue_id, name) DO NOTHING
+      `, [SYSTEM_QUEUE]);
+      
+      log('✅ System event queue initialized');
+    } catch (error) {
+      console.error('Failed to initialize system queue:', error);
+      throw error;
+    }
   }
-};
 
-await initDatabaseWithMigrations();
+  await initializeSystemQueue();
 
-// Initialize system queue
-async function initializeSystemQueue() {
-  try {
-    // Direct database operation to create system queue
-    await pool.query(`
-      INSERT INTO queen.queues (name, ttl, priority, max_queue_size)
-      VALUES ($1, 300, 100, 10000)
-      ON CONFLICT (name) DO UPDATE SET
-        ttl = EXCLUDED.ttl,
-        priority = EXCLUDED.priority,
-        max_queue_size = EXCLUDED.max_queue_size
-    `, [SYSTEM_QUEUE]);
+  // Initialize extended features
+  log('🚀 Initializing Queen Services...');
+
+  // 1. Encryption service
+  const encryptionEnabled = initEncryption();
+
+  // 2. Retention service
+  const stopRetention = startRetentionJob(pool);
+
+  // 3. Eviction service
+  const stopEviction = startEvictionJob(pool, eventManager);
+
+  // Background job for lease reclamation
+  const leaseReclaimInterval = setInterval(async () => {
+    if (isShuttingDown) return;
+    try {
+      const reclaimed = await queueManager.reclaimExpiredLeases();
+      if (reclaimed > 0) {
+        log(`Reclaimed ${reclaimed} expired leases`);
+      }
+    } catch (error) {
+      if (!isShuttingDown) {
+        log('Error reclaiming leases:', error);
+      }
+    }
+  }, config.JOBS.LEASE_RECLAIM_INTERVAL);
+
+  // Create server
+  const app = uWS.App();
+
+  // Initialize WebSocket server
+  const wsServer = createWebSocketServer(app, eventManager);
+
+  // Background job for queue depth updates
+  const queueDepthInterval = setInterval(async () => {
+    if (isShuttingDown) return;
+    try {
+      await wsServer.updateQueueDepths(queueManager);
+    } catch (error) {
+      if (!isShuttingDown) {
+        log('Error updating queue depths:', error);
+      }
+    }
+  }, config.JOBS.QUEUE_DEPTH_UPDATE_INTERVAL);
+
+  // Background job for system stats
+  const systemStatsInterval = setInterval(async () => {
+    if (isShuttingDown) return;
+    try {
+      await wsServer.sendSystemStats(pool);
+    } catch (error) {
+      if (!isShuttingDown) {
+        log('Error sending system stats:', error);
+      }
+    }
+  }, config.JOBS.SYSTEM_STATS_UPDATE_INTERVAL);
+
+  // CORS headers helper
+  const setCorsHeaders = (res) => {
+    res.writeHeader('Access-Control-Allow-Origin', config.API.CORS_ALLOWED_ORIGINS);
+    res.writeHeader('Access-Control-Allow-Methods', config.API.CORS_ALLOWED_METHODS);
+    res.writeHeader('Access-Control-Allow-Headers', config.API.CORS_ALLOWED_HEADERS);
+    res.writeHeader('Access-Control-Max-Age', config.API.CORS_MAX_AGE.toString());
+  };
+
+  // Helper to read JSON body
+  const readJson = (res, cb, abortedRef) => {
+    let buffer;
+    const maxBodySize = config.API.MAX_BODY_SIZE; // 10MB max body size
     
-    await pool.query(`
-      INSERT INTO queen.partitions (queue_id, name)
-      SELECT id, 'Default' FROM queen.queues WHERE name = $1
-      ON CONFLICT (queue_id, name) DO NOTHING
-    `, [SYSTEM_QUEUE]);
-    
-    log('✅ System event queue initialized');
-  } catch (error) {
-    console.error('Failed to initialize system queue:', error);
-    throw error;
-  }
-}
-
-await initializeSystemQueue();
-
-// Initialize extended features
-log('🚀 Initializing Queen Services...');
-
-// 1. Encryption service
-const encryptionEnabled = initEncryption();
-
-// 2. Retention service
-const stopRetention = startRetentionJob(pool);
-
-// 3. Eviction service
-const stopEviction = startEvictionJob(pool, eventManager);
-
-// Background job for lease reclamation
-const leaseReclaimInterval = setInterval(async () => {
-  if (isShuttingDown) return;
-  try {
-    const reclaimed = await queueManager.reclaimExpiredLeases();
-    if (reclaimed > 0) {
-      log(`Reclaimed ${reclaimed} expired leases`);
-    }
-  } catch (error) {
-    if (!isShuttingDown) {
-      log('Error reclaiming leases:', error);
-    }
-  }
-}, config.JOBS.LEASE_RECLAIM_INTERVAL);
-
-// Create server
-const app = uWS.App();
-
-// Initialize WebSocket server
-const wsServer = createWebSocketServer(app, eventManager);
-
-// Background job for queue depth updates
-const queueDepthInterval = setInterval(async () => {
-  if (isShuttingDown) return;
-  try {
-    await wsServer.updateQueueDepths(queueManager);
-  } catch (error) {
-    if (!isShuttingDown) {
-      log('Error updating queue depths:', error);
-    }
-  }
-}, config.JOBS.QUEUE_DEPTH_UPDATE_INTERVAL);
-
-// Background job for system stats
-const systemStatsInterval = setInterval(async () => {
-  if (isShuttingDown) return;
-  try {
-    await wsServer.sendSystemStats(pool);
-  } catch (error) {
-    if (!isShuttingDown) {
-      log('Error sending system stats:', error);
-    }
-  }
-}, config.JOBS.SYSTEM_STATS_UPDATE_INTERVAL);
-
-// CORS headers helper
-const setCorsHeaders = (res) => {
-  res.writeHeader('Access-Control-Allow-Origin', config.API.CORS_ALLOWED_ORIGINS);
-  res.writeHeader('Access-Control-Allow-Methods', config.API.CORS_ALLOWED_METHODS);
-  res.writeHeader('Access-Control-Allow-Headers', config.API.CORS_ALLOWED_HEADERS);
-  res.writeHeader('Access-Control-Max-Age', config.API.CORS_MAX_AGE.toString());
-};
-
-// Helper to read JSON body
-const readJson = (res, cb, abortedRef) => {
-  let buffer;
-  const maxBodySize = config.API.MAX_BODY_SIZE; // 10MB max body size
-  
-  res.onData((ab, isLast) => {
-    const chunk = Buffer.from(ab);
-    
-    // Check size limit
-    const currentSize = (buffer ? buffer.length : 0) + chunk.length;
-    if (currentSize > maxBodySize) {
-      if (abortedRef && abortedRef.aborted) return;
-      res.writeStatus(config.HTTP_STATUS.BAD_REQUEST.toString()).end(JSON.stringify({ error: 'Request body too large' }));
-      return;
-    }
-    
-    if (isLast) {
-      let json;
-      try {
-        let fullData;
-        if (buffer) {
-          fullData = Buffer.concat([buffer, chunk]);
-        } else {
-          fullData = chunk;
-        }
-        
-        const jsonString = fullData.toString('utf8');
-        
-        // Debug large payloads
-        if (jsonString.length > 1000000) {
-          log(`Parsing large JSON: ${jsonString.length} bytes, starts with: ${jsonString.substring(0, 100)}`);
-        }
-        
-        json = JSON.parse(jsonString);
-      } catch (e) {
+    res.onData((ab, isLast) => {
+      const chunk = Buffer.from(ab);
+      
+      // Check size limit
+      const currentSize = (buffer ? buffer.length : 0) + chunk.length;
+      if (currentSize > maxBodySize) {
         if (abortedRef && abortedRef.aborted) return;
-        // Log the actual error for debugging  
-        log(`JSON parse error: ${e.message}`);
-        
-        // Log what we're trying to parse for debugging
-        let sample = '';
-        if (buffer) {
-          const fullData = Buffer.concat([buffer, chunk]);
-          sample = fullData.toString('utf8').substring(0, 200);
-        } else {
-          sample = chunk.toString('utf8').substring(0, 200);
-        }
-        log(`Failed to parse data starting with: ${sample}`);
-        
-        res.writeStatus(config.HTTP_STATUS.BAD_REQUEST.toString()).end(JSON.stringify({ error: 'Invalid JSON' }));
+        res.writeStatus(config.HTTP_STATUS.BAD_REQUEST.toString()).end(JSON.stringify({ error: 'Request body too large' }));
         return;
       }
-      cb(json);
-    } else {
-      if (buffer) {
-        buffer = Buffer.concat([buffer, chunk]);
-      } else {
-        buffer = Buffer.from(chunk);  // Ensure it's a Buffer
-      }
-    }
-  });
-};
-
-// Handle OPTIONS requests for CORS preflight
-app.options('/*', (res, req) => {
-  res.onAborted(() => {
-    log('OPTIONS request aborted');
-  });
-  
-  res.cork(() => {
-    setCorsHeaders(res);
-    res.writeStatus(config.HTTP_STATUS.NO_CONTENT.toString()).end();
-  });
-});
-
-// Configure route
-app.post('/api/v1/configure', (res, req) => {
-  const abortedRef = { aborted: false };
-  res.onAborted(() => {
-    abortedRef.aborted = true;
-    log('Configure request aborted');
-  });
-  
-  readJson(res, async (body) => {
-    if (abortedRef.aborted) return;
-    try {
-      const result = await createConfigureRoute(queueManager)(body);
-      if (abortedRef.aborted) return;
-      eventManager.emit('queue.created', result);
-      res.cork(() => {
-        setCorsHeaders(res);
-        res.writeStatus(config.HTTP_STATUS.CREATED.toString()).end(JSON.stringify(result));
-      });
-    } catch (error) {
-      if (abortedRef.aborted) return;
-      log('Configure error:', error);
-      res.cork(() => {
-        setCorsHeaders(res);
-        res.writeStatus(config.HTTP_STATUS.INTERNAL_SERVER_ERROR.toString()).end(JSON.stringify({ error: error.message }));
-      });
-    }
-  }, abortedRef);
-});
-
-// Push route
-app.post('/api/v1/push', (res, req) => {
-  const abortedRef = { aborted: false };
-  res.onAborted(() => {
-    abortedRef.aborted = true;
-    log('Push request aborted');
-  });
-  
-  readJson(res, async (body) => {
-    if (abortedRef.aborted) return;
-    try {
-      const result = await createPushRoute(queueManager)(body);
-      messageCount += result.messages.length;
-      requestCount++;
-      if (abortedRef.aborted) return;
       
-      // Emit events for pushed messages
-      for (const msg of result.messages) {
-        if (msg.status === 'queued') {
-          const item = body.items.find(i => 
-            i.transactionId === msg.transactionId || !i.transactionId
-          );
-          if (item) {
-            const partition = item.partition ?? 'Default';
-            const queuePath = `${item.queue}/${partition}`;
-            eventManager.emit('message.pushed', {
-              queue: item.queue,
-              partition: partition,
-              transactionId: msg.transactionId
-            });
-            eventManager.notifyMessageAvailable(queuePath);
+      if (isLast) {
+        let json;
+        try {
+          let fullData;
+          if (buffer) {
+            fullData = Buffer.concat([buffer, chunk]);
+          } else {
+            fullData = chunk;
           }
+          
+          const jsonString = fullData.toString('utf8');
+          
+          // Debug large payloads
+          if (jsonString.length > 1000000) {
+            log(`Parsing large JSON: ${jsonString.length} bytes, starts with: ${jsonString.substring(0, 100)}`);
+          }
+          
+          json = JSON.parse(jsonString);
+        } catch (e) {
+          if (abortedRef && abortedRef.aborted) return;
+          // Log the actual error for debugging  
+          log(`JSON parse error: ${e.message}`);
+          
+          // Log what we're trying to parse for debugging
+          let sample = '';
+          if (buffer) {
+            const fullData = Buffer.concat([buffer, chunk]);
+            sample = fullData.toString('utf8').substring(0, 200);
+          } else {
+            sample = chunk.toString('utf8').substring(0, 200);
+          }
+          log(`Failed to parse data starting with: ${sample}`);
+          
+          res.writeStatus(config.HTTP_STATUS.BAD_REQUEST.toString()).end(JSON.stringify({ error: 'Invalid JSON' }));
+          return;
+        }
+        cb(json);
+      } else {
+        if (buffer) {
+          buffer = Buffer.concat([buffer, chunk]);
+        } else {
+          buffer = Buffer.from(chunk);  // Ensure it's a Buffer
         }
       }
-      
-      res.cork(() => {
-        setCorsHeaders(res);
-        res.writeStatus(config.HTTP_STATUS.CREATED.toString()).end(JSON.stringify(result));
-      });
-    } catch (error) {
-      if (abortedRef.aborted) return;
-      log('Push error:', error.message || error);
-      res.cork(() => {
-        setCorsHeaders(res);
-        res.writeStatus(config.HTTP_STATUS.INTERNAL_SERVER_ERROR.toString()).end(JSON.stringify({ error: error.message }));
-      });
-    }
-  }, abortedRef);
-});
+    });
+  };
 
-// Pop routes with new structure
-app.get('/api/v1/pop/queue/:queue/partition/:partition', (res, req) => {
-  const queue = req.getParameter(0);
-  const partition = req.getParameter(1);
-  const query = new URLSearchParams(req.getQuery());
-  
-  let aborted = false;
-  res.onAborted(() => {
-    aborted = true;
-    log('Pop request aborted');
-  });
-  
-  createPopRoute(queueManager, eventManager)(
-    { 
-      queue, 
-      partition,
-      consumerGroup: query.get('consumerGroup') || query.get('consumer_group')
-    },
-    {
-      wait: query.get('wait') === 'true',
-      timeout: parseInt(query.get('timeout') || config.QUEUE.DEFAULT_TIMEOUT.toString()),
-      batch: parseInt(query.get('batch') || config.QUEUE.DEFAULT_BATCH_SIZE.toString()),
-      subscriptionMode: query.get('subscriptionMode'),
-      subscriptionFrom: query.get('subscriptionFrom')
-    }
-  ).then(result => {
-    if (aborted) return;
+  // Handle OPTIONS requests for CORS preflight
+  app.options('/*', (res, req) => {
+    res.onAborted(() => {
+      log('OPTIONS request aborted');
+    });
     
-    // Emit events for processing messages
-    for (const msg of result.messages) {
-      eventManager.emit('message.processing', {
-        queue: msg.queue,
-        partition: msg.partition,
-        transactionId: msg.transactionId,
-        workerId: `worker-${process.pid}`
-      });
-    }
-    
-    // Use streaming with backpressure for large responses
-    if (result.messages.length === 0) {
-      res.cork(() => {
-        setCorsHeaders(res);
-        res.writeStatus(config.HTTP_STATUS.NO_CONTENT.toString()).end();
-      });
-    } else {
-      res.cork(() => {
-        setCorsHeaders(res);
-        res.writeStatus(config.HTTP_STATUS.OK.toString());
-      });
-      streamJSON(res, result, { aborted });
-    }
-  }).catch(error => {
-    if (aborted) return;
-    log('Pop error:', error);
     res.cork(() => {
       setCorsHeaders(res);
+      res.writeStatus(config.HTTP_STATUS.NO_CONTENT.toString()).end();
     });
-    sendError(res, error, config.HTTP_STATUS.INTERNAL_SERVER_ERROR);
   });
-});
 
-app.get('/api/v1/pop/queue/:queue', (res, req) => {
-  const queue = req.getParameter(0);
-  const query = new URLSearchParams(req.getQuery());
+  // Configure route
+  app.post('/api/v1/configure', (res, req) => {
+    const abortedRef = { aborted: false };
+    res.onAborted(() => {
+      abortedRef.aborted = true;
+      log('Configure request aborted');
+    });
+    
+    readJson(res, async (body) => {
+      if (abortedRef.aborted) return;
+      try {
+        const result = await createConfigureRoute(queueManager)(body);
+        if (abortedRef.aborted) return;
+        eventManager.emit('queue.created', result);
+        res.cork(() => {
+          setCorsHeaders(res);
+          res.writeStatus(config.HTTP_STATUS.CREATED.toString()).end(JSON.stringify(result));
+        });
+      } catch (error) {
+        if (abortedRef.aborted) return;
+        log('Configure error:', error);
+        res.cork(() => {
+          setCorsHeaders(res);
+          res.writeStatus(config.HTTP_STATUS.INTERNAL_SERVER_ERROR.toString()).end(JSON.stringify({ error: error.message }));
+        });
+      }
+    }, abortedRef);
+  });
+
+  // Push route
+  app.post('/api/v1/push', (res, req) => {
+    const abortedRef = { aborted: false };
+    res.onAborted(() => {
+      abortedRef.aborted = true;
+      log('Push request aborted');
+    });
+    
+    readJson(res, async (body) => {
+      if (abortedRef.aborted) return;
+      try {
+        const result = await createPushRoute(queueManager)(body);
+        messageCount += result.messages.length;
+        requestCount++;
+        if (abortedRef.aborted) return;
+        
+        // Emit events for pushed messages
+        for (const msg of result.messages) {
+          if (msg.status === 'queued') {
+            const item = body.items.find(i => 
+              i.transactionId === msg.transactionId || !i.transactionId
+            );
+            if (item) {
+              const partition = item.partition ?? 'Default';
+              const queuePath = `${item.queue}/${partition}`;
+              eventManager.emit('message.pushed', {
+                queue: item.queue,
+                partition: partition,
+                transactionId: msg.transactionId
+              });
+              eventManager.notifyMessageAvailable(queuePath);
+            }
+          }
+        }
+        
+        res.cork(() => {
+          setCorsHeaders(res);
+          res.writeStatus(config.HTTP_STATUS.CREATED.toString()).end(JSON.stringify(result));
+        });
+      } catch (error) {
+        if (abortedRef.aborted) return;
+        log('Push error:', error.message || error);
+        res.cork(() => {
+          setCorsHeaders(res);
+          res.writeStatus(config.HTTP_STATUS.INTERNAL_SERVER_ERROR.toString()).end(JSON.stringify({ error: error.message }));
+        });
+      }
+    }, abortedRef);
+  });
+
+  // Pop routes with new structure
+  app.get('/api/v1/pop/queue/:queue/partition/:partition', (res, req) => {
+    const queue = req.getParameter(0);
+    const partition = req.getParameter(1);
+    const query = new URLSearchParams(req.getQuery());
+    
+    let aborted = false;
+    res.onAborted(() => {
+      aborted = true;
+      log('Pop request aborted');
+    });
+    
+    createPopRoute(queueManager, eventManager)(
+      { 
+        queue, 
+        partition,
+        consumerGroup: query.get('consumerGroup') || query.get('consumer_group')
+      },
+      {
+        wait: query.get('wait') === 'true',
+        timeout: parseInt(query.get('timeout') || config.QUEUE.DEFAULT_TIMEOUT.toString()),
+        batch: parseInt(query.get('batch') || config.QUEUE.DEFAULT_BATCH_SIZE.toString()),
+        subscriptionMode: query.get('subscriptionMode'),
+        subscriptionFrom: query.get('subscriptionFrom')
+      }
+    ).then(result => {
+      if (aborted) return;
+      
+      // Emit events for processing messages
+      for (const msg of result.messages) {
+        eventManager.emit('message.processing', {
+          queue: msg.queue,
+          partition: msg.partition,
+          transactionId: msg.transactionId,
+          workerId: `worker-${process.pid}`
+        });
+      }
+      
+      // Use streaming with backpressure for large responses
+      if (result.messages.length === 0) {
+        res.cork(() => {
+          setCorsHeaders(res);
+          res.writeStatus(config.HTTP_STATUS.NO_CONTENT.toString()).end();
+        });
+      } else {
+        res.cork(() => {
+          setCorsHeaders(res);
+          res.writeStatus(config.HTTP_STATUS.OK.toString());
+        });
+        streamJSON(res, result, { aborted });
+      }
+    }).catch(error => {
+      if (aborted) return;
+      log('Pop error:', error);
+      res.cork(() => {
+        setCorsHeaders(res);
+      });
+      sendError(res, error, config.HTTP_STATUS.INTERNAL_SERVER_ERROR);
+    });
+  });
+
+    app.get('/api/v1/pop/queue/:queue', (res, req) => {
+    const queue = req.getParameter(0);
+    const query = new URLSearchParams(req.getQuery());
   
-  let aborted = false;
-  res.onAborted(() => {
+    let aborted = false;
+    res.onAborted(() => {
     aborted = true;
     log('Pop request aborted');
   });
   
-  createPopRoute(queueManager, eventManager)(
+    createPopRoute(queueManager, eventManager)(
     { 
       queue,
       consumerGroup: query.get('consumerGroup') || query.get('consumer_group')
@@ -446,18 +455,18 @@ app.get('/api/v1/pop/queue/:queue', (res, req) => {
 });
 
 // Pop with filters (namespace or task)
-app.get('/api/v1/pop', (res, req) => {
-  const query = new URLSearchParams(req.getQuery());
-  const namespace = query.get('namespace');
-  const task = query.get('task');
+    app.get('/api/v1/pop', (res, req) => {
+    const query = new URLSearchParams(req.getQuery());
+    const namespace = query.get('namespace');
+    const task = query.get('task');
   
-  let aborted = false;
-  res.onAborted(() => {
+    let aborted = false;
+    res.onAborted(() => {
     aborted = true;
     log('Pop request aborted');
   });
   
-  createPopRoute(queueManager, eventManager)(
+    createPopRoute(queueManager, eventManager)(
     { 
       namespace, 
       task,
@@ -506,14 +515,14 @@ app.get('/api/v1/pop', (res, req) => {
 });
 
 // ACK route
-app.post('/api/v1/ack', (res, req) => {
-  const abortedRef = { aborted: false };
-  res.onAborted(() => {
+    app.post('/api/v1/ack', (res, req) => {
+    const abortedRef = { aborted: false };
+    res.onAborted(() => {
     abortedRef.aborted = true;
     log('ACK request aborted');
   });
   
-  readJson(res, async (body) => {
+    readJson(res, async (body) => {
     if (abortedRef.aborted) return;
     try {
       const result = await createAckRoute(queueManager)(body);
@@ -547,14 +556,14 @@ app.post('/api/v1/ack', (res, req) => {
 });
 
 // Batch ACK route
-app.post('/api/v1/ack/batch', (res, req) => {
-  const abortedRef = { aborted: false };
-  res.onAborted(() => {
+    app.post('/api/v1/ack/batch', (res, req) => {
+    const abortedRef = { aborted: false };
+    res.onAborted(() => {
     abortedRef.aborted = true;
     log('Batch ACK request aborted');
   });
   
-  readJson(res, async (body) => {
+    readJson(res, async (body) => {
     if (abortedRef.aborted) return;
     try {
       const results = await queueManager.acknowledgeMessages(body.acknowledgments, body.consumerGroup);
@@ -593,16 +602,16 @@ app.post('/api/v1/ack/batch', (res, req) => {
 });
 
 // Messages routes
-app.get('/api/v1/messages', (res, req) => {
-  const query = new URLSearchParams(req.getQuery());
+    app.get('/api/v1/messages', (res, req) => {
+    const query = new URLSearchParams(req.getQuery());
   
-  let aborted = false;
-  res.onAborted(() => {
+    let aborted = false;
+    res.onAborted(() => {
     aborted = true;
     log('Messages list request aborted');
   });
   
-  const filters = {
+    const filters = {
     ns: query.get('ns'),
     task: query.get('task'),
     queue: query.get('queue'),
@@ -611,7 +620,7 @@ app.get('/api/v1/messages', (res, req) => {
     offset: parseInt(query.get('offset') || config.API.DEFAULT_OFFSET.toString())
   };
   
-  messagesRoutes.listMessages(filters).then(result => {
+    messagesRoutes.listMessages(filters).then(result => {
     if (aborted) return;
     res.cork(() => {
       setCorsHeaders(res);
@@ -627,16 +636,16 @@ app.get('/api/v1/messages', (res, req) => {
   });
 });
 
-app.get('/api/v1/messages/:transactionId', (res, req) => {
-  const transactionId = req.getParameter(0);
+    app.get('/api/v1/messages/:transactionId', (res, req) => {
+    const transactionId = req.getParameter(0);
   
-  let aborted = false;
-  res.onAborted(() => {
+    let aborted = false;
+    res.onAborted(() => {
     aborted = true;
     log('Get message request aborted');
   });
   
-  messagesRoutes.getMessage(transactionId).then(result => {
+    messagesRoutes.getMessage(transactionId).then(result => {
     if (aborted) return;
     res.cork(() => {
       setCorsHeaders(res);
@@ -653,16 +662,16 @@ app.get('/api/v1/messages/:transactionId', (res, req) => {
   });
 });
 
-app.del('/api/v1/messages/:transactionId', (res, req) => {
-  const transactionId = req.getParameter(0);
+    app.del('/api/v1/messages/:transactionId', (res, req) => {
+    const transactionId = req.getParameter(0);
   
-  let aborted = false;
-  res.onAborted(() => {
+    let aborted = false;
+    res.onAborted(() => {
     aborted = true;
     log('Delete message request aborted');
   });
   
-  messagesRoutes.deleteMessage(transactionId).then(result => {
+    messagesRoutes.deleteMessage(transactionId).then(result => {
     if (aborted) return;
     res.cork(() => {
       setCorsHeaders(res);
@@ -679,16 +688,16 @@ app.del('/api/v1/messages/:transactionId', (res, req) => {
   });
 });
 
-app.post('/api/v1/messages/:transactionId/retry', (res, req) => {
-  const transactionId = req.getParameter(0);
+    app.post('/api/v1/messages/:transactionId/retry', (res, req) => {
+    const transactionId = req.getParameter(0);
   
-  let aborted = false;
-  res.onAborted(() => {
+    let aborted = false;
+    res.onAborted(() => {
     aborted = true;
     log('Retry message request aborted');
   });
   
-  messagesRoutes.retryMessage(transactionId).then(result => {
+    messagesRoutes.retryMessage(transactionId).then(result => {
     if (aborted) return;
     res.cork(() => {
       setCorsHeaders(res);
@@ -704,16 +713,16 @@ app.post('/api/v1/messages/:transactionId/retry', (res, req) => {
   });
 });
 
-app.post('/api/v1/messages/:transactionId/dlq', (res, req) => {
-  const transactionId = req.getParameter(0);
+    app.post('/api/v1/messages/:transactionId/dlq', (res, req) => {
+    const transactionId = req.getParameter(0);
   
-  let aborted = false;
-  res.onAborted(() => {
+    let aborted = false;
+    res.onAborted(() => {
     aborted = true;
     log('Move to DLQ request aborted');
   });
   
-  messagesRoutes.moveToDLQ(transactionId).then(result => {
+    messagesRoutes.moveToDLQ(transactionId).then(result => {
     if (aborted) return;
     res.cork(() => {
       setCorsHeaders(res);
@@ -729,16 +738,16 @@ app.post('/api/v1/messages/:transactionId/dlq', (res, req) => {
   });
 });
 
-app.get('/api/v1/messages/:transactionId/related', (res, req) => {
-  const transactionId = req.getParameter(0);
+    app.get('/api/v1/messages/:transactionId/related', (res, req) => {
+    const transactionId = req.getParameter(0);
   
-  let aborted = false;
-  res.onAborted(() => {
+    let aborted = false;
+    res.onAborted(() => {
     aborted = true;
     log('Get related messages request aborted');
   });
   
-  messagesRoutes.getRelatedMessages(transactionId).then(result => {
+    messagesRoutes.getRelatedMessages(transactionId).then(result => {
     if (aborted) return;
     res.cork(() => {
       setCorsHeaders(res);
@@ -754,18 +763,18 @@ app.get('/api/v1/messages/:transactionId/related', (res, req) => {
   });
 });
 
-app.del('/api/v1/queues/:queue/clear', (res, req) => {
-  const queue = req.getParameter(0);
-  const query = new URLSearchParams(req.getQuery());
-  const partition = query.get('partition');
+    app.del('/api/v1/queues/:queue/clear', (res, req) => {
+    const queue = req.getParameter(0);
+    const query = new URLSearchParams(req.getQuery());
+    const partition = query.get('partition');
   
-  let aborted = false;
-  res.onAborted(() => {
+    let aborted = false;
+    res.onAborted(() => {
     aborted = true;
     log('Clear queue request aborted');
   });
   
-  messagesRoutes.clearQueue(queue, partition).then(result => {
+    messagesRoutes.clearQueue(queue, partition).then(result => {
     if (aborted) return;
     res.cork(() => {
       setCorsHeaders(res);
@@ -782,18 +791,18 @@ app.del('/api/v1/queues/:queue/clear', (res, req) => {
 });
 
 // Resources routes
-app.get('/api/v1/resources/queues', (res, req) => {
-  const query = new URLSearchParams(req.getQuery());
-  const namespace = query.get('namespace');
-  const task = query.get('task');
+    app.get('/api/v1/resources/queues', (res, req) => {
+    const query = new URLSearchParams(req.getQuery());
+    const namespace = query.get('namespace');
+    const task = query.get('task');
   
-  let aborted = false;
-  res.onAborted(() => {
+    let aborted = false;
+    res.onAborted(() => {
     aborted = true;
     log('Get queues request aborted');
   });
   
-  resourcesRoutes.getQueues({ namespace, task }).then(result => {
+    resourcesRoutes.getQueues({ namespace, task }).then(result => {
     if (aborted) return;
     res.cork(() => {
       setCorsHeaders(res);
@@ -809,16 +818,16 @@ app.get('/api/v1/resources/queues', (res, req) => {
   });
 });
 
-app.get('/api/v1/resources/queues/:queue', (res, req) => {
-  const queue = req.getParameter(0);
+    app.get('/api/v1/resources/queues/:queue', (res, req) => {
+    const queue = req.getParameter(0);
   
-  let aborted = false;
-  res.onAborted(() => {
+    let aborted = false;
+    res.onAborted(() => {
     aborted = true;
     log('Get queue request aborted');
   });
   
-  resourcesRoutes.getQueue(queue).then(result => {
+    resourcesRoutes.getQueue(queue).then(result => {
     if (aborted) return;
     res.cork(() => {
       setCorsHeaders(res);
@@ -835,18 +844,18 @@ app.get('/api/v1/resources/queues/:queue', (res, req) => {
   });
 });
 
-app.get('/api/v1/resources/partitions', (res, req) => {
-  const query = new URLSearchParams(req.getQuery());
-  const queue = query.get('queue');
-  const minDepth = query.get('minDepth');
+    app.get('/api/v1/resources/partitions', (res, req) => {
+    const query = new URLSearchParams(req.getQuery());
+    const queue = query.get('queue');
+    const minDepth = query.get('minDepth');
   
-  let aborted = false;
-  res.onAborted(() => {
+    let aborted = false;
+    res.onAborted(() => {
     aborted = true;
     log('Get partitions request aborted');
   });
   
-  resourcesRoutes.getPartitions({ queue, minDepth: minDepth ? parseInt(minDepth) : null }).then(result => {
+    resourcesRoutes.getPartitions({ queue, minDepth: minDepth ? parseInt(minDepth) : null }).then(result => {
     if (aborted) return;
     res.cork(() => {
       setCorsHeaders(res);
@@ -862,14 +871,14 @@ app.get('/api/v1/resources/partitions', (res, req) => {
   });
 });
 
-app.get('/api/v1/resources/namespaces', (res, req) => {
-  let aborted = false;
-  res.onAborted(() => {
+    app.get('/api/v1/resources/namespaces', (res, req) => {
+    let aborted = false;
+    res.onAborted(() => {
     aborted = true;
     log('Get namespaces request aborted');
   });
   
-  resourcesRoutes.getNamespaces().then(result => {
+    resourcesRoutes.getNamespaces().then(result => {
     if (aborted) return;
     res.cork(() => {
       setCorsHeaders(res);
@@ -885,14 +894,14 @@ app.get('/api/v1/resources/namespaces', (res, req) => {
   });
 });
 
-app.get('/api/v1/resources/tasks', (res, req) => {
-  let aborted = false;
-  res.onAborted(() => {
+    app.get('/api/v1/resources/tasks', (res, req) => {
+    let aborted = false;
+    res.onAborted(() => {
     aborted = true;
     log('Get tasks request aborted');
   });
   
-  resourcesRoutes.getTasks().then(result => {
+    resourcesRoutes.getTasks().then(result => {
     if (aborted) return;
     res.cork(() => {
       setCorsHeaders(res);
@@ -908,14 +917,14 @@ app.get('/api/v1/resources/tasks', (res, req) => {
   });
 });
 
-app.get('/api/v1/resources/overview', (res, req) => {
-  let aborted = false;
-  res.onAborted(() => {
+    app.get('/api/v1/resources/overview', (res, req) => {
+    let aborted = false;
+    res.onAborted(() => {
     aborted = true;
     log('Get overview request aborted');
   });
   
-  resourcesRoutes.getSystemOverview().then(result => {
+    resourcesRoutes.getSystemOverview().then(result => {
     if (aborted) return;
     res.cork(() => {
       setCorsHeaders(res);
@@ -932,16 +941,16 @@ app.get('/api/v1/resources/overview', (res, req) => {
 });
 
 // Delete queue
-app.del('/api/v1/resources/queues/:queue', (res, req) => {
-  const queue = req.getParameter(0);
+    app.del('/api/v1/resources/queues/:queue', (res, req) => {
+    const queue = req.getParameter(0);
   
-  let aborted = false;
-  res.onAborted(() => {
+    let aborted = false;
+    res.onAborted(() => {
     aborted = true;
     log('Delete queue request aborted');
   });
   
-  resourcesRoutes.deleteQueue(queue).then(result => {
+    resourcesRoutes.deleteQueue(queue).then(result => {
     if (aborted) return;
     res.cork(() => {
       setCorsHeaders(res);
@@ -962,16 +971,16 @@ app.del('/api/v1/resources/queues/:queue', (res, req) => {
 // ============================================================================
 
 // 1. Dashboard Status - GET /api/v1/status
-app.get('/api/v1/status', (res, req) => {
-  const query = new URLSearchParams(req.getQuery());
+    app.get('/api/v1/status', (res, req) => {
+    const query = new URLSearchParams(req.getQuery());
   
-  let aborted = false;
-  res.onAborted(() => {
+    let aborted = false;
+    res.onAborted(() => {
     aborted = true;
     log('Status request aborted');
   });
   
-  const filters = {
+    const filters = {
     from: query.get('from'),
     to: query.get('to'),
     queue: query.get('queue'),
@@ -979,7 +988,7 @@ app.get('/api/v1/status', (res, req) => {
     task: query.get('task')
   };
   
-  statusRoutes.getStatus(filters).then(result => {
+    statusRoutes.getStatus(filters).then(result => {
     if (aborted) return;
     res.cork(() => {
       setCorsHeaders(res);
@@ -996,16 +1005,16 @@ app.get('/api/v1/status', (res, req) => {
 });
 
 // 2. Queues List - GET /api/v1/status/queues
-app.get('/api/v1/status/queues', (res, req) => {
-  const query = new URLSearchParams(req.getQuery());
+    app.get('/api/v1/status/queues', (res, req) => {
+    const query = new URLSearchParams(req.getQuery());
   
-  let aborted = false;
-  res.onAborted(() => {
+    let aborted = false;
+    res.onAborted(() => {
     aborted = true;
     log('Status queues request aborted');
   });
   
-  const filters = {
+    const filters = {
     from: query.get('from'),
     to: query.get('to'),
     namespace: query.get('namespace'),
@@ -1014,7 +1023,7 @@ app.get('/api/v1/status/queues', (res, req) => {
     offset: query.get('offset')
   };
   
-  statusRoutes.getQueues(filters).then(result => {
+    statusRoutes.getQueues(filters).then(result => {
     if (aborted) return;
     res.cork(() => {
       setCorsHeaders(res);
@@ -1031,22 +1040,22 @@ app.get('/api/v1/status/queues', (res, req) => {
 });
 
 // 3. Queue Detail - GET /api/v1/status/queues/:queueName
-app.get('/api/v1/status/queues/:queue', (res, req) => {
-  const queueName = req.getParameter(0);
-  const query = new URLSearchParams(req.getQuery());
+    app.get('/api/v1/status/queues/:queue', (res, req) => {
+    const queueName = req.getParameter(0);
+    const query = new URLSearchParams(req.getQuery());
   
-  let aborted = false;
-  res.onAborted(() => {
+    let aborted = false;
+    res.onAborted(() => {
     aborted = true;
     log('Status queue detail request aborted');
   });
   
-  const filters = {
+    const filters = {
     from: query.get('from'),
     to: query.get('to')
   };
   
-  statusRoutes.getQueueDetail(queueName, filters).then(result => {
+    statusRoutes.getQueueDetail(queueName, filters).then(result => {
     if (aborted) return;
     res.cork(() => {
       setCorsHeaders(res);
@@ -1066,17 +1075,17 @@ app.get('/api/v1/status/queues/:queue', (res, req) => {
 });
 
 // 4. Queue Messages - GET /api/v1/status/queues/:queueName/messages
-app.get('/api/v1/status/queues/:queue/messages', (res, req) => {
-  const queueName = req.getParameter(0);
-  const query = new URLSearchParams(req.getQuery());
+    app.get('/api/v1/status/queues/:queue/messages', (res, req) => {
+    const queueName = req.getParameter(0);
+    const query = new URLSearchParams(req.getQuery());
   
-  let aborted = false;
-  res.onAborted(() => {
+    let aborted = false;
+    res.onAborted(() => {
     aborted = true;
     log('Status queue messages request aborted');
   });
   
-  const filters = {
+    const filters = {
     status: query.get('status'),
     partition: query.get('partition'),
     from: query.get('from'),
@@ -1085,7 +1094,7 @@ app.get('/api/v1/status/queues/:queue/messages', (res, req) => {
     offset: query.get('offset')
   };
   
-  statusRoutes.getQueueMessages(queueName, filters).then(result => {
+    statusRoutes.getQueueMessages(queueName, filters).then(result => {
     if (aborted) return;
     res.cork(() => {
       setCorsHeaders(res);
@@ -1102,16 +1111,16 @@ app.get('/api/v1/status/queues/:queue/messages', (res, req) => {
 });
 
 // 5. Analytics - GET /api/v1/status/analytics
-app.get('/api/v1/status/analytics', (res, req) => {
-  const query = new URLSearchParams(req.getQuery());
+    app.get('/api/v1/status/analytics', (res, req) => {
+    const query = new URLSearchParams(req.getQuery());
   
-  let aborted = false;
-  res.onAborted(() => {
+    let aborted = false;
+    res.onAborted(() => {
     aborted = true;
     log('Status analytics request aborted');
   });
   
-  const filters = {
+    const filters = {
     from: query.get('from'),
     to: query.get('to'),
     queue: query.get('queue'),
@@ -1120,7 +1129,7 @@ app.get('/api/v1/status/analytics', (res, req) => {
     interval: query.get('interval') || 'hour'
   };
   
-  statusRoutes.getAnalytics(filters).then(result => {
+    statusRoutes.getAnalytics(filters).then(result => {
     if (aborted) return;
     res.cork(() => {
       setCorsHeaders(res);
@@ -1137,14 +1146,14 @@ app.get('/api/v1/status/analytics', (res, req) => {
 });
 
 // Health check with performance stats
-app.get('/health', async (res, req) => {
-  let aborted = false;
-  res.onAborted(() => {
+    app.get('/health', async (res, req) => {
+    let aborted = false;
+    res.onAborted(() => {
     aborted = true;
     log('Health check aborted');
   });
   
-  try {
+    try {
     await pool.query('SELECT 1');
     if (aborted) return;
     
@@ -1181,13 +1190,13 @@ app.get('/health', async (res, req) => {
 });
 
 // Metrics endpoint for performance monitoring
-app.get('/metrics', (res, req) => {
-  res.onAborted(() => {
+    app.get('/metrics', (res, req) => {
+    res.onAborted(() => {
     log('Metrics request aborted');
   });
   
-  const uptime = (Date.now() - startTime) / 1000;
-  const metrics = {
+    const uptime = (Date.now() - startTime) / 1000;
+    const metrics = {
     uptime: uptime,
     requests: {
       total: requestCount,
@@ -1206,7 +1215,7 @@ app.get('/metrics', (res, req) => {
     cpu: process.cpuUsage()
   };
   
-  res.cork(() => {
+    res.cork(() => {
     setCorsHeaders(res);
     res.writeStatus(config.HTTP_STATUS.OK.toString()).end(JSON.stringify(metrics));
   });
@@ -1265,58 +1274,75 @@ app.listen(HOST, PORT, async (token) => {
   }
 });
 
-// Graceful shutdown
-const shutdown = async (signal) => {
-  log(`\n🛑 Received ${signal}, shutting down gracefully...`);
-  
-  // Set shutdown flag immediately to prevent new operations
-  isShuttingDown = true;
-  
-  // Stop system event consumer
-  if (stopSystemEventConsumer) {
-    stopSystemEventConsumer();
-    log('✅ System event consumer stopped');
-  }
-  
-  // Stop background jobs
-  if (stopRetention) {
-    stopRetention();
-    log('✅ Retention job stopped');
-  }
-  if (stopEviction) {
-    stopEviction();
-    log('✅ Eviction job stopped');
-  }
-  
-  // Clear background intervals
-  if (leaseReclaimInterval) {
-    clearInterval(leaseReclaimInterval);
-    log('✅ Lease reclaim interval stopped');
-  }
-  if (queueDepthInterval) {
-    clearInterval(queueDepthInterval);
-    log('✅ Queue depth update interval stopped');
-  }
-  if (systemStatsInterval) {
-    clearInterval(systemStatsInterval);
-    log('✅ System stats interval stopped');
-  }
-  
-  // Wait a moment for any in-flight operations to complete
-  await new Promise(resolve => setTimeout(resolve, 100));
-  
-  const uptime = (Date.now() - startTime) / 1000;
-  if (messageCount > 0) {
-    log(`📊 Final stats: ${messageCount} messages processed in ${uptime.toFixed(1)}s`);
-    log(`   Average: ${(messageCount / uptime).toFixed(2)} messages/second`);
-  }
-  
-  // Close database pool last
-  await pool.end();
-  log('✅ Database pool closed');
-  
-  process.exit(0);
-};
+  // Graceful shutdown
+  const shutdown = async (signal) => {
+    log(`\n🛑 Received ${signal}, shutting down gracefully...`);
+    
+    // Set shutdown flag immediately to prevent new operations
+    isShuttingDown = true;
+    
+    // Stop system event consumer
+    if (stopSystemEventConsumer) {
+      stopSystemEventConsumer();
+      log('✅ System event consumer stopped');
+    }
+    
+    // Stop background jobs
+    if (stopRetention) {
+      stopRetention();
+      log('✅ Retention job stopped');
+    }
+    if (stopEviction) {
+      stopEviction();
+      log('✅ Eviction job stopped');
+    }
+    
+    // Clear background intervals
+    if (leaseReclaimInterval) {
+      clearInterval(leaseReclaimInterval);
+      log('✅ Lease reclaim interval stopped');
+    }
+    if (queueDepthInterval) {
+      clearInterval(queueDepthInterval);
+      log('✅ Queue depth update interval stopped');
+    }
+    if (systemStatsInterval) {
+      clearInterval(systemStatsInterval);
+      log('✅ System stats interval stopped');
+    }
+    
+    // Wait a moment for any in-flight operations to complete
+    await new Promise(resolve => setTimeout(resolve, 100));
+    
+    const uptime = (Date.now() - startTime) / 1000;
+    if (messageCount > 0) {
+      log(`📊 Final stats: ${messageCount} messages processed in ${uptime.toFixed(1)}s`);
+      log(`   Average: ${(messageCount / uptime).toFixed(2)} messages/second`);
+    }
+    
+    // Close database pool last
+    await pool.end();
+    log('✅ Database pool closed');
+    
+    process.exit(0);
+  };
 
-process.on('SIGTERM', () => shutdown('SIGTERM'));
-process.on('SIGINT', () => shutdown('SIGINT'));
+  process.on('SIGTERM', () => shutdown('SIGTERM'));
+  process.on('SIGINT', () => shutdown('SIGINT'));
+
+  // Return server instance with shutdown method
+  return {
+    port: PORT,
+    host: HOST,
+    shutdown,
+    app
+  };
+}
+
+// Auto-start server if run directly (not imported)
+if (import.meta.url === `file://${process.argv[1]}`) {
+  QueenServer().catch(error => {
+    console.error('Failed to start Queen server:', error);
+    process.exit(1);
+  });
+}
