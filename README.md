@@ -866,11 +866,3 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for development setup and guidelines.
 ## 📄 License
 
 Apache 2.0 - see [LICENSE.md](LICENSE.md)
-
----
-
-## 💬 Support
-
-- Documentation: [https://queen-mq.dev](https://queen-mq.dev)
-- Issues: [GitHub Issues](https://github.com/smartpricing/queen/issues)
-- Discord: [Join our community](https://discord.gg/queen-mq)
