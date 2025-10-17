@@ -1000,8 +1000,8 @@ export const createOptimizedQueueManager = (pool, resourceCache, eventManager, s
     
     return withTransaction(pool, async (client) => {
       const connectionWaitTime = Date.now() - startTime;
-      if (connectionWaitTime > 50) {
-        log(`⚠️  : ${connectionWaitTime}ms`);
+      if (connectionWaitTime > 1000) {
+        log(`⚠️ Warning connection wait time: ${connectionWaitTime}ms`);
       }
       
       // ─────────────────────────────────────────────────────────────────────
