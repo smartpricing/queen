@@ -23,6 +23,7 @@ import { startRetentionJob } from './services/retentionService.js';
 import { startEvictionJob } from './services/evictionService.js';
 import { log } from './utils/logger.js';
 import { streamJSON, sendJSON, sendError } from './utils/streaming.js';
+import { generateUUID } from './utils/uuid.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -560,10 +561,11 @@ export async function QueenServer(options = {}) {
       });
     } catch (error) {
       if (abortedRef.aborted) return;
-      log('ACK error:', error);
+      log('ACK error:', error.message || error);
       res.cork(() => {
+        res.writeStatus('500');
         setCorsHeaders(res);
-        res.writeStatus(config.HTTP_STATUS.INTERNAL_SERVER_ERROR.toString()).end(JSON.stringify({ error: error.message }));
+        res.end(JSON.stringify({ error: error.message || 'Unknown error' }));
       });
     }
   }, abortedRef);
@@ -611,6 +613,109 @@ export async function QueenServer(options = {}) {
         setCorsHeaders(res);
         res.writeStatus(config.HTTP_STATUS.INTERNAL_SERVER_ERROR.toString()).end(JSON.stringify({ error: error.message }));
       });
+    }
+  }, abortedRef);
+});
+
+// Lease extension endpoint
+app.post('/api/v1/lease/:leaseId/extend', (res, req) => {
+  const abortedRef = { aborted: false };
+  res.onAborted(() => { 
+    abortedRef.aborted = true;
+    log('Lease extension request aborted');
+  });
+  
+  const leaseId = req.getParameter(0);  // In uWebSockets.js, parameters are accessed by index
+  
+  readJson(res, async (body) => {
+    if (abortedRef.aborted) return;
+    
+    const { seconds = 60 } = body || {};
+    
+    try {
+      const result = await pool.query(`
+        UPDATE queen.partition_consumers
+        SET lease_expires_at = GREATEST(lease_expires_at, NOW() + INTERVAL '1 second' * $1)
+        WHERE worker_id = $2 AND lease_expires_at > NOW()
+        RETURNING lease_expires_at, partition_id
+      `, [seconds, leaseId]);
+      
+      if (result.rows.length === 0) {
+        if (!abortedRef.aborted) {
+          res.cork(() => {
+            setCorsHeaders(res);
+            res.writeStatus('404').end(JSON.stringify({ error: 'Lease not found or expired' }));
+          });
+        }
+        return;
+      }
+      
+      if (!abortedRef.aborted) {
+        res.cork(() => {
+          setCorsHeaders(res);
+          res.writeStatus('200').end(JSON.stringify({ 
+            leaseId,
+            newExpiresAt: result.rows[0].lease_expires_at
+          }));
+        });
+      }
+    } catch (error) {
+      if (!abortedRef.aborted) {
+        log('Lease extension error:', error);
+        res.cork(() => {
+          setCorsHeaders(res);
+          res.writeStatus('500').end(JSON.stringify({ error: error.message }));
+        });
+      }
+    }
+  }, abortedRef);
+});
+
+// Transaction endpoint
+app.post('/api/v1/transaction', (res, req) => {
+  const abortedRef = { aborted: false };
+  res.onAborted(() => { 
+    abortedRef.aborted = true;
+    log('Transaction request aborted');
+  });
+  
+  readJson(res, async (body) => {
+    if (abortedRef.aborted) return;
+    
+    const { operations = [], requiredLeases = [] } = body;
+    
+    if (!Array.isArray(operations) || operations.length === 0) {
+      if (!abortedRef.aborted) {
+        res.cork(() => {
+          setCorsHeaders(res);
+          res.writeStatus('400').end(JSON.stringify({ error: 'Operations array required' }));
+        });
+      }
+      return;
+    }
+    
+    try {
+      const results = await queueManager.executeTransaction(operations, requiredLeases);
+      
+      if (!abortedRef.aborted) {
+        const transactionId = generateUUID();
+        res.cork(() => {
+          setCorsHeaders(res);
+          res.writeStatus('200').end(JSON.stringify({
+            success: true,
+            results,
+            transactionId
+          }));
+        });
+      }
+    } catch (error) {
+      if (!abortedRef.aborted) {
+        log('Transaction error:', error);
+        res.cork(() => {
+          setCorsHeaders(res);
+          res.writeStatus('400').end(JSON.stringify({ error: error.message }));
+        });
+      }
     }
   }, abortedRef);
 });

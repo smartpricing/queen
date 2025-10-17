@@ -201,8 +201,8 @@ export const createOptimizedQueueManager = (pool, resourceCache, eventManager, s
     return result;
   };
   
-  // Optimized batch insert for high throughput (simplified - no status)
-  const pushMessagesBatch = async (items) => {
+  // Internal push operation that accepts a client
+  const pushMessagesInternal = async (client, items) => {
     const pushStartTime = Date.now();
     
     // Group items by queue and partition for efficient resource lookup
@@ -229,7 +229,6 @@ export const createOptimizedQueueManager = (pool, resourceCache, eventManager, s
     // Check capacity for all queues with max_queue_size set (single query)
     const queuesToCheck = Object.keys(queueBatchSizes);
     if (queuesToCheck.length > 0) {
-      await withTransaction(pool, async (client) => {
         const capacityCheck = await client.query(
           `SELECT 
              q.name,
@@ -254,7 +253,6 @@ export const createOptimizedQueueManager = (pool, resourceCache, eventManager, s
             throw new Error(`Queue '${row.name}' would exceed max capacity (${maxSize}). Current: ${currentDepth}, Batch: ${batchSize}`);
           }
         }
-      });
     }
     
     // Process each partition group
@@ -267,7 +265,6 @@ export const createOptimizedQueueManager = (pool, resourceCache, eventManager, s
       
       while (retryCount <= maxRetries) {
         try {
-          const results = await withTransaction(pool, async (client) => {
             // Ensure resources exist (cached after first call)
             const resources = await ensureResources(client, queueName, partitionName);
             const { partitionId, encryptionEnabled, queueConfig } = resources;
@@ -433,10 +430,7 @@ export const createOptimizedQueueManager = (pool, resourceCache, eventManager, s
             const queuePath = `${queueName}/${partitionName}`;
             eventManager.notifyMessageAvailable(queuePath);
             
-            return batchResults;
-          });
-          
-          allResults.push(...results);
+            allResults.push(...batchResults);
           break; // Success, exit retry loop
         } catch (error) {
           // Check if it's a stale cache error
@@ -454,17 +448,42 @@ export const createOptimizedQueueManager = (pool, resourceCache, eventManager, s
     log(`[PUSH] Pushed ${items.length} items → ${allResults.length} results in ${duration}ms (${(items.length / (duration / 1000)).toFixed(0)} msg/s)`);
     return allResults;
   };
+  
+  // Public wrapper for push that creates its own transaction
+  const pushMessagesBatch = async (items) => {
+    return withTransaction(pool, async (client) => {
+      return pushMessagesInternal(client, items);
+    });
+  };
 
 
   // Acknowledge messages (now per consumer group)
   // CURSOR-BASED: Single ACK now routes through batch ACK to advance cursor properly
-  const acknowledgeMessage = async (transactionId, status = 'completed', error = null, consumerGroup = null) => {
+  const acknowledgeMessage = async (transactionId, status = 'completed', error = null, consumerGroup = null, leaseId = null) => {
+    // If lease ID provided, validate it first
+    if (leaseId) {
+      log(`Validating lease ${leaseId} for transaction ${transactionId}`);
+      const valid = await pool.query(`
+        SELECT 1 FROM queen.partition_consumers pc
+        JOIN queen.messages m ON m.partition_id = pc.partition_id
+        WHERE m.transaction_id = $1 
+          AND pc.worker_id = $2
+          AND pc.lease_expires_at > NOW()
+      `, [transactionId, leaseId]);
+      
+      if (valid.rows.length === 0) {
+        log(`Invalid lease ${leaseId} for transaction ${transactionId} - validation failed`);
+        throw new Error('Invalid lease - cannot ACK');
+      }
+      log(`Lease ${leaseId} validated successfully`);
+    }
+    
     const batchResult = await acknowledgeMessages([{ transactionId, status, error }], consumerGroup);
     return batchResult[0] || { status: 'not_found', transaction_id: transactionId };
   };
   
-  // Batch acknowledge messages with cursor-based advancement
-  const acknowledgeMessages = async (acknowledgments, consumerGroup = null) => {
+  // Internal acknowledge operation that accepts a client
+  const acknowledgeMessagesInternal = async (client, acknowledgments, consumerGroup = null) => {
     const ackStartTime = Date.now();
     const results = [];
     const actualConsumerGroup = consumerGroup || '__QUEUE_MODE__';
@@ -486,45 +505,154 @@ export const createOptimizedQueueManager = (pool, resourceCache, eventManager, s
     const successCount = grouped.completed.length;
     
     // Determine if this is a TOTAL batch failure or partial failure
-    // Only treat as "total batch failure" if it's a real batch (>1 message)
-    // Single-message failures always go to DLQ
-    const isTotalBatchFailure = failedCount === totalMessages && totalMessages > 1;
+    // Total batch failure: all messages being ACKed right now are failures AND
+    // we're ACKing the complete leased batch
+    const allIds = acknowledgments.map(a => a.transactionId);
+    const batchSizeInfo = await client.query(`
+      SELECT pc.batch_size, pc.partition_id
+      FROM queen.messages m
+      JOIN queen.partition_consumers pc ON pc.partition_id = m.partition_id 
+        AND pc.consumer_group = $2
+      WHERE m.transaction_id = ANY($1::varchar[])
+      LIMIT 1
+    `, [allIds, actualConsumerGroup]);
     
-    await withTransaction(pool, async (client) => {
+    if (batchSizeInfo.rows.length === 0) {
+      throw new Error('Cannot find leased batch size for acknowledgment');
+    }
+    
+    const leasedBatchSize = batchSizeInfo.rows[0].batch_size;
+    
+    // Total batch failure: 
+    // 1. All messages in this ACK call are failures (failedCount === totalMessages)
+    // 2. This ACK call covers the complete leased batch (totalMessages === leasedBatchSize)
+    const isTotalBatchFailure = (failedCount === totalMessages) && (totalMessages === leasedBatchSize);
+    
       // CURSOR-BASED APPROACH: Handle total batch failure vs partial failure differently
       
       if (isTotalBatchFailure) {
         // ═══════════════════════════════════════════════════════════════
-        // TOTAL BATCH FAILURE: Don't advance cursor, allow retry
+        // TOTAL BATCH FAILURE: Check retry limit before retrying
         // ═══════════════════════════════════════════════════════════════
-        log(`[CURSOR] Total batch failure - cursor NOT advanced, same batch will retry on next POP`);
+        
+        // Get queue retry limit and current batch retry count
+        const allIds = acknowledgments.map(a => a.transactionId);
+        const batchRetryInfo = await client.query(`
+          SELECT 
+            q.retry_limit,
+            pc.batch_retry_count,
+            pc.partition_id,
+            p.name as partition_name
+          FROM queen.messages m
+          JOIN queen.partitions p ON p.id = m.partition_id
+          JOIN queen.queues q ON q.id = p.queue_id
+          JOIN queen.partition_consumers pc ON pc.partition_id = m.partition_id 
+            AND pc.consumer_group = $2
+          WHERE m.transaction_id = ANY($1::varchar[])
+          LIMIT 1
+        `, [allIds, actualConsumerGroup]);
+        
+        if (batchRetryInfo.rows.length === 0) {
+          throw new Error('Cannot find queue retry limit for batch failure');
+        }
+        
+        const { retry_limit, batch_retry_count, partition_id, partition_name } = batchRetryInfo.rows[0];
+        const currentRetryCount = batch_retry_count || 0;
+        
         const ackTime = Date.now() - ackStartTime;
         const throughput = ackTime > 0 ? (totalMessages / (ackTime / 1000)).toFixed(0) : 0;
         
-        log(`[${LogTypes.ACK_BATCH}] Total batch failure: ${failedCount} msgs | ${throughput} msg/s | ${ackTime}ms | ConsumerGroup: ${consumerGroup || 'QUEUE_MODE'}`);
-        
-        // Just release the lease - next POP will get same batch
-        const allIds = acknowledgments.map(a => a.transactionId);
-        await client.query(`
-          WITH affected_partitions AS (
-            SELECT DISTINCT m.partition_id
+        if (currentRetryCount >= retry_limit) {
+          // ═══════════════════════════════════════════════════════════════
+          // BATCH RETRY LIMIT EXCEEDED: Move to DLQ and advance cursor
+          // ═══════════════════════════════════════════════════════════════
+          log(`[CURSOR] Batch retry limit exceeded (${currentRetryCount}/${retry_limit}) - moving batch to DLQ and advancing cursor`);
+          log(`[${LogTypes.ACK_BATCH}] Batch retry limit exceeded: ${failedCount} msgs → DLQ | ${throughput} msg/s | ${ackTime}ms | ConsumerGroup: ${consumerGroup || 'QUEUE_MODE'}`);
+          
+          // Move all messages to DLQ
+          const failedErrors = grouped.failed.map(a => a.error || `Batch retry limit exceeded (${currentRetryCount}/${retry_limit})`);
+          await client.query(`
+            INSERT INTO queen.dead_letter_queue (message_id, partition_id, consumer_group, error_message, original_created_at)
+            SELECT 
+              m.id,
+              m.partition_id,
+              $2,
+              e.error_message,
+              m.created_at
+            FROM queen.messages m
+            CROSS JOIN LATERAL UNNEST($1::varchar[], $3::text[]) AS e(txn_id, error_message)
+            WHERE m.transaction_id = e.txn_id
+              AND m.transaction_id = ANY($1::varchar[])
+            ON CONFLICT DO NOTHING
+          `, [allIds, actualConsumerGroup, failedErrors]);
+          
+          // Get last message for cursor advancement
+          const lastMessageInfo = await client.query(`
+            SELECT id, created_at
             FROM queen.messages m
             WHERE m.transaction_id = ANY($1::varchar[])
-          )
-          UPDATE queen.partition_consumers pc
-          SET lease_expires_at = NULL,
-              lease_acquired_at = NULL,
-              message_batch = NULL,
-              batch_size = 0,
-              acked_count = 0
-          FROM affected_partitions ap
-          WHERE pc.partition_id = ap.partition_id
-            AND pc.consumer_group = $2
-        `, [allIds, actualConsumerGroup]);
-        
-        grouped.failed.forEach(ack => {
-          results.push({ transactionId: ack.transactionId, status: 'failed_retry' });
-        });
+            ORDER BY m.created_at DESC, m.id DESC
+            LIMIT 1
+          `, [allIds]);
+          
+          const lastMessage = lastMessageInfo.rows[0];
+          
+          // Advance cursor and reset batch retry count
+          await client.query(`
+            UPDATE queen.partition_consumers
+            SET 
+                -- Advance cursor past failed batch
+                last_consumed_created_at = $1,
+                last_consumed_id = $2,
+                total_messages_consumed = total_messages_consumed + $3,
+                total_batches_consumed = total_batches_consumed + 1,
+                last_consumed_at = NOW(),
+                
+                -- Reset batch retry count
+                batch_retry_count = 0,
+                
+                -- Update pending estimate
+                pending_estimate = GREATEST(0, pending_estimate - $3),
+                last_stats_update = NOW(),
+                
+                -- Release lease
+                lease_expires_at = NULL,
+                lease_acquired_at = NULL,
+                message_batch = NULL,
+                batch_size = 0,
+                acked_count = 0
+            WHERE partition_id = $4 
+              AND consumer_group = $5
+          `, [lastMessage.created_at, lastMessage.id, totalMessages, partition_id, actualConsumerGroup]);
+          
+          grouped.failed.forEach(ack => {
+            results.push({ transactionId: ack.transactionId, status: 'failed_dlq' });
+          });
+          
+        } else {
+          // ═══════════════════════════════════════════════════════════════
+          // BATCH RETRY: Increment retry count and retry same batch
+          // ═══════════════════════════════════════════════════════════════
+          log(`[CURSOR] Total batch failure - cursor NOT advanced, same batch will retry (attempt ${currentRetryCount + 1}/${retry_limit})`);
+          log(`[${LogTypes.ACK_BATCH}] Total batch failure: ${failedCount} msgs | Retry ${currentRetryCount + 1}/${retry_limit} | ${throughput} msg/s | ${ackTime}ms | ConsumerGroup: ${consumerGroup || 'QUEUE_MODE'}`);
+          
+          // Increment batch retry count and release lease
+          await client.query(`
+            UPDATE queen.partition_consumers pc
+            SET lease_expires_at = NULL,
+                lease_acquired_at = NULL,
+                message_batch = NULL,
+                batch_size = 0,
+                acked_count = 0,
+                batch_retry_count = COALESCE(batch_retry_count, 0) + 1
+            WHERE pc.partition_id = $1
+              AND pc.consumer_group = $2
+          `, [partition_id, actualConsumerGroup]);
+          
+          grouped.failed.forEach(ack => {
+            results.push({ transactionId: ack.transactionId, status: 'failed_retry' });
+          });
+        }
         
       } else {
         // ═══════════════════════════════════════════════════════════════
@@ -565,6 +693,9 @@ export const createOptimizedQueueManager = (pool, resourceCache, eventManager, s
               total_messages_consumed = total_messages_consumed + $3,
               total_batches_consumed = total_batches_consumed + 1,
               last_consumed_at = NOW(),
+              
+              -- Reset batch retry count on successful processing
+              batch_retry_count = 0,
               
               -- Update pending estimate
               pending_estimate = GREATEST(0, pending_estimate - $3),
@@ -645,9 +776,15 @@ export const createOptimizedQueueManager = (pool, resourceCache, eventManager, s
           results.push({ transactionId: ack.transactionId, status: 'failed_dlq' });
         });
       }
-    });
     
     return results;
+  };
+  
+  // Public wrapper for acknowledge that creates its own transaction
+  const acknowledgeMessages = async (acknowledgments, consumerGroup = null) => {
+    return withTransaction(pool, async (client) => {
+      return acknowledgeMessagesInternal(client, acknowledgments, consumerGroup);
+    });
   };
   
   // Reclaim expired leases from partition_consumers
@@ -1232,11 +1369,15 @@ export const createOptimizedQueueManager = (pool, resourceCache, eventManager, s
               ON CONFLICT (partition_id, consumer_group) DO NOTHING
             `, [candidate.partition_id, actualConsumerGroup, initialCursorId, initialCursorTimestamp]);
             
+            // Generate unique lease ID for this POP operation
+            const leaseId = generateUUID();
+            
             // Step 2: Try to acquire lease and get cursor position
             const leaseResult = await client.query(`
               UPDATE queen.partition_consumers
               SET lease_expires_at = NOW() + INTERVAL '1 second' * $3,
                   lease_acquired_at = NOW(),
+                  worker_id = $4,  -- Store lease ID in worker_id field
                   message_batch = NULL,
                   batch_size = 0,
                   acked_count = 0
@@ -1244,8 +1385,8 @@ export const createOptimizedQueueManager = (pool, resourceCache, eventManager, s
                 AND consumer_group = $2
                 AND (lease_expires_at IS NULL OR lease_expires_at <= NOW())
               RETURNING partition_id, last_consumed_id, last_consumed_created_at, 
-                        total_messages_consumed, lease_expires_at
-            `, [candidate.partition_id, actualConsumerGroup, candidate.lease_time]);
+                        total_messages_consumed, lease_expires_at, worker_id as lease_id
+            `, [candidate.partition_id, actualConsumerGroup, candidate.lease_time, leaseId]);
             
             // Check if we acquired the lease
             const acquired = leaseResult.rows.length > 0;
@@ -1333,6 +1474,7 @@ export const createOptimizedQueueManager = (pool, resourceCache, eventManager, s
               
               // Success! We have messages from this partition
               acquiredPartition = candidate;
+              acquiredPartition.leaseId = leaseId;  // Store lease ID for later use
               
               // ─────────────────────────────────────────────────────────────────────
               // PHASE 4: Update Partition Lease with Message Batch
@@ -1377,7 +1519,8 @@ export const createOptimizedQueueManager = (pool, resourceCache, eventManager, s
                   retryCount: msg.retry_count || 0,
                   priority: msg.priority || 0,
                   createdAt: msg.created_at,
-                  consumerGroup: consumerGroup || null
+                  consumerGroup: consumerGroup || null,
+                  leaseId: acquiredPartition.leaseId  // Add lease ID to each message
                 };
               }));
               const decryptTime = Date.now() - decryptStart;
@@ -1414,6 +1557,65 @@ export const createOptimizedQueueManager = (pool, resourceCache, eventManager, s
       }
     });
   };
+  
+  // Execute multiple operations in a single transaction
+  const executeTransaction = async (operations, requiredLeases = []) => {
+    return withTransaction(pool, async (client) => {
+      // 1. Validate all required leases upfront
+      if (requiredLeases.length > 0) {
+        const leaseCheck = await client.query(`
+          SELECT COUNT(*) = $2 as all_valid
+          FROM queen.partition_consumers
+          WHERE worker_id = ANY($1::varchar[])
+            AND lease_expires_at > NOW()
+        `, [requiredLeases, requiredLeases.length]);
+        
+        if (!leaseCheck.rows[0].all_valid) {
+          throw new Error('One or more leases invalid or expired');
+        }
+      }
+      
+      // 2. Execute operations in order
+      const results = [];
+      for (const op of operations) {
+        switch (op.type) {
+          case 'push':
+            const pushResult = await pushMessagesInternal(client, op.items);
+            results.push({ type: 'push', result: pushResult });
+            break;
+            
+          case 'ack':
+            const acks = [{
+              transactionId: op.transactionId,
+              status: op.status || 'completed',
+              error: op.error
+            }];
+            const ackResult = await acknowledgeMessagesInternal(client, acks, op.consumerGroup);
+            results.push({ type: 'ack', result: ackResult });
+            break;
+            
+          case 'extend':
+            const extendResult = await client.query(`
+              UPDATE queen.partition_consumers
+              SET lease_expires_at = GREATEST(lease_expires_at, NOW() + INTERVAL '1 second' * $1)
+              WHERE worker_id = $2 AND lease_expires_at > NOW()
+              RETURNING lease_expires_at
+            `, [op.seconds || 60, op.leaseId]);
+            
+            if (extendResult.rows.length === 0) {
+              throw new Error(`Cannot extend lease ${op.leaseId} - not found or expired`);
+            }
+            results.push({ type: 'extend', result: extendResult.rows[0] });
+            break;
+            
+          default:
+            throw new Error(`Unknown operation type: ${op.type}`);
+        }
+      }
+      
+      return results;
+    });
+  };
 
   // Export all functions
   return {
@@ -1426,6 +1628,7 @@ export const createOptimizedQueueManager = (pool, resourceCache, eventManager, s
     getQueueStats,
     getQueueLag,
     uniquePop,  // ← New unified function
-    configureQueue
+    configureQueue,
+    executeTransaction  // ← New transaction support
   };
 };

@@ -418,7 +418,7 @@ export async function testWindowBuffer(client) {
     const task = `test-task-${timestamp}`;
     const queue3 = 'test-window-buffer-filtered-' + timestamp;
     
-    await client.queue(queue3, { windowBuffer: 5 }, ns, task);
+    await client.queue(queue3, { windowBuffer: 5 }, { namespace: ns, task: task });
     await client.push(`${queue3}/p1`, { test: 'case3' });
     
     let gotCase3Immediate = false;

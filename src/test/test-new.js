@@ -90,6 +90,21 @@ import {
   testMessageDeduplication
 } from './advanced-pattern-tests.js';
 
+import {
+  testPipelineBasic,
+  testPipelineErrorHandling,
+  testPipelineAutoRenewal,
+  testPipelineParallel,
+  testPipelineConcurrencyRaceCondition,
+  testPipelineContinuous,
+  testTransactionAPI,
+  testPipelineAtomic,
+  testManualLeaseRenewal,
+  testLeaseValidation,
+  testComplexPipelineWorkflow,
+  runAdvancedClientTests
+} from './advanced-client-tests.js';
+
 // Helper to run a test with error handling and delay
 async function runTest(testFn) {
   try {
@@ -235,10 +250,30 @@ async function runTests() {
     }
     
     // ============================================
+    // ADVANCED CLIENT FEATURE TESTS
+    // ============================================
+    if (!testFilter || testFilter === 'advanced' || testFilter === 'client') {
+      console.log('\n🚀 ADVANCED CLIENT FEATURES');
+      console.log('-'.repeat(40));
+      
+      await runTest(() => testPipelineBasic(client));
+      await runTest(() => testPipelineErrorHandling(client));
+      await runTest(() => testPipelineAutoRenewal(client));
+      await runTest(() => testPipelineParallel(client));
+      await runTest(() => testPipelineConcurrencyRaceCondition(client));
+      await runTest(() => testPipelineContinuous(client));
+      await runTest(() => testTransactionAPI(client));
+      await runTest(() => testPipelineAtomic(client));
+      await runTest(() => testManualLeaseRenewal(client));
+      await runTest(() => testLeaseValidation(client));
+      await runTest(() => testComplexPipelineWorkflow(client));
+    }
+    
+    // ============================================
     // ADVANCED SCENARIO TESTS
     // ============================================
     if (!testFilter || testFilter === 'advanced' || testFilter === 'pattern') {
-      console.log('\n🎯 ADVANCED SCENARIOS');
+      console.log('\n🎯 ADVANCED PATTERNS');
       console.log('-'.repeat(40));
       
       await runTest(() => testMultiStagePipeline(client));

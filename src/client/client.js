@@ -407,6 +407,74 @@ export class Queen {
   }
   
   /**
+   * Take a single batch of messages (convenience method)
+   * @param {string} address - Queue address
+   * @param {Object} options - Options for taking messages
+   * @returns {Promise<Array>} Array of messages
+   */
+  async takeSingleBatch(address, options = {}) {
+    const messages = [];
+    for await (const batch of this.takeBatch(address, options)) {
+      messages.push(...batch);
+      break; // Take only one batch
+    }
+    return messages;
+  }
+  
+  /**
+   * Renew lease for a message or batch of messages
+   * @param {Object|Array|string} messageOrLeaseId - Message object(s) or lease ID(s)
+   * @returns {Promise<Object>} Renewal result
+   */
+  async renewLease(messageOrLeaseId) {
+    await this.#ensureConnected();
+    
+    // Handle different input types
+    let leaseIds = [];
+    
+    if (typeof messageOrLeaseId === 'string') {
+      // Direct lease ID
+      leaseIds = [messageOrLeaseId];
+    } else if (Array.isArray(messageOrLeaseId)) {
+      // Array of messages or lease IDs
+      leaseIds = messageOrLeaseId.map(item => 
+        typeof item === 'string' ? item : item.leaseId
+      ).filter(Boolean);
+    } else if (messageOrLeaseId && typeof messageOrLeaseId === 'object') {
+      // Single message object
+      if (messageOrLeaseId.leaseId) {
+        leaseIds = [messageOrLeaseId.leaseId];
+      }
+    }
+    
+    if (leaseIds.length === 0) {
+      throw new Error('No valid lease IDs found for renewal');
+    }
+    
+    // Renew all leases
+    const results = [];
+    for (const leaseId of leaseIds) {
+      try {
+        const result = await withRetry(
+          () => this.#http.post(`/api/v1/lease/${leaseId}/extend`, {}),
+          this.#config.retryAttempts,
+          this.#config.retryDelay
+        );
+        results.push({ 
+          leaseId, 
+          success: true, 
+          newExpiresAt: result.leaseId ? result.newExpiresAt : result.lease_expires_at 
+        });
+      } catch (error) {
+        results.push({ leaseId, success: false, error: error.message });
+      }
+    }
+    
+    // Return single result for single input, array for array input
+    return Array.isArray(messageOrLeaseId) ? results : results[0];
+  }
+  
+  /**
    * Acknowledge a message or batch of messages
    * @param {Object|string|Array} message - Message object, transaction ID, or array of messages
    * @param {boolean|string} status - true for success, false for failure, or 'retry'
@@ -431,12 +499,15 @@ export class Queen {
       if (hasIndividualStatus) {
         // Option B: Each message has its own status
         acknowledgments = message.map(msg => {
-          // Extract transaction ID
+          // Extract transaction ID and lease ID
           let transactionId;
+          let leaseId = null;
+          
           if (typeof msg === 'string') {
             transactionId = msg;
           } else if (typeof msg === 'object' && msg !== null) {
             transactionId = msg.transactionId || msg.id;
+            leaseId = msg.leaseId || null;
             if (!transactionId) {
               throw new Error('Message object must have transactionId or id property');
             }
@@ -453,11 +524,18 @@ export class Queen {
             statusStr = msgStatus;
           }
           
-          return {
+          const ack = {
             transactionId,
             status: statusStr,
             error: msg._error || context.error || null
           };
+          
+          // Include lease ID if available
+          if (leaseId) {
+            ack.leaseId = leaseId;
+          }
+          
+          return ack;
         });
       } else {
         // Option A: Same status for all messages
@@ -466,12 +544,15 @@ export class Queen {
           : status;
         
         acknowledgments = message.map(msg => {
-          // Extract transaction ID
+          // Extract transaction ID and lease ID
           let transactionId;
+          let leaseId = null;
+          
           if (typeof msg === 'string') {
             transactionId = msg;
           } else if (typeof msg === 'object' && msg !== null) {
             transactionId = msg.transactionId || msg.id;
+            leaseId = msg.leaseId || null;
             if (!transactionId) {
               throw new Error('Message object must have transactionId or id property');
             }
@@ -479,11 +560,18 @@ export class Queen {
             throw new Error('Invalid message in batch');
           }
           
-          return {
+          const ack = {
             transactionId,
             status: statusStr,
             error: context.error || null
           };
+          
+          // Include lease ID if available
+          if (leaseId) {
+            ack.leaseId = leaseId;
+          }
+          
+          return ack;
         });
       }
       
@@ -505,12 +593,15 @@ export class Queen {
     }
     
     // Handle single message acknowledgment
-    // Extract transaction ID
+    // Extract transaction ID and lease ID
     let transactionId;
+    let leaseId = null;
+    
     if (typeof message === 'string') {
       transactionId = message;
     } else if (typeof message === 'object' && message !== null) {
       transactionId = message.transactionId || message.id;
+      leaseId = message.leaseId || null;  // Extract lease ID if present
       if (!transactionId) {
         throw new Error('Message object must have transactionId or id property');
       }
@@ -533,6 +624,11 @@ export class Queen {
       error: context.error || null,
       consumerGroup: context.group || null
     };
+    
+    // Include lease ID if available for lease validation
+    if (leaseId) {
+      body.leaseId = leaseId;
+    }
     
     const result = await withRetry(
       () => this.#http.post('/api/v1/ack', body),
@@ -579,6 +675,569 @@ export class Queen {
     this.#connected = false;
     this.#http = null;
     this.#loadBalancer = null;
+  }
+  
+  /**
+   * Create a transaction builder for atomic operations
+   * @returns {TransactionBuilder} Transaction builder instance
+   */
+  transaction() {
+    return new TransactionBuilder(this);
+  }
+  
+  /**
+   * Create a pipeline for message processing workflows
+   * @param {string} queue - Source queue name
+   * @returns {PipelineBuilder} Pipeline builder instance
+   */
+  pipeline(queue) {
+    return new PipelineBuilder(this, queue);
+  }
+  
+  // Internal helper methods for Transaction and Pipeline
+  async _ensureConnected() {
+    return this.#ensureConnected();
+  }
+  
+  get _http() {
+    return this.#http;
+  }
+}
+
+/**
+ * Transaction Builder for atomic operations
+ */
+class TransactionBuilder {
+  #client;
+  #operations = [];
+  #requiredLeases = [];
+  
+  constructor(client) {
+    this.#client = client;
+  }
+  
+  /**
+   * Add ACK operation to transaction
+   * @param {Array|Object} messages - Messages to acknowledge
+   * @param {string} status - Status ('completed' or 'failed')
+   * @returns {TransactionBuilder} this for chaining
+   */
+  ack(messages, status = 'completed') {
+    const msgs = Array.isArray(messages) ? messages : [messages];
+    
+    msgs.forEach(msg => {
+      const transactionId = msg.transactionId || msg.id || msg;
+      const leaseId = msg.leaseId || null;
+      
+      this.#operations.push({
+        type: 'ack',
+        transactionId,
+        status
+      });
+      
+      if (leaseId) {
+        this.#requiredLeases.push(leaseId);
+      }
+    });
+    
+    return this;
+  }
+  
+  /**
+   * Add PUSH operation to transaction
+   * @param {string} queue - Target queue
+   * @param {Array|Object} items - Items to push
+   * @returns {TransactionBuilder} this for chaining
+   */
+  push(queue, items) {
+    const itemArray = Array.isArray(items) ? items : [items];
+    
+    this.#operations.push({
+      type: 'push',
+      items: itemArray.map(item => ({
+        queue,
+        payload: item
+      }))
+    });
+    
+    return this;
+  }
+  
+  /**
+   * Add lease extension to transaction
+   * @param {string} leaseId - Lease ID to extend
+   * @returns {TransactionBuilder} this for chaining
+   */
+  extend(leaseId) {
+    this.#operations.push({
+      type: 'extend',
+      leaseId
+    });
+    
+    this.#requiredLeases.push(leaseId);
+    return this;
+  }
+  
+  /**
+   * Execute the transaction
+   * @returns {Promise<Object>} Transaction result
+   */
+  async commit() {
+    await this.#client._ensureConnected();
+    
+    const result = await this.#client._http.post('/api/v1/transaction', {
+      operations: this.#operations,
+      requiredLeases: [...new Set(this.#requiredLeases)] // Unique leases
+    });
+    
+    if (!result.success) {
+      throw new Error(result.error || 'Transaction failed');
+    }
+    
+    return result;
+  }
+}
+
+/**
+ * Pipeline Builder for message processing workflows
+ */
+class PipelineBuilder {
+  #client;
+  #queue;
+  #options = {};
+  #processor = null;
+  #errorHandler = null;
+  #atomicOps = null;
+  #leaseRenewal = null;
+  #repeatConfig = null;
+  #concurrency = 1;
+  
+  constructor(client, queue) {
+    this.#client = client;
+    this.#queue = queue;
+  }
+  
+  /**
+   * Take messages from the queue
+   * @param {number} count - Number of messages to take
+   * @param {Object} options - Take options
+   * @returns {PipelineBuilder} this for chaining
+   */
+  take(count, options = {}) {
+    this.#options = { ...options, batch: count, limit: count };
+    return this;
+  }
+  
+  /**
+   * Process messages individually (one at a time)
+   * @param {Function} handler - Async function to process a single message
+   * @returns {PipelineBuilder} this for chaining
+   */
+  process(handler) {
+    // Wrap the single-message handler to process messages one by one
+    this.#processor = async (messages) => {
+      const results = [];
+      for (const message of messages) {
+        const result = await handler(message);
+        results.push(result);
+      }
+      return results;
+    };
+    return this;
+  }
+  
+  /**
+   * Process messages as a batch
+   * @param {Function} handler - Async function to process a batch of messages
+   * @returns {PipelineBuilder} this for chaining
+   */
+  processBatch(handler) {
+    this.#processor = handler;
+    return this;
+  }
+  
+  /**
+   * Define atomic operations to execute after processing
+   * @param {Function} txBuilder - Function that receives a TransactionBuilder
+   * @returns {PipelineBuilder} this for chaining
+   */
+  atomically(txBuilder) {
+    this.#atomicOps = txBuilder;
+    return this;
+  }
+  
+  /**
+   * Handle errors
+   * @param {Function} handler - Error handler function
+   * @returns {PipelineBuilder} this for chaining
+   */
+  onError(handler) {
+    this.#errorHandler = handler;
+    return this;
+  }
+  
+  /**
+   * Enable automatic lease renewal
+   * @param {Object} options - Renewal options
+   * @returns {PipelineBuilder} this for chaining
+   */
+  withAutoRenewal(options = {}) {
+    this.#leaseRenewal = {
+      interval: options.interval || 30000, // Renew every 30s by default
+      enabled: true
+    };
+    return this;
+  }
+  
+  /**
+   * Set concurrency level for parallel batch processing
+   * @param {number} level - Number of concurrent batches to process
+   * @returns {PipelineBuilder} this for chaining
+   */
+  withConcurrency(level) {
+    this.#concurrency = Math.max(1, level);
+    return this;
+  }
+  
+  /**
+   * Configure repeated execution
+   * @param {Object} options - Repeat options
+   * @returns {PipelineBuilder} this for chaining
+   */
+  repeat(options = {}) {
+    this.#repeatConfig = {
+      maxIterations: options.maxIterations || Infinity,
+      delay: options.delay || 0,
+      continuous: options.continuous !== undefined ? options.continuous : true,  // Default to continuous mode
+      waitOnEmpty: options.waitOnEmpty || 1000  // Wait time when no messages
+    };
+    return this;
+  }
+  
+  /**
+   * Execute the pipeline (once or repeatedly based on configuration)
+   * @param {Object} options - Execution options
+   * @param {boolean} options.returnGenerator - For repeat mode, return generator instead of running loop
+   * @returns {Promise<Object>} Result or summary of all iterations
+   */
+  async execute(options = {}) {
+    // If repeat is configured
+    if (this.#repeatConfig) {
+      // Option to return generator for advanced users
+      if (options.returnGenerator) {
+        return this.#executeRepeatedly();
+      }
+      
+      // Default: run the loop internally and return summary
+      return this.#executeRepeatedlyWithSummary();
+    }
+    
+    // Otherwise execute once
+    return this.#executeSingle();
+  }
+  
+  /**
+   * Execute the pipeline once (internal)
+   * @private
+   * @returns {Promise<Object>} Pipeline execution result
+   */
+  async #executeSingle() {
+    // Use local variables to avoid race conditions in parallel execution
+    let messages = null;
+    let processedMessages = null;
+    
+    try {
+      // 1. Take messages
+      messages = await this.#client.takeSingleBatch(this.#queue, this.#options);
+      
+      if (!messages || messages.length === 0) {
+        return { processed: 0, messages: [] };
+      }
+      
+      // 2. Set up auto-renewal if enabled
+      let renewalTimer = null;
+      if (this.#leaseRenewal?.enabled) {
+        renewalTimer = this.#setupAutoRenewal(messages);
+      }
+      
+      try {
+        // 3. Process messages
+        if (this.#processor) {
+          processedMessages = await this.#processor(messages);
+        } else {
+          processedMessages = messages;
+        }
+        
+        // 4. Execute atomic operations
+        if (this.#atomicOps) {
+          const tx = new TransactionBuilder(this.#client);
+          
+          // Apply the atomic operations
+          this.#atomicOps(tx, messages, processedMessages);
+          
+          await tx.commit();
+        } else {
+          // Default: just ACK the messages
+          await this.#client.ack(messages, true);
+        }
+        
+        return {
+          processed: messages.length,
+          messages: processedMessages
+        };
+        
+      } finally {
+        // Clean up renewal timer
+        if (renewalTimer) {
+          clearInterval(renewalTimer);
+        }
+      }
+      
+    } catch (error) {
+      if (this.#errorHandler) {
+        await this.#errorHandler(error, messages || []);
+        return { processed: 0, messages: [], error: error.message };
+      } else {
+        throw error;
+      }
+    }
+  }
+  
+  /**
+   * Execute the pipeline repeatedly (internal)
+   * @private
+   * @returns {AsyncGenerator} Async generator of results
+   */
+  async *#executeRepeatedly() {
+    const { maxIterations, delay } = this.#repeatConfig;
+    let iteration = 0;
+    
+    while (iteration < maxIterations) {
+      const result = await this.#executeSingle();
+      yield result;
+      
+      iteration++;
+      
+      if (delay > 0) {
+        await new Promise(resolve => setTimeout(resolve, delay));
+      }
+    }
+  }
+  
+  /**
+   * Execute the pipeline repeatedly and return summary
+   * @private
+   * @returns {Promise<Object>} Summary of all iterations
+   */
+  async #executeRepeatedlyWithSummary() {
+    const { maxIterations, delay, continuous, waitOnEmpty } = this.#repeatConfig;
+    
+    // If concurrency > 1, use parallel workers
+    if (this.#concurrency > 1) {
+      return this.#executeRepeatedlyParallel();
+    }
+    
+    // Sequential processing
+    let iteration = 0;
+    let totalProcessed = 0;
+    const results = [];
+    let consecutiveEmpty = 0;
+    const maxConsecutiveEmpty = continuous ? Infinity : 3; // In continuous mode, never stop on empty
+    
+    while (iteration < maxIterations) {
+      const result = await this.#executeSingle();
+      
+      if (result.processed === 0) {
+        consecutiveEmpty++;
+        
+        // In continuous mode, wait and retry
+        if (continuous || consecutiveEmpty < maxConsecutiveEmpty) {
+          await new Promise(resolve => setTimeout(resolve, waitOnEmpty));
+          continue; // Don't increment iteration for empty results
+        } else {
+          // Not continuous and too many empty results
+          break;
+        }
+      } else {
+        // Reset empty counter on successful batch
+        consecutiveEmpty = 0;
+        results.push(result);
+        totalProcessed += result.processed;
+        iteration++;
+      }
+      
+      if (delay > 0 && iteration < maxIterations) {
+        await new Promise(resolve => setTimeout(resolve, delay));
+      }
+    }
+    
+    return {
+      iterations: iteration,
+      totalProcessed,
+      results,
+      summary: {
+        averagePerBatch: iteration > 0 ? totalProcessed / iteration : 0,
+        completed: iteration >= maxIterations ? 'maxIterations' : 'noMessages',
+        concurrency: this.#concurrency,
+        continuous
+      }
+    };
+  }
+  
+  /**
+   * Execute pipeline with parallel processing
+   * Each worker independently calls take(), allowing them to work on different partitions
+   * @private
+   * @returns {Promise<Object>} Summary of all parallel executions
+   */
+  async #executeRepeatedlyParallel() {
+    const { maxIterations = Infinity, delay, continuous, waitOnEmpty } = this.#repeatConfig || {};
+    const workers = [];
+    const results = [];
+    
+    // Shared state for coordination
+    const sharedState = {
+      shouldStop: false,
+      emptyWorkers: new Set(),
+      lock: Promise.resolve()
+    };
+    
+    // Worker function - each worker independently takes and processes messages
+    const worker = async (workerId) => {
+      let workerIterations = 0;
+      let workerProcessed = 0;
+      let consecutiveEmpty = 0;
+      const maxConsecutiveEmpty = continuous ? Infinity : 10;
+      
+      while (!sharedState.shouldStop && workerIterations < maxIterations) {
+        try {
+          // Each worker independently calls executeSingle (which calls take)
+          const result = await this.#executeSingle();
+          
+          if (result.processed === 0) {
+            consecutiveEmpty++;
+            
+            // Add this worker to empty set
+            sharedState.emptyWorkers.add(workerId);
+            
+            // If all workers are empty, consider stopping
+            if (!continuous && sharedState.emptyWorkers.size === this.#concurrency) {
+              // Double-check with a small delay to avoid race conditions
+              await new Promise(resolve => setTimeout(resolve, 200));
+              
+              // Re-check after delay
+              if (sharedState.emptyWorkers.size === this.#concurrency) {
+                sharedState.shouldStop = true;
+                break;
+              }
+            }
+            
+            // Individual worker timeout
+            if (!continuous && consecutiveEmpty >= maxConsecutiveEmpty) {
+              break;
+            }
+            
+            // Wait before retry
+            await new Promise(resolve => setTimeout(resolve, waitOnEmpty || 1000));
+            continue; // Don't count empty iterations
+          }
+          
+          // Reset empty counter on successful batch
+          consecutiveEmpty = 0;
+          sharedState.emptyWorkers.delete(workerId);
+          
+          // Store result with worker info
+          results.push({ 
+            ...result, 
+            workerId, 
+            timestamp: new Date().toISOString() 
+          });
+          
+          workerProcessed += result.processed;
+          workerIterations++;
+          
+          if (delay > 0) {
+            await new Promise(resolve => setTimeout(resolve, delay));
+          }
+        } catch (error) {
+          console.error(`Worker ${workerId} error:`, error);
+          if (this.#errorHandler) {
+            await this.#errorHandler(error, []);
+          } else {
+            sharedState.shouldStop = true;
+            throw error;
+          }
+        }
+      }
+      
+      return { 
+        workerId, 
+        iterations: workerIterations, 
+        processed: workerProcessed,
+        consecutiveEmpty 
+      };
+    };
+    
+    // Start parallel workers
+    console.log(`🚀 Starting ${this.#concurrency} parallel workers...`);
+    for (let i = 0; i < this.#concurrency; i++) {
+      workers.push(worker(i));
+    }
+    
+    // Wait for all workers
+    const workerResults = await Promise.all(workers);
+    
+    // Aggregate results
+    let totalProcessed = 0;
+    let totalIterations = 0;
+    
+    workerResults.forEach(wr => {
+      totalProcessed += wr.processed;
+      totalIterations += wr.iterations;
+      if (wr.iterations > 0) {
+        console.log(`Worker ${wr.workerId}: Processed ${wr.processed} messages in ${wr.iterations} batches`);
+      }
+    });
+    
+    return {
+      iterations: totalIterations,
+      totalProcessed,
+      results,
+      workers: workerResults,
+      summary: {
+        averagePerBatch: totalIterations > 0 ? totalProcessed / totalIterations : 0,
+        completed: totalIterations >= (maxIterations * this.#concurrency) ? 'maxIterations' : 'noMessages',
+        concurrency: this.#concurrency,
+        workersUtilized: workerResults.filter(w => w.iterations > 0).length,
+        continuous
+      }
+    };
+  }
+  
+  /**
+   * Set up automatic lease renewal
+   * @private
+   */
+  #setupAutoRenewal(messages) {
+    const leaseIds = messages
+      .map(m => m.leaseId)
+      .filter(id => id != null);
+    
+    if (leaseIds.length === 0) return null;
+    
+    return setInterval(async () => {
+      try {
+        // Extend all leases using the client's renewLease method
+        for (const leaseId of leaseIds) {
+          const result = await this.#client.renewLease(leaseId);
+          if (!result.success) {
+            console.error('Lease renewal failed:', result.error);
+          }
+        }
+      } catch (error) {
+        console.error('Failed to renew lease:', error);
+      }
+    }, this.#leaseRenewal.interval);
   }
 }
 

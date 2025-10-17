@@ -487,10 +487,10 @@ export async function testManyConsumerGroups(client) {
     }
     
     // Verify all groups got the same messages
-    const firstGroupIds = groupResults[0].map(m => m.payload.id).sort();
+    const firstGroupIds = groupResults[0].map(m => m.data.id).sort();
     
     for (let g = 1; g < numGroups; g++) {
-      const groupIds = groupResults[g].map(m => m.payload.id).sort();
+      const groupIds = groupResults[g].map(m => m.data.id).sort();
       if (JSON.stringify(groupIds) !== JSON.stringify(firstGroupIds)) {
         throw new Error(`Group ${g} got different messages`);
       }

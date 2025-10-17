@@ -1,6 +1,6 @@
 {
   "name": "queen-mq",
-  "version": "0.1.6",
+  "version": "0.2.0",
   "type": "module",
   "description": "High-performance message queue backed by PostgreSQL",
   "main": "src/client/index.js",
@@ -11,19 +11,7 @@
     "copy:webapp": "rm -rf src/webapp-dist && cp -r webapp/dist src/webapp-dist",
     "prepublishOnly": "npm run build:webapp && npm run copy:webapp",
     "publish:public": "npm run build:webapp && npm run copy:webapp && npm publish --access public",
-    "test:produce": "node test.js produce",
-    "test:consume": "node test.js consume",
-    "test": "node src/test/test.js",
-    "test:core": "node src/test/core-features-test.js",
-    "test:comprehensive": "node src/test/comprehensive-test.js",
-    "test:edge": "node src/test/comprehensive-edge-cases-test.js",
-    "test:advanced": "node src/test/advanced-scenarios-test.js",
-    "test:all": "npm run test && npm run test:edge && npm run test:advanced",
-    "test:quick": "npm run test:core",
-    "test:lease": "node src/test/test-lease-expiration.js",
-    "test:lease:simple": "node test-lease-simple.js",
-    "test:client": "node test-client.js",
-    "test:simple": "node test-simple.js",
+    "test": "node src/test/test-new.js",
     "init": "node init-db.js"
   },
   "files": [

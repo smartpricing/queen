@@ -401,8 +401,8 @@ export async function testComplexPriorityScenarios(client) {
     }
     
     // Calculate average priority of first vs last 3 messages
-    const firstThree = received.slice(0, 3).map(m => m.payload.priority);
-    const lastThree = received.slice(-3).map(m => m.payload.priority);
+    const firstThree = received.slice(0, 3).map(m => m.data.priority);
+    const lastThree = received.slice(-3).map(m => m.data.priority);
     
     const avgFirst = firstThree.reduce((a, b) => a + b, 0) / 3;
     const avgLast = lastThree.reduce((a, b) => a + b, 0) / 3;

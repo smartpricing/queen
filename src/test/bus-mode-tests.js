@@ -47,8 +47,8 @@ export async function testBusConsumerGroups(client) {
     }
     
     // Verify both groups got the same message IDs
-    const group1Ids = group1Messages.map(m => m.payload.id).sort();
-    const group2Ids = group2Messages.map(m => m.payload.id).sort();
+    const group1Ids = group1Messages.map(m => m.data.id).sort();
+    const group2Ids = group2Messages.map(m => m.data.id).sort();
     
     if (JSON.stringify(group1Ids) !== JSON.stringify(group2Ids)) {
       throw new Error('Consumer groups did not receive the same messages');
@@ -119,8 +119,8 @@ export async function testMixedMode(client) {
     }
     
     // Workers should get different messages (competing)
-    const worker1Ids = worker1Messages.map(m => m.payload.id);
-    const worker2Ids = worker2Messages.map(m => m.payload.id);
+    const worker1Ids = worker1Messages.map(m => m.data.id);
+    const worker2Ids = worker2Messages.map(m => m.data.id);
     const intersection = worker1Ids.filter(id => worker2Ids.includes(id));
     
     if (intersection.length > 0) {
@@ -150,8 +150,8 @@ export async function testMixedMode(client) {
     }
     
     // Verify groups got all messages
-    const analyticsIds = analyticsMessages.map(m => m.payload.id).sort();
-    const auditIds = auditMessages.map(m => m.payload.id).sort();
+    const analyticsIds = analyticsMessages.map(m => m.data.id).sort();
+    const auditIds = auditMessages.map(m => m.data.id).sort();
     
     if (JSON.stringify(analyticsIds) !== JSON.stringify([1, 2, 3, 4, 5, 6])) {
       throw new Error('Analytics group did not receive all messages');
