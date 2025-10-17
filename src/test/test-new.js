@@ -24,6 +24,12 @@ import {
   resetResults
 } from './utils.js';
 
+// Import human tests
+import {
+  testCreateQueue,
+  workerQueueTest
+} from './human.js';
+
 // Import test modules
 import {
   testQueueCreationPolicy,
@@ -169,6 +175,16 @@ async function runTests() {
     
     // Clean up any existing test data
     await cleanupTestData();
+
+    // ============================================
+    // HUMAN TESTS
+    // ============================================
+    if (!testFilter || testFilter === 'human') {
+      console.log('\n👤 HUMAN TESTS');
+      console.log('-'.repeat(40));
+      await runTest(() => testCreateQueue(client));
+      await runTest(() => workerQueueTest(client));
+    }
     
     // ============================================
     // CORE FEATURE TESTS
