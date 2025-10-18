@@ -29,7 +29,10 @@ private:
     void handle_pop_queue(uWS::HttpResponse<false>* res, uWS::HttpRequest* req);
     void handle_pop_filtered(uWS::HttpResponse<false>* res, uWS::HttpRequest* req);
     void handle_ack(uWS::HttpResponse<false>* res, uWS::HttpRequest* req);
+    void handle_ack_batch(uWS::HttpResponse<false>* res, uWS::HttpRequest* req);
     void handle_transaction(uWS::HttpResponse<false>* res, uWS::HttpRequest* req);
+    void handle_lease_extend(uWS::HttpResponse<false>* res, uWS::HttpRequest* req);
+    void handle_delete_queue(uWS::HttpResponse<false>* res, uWS::HttpRequest* req);
     void handle_health(uWS::HttpResponse<false>* res, uWS::HttpRequest* req);
     
     // JSON body reading helper

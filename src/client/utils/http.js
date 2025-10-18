@@ -1,4 +1,5 @@
 export const httpRequest = async (url, options = {}) => {
+  //console.log('httpRequest', url, options);
   const response = await fetch(url, {
     ...options,
     headers: {
@@ -6,7 +7,7 @@ export const httpRequest = async (url, options = {}) => {
       ...options.headers
     }
   });
-  
+  //console.log('response', response);
   // Handle 204 No Content
   if (response.status === 204) {
     return null; // No content
@@ -143,7 +144,7 @@ export const createLoadBalancedHttpClient = ({ baseUrls, loadBalancer, timeout =
           return await executeRequest(url);
         } catch (error) {
           lastError = error;
-          console.warn(`Request failed for ${url}: ${error.message}`);
+          console.warn(`Request failed for ${url}: ${method} ${path} - ${error.message}`);
           
           // Don't retry on client errors (4xx)
           if (error.status && error.status >= 400 && error.status < 500) {

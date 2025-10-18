@@ -123,10 +123,30 @@ bool QueueManager::ensure_partition_exists(const std::string& queue_name,
     }
 }
 
-bool QueueManager::configure_queue(const std::string& queue_name, 
-                                 const QueueOptions& options,
-                                 const std::string& namespace_name,
-                                 const std::string& task_name) {
+bool QueueManager::delete_queue(const std::string& queue_name) {
+    try {
+        ScopedConnection conn(db_pool_.get());
+        
+        // Delete the queue (cascading deletes will handle partitions, messages, etc.)
+        std::string sql = "DELETE FROM queen.queues WHERE name = $1 RETURNING id";
+        auto result = QueryResult(conn->exec_params(sql, {queue_name}));
+        
+        if (result.is_success() && result.num_rows() > 0) {
+            spdlog::info("Deleted queue: {}", queue_name);
+            return true;
+        }
+        
+        return false;
+    } catch (const std::exception& e) {
+        spdlog::error("Failed to delete queue {}: {}", queue_name, e.what());
+        return false;
+    }
+}
+
+bool QueueManager::configure_queue(const std::string& queue_name,
+                                  const QueueOptions& options,
+                                  const std::string& namespace_name,
+                                  const std::string& task_name) {
     try {
         ScopedConnection conn(db_pool_.get());
         
@@ -1132,12 +1152,39 @@ PopResult QueueManager::wait_for_messages(const std::function<PopResult()>& pop_
     return PopResult{}; // Empty result
 }
 
-bool QueueManager::acknowledge_message(const std::string& transaction_id,
+QueueManager::AckResult QueueManager::acknowledge_message(const std::string& transaction_id,
                                      const std::string& status,
                                      const std::optional<std::string>& error,
-                                     const std::string& consumer_group) {
+                                     const std::string& consumer_group,
+                                     const std::optional<std::string>& lease_id) {
+    QueueManager::AckResult result;
+    result.transaction_id = transaction_id;
+    result.status = "not_found";
+    result.success = false;
+    
     try {
         ScopedConnection conn(db_pool_.get());
+        
+        // If lease ID provided, validate it first
+        if (lease_id.has_value()) {
+            spdlog::debug("Validating lease {} for transaction {}", *lease_id, transaction_id);
+            std::string validate_sql = R"(
+                SELECT 1 FROM queen.partition_consumers pc
+                JOIN queen.messages m ON m.partition_id = pc.partition_id
+                WHERE m.transaction_id = $1 
+                  AND pc.worker_id = $2
+                  AND pc.lease_expires_at > NOW()
+            )";
+            
+            auto valid = QueryResult(conn->exec_params(validate_sql, {transaction_id, *lease_id}));
+            
+            if (!valid.is_success() || valid.num_rows() == 0) {
+                spdlog::warn("Invalid lease {} for transaction {} - validation failed", *lease_id, transaction_id);
+                result.status = "invalid_lease";
+                return result;
+            }
+            spdlog::debug("Lease {} validated successfully", *lease_id);
+        }
         
         if (status == "completed") {
             // Update cursor and release lease if all messages in batch are ACKed
@@ -1173,16 +1220,18 @@ bool QueueManager::acknowledge_message(const std::string& transaction_id,
             )";
             
             std::vector<std::string> params = {consumer_group, transaction_id};
-            auto result = QueryResult(conn->exec_params(sql, params));
+            auto query_result = QueryResult(conn->exec_params(sql, params));
             
-            if (result.is_success() && result.num_rows() > 0) {
-                bool lease_released = result.get_value(0, "lease_released") == "t";
+            if (query_result.is_success() && query_result.num_rows() > 0) {
+                bool lease_released = query_result.get_value(0, "lease_released") == "t";
                 if (lease_released) {
                     spdlog::debug("Lease released after ACK for transaction: {}", transaction_id);
                 }
+                result.status = "completed";
+                result.success = true;
             }
             
-            return result.is_success();
+            return result;
             
         } else if (status == "failed") {
             // Insert into Dead Letter Queue for this consumer group
@@ -1210,7 +1259,7 @@ bool QueueManager::acknowledge_message(const std::string& transaction_id,
             
             if (!dlq_result.is_success()) {
                 spdlog::error("Failed to insert into DLQ: {}", dlq_result.error_message());
-                return false;
+                return result;
             }
             
             // Still advance cursor for failed messages (they are "consumed")
@@ -1247,26 +1296,55 @@ bool QueueManager::acknowledge_message(const std::string& transaction_id,
             auto cursor_result = QueryResult(conn->exec_params(cursor_sql, {consumer_group, transaction_id}));
             
             spdlog::warn("Message failed and moved to DLQ: {} - {}", transaction_id, error.value_or("No error message"));
-            return cursor_result.is_success();
+            result.status = "failed_dlq";
+            result.success = cursor_result.is_success();
+            return result;
         }
         
     } catch (const std::exception& e) {
         spdlog::error("Failed to acknowledge message: {}", e.what());
     }
     
-    return false;
+    return result;
 }
 
-std::vector<bool> QueueManager::acknowledge_messages(const std::vector<AckItem>& acks,
+std::vector<QueueManager::AckResult> QueueManager::acknowledge_messages(const std::vector<AckItem>& acks,
                                                    const std::string& consumer_group) {
-    std::vector<bool> results;
+    std::vector<QueueManager::AckResult> results;
     results.reserve(acks.size());
     
     for (const auto& ack : acks) {
-        results.push_back(acknowledge_message(ack.transaction_id, ack.status, ack.error, consumer_group));
+        results.push_back(acknowledge_message(ack.transaction_id, ack.status, ack.error, consumer_group, std::nullopt));
     }
     
     return results;
+}
+
+bool QueueManager::extend_message_lease(const std::string& lease_id, int seconds) {
+    try {
+        ScopedConnection conn(db_pool_.get());
+        
+        std::string sql = R"(
+            UPDATE queen.partition_consumers
+            SET lease_expires_at = GREATEST(lease_expires_at, NOW() + INTERVAL '1 second' * $1)
+            WHERE worker_id = $2 AND lease_expires_at > NOW()
+            RETURNING lease_expires_at
+        )";
+        
+        auto result = QueryResult(conn->exec_params(sql, {std::to_string(seconds), lease_id}));
+        
+        if (result.is_success() && result.num_rows() > 0) {
+            spdlog::debug("Lease {} extended by {} seconds", lease_id, seconds);
+            return true;
+        }
+        
+        spdlog::debug("Lease {} not found or expired", lease_id);
+        return false;
+        
+    } catch (const std::exception& e) {
+        spdlog::error("Failed to extend lease: {}", e.what());
+        return false;
+    }
 }
 
 bool QueueManager::health_check() {

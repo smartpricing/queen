@@ -470,15 +470,20 @@ void QueenServer::handle_ack(uWS::HttpResponse<false>* res, uWS::HttpRequest* re
     read_json_body(res,
         [this, res](const nlohmann::json& body) {
             try {
-                if (!body.contains("transactionId") || !body["transactionId"].is_string()) {
-                    send_error_response(res, "transactionId is required", 400);
+                std::string transaction_id = "";
+                if (body.contains("transactionId") && !body["transactionId"].is_null() && body["transactionId"].is_string()) {
+                    transaction_id = body["transactionId"];
+                } else {
+                    send_error_response(res, "transactionId is required and must be a string", 400);
                     return;
                 }
                 
-                std::string transaction_id = body["transactionId"];
-                std::string status = body.value("status", "completed");
-                std::string consumer_group = "__QUEUE_MODE__";
+                std::string status = "completed";
+                if (body.contains("status") && !body["status"].is_null() && body["status"].is_string()) {
+                    status = body["status"];
+                }
                 
+                std::string consumer_group = "__QUEUE_MODE__";
                 if (body.contains("consumerGroup") && !body["consumerGroup"].is_null() && body["consumerGroup"].is_string()) {
                     consumer_group = body["consumerGroup"];
                 }
@@ -488,9 +493,14 @@ void QueenServer::handle_ack(uWS::HttpResponse<false>* res, uWS::HttpRequest* re
                     error = body["error"];
                 }
                 
-                bool success = queue_manager_->acknowledge_message(transaction_id, status, error, consumer_group);
+                std::optional<std::string> lease_id;
+                if (body.contains("leaseId") && !body["leaseId"].is_null() && body["leaseId"].is_string()) {
+                    lease_id = body["leaseId"];
+                }
                 
-                if (success) {
+                auto ack_result = queue_manager_->acknowledge_message(transaction_id, status, error, consumer_group, lease_id);
+                
+                if (ack_result.success) {
                     // Get current timestamp in ISO format
                     auto now = std::chrono::system_clock::now();
                     auto time_t = std::chrono::system_clock::to_time_t(now);
@@ -503,13 +513,13 @@ void QueenServer::handle_ack(uWS::HttpResponse<false>* res, uWS::HttpRequest* re
                     
                     nlohmann::json response = {
                         {"transactionId", transaction_id},
-                        {"status", status},
+                        {"status", ack_result.status},
                         {"consumerGroup", consumer_group == "__QUEUE_MODE__" ? nlohmann::json(nullptr) : nlohmann::json(consumer_group)},
                         {"acknowledgedAt", ss.str()}
                     };
                     send_json_response(res, response);
                 } else {
-                    send_error_response(res, "Failed to acknowledge message", 500);
+                    send_error_response(res, "Failed to acknowledge message: " + ack_result.status, 500);
                 }
                 
             } catch (const std::exception& e) {
@@ -579,10 +589,12 @@ void QueenServer::handle_transaction(uWS::HttpResponse<false>* res, uWS::HttpReq
                             error = op["error"];
                         }
                         
-                        bool success = queue_manager_->acknowledge_message(transaction_id, status, error, consumer_group);
+                        auto ack_result = queue_manager_->acknowledge_message(transaction_id, status, error, consumer_group, std::nullopt);
                         nlohmann::json ack_result_json;
                         ack_result_json["type"] = "ack";
-                        ack_result_json["success"] = success;
+                        ack_result_json["success"] = ack_result.success;
+                        ack_result_json["transactionId"] = ack_result.transaction_id;
+                        ack_result_json["status"] = ack_result.status;
                         results.push_back(ack_result_json);
                         
                     } else {
@@ -607,6 +619,122 @@ void QueenServer::handle_transaction(uWS::HttpResponse<false>* res, uWS::HttpReq
             send_error_response(res, error, 400);
         }
     );
+}
+
+void QueenServer::handle_ack_batch(uWS::HttpResponse<false>* res, uWS::HttpRequest* req) {
+    read_json_body(res,
+        [this, res](const nlohmann::json& body) {
+            try {
+                if (!body.contains("acknowledgments") || !body["acknowledgments"].is_array()) {
+                    send_error_response(res, "acknowledgments array is required", 400);
+                    return;
+                }
+                
+                auto acknowledgments = body["acknowledgments"];
+                std::string consumer_group = "__QUEUE_MODE__";
+                
+                if (body.contains("consumerGroup") && !body["consumerGroup"].is_null() && body["consumerGroup"].is_string()) {
+                    consumer_group = body["consumerGroup"];
+                }
+                
+                // Process each acknowledgment
+                std::vector<QueueManager::AckItem> ack_items;
+                for (const auto& ack_json : acknowledgments) {
+                    QueueManager::AckItem ack;
+                    
+                    if (!ack_json.contains("transactionId") || ack_json["transactionId"].is_null() || !ack_json["transactionId"].is_string()) {
+                        send_error_response(res, "Each acknowledgment must have a valid transactionId string", 400);
+                        return;
+                    }
+                    ack.transaction_id = ack_json["transactionId"];
+                    
+                    ack.status = "completed";
+                    if (ack_json.contains("status") && !ack_json["status"].is_null() && ack_json["status"].is_string()) {
+                        ack.status = ack_json["status"];
+                    }
+                    
+                    if (ack_json.contains("error") && !ack_json["error"].is_null() && ack_json["error"].is_string()) {
+                        ack.error = ack_json["error"];
+                    }
+                    
+                    ack_items.push_back(ack);
+                }
+                
+                auto results = queue_manager_->acknowledge_messages(ack_items, consumer_group);
+                
+                nlohmann::json response = {
+                    {"processed", results.size()},
+                    {"results", nlohmann::json::array()}
+                };
+                
+                // Build results array - match Node.js format
+                for (const auto& ack_result : results) {
+                    nlohmann::json result_item = {
+                        {"transactionId", ack_result.transaction_id},
+                        {"status", ack_result.status}
+                    };
+                    response["results"].push_back(result_item);
+                }
+                
+                send_json_response(res, response);
+                
+            } catch (const std::exception& e) {
+                send_error_response(res, e.what(), 500);
+            }
+        },
+        [this, res](const std::string& error) {
+            send_error_response(res, error, 400);
+        }
+    );
+}
+
+void QueenServer::handle_lease_extend(uWS::HttpResponse<false>* res, uWS::HttpRequest* req) {
+    read_json_body(res,
+        [this, res, req](const nlohmann::json& body) {
+            try {
+                std::string lease_id = std::string(req->getParameter(0));
+                int seconds = body.value("seconds", 60);
+                
+                bool success = queue_manager_->extend_message_lease(lease_id, seconds);
+                
+                if (success) {
+                    nlohmann::json response = {
+                        {"leaseId", lease_id},
+                        {"extended", true},
+                        {"seconds", seconds}
+                    };
+                    send_json_response(res, response);
+                } else {
+                    send_error_response(res, "Lease not found or expired", 404);
+                }
+                
+            } catch (const std::exception& e) {
+                send_error_response(res, e.what(), 500);
+            }
+        },
+        [this, res](const std::string& error) {
+            send_error_response(res, error, 400);
+        }
+    );
+}
+
+void QueenServer::handle_delete_queue(uWS::HttpResponse<false>* res, uWS::HttpRequest* req) {
+    try {
+        std::string queue_name = std::string(req->getParameter(0));
+        
+        bool deleted = queue_manager_->delete_queue(queue_name);
+        
+        nlohmann::json response = {
+            {"deleted", true},
+            {"queue", queue_name},
+            {"existed", deleted}
+        };
+        
+        send_json_response(res, response);
+        
+    } catch (const std::exception& e) {
+        send_error_response(res, e.what(), 500);
+    }
 }
 
 void QueenServer::handle_health(uWS::HttpResponse<false>* res, uWS::HttpRequest* req) {
@@ -660,8 +788,20 @@ void QueenServer::setup_routes() {
         handle_ack(res, req);
     });
     
+    app_->post("/api/v1/ack/batch", [this](auto* res, auto* req) {
+        handle_ack_batch(res, req);
+    });
+    
     app_->post("/api/v1/transaction", [this](auto* res, auto* req) {
         handle_transaction(res, req);
+    });
+    
+    app_->post("/api/v1/lease/:leaseId/extend", [this](auto* res, auto* req) {
+        handle_lease_extend(res, req);
+    });
+    
+    app_->del("/api/v1/resources/queues/:queue", [this](auto* res, auto* req) {
+        handle_delete_queue(res, req);
     });
     
     app_->get("/health", [this](auto* res, auto* req) {

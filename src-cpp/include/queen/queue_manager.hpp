@@ -137,6 +137,8 @@ public:
                         const std::string& namespace_name = "",
                         const std::string& task_name = "");
     
+    bool delete_queue(const std::string& queue_name);
+    
     // Core message operations
     std::vector<PushResult> push_messages(const std::vector<PushItem>& items);
     
@@ -163,12 +165,19 @@ public:
         std::optional<std::string> error;
     };
     
-    bool acknowledge_message(const std::string& transaction_id,
+    struct AckResult {
+        std::string transaction_id;
+        std::string status; // "completed", "failed_dlq", "failed_retry", "not_found"
+        bool success = false;
+    };
+    
+    AckResult acknowledge_message(const std::string& transaction_id,
                            const std::string& status,
                            const std::optional<std::string>& error = std::nullopt,
-                           const std::string& consumer_group = "__QUEUE_MODE__");
+                           const std::string& consumer_group = "__QUEUE_MODE__",
+                           const std::optional<std::string>& lease_id = std::nullopt);
     
-    std::vector<bool> acknowledge_messages(const std::vector<AckItem>& acks,
+    std::vector<AckResult> acknowledge_messages(const std::vector<AckItem>& acks,
                                          const std::string& consumer_group = "__QUEUE_MODE__");
     
     // Lease management
