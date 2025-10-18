@@ -1,4 +1,5 @@
 #include "queen/queue_manager.hpp"
+#include "queen/encryption.hpp"
 #include <spdlog/spdlog.h>
 #include <random>
 #include <iomanip>
@@ -346,6 +347,39 @@ std::vector<PushResult> QueueManager::push_messages_batch(const std::vector<Push
             return results;
         }
         
+        // Check max queue size if configured
+        std::string size_check_sql = R"(
+            SELECT q.max_queue_size, COALESCE(COUNT(m.id), 0) as current_size
+            FROM queen.queues q
+            LEFT JOIN queen.partitions p ON p.queue_id = q.id
+            LEFT JOIN queen.messages m ON m.partition_id = p.id
+            WHERE q.name = $1 AND q.max_queue_size > 0
+            GROUP BY q.max_queue_size
+        )";
+        
+        auto size_result = QueryResult(check_conn->exec_params(size_check_sql, {queue_name}));
+        
+        if (size_result.is_success() && size_result.num_rows() > 0) {
+            int max_size = std::stoi(size_result.get_value(0, "max_queue_size"));
+            int current_size = std::stoi(size_result.get_value(0, "current_size"));
+            
+            if (current_size + items.size() > max_size) {
+                // All messages fail if queue would exceed max size
+                for (const auto& item : items) {
+                    PushResult result;
+                    result.transaction_id = item.transaction_id.value_or(generate_transaction_id());
+                    result.status = "failed";
+                    result.error = "Queue '" + queue_name + "' would exceed max capacity (" + 
+                                  std::to_string(max_size) + "). Current: " + std::to_string(current_size) + 
+                                  ", Batch: " + std::to_string(items.size());
+                    results.push_back(result);
+                }
+                spdlog::warn("Queue {} rejected push: would exceed max size {} (current: {}, batch: {})",
+                           queue_name, max_size, current_size, items.size());
+                return results;
+            }
+        }
+        
         // Ensure partition exists
         if (!ensure_partition_exists(queue_name, partition_name)) {
             // All messages fail if partition creation fails
@@ -358,6 +392,19 @@ std::vector<PushResult> QueueManager::push_messages_batch(const std::vector<Push
             }
             return results;
         }
+        
+        // Check if queue has encryption enabled
+        std::string encryption_check_sql = "SELECT encryption_enabled FROM queen.queues WHERE name = $1";
+        auto encryption_result = QueryResult(check_conn->exec_params(encryption_check_sql, {queue_name}));
+        
+        bool encryption_enabled = false;
+        if (encryption_result.is_success() && encryption_result.num_rows() > 0) {
+            std::string enc_str = encryption_result.get_value(0, "encryption_enabled");
+            encryption_enabled = (enc_str == "t" || enc_str == "true");
+        }
+        
+        // Get encryption service if needed
+        EncryptionService* enc_service = encryption_enabled ? get_encryption_service() : nullptr;
         
         // For simplicity, process each message individually but within the same transaction
         // This ensures atomicity while keeping the code simple
@@ -379,26 +426,50 @@ std::vector<PushResult> QueueManager::push_messages_batch(const std::vector<Push
                 // Generate UUIDv7 for message ID to ensure proper ordering
                 std::string message_id = generate_uuid();
                 
+                // Prepare payload - encrypt if needed
+                std::string payload_to_store;
+                bool is_encrypted = false;
+                
+                if (enc_service && enc_service->is_enabled()) {
+                    // Encrypt the payload
+                    auto encrypted = enc_service->encrypt_payload(item.payload.dump());
+                    if (encrypted.has_value()) {
+                        // Store encrypted data as JSON object
+                        nlohmann::json encrypted_json = {
+                            {"encrypted", encrypted->encrypted},
+                            {"iv", encrypted->iv},
+                            {"authTag", encrypted->auth_tag}
+                        };
+                        payload_to_store = encrypted_json.dump();
+                        is_encrypted = true;
+                    } else {
+                        spdlog::warn("Encryption failed for message, storing unencrypted");
+                        payload_to_store = item.payload.dump();
+                    }
+                } else {
+                    payload_to_store = item.payload.dump();
+                }
+                
                 if (item.trace_id.has_value() && !item.trace_id->empty()) {
                     sql = R"(
-                        INSERT INTO queen.messages (id, transaction_id, partition_id, payload, trace_id, created_at)
-                        SELECT $1, $2, p.id, $3, $4, NOW()
+                        INSERT INTO queen.messages (id, transaction_id, partition_id, payload, trace_id, created_at, is_encrypted)
+                        SELECT $1, $2, p.id, $3, $4, NOW(), $7
                         FROM queen.partitions p
                         JOIN queen.queues q ON p.queue_id = q.id
                         WHERE q.name = $5 AND p.name = $6
                         RETURNING id, trace_id
                     )";
-                    params = {message_id, result.transaction_id, item.payload.dump(), item.trace_id.value(), queue_name, partition_name};
+                    params = {message_id, result.transaction_id, payload_to_store, item.trace_id.value(), queue_name, partition_name, is_encrypted ? "true" : "false"};
                 } else {
                     sql = R"(
-                        INSERT INTO queen.messages (id, transaction_id, partition_id, payload, created_at)
-                        SELECT $1, $2, p.id, $3, NOW()
+                        INSERT INTO queen.messages (id, transaction_id, partition_id, payload, created_at, is_encrypted)
+                        SELECT $1, $2, p.id, $3, NOW(), $6
                         FROM queen.partitions p
                         JOIN queen.queues q ON p.queue_id = q.id
                         WHERE q.name = $4 AND p.name = $5
                         RETURNING id, trace_id
                     )";
-                    params = {message_id, result.transaction_id, item.payload.dump(), queue_name, partition_name};
+                    params = {message_id, result.transaction_id, payload_to_store, queue_name, partition_name, is_encrypted ? "true" : "false"};
                 }
                 
                 auto insert_result = QueryResult(conn->exec_params(sql, params));
@@ -442,36 +513,122 @@ std::vector<PushResult> QueueManager::push_messages_batch(const std::vector<Push
 std::string QueueManager::acquire_partition_lease(const std::string& queue_name,
                                                 const std::string& partition_name,
                                                 const std::string& consumer_group,
-                                                int lease_time_seconds) {
+                                                int lease_time_seconds,
+                                                const PopOptions& options) {
     try {
         ScopedConnection conn(db_pool_.get());
         
         std::string lease_id = generate_uuid();
         
-        std::string sql = R"(
-            INSERT INTO queen.partition_consumers (
-                partition_id, consumer_group, lease_expires_at, lease_acquired_at, worker_id
-            )
-            SELECT p.id, $1, NOW() + INTERVAL '1 second' * $2, NOW(), $3
-            FROM queen.partitions p
-            JOIN queen.queues q ON q.id = p.queue_id
-            WHERE q.name = $4 AND p.name = $5
-            ON CONFLICT (partition_id, consumer_group) DO UPDATE SET
-                lease_expires_at = NOW() + INTERVAL '1 second' * $2,
-                lease_acquired_at = NOW(),
-                worker_id = $3
-            WHERE partition_consumers.lease_expires_at IS NULL 
-               OR partition_consumers.lease_expires_at <= NOW()
-            RETURNING worker_id
+        // Check if this is a new consumer group with subscription preferences
+        std::string initial_cursor_id = "00000000-0000-0000-0000-000000000000";
+        std::string initial_cursor_timestamp_sql = "NULL";
+        
+        if (consumer_group != "__QUEUE_MODE__" && 
+            (options.subscription_mode.has_value() || options.subscription_from.has_value())) {
+            
+            std::string sub_mode = options.subscription_mode.value_or("");
+            std::string sub_from = options.subscription_from.value_or("");
+            
+            // For 'new', 'new-only', or 'now' - start from latest message
+            if (sub_mode == "new" || sub_mode == "new-only" || sub_from == "now") {
+                // Get latest message in this partition
+                std::string latest_sql = R"(
+                    SELECT m.id, m.created_at
+                    FROM queen.messages m
+                    JOIN queen.partitions p ON m.partition_id = p.id
+                    JOIN queen.queues q ON p.queue_id = q.id
+                    WHERE q.name = $1 AND p.name = $2
+                    ORDER BY m.created_at DESC, m.id DESC
+                    LIMIT 1
+                )";
+                
+                auto latest_result = QueryResult(conn->exec_params(latest_sql, {queue_name, partition_name}));
+                if (latest_result.is_success() && latest_result.num_rows() > 0) {
+                    initial_cursor_id = latest_result.get_value(0, "id");
+                    initial_cursor_timestamp_sql = "'" + latest_result.get_value(0, "created_at") + "'";
+                    spdlog::debug("Subscription mode '{}' - starting from latest message: {}", sub_mode, initial_cursor_id);
+                }
+            }
+            // else: 'all' mode or no preference - start from beginning
+        }
+        
+        // First, check if this consumer group already exists
+        std::string check_sql = R"(
+            SELECT id FROM queen.partition_consumers pc
+            JOIN queen.partitions p ON pc.partition_id = p.id
+            JOIN queen.queues q ON p.queue_id = q.id
+            WHERE q.name = $1 AND p.name = $2 AND pc.consumer_group = $3
         )";
         
-        std::vector<std::string> params = {
-            consumer_group,
-            std::to_string(lease_time_seconds),
-            lease_id,
-            queue_name,
-            partition_name
-        };
+        auto check_result = QueryResult(conn->exec_params(check_sql, {queue_name, partition_name, consumer_group}));
+        bool consumer_exists = check_result.is_success() && check_result.num_rows() > 0;
+        
+        spdlog::debug("Consumer group '{}' exists: {}, has subscription options: {}", 
+                     consumer_group, consumer_exists, 
+                     (options.subscription_mode.has_value() || options.subscription_from.has_value()));
+        
+        std::string sql;
+        if (!consumer_exists && consumer_group != "__QUEUE_MODE__" && 
+            (options.subscription_mode.has_value() || options.subscription_from.has_value())) {
+            // New consumer group with subscription preferences - set initial cursor
+            spdlog::debug("Creating new consumer group '{}' with cursor at: {}", consumer_group, initial_cursor_id);
+            
+            sql = R"(
+                INSERT INTO queen.partition_consumers (
+                    partition_id, consumer_group, lease_expires_at, lease_acquired_at, worker_id,
+                    last_consumed_id, last_consumed_created_at
+                )
+                SELECT p.id, $1, NOW() + INTERVAL '1 second' * $2, NOW(), $3, 
+                       $6::uuid, )" + initial_cursor_timestamp_sql + R"(
+                FROM queen.partitions p
+                JOIN queen.queues q ON q.id = p.queue_id
+                WHERE q.name = $4 AND p.name = $5
+                ON CONFLICT (partition_id, consumer_group) DO NOTHING
+                RETURNING worker_id
+            )";
+        } else {
+            // Existing consumer or no subscription preference - just update lease
+            sql = R"(
+                INSERT INTO queen.partition_consumers (
+                    partition_id, consumer_group, lease_expires_at, lease_acquired_at, worker_id
+                )
+                SELECT p.id, $1, NOW() + INTERVAL '1 second' * $2, NOW(), $3
+                FROM queen.partitions p
+                JOIN queen.queues q ON q.id = p.queue_id
+                WHERE q.name = $4 AND p.name = $5
+                ON CONFLICT (partition_id, consumer_group) DO UPDATE SET
+                    lease_expires_at = NOW() + INTERVAL '1 second' * $2,
+                    lease_acquired_at = NOW(),
+                    worker_id = $3
+                WHERE partition_consumers.lease_expires_at IS NULL 
+                   OR partition_consumers.lease_expires_at <= NOW()
+                RETURNING worker_id
+            )";
+        }
+        
+        std::vector<std::string> params;
+        if (!consumer_exists && consumer_group != "__QUEUE_MODE__" && 
+            (options.subscription_mode.has_value() || options.subscription_from.has_value())) {
+            // Include cursor params for new consumer with subscription
+            params = {
+                consumer_group,
+                std::to_string(lease_time_seconds),
+                lease_id,
+                queue_name,
+                partition_name,
+                initial_cursor_id
+            };
+        } else {
+            // No cursor params needed
+            params = {
+                consumer_group,
+                std::to_string(lease_time_seconds),
+                lease_id,
+                queue_name,
+                partition_name
+            };
+        }
         
         spdlog::debug("Lease acquisition query params: consumer_group={}, lease_time={}, lease_id={}, queue={}, partition={}", 
                      consumer_group, lease_time_seconds, lease_id, queue_name, partition_name);
@@ -527,7 +684,7 @@ PopResult QueueManager::pop_from_queue_partition(const std::string& queue_name,
         
         // Acquire lease for this partition
         std::string lease_id = acquire_partition_lease(queue_name, partition_name, 
-                                                     consumer_group, 300);
+                                                     consumer_group, 300, options);
         if (lease_id.empty()) {
             return result; // No lease acquired, return empty result
         }
@@ -587,11 +744,11 @@ PopResult QueueManager::pop_from_queue_partition(const std::string& queue_name,
         params.push_back(std::to_string(options.batch));
         std::string limit_param = "$" + std::to_string(params.size());
         
-        // Get messages from this partition
+        // Get messages from this partition with queue priority and encryption flag
         std::string sql = R"(
             WITH message_batch AS (
-                SELECT m.id, m.transaction_id, m.payload, m.trace_id, m.created_at,
-                       q.name as queue_name, p.name as partition_name
+                SELECT m.id, m.transaction_id, m.payload, m.trace_id, m.created_at, m.is_encrypted,
+                       q.name as queue_name, p.name as partition_name, q.priority as queue_priority
                 FROM queen.messages m
                 JOIN queen.partitions p ON p.id = m.partition_id
                 JOIN queen.queues q ON q.id = p.queue_id
@@ -681,11 +838,55 @@ PopResult QueueManager::pop_from_queue_partition(const std::string& queue_name,
                 msg.trace_id = trace_val;
                 msg.status = "processing";
                 
-                // Parse payload JSON
+                // Get priority from queue
+                std::string priority_str = query_result.get_value(i, "queue_priority");
+                msg.priority = priority_str.empty() ? 0 : std::stoi(priority_str);
+                
+                // Retry count is always 0 for messages being popped (not retried yet)
+                msg.retry_count = 0;
+                
+                // Parse created_at timestamp
+                std::string created_at_str = query_result.get_value(i, "created_at");
+                if (!created_at_str.empty()) {
+                    // Parse PostgreSQL timestamp format
+                    std::tm tm = {};
+                    std::istringstream ss(created_at_str);
+                    ss >> std::get_time(&tm, "%Y-%m-%d %H:%M:%S");
+                    msg.created_at = std::chrono::system_clock::from_time_t(std::mktime(&tm));
+                }
+                
+                // Parse payload JSON - decrypt if encrypted
                 try {
                     std::string payload_str = query_result.get_value(i, "payload");
+                    std::string is_encrypted_str = query_result.get_value(i, "is_encrypted");
+                    bool is_encrypted = (is_encrypted_str == "t" || is_encrypted_str == "true");
+                    
                     if (!payload_str.empty()) {
-                        msg.payload = nlohmann::json::parse(payload_str);
+                        if (is_encrypted) {
+                            // Decrypt the payload
+                            auto encrypted_json = nlohmann::json::parse(payload_str);
+                            
+                            EncryptionService::EncryptedData encrypted_data;
+                            encrypted_data.encrypted = encrypted_json["encrypted"];
+                            encrypted_data.iv = encrypted_json["iv"];
+                            encrypted_data.auth_tag = encrypted_json["authTag"];
+                            
+                            auto enc_service = get_encryption_service();
+                            if (enc_service && enc_service->is_enabled()) {
+                                auto decrypted = enc_service->decrypt_payload(encrypted_data);
+                                if (decrypted.has_value()) {
+                                    msg.payload = nlohmann::json::parse(*decrypted);
+                                } else {
+                                    spdlog::error("Failed to decrypt message payload");
+                                    msg.payload = payload_str;  // Return encrypted data as fallback
+                                }
+                            } else {
+                                spdlog::warn("Message is encrypted but encryption service not available");
+                                msg.payload = payload_str;
+                            }
+                        } else {
+                            msg.payload = nlohmann::json::parse(payload_str);
+                        }
                     }
                 } catch (const std::exception& e) {
                     spdlog::warn("Failed to parse message payload as JSON: {}", e.what());
@@ -984,10 +1185,69 @@ bool QueueManager::acknowledge_message(const std::string& transaction_id,
             return result.is_success();
             
         } else if (status == "failed") {
-            // For now, just log the failure
-            // In a full implementation, you'd handle retries and DLQ here
-            spdlog::warn("Message failed: {} - {}", transaction_id, error.value_or("No error message"));
-            return true;
+            // Insert into Dead Letter Queue for this consumer group
+            std::string dlq_sql = R"(
+                INSERT INTO queen.dead_letter_queue (
+                    message_id, partition_id, consumer_group, error_message, 
+                    retry_count, original_created_at
+                )
+                SELECT m.id, m.partition_id, $1::varchar, $2::text, 0, m.created_at
+                FROM queen.messages m
+                WHERE m.transaction_id = $3
+                  AND NOT EXISTS (
+                      SELECT 1 FROM queen.dead_letter_queue dlq
+                      WHERE dlq.message_id = m.id AND dlq.consumer_group = $1::varchar
+                  )
+            )";
+            
+            std::vector<std::string> dlq_params = {
+                consumer_group,
+                error.value_or("Message processing failed"),
+                transaction_id
+            };
+            
+            auto dlq_result = QueryResult(conn->exec_params(dlq_sql, dlq_params));
+            
+            if (!dlq_result.is_success()) {
+                spdlog::error("Failed to insert into DLQ: {}", dlq_result.error_message());
+                return false;
+            }
+            
+            // Still advance cursor for failed messages (they are "consumed")
+            std::string cursor_sql = R"(
+                UPDATE queen.partition_consumers 
+                SET last_consumed_id = m.id,
+                    last_consumed_created_at = m.created_at,
+                    last_consumed_at = NOW(),
+                    total_messages_consumed = total_messages_consumed + 1,
+                    acked_count = acked_count + 1,
+                    -- Release lease when all messages in batch are ACKed
+                    lease_expires_at = CASE 
+                        WHEN acked_count + 1 >= batch_size AND batch_size > 0 
+                        THEN NULL 
+                        ELSE lease_expires_at 
+                    END,
+                    lease_acquired_at = CASE 
+                        WHEN acked_count + 1 >= batch_size AND batch_size > 0 
+                        THEN NULL 
+                        ELSE lease_acquired_at 
+                    END,
+                    batch_size = CASE 
+                        WHEN acked_count + 1 >= batch_size AND batch_size > 0 
+                        THEN 0 
+                        ELSE batch_size 
+                    END
+                FROM queen.messages m
+                JOIN queen.partitions p ON p.id = m.partition_id
+                WHERE partition_consumers.partition_id = p.id
+                  AND partition_consumers.consumer_group = $1
+                  AND m.transaction_id = $2
+            )";
+            
+            auto cursor_result = QueryResult(conn->exec_params(cursor_sql, {consumer_group, transaction_id}));
+            
+            spdlog::warn("Message failed and moved to DLQ: {} - {}", transaction_id, error.value_or("No error message"));
+            return cursor_result.is_success();
         }
         
     } catch (const std::exception& e) {
@@ -1090,7 +1350,20 @@ bool QueueManager::initialize_schema() {
                 worker_id VARCHAR(255),
                 pending_estimate BIGINT DEFAULT 0,
                 last_stats_update TIMESTAMPTZ,
+                batch_retry_count INTEGER DEFAULT 0,
                 UNIQUE(partition_id, consumer_group)
+            );
+            
+            CREATE TABLE IF NOT EXISTS queen.dead_letter_queue (
+                id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+                message_id UUID REFERENCES queen.messages(id) ON DELETE CASCADE,
+                partition_id UUID REFERENCES queen.partitions(id) ON DELETE CASCADE,
+                consumer_group VARCHAR(255),
+                error_message TEXT,
+                retry_count INTEGER DEFAULT 0,
+                original_created_at TIMESTAMPTZ,
+                failed_at TIMESTAMPTZ DEFAULT NOW(),
+                UNIQUE(message_id, consumer_group)
             );
         )";
         

@@ -21,6 +21,8 @@ struct Message {
     std::chrono::system_clock::time_point created_at;
     std::chrono::system_clock::time_point lease_expires_at;
     std::string status; // "pending", "processing", "completed", "failed"
+    int priority = 0;
+    int retry_count = 0;
 };
 
 struct PushItem {
@@ -62,12 +64,15 @@ struct QueueStats {
 };
 
 class QueueManager {
+public:
+    // Utility methods
+    std::string generate_uuid();
+    
 private:
     std::shared_ptr<DatabasePool> db_pool_;
     QueueConfig config_;
     
     // Internal helper methods
-    std::string generate_uuid();
     std::string generate_transaction_id();
     
     // Queue operations
@@ -95,7 +100,8 @@ private:
     std::string acquire_partition_lease(const std::string& queue_name,
                                       const std::string& partition_name,
                                       const std::string& consumer_group,
-                                      int lease_time_seconds);
+                                      int lease_time_seconds,
+                                      const PopOptions& options = PopOptions{});
     bool extend_lease(const std::string& lease_id, int seconds);
     void release_lease(const std::string& lease_id);
     

@@ -1,4 +1,5 @@
 #include "queen/server.hpp"
+#include "queen/encryption.hpp"
 #include <spdlog/spdlog.h>
 #include <iostream>
 #include <sstream>
@@ -19,6 +20,10 @@ QueenServer::~QueenServer() {
 
 bool QueenServer::initialize() {
     try {
+        // Initialize encryption service
+        bool encryption_enabled = init_encryption();
+        spdlog::info("Encryption: {}", encryption_enabled ? "enabled" : "disabled");
+        
         // Initialize database pool
         auto db_config = config_.database;
         db_pool_ = std::make_shared<DatabasePool>(
@@ -292,6 +297,11 @@ void QueenServer::handle_pop_queue_partition(uWS::HttpResponse<false>* res, uWS:
         options.timeout = get_query_param_int(req, "timeout", config_.queue.default_timeout);
         options.batch = get_query_param_int(req, "batch", config_.queue.default_batch_size);
         
+        std::string sub_mode = get_query_param(req, "subscriptionMode");
+        std::string sub_from = get_query_param(req, "subscriptionFrom");
+        if (!sub_mode.empty()) options.subscription_mode = sub_mode;
+        if (!sub_from.empty()) options.subscription_from = sub_from;
+        
         auto result = queue_manager_->pop_messages(queue_name, partition_name, consumer_group, options);
         
         if (result.messages.empty()) {
@@ -316,8 +326,8 @@ void QueenServer::handle_pop_queue_partition(uWS::HttpResponse<false>* res, uWS:
                     {"queue", msg.queue_name},
                     {"partition", msg.partition_name},
                     {"data", msg.payload},
-                    {"retryCount", 0},
-                    {"priority", 0},
+                    {"retryCount", msg.retry_count},
+                    {"priority", msg.priority},
                     {"createdAt", created_at_ss.str()},
                     {"consumerGroup", nlohmann::json(nullptr)},
                     {"leaseId", result.lease_id.has_value() ? nlohmann::json(*result.lease_id) : nlohmann::json(nullptr)}
@@ -347,6 +357,11 @@ void QueenServer::handle_pop_queue(uWS::HttpResponse<false>* res, uWS::HttpReque
         options.timeout = get_query_param_int(req, "timeout", config_.queue.default_timeout);
         options.batch = get_query_param_int(req, "batch", config_.queue.default_batch_size);
         
+        std::string sub_mode = get_query_param(req, "subscriptionMode");
+        std::string sub_from = get_query_param(req, "subscriptionFrom");
+        if (!sub_mode.empty()) options.subscription_mode = sub_mode;
+        if (!sub_from.empty()) options.subscription_from = sub_from;
+        
         auto result = queue_manager_->pop_messages(queue_name, std::nullopt, consumer_group, options);
         
         if (result.messages.empty()) {
@@ -371,8 +386,8 @@ void QueenServer::handle_pop_queue(uWS::HttpResponse<false>* res, uWS::HttpReque
                     {"queue", msg.queue_name},
                     {"partition", msg.partition_name},
                     {"data", msg.payload},
-                    {"retryCount", 0},
-                    {"priority", 0},
+                    {"retryCount", msg.retry_count},
+                    {"priority", msg.priority},
                     {"createdAt", created_at_ss.str()},
                     {"consumerGroup", nlohmann::json(nullptr)},
                     {"leaseId", result.lease_id.has_value() ? nlohmann::json(*result.lease_id) : nlohmann::json(nullptr)}
@@ -402,6 +417,11 @@ void QueenServer::handle_pop_filtered(uWS::HttpResponse<false>* res, uWS::HttpRe
         options.timeout = get_query_param_int(req, "timeout", config_.queue.default_timeout);
         options.batch = get_query_param_int(req, "batch", config_.queue.default_batch_size);
         
+        std::string sub_mode = get_query_param(req, "subscriptionMode");
+        std::string sub_from = get_query_param(req, "subscriptionFrom");
+        if (!sub_mode.empty()) options.subscription_mode = sub_mode;
+        if (!sub_from.empty()) options.subscription_from = sub_from;
+        
         std::optional<std::string> namespace_opt = namespace_param.empty() ? std::nullopt : std::optional<std::string>(namespace_param);
         std::optional<std::string> task_opt = task_param.empty() ? std::nullopt : std::optional<std::string>(task_param);
         
@@ -429,8 +449,8 @@ void QueenServer::handle_pop_filtered(uWS::HttpResponse<false>* res, uWS::HttpRe
                     {"queue", msg.queue_name},
                     {"partition", msg.partition_name},
                     {"data", msg.payload},
-                    {"retryCount", 0},
-                    {"priority", 0},
+                    {"retryCount", msg.retry_count},
+                    {"priority", msg.priority},
                     {"createdAt", created_at_ss.str()},
                     {"consumerGroup", nlohmann::json(nullptr)},
                     {"leaseId", result.lease_id.has_value() ? nlohmann::json(*result.lease_id) : nlohmann::json(nullptr)}
@@ -502,6 +522,93 @@ void QueenServer::handle_ack(uWS::HttpResponse<false>* res, uWS::HttpRequest* re
     );
 }
 
+void QueenServer::handle_transaction(uWS::HttpResponse<false>* res, uWS::HttpRequest* req) {
+    read_json_body(res,
+        [this, res](const nlohmann::json& body) {
+            try {
+                if (!body.contains("operations") || !body["operations"].is_array()) {
+                    send_error_response(res, "operations array required", 400);
+                    return;
+                }
+                
+                auto operations = body["operations"];
+                if (operations.empty()) {
+                    send_error_response(res, "operations array cannot be empty", 400);
+                    return;
+                }
+                
+                // For now, execute operations sequentially (not in a single DB transaction)
+                // This is a simplified implementation that works for most use cases
+                nlohmann::json results = nlohmann::json::array();
+                
+                for (const auto& op : operations) {
+                    if (!op.contains("type")) {
+                        send_error_response(res, "operation type required", 400);
+                        return;
+                    }
+                    
+                    std::string op_type = op["type"];
+                    
+                    if (op_type == "push") {
+                        // Push operation
+                        auto items_json = op["items"];
+                        std::vector<PushItem> items;
+                        
+                        for (const auto& item_json : items_json) {
+                            PushItem item;
+                            item.queue = item_json["queue"];
+                            item.partition = item_json.value("partition", "Default");
+                            item.payload = item_json.value("payload", nlohmann::json{});
+                            items.push_back(item);
+                        }
+                        
+                        auto push_results = queue_manager_->push_messages(items);
+                        nlohmann::json push_result_json;
+                        push_result_json["type"] = "push";
+                        push_result_json["count"] = push_results.size();
+                        results.push_back(push_result_json);
+                        
+                    } else if (op_type == "ack") {
+                        // ACK operation
+                        std::string transaction_id = op["transactionId"];
+                        std::string status = op.value("status", "completed");
+                        std::string consumer_group = op.value("consumerGroup", "__QUEUE_MODE__");
+                        
+                        std::optional<std::string> error;
+                        if (op.contains("error") && !op["error"].is_null()) {
+                            error = op["error"];
+                        }
+                        
+                        bool success = queue_manager_->acknowledge_message(transaction_id, status, error, consumer_group);
+                        nlohmann::json ack_result_json;
+                        ack_result_json["type"] = "ack";
+                        ack_result_json["success"] = success;
+                        results.push_back(ack_result_json);
+                        
+                    } else {
+                        send_error_response(res, "Unknown operation type: " + op_type, 400);
+                        return;
+                    }
+                }
+                
+                nlohmann::json response = {
+                    {"success", true},
+                    {"results", results},
+                    {"transactionId", queue_manager_->generate_uuid()}
+                };
+                
+                send_json_response(res, response);
+                
+            } catch (const std::exception& e) {
+                send_error_response(res, e.what(), 400);
+            }
+        },
+        [this, res](const std::string& error) {
+            send_error_response(res, error, 400);
+        }
+    );
+}
+
 void QueenServer::handle_health(uWS::HttpResponse<false>* res, uWS::HttpRequest* req) {
     try {
         bool healthy = queue_manager_->health_check();
@@ -551,6 +658,10 @@ void QueenServer::setup_routes() {
     
     app_->post("/api/v1/ack", [this](auto* res, auto* req) {
         handle_ack(res, req);
+    });
+    
+    app_->post("/api/v1/transaction", [this](auto* res, auto* req) {
+        handle_transaction(res, req);
     });
     
     app_->get("/health", [this](auto* res, auto* req) {
