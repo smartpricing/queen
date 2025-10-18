@@ -145,6 +145,9 @@ public:
 private:
     // Internal batch processing
     std::vector<PushResult> push_messages_batch(const std::vector<PushItem>& items);
+    std::vector<PushResult> push_messages_chunk(const std::vector<PushItem>& items,
+                                                const std::string& queue_name,
+                                                const std::string& partition_name);
     
 public:
     

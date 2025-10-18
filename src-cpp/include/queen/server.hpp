@@ -7,33 +7,30 @@
 #include <memory>
 #include <string>
 #include <functional>
+#include <thread>
+#include <vector>
 
 namespace queen {
 
 class QueenServer {
 private:
-    std::shared_ptr<QueueManager> queue_manager_;
-    std::shared_ptr<DatabasePool> db_pool_;
     Config config_;
-    std::unique_ptr<uWS::App> app_;
+    std::atomic<bool> is_shutting_down_{false};
+    std::vector<std::thread> worker_threads_;
+    
+    // Worker thread function - each runs isolated App with own resources
+    static void worker_thread_main(Config config, int thread_id);
     
     // Request handling helpers
     void setup_cors_headers(uWS::HttpResponse<false>* res);
     void send_json_response(uWS::HttpResponse<false>* res, const nlohmann::json& json, int status_code = 200);
     void send_error_response(uWS::HttpResponse<false>* res, const std::string& error, int status_code = 500);
     
-    // Route handlers
-    void handle_configure(uWS::HttpResponse<false>* res, uWS::HttpRequest* req);
-    void handle_push(uWS::HttpResponse<false>* res, uWS::HttpRequest* req);
-    void handle_pop_queue_partition(uWS::HttpResponse<false>* res, uWS::HttpRequest* req);
-    void handle_pop_queue(uWS::HttpResponse<false>* res, uWS::HttpRequest* req);
-    void handle_pop_filtered(uWS::HttpResponse<false>* res, uWS::HttpRequest* req);
-    void handle_ack(uWS::HttpResponse<false>* res, uWS::HttpRequest* req);
-    void handle_ack_batch(uWS::HttpResponse<false>* res, uWS::HttpRequest* req);
-    void handle_transaction(uWS::HttpResponse<false>* res, uWS::HttpRequest* req);
-    void handle_lease_extend(uWS::HttpResponse<false>* res, uWS::HttpRequest* req);
-    void handle_delete_queue(uWS::HttpResponse<false>* res, uWS::HttpRequest* req);
-    void handle_health(uWS::HttpResponse<false>* res, uWS::HttpRequest* req);
+    // Helper to setup all routes on an App instance
+    // This is called by each worker thread for its own App
+    static void setup_app_routes(uWS::App& app, 
+                                 std::shared_ptr<QueueManager> queue_manager,
+                                 const Config& config);
     
     // JSON body reading helper
     void read_json_body(uWS::HttpResponse<false>* res, 

@@ -12,7 +12,7 @@ const q = new Queen({
   timeout: 120000
 });
 
-//await q.queueDelete(QUEUE_NAME);
+await q.queueDelete(QUEUE_NAME);
 await q.queue(QUEUE_NAME, {
   leaseTime: 10,
   retryLimit: 3

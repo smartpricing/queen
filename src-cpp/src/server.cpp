@@ -11,41 +11,76 @@
 namespace queen {
 
 QueenServer::QueenServer(const Config& config) : config_(config) {
-    app_ = std::make_unique<uWS::App>();
+    // Multi-App pattern - each worker thread will create its own App
 }
 
 QueenServer::~QueenServer() {
+    spdlog::info("Server destructor - waiting for worker threads");
     stop();
+    
+    // Wait for all worker threads to finish
+    for (auto& thread : worker_threads_) {
+        if (thread.joinable()) {
+            thread.join();
+        }
+    }
+    spdlog::info("All worker threads stopped");
 }
 
 bool QueenServer::initialize() {
+    // Initialize encryption service globally (shared across threads)
+    bool encryption_enabled = init_encryption();
+    spdlog::info("Encryption: {}", encryption_enabled ? "enabled" : "disabled");
+    
+    spdlog::info("Queen C++ server initialized - ready to spawn worker threads");
+    return true;
+}
+
+// Worker thread main function - each thread is completely isolated
+void QueenServer::worker_thread_main(Config config, int thread_id) {
     try {
-        // Initialize encryption service
-        bool encryption_enabled = init_encryption();
-        spdlog::info("Encryption: {}", encryption_enabled ? "enabled" : "disabled");
+        spdlog::info("Worker thread {} starting...", thread_id);
         
-        // Initialize database pool
-        auto db_config = config_.database;
-        db_pool_ = std::make_shared<DatabasePool>(
-            db_config.connection_string(), 
-            db_config.pool_size
+        // Create thread-local database pool (small size per thread)
+        int pool_size_per_thread = 5;  // Each thread gets 5 connections
+        auto db_pool = std::make_shared<DatabasePool>(
+            config.database.connection_string(),
+            pool_size_per_thread
         );
         
-        // Initialize queue manager
-        queue_manager_ = std::make_shared<QueueManager>(db_pool_, config_.queue);
+        // Create thread-local queue manager
+        auto queue_manager = std::make_shared<QueueManager>(db_pool, config.queue);
         
-        // Initialize database schema
-        if (!queue_manager_->initialize_schema()) {
-            spdlog::error("Failed to initialize database schema");
-            return false;
+        // Initialize schema (only first thread needs to, but idempotent)
+        if (thread_id == 0) {
+            queue_manager->initialize_schema();
         }
         
-        spdlog::info("Queen C++ server initialized successfully");
-        return true;
+        // Create thread-local App instance
+        uWS::App app;
+        
+        // Setup all routes on this App
+        setup_app_routes(app, queue_manager, config);
+        
+        // Listen on the same port (SO_REUSEPORT allows this)
+        app.listen(config.server.host, config.server.port, [thread_id, config](auto* listen_socket) {
+            if (listen_socket) {
+                spdlog::info("✅ Worker {} listening on {}:{}", 
+                           thread_id, config.server.host, config.server.port);
+            } else {
+                spdlog::error("❌ Worker {} failed to listen on {}:{}", 
+                            thread_id, config.server.host, config.server.port);
+            }
+        });
+        
+        // Run event loop (blocks forever in this thread)
+        spdlog::info("Worker {} entering event loop", thread_id);
+        app.run();
+        
+        spdlog::info("Worker {} event loop exited", thread_id);
         
     } catch (const std::exception& e) {
-        spdlog::error("Failed to initialize server: {}", e.what());
-        return false;
+        spdlog::error("Worker thread {} error: {}", thread_id, e.what());
     }
 }
 
@@ -283,6 +318,14 @@ void QueenServer::handle_push(uWS::HttpResponse<false>* res, uWS::HttpRequest* r
 }
 
 void QueenServer::handle_pop_queue_partition(uWS::HttpResponse<false>* res, uWS::HttpRequest* req) {
+    spdlog::info("=== POP REQUEST RECEIVED (partition) ===");
+    
+    auto aborted = std::make_shared<bool>(false);
+    res->onAborted([aborted]() {
+        spdlog::warn("POP request aborted by client");
+        *aborted = true;
+    });
+    
     try {
         std::string queue_name = std::string(req->getParameter(0));
         std::string partition_name = std::string(req->getParameter(1));
@@ -297,48 +340,113 @@ void QueenServer::handle_pop_queue_partition(uWS::HttpResponse<false>* res, uWS:
         options.timeout = get_query_param_int(req, "timeout", config_.queue.default_timeout);
         options.batch = get_query_param_int(req, "batch", config_.queue.default_batch_size);
         
+        spdlog::info("POP params: queue={}, partition={}, batch={}, wait={}", 
+                    queue_name, partition_name, options.batch, options.wait);
+        
+        // No artificial batch limits - handle any size with streaming
+        
         std::string sub_mode = get_query_param(req, "subscriptionMode");
         std::string sub_from = get_query_param(req, "subscriptionFrom");
         if (!sub_mode.empty()) options.subscription_mode = sub_mode;
         if (!sub_from.empty()) options.subscription_from = sub_from;
         
-        auto result = queue_manager_->pop_messages(queue_name, partition_name, consumer_group, options);
+        spdlog::info("Pushing POP task to thread pool (queue size: {})", thread_pool_->queue_size());
         
-        if (result.messages.empty()) {
-            setup_cors_headers(res);
-            res->writeStatus("204");
-            res->end();
-        } else {
-            nlohmann::json response = {
-                {"messages", nlohmann::json::array()}
-            };
+        // ⚡ Offload to thread pool - worker does ONLY database work
+        thread_pool_->push([this, res, queue_name, partition_name, consumer_group, options, aborted]() {
+            if (*aborted || is_shutting_down_.load()) return;
             
-            for (const auto& msg : result.messages) {
-                // Format timestamp for createdAt
-                auto time_t = std::chrono::system_clock::to_time_t(msg.created_at);
-                std::stringstream created_at_ss;
-                created_at_ss << std::put_time(std::gmtime(&time_t), "%Y-%m-%dT%H:%M:%S.000Z");
+            spdlog::info("Worker thread: Starting POP for queue={}, partition={}, batch={}", 
+                        queue_name, partition_name, options.batch);
+            
+            try {
+                // Worker thread: ONLY do blocking database work
+                auto result = queue_manager_->pop_messages(queue_name, partition_name, consumer_group, options);
                 
-                nlohmann::json msg_json = {
-                    {"id", msg.id},
-                    {"transactionId", msg.transaction_id},
-                    {"traceId", msg.trace_id.empty() ? nlohmann::json(nullptr) : nlohmann::json(msg.trace_id)},
-                    {"queue", msg.queue_name},
-                    {"partition", msg.partition_name},
-                    {"data", msg.payload},
-                    {"retryCount", msg.retry_count},
-                    {"priority", msg.priority},
-                    {"createdAt", created_at_ss.str()},
-                    {"consumerGroup", nlohmann::json(nullptr)},
-                    {"leaseId", result.lease_id.has_value() ? nlohmann::json(*result.lease_id) : nlohmann::json(nullptr)}
-                };
-                response["messages"].push_back(msg_json);
+                spdlog::info("Worker thread: POP completed, got {} messages", result.messages.size());
+                
+                if (*aborted || is_shutting_down_.load()) {
+                    spdlog::debug("Request aborted after POP, skipping defer");
+                    return;
+                }
+                
+                // ✅ CRITICAL: Use Loop::defer to get back to event loop thread!
+                // This is the ONLY thread-safe way to use res
+                uWS::Loop::get()->defer([this, res, result, aborted]() {
+                    // NOW in event loop thread - safe to use res!
+                    if (*aborted) {
+                        spdlog::debug("Request aborted in defer callback");
+                        return;
+                    }
+                    
+                    try {
+                        if (result.messages.empty()) {
+                            res->cork([this, res]() {
+                                setup_cors_headers(res);
+                                res->writeStatus("204");
+                                res->end();
+                            });
+                        } else {
+                            // Build response JSON
+                            nlohmann::json response = {{"messages", nlohmann::json::array()}};
+                            
+                            for (const auto& msg : result.messages) {
+                                // Format timestamp
+                                auto time_t = std::chrono::system_clock::to_time_t(msg.created_at);
+                                auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+                                    msg.created_at.time_since_epoch()) % 1000;
+                                
+                                std::stringstream created_at_ss;
+                                created_at_ss << std::put_time(std::gmtime(&time_t), "%Y-%m-%dT%H:%M:%S");
+                                created_at_ss << '.' << std::setfill('0') << std::setw(3) << ms.count() << 'Z';
+                                
+                                nlohmann::json msg_json = {
+                                    {"id", msg.id},
+                                    {"transactionId", msg.transaction_id},
+                                    {"traceId", msg.trace_id.empty() ? nlohmann::json(nullptr) : nlohmann::json(msg.trace_id)},
+                                    {"queue", msg.queue_name},
+                                    {"partition", msg.partition_name},
+                                    {"data", msg.payload},
+                                    {"retryCount", msg.retry_count},
+                                    {"priority", msg.priority},
+                                    {"createdAt", created_at_ss.str()},
+                                    {"consumerGroup", nlohmann::json(nullptr)},
+                                    {"leaseId", result.lease_id.has_value() ? nlohmann::json(*result.lease_id) : nlohmann::json(nullptr)}
+                                };
+                                response["messages"].push_back(msg_json);
+                            }
+                            
+                            // Send response in event loop thread (safe!)
+                            res->cork([this, res, response]() {
+                                send_json_response(res, response);
+                            });
+                        }
+                    } catch (const std::exception& e) {
+                        spdlog::error("Error in defer callback: {}", e.what());
+                        res->cork([this, res, e]() {
+                            send_error_response(res, e.what(), 500);
+                        });
+                    }
+                });
+                
+            } catch (const std::exception& e) {
+                spdlog::error("Error in worker thread: {}", e.what());
+                
+                if (*aborted) return;
+                
+                // Defer error response back to event loop
+                uWS::Loop::get()->defer([this, res, e, aborted]() {
+                    if (*aborted) return;
+                    
+                    res->cork([this, res, e]() {
+                        send_error_response(res, e.what(), 500);
+                    });
+                });
             }
-            
-            send_json_response(res, response);
-        }
+        });
         
     } catch (const std::exception& e) {
+        if (*aborted) return;
         send_error_response(res, e.what(), 500);
     }
 }
@@ -374,10 +482,14 @@ void QueenServer::handle_pop_queue(uWS::HttpResponse<false>* res, uWS::HttpReque
             };
             
             for (const auto& msg : result.messages) {
-                // Format timestamp for createdAt
+                // Format timestamp for createdAt with milliseconds
                 auto time_t = std::chrono::system_clock::to_time_t(msg.created_at);
+                auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+                    msg.created_at.time_since_epoch()) % 1000;
+                
                 std::stringstream created_at_ss;
-                created_at_ss << std::put_time(std::gmtime(&time_t), "%Y-%m-%dT%H:%M:%S.000Z");
+                created_at_ss << std::put_time(std::gmtime(&time_t), "%Y-%m-%dT%H:%M:%S");
+                created_at_ss << '.' << std::setfill('0') << std::setw(3) << ms.count() << 'Z';
                 
                 nlohmann::json msg_json = {
                     {"id", msg.id},
@@ -437,10 +549,14 @@ void QueenServer::handle_pop_filtered(uWS::HttpResponse<false>* res, uWS::HttpRe
             };
             
             for (const auto& msg : result.messages) {
-                // Format timestamp for createdAt
+                // Format timestamp for createdAt with milliseconds
                 auto time_t = std::chrono::system_clock::to_time_t(msg.created_at);
+                auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+                    msg.created_at.time_since_epoch()) % 1000;
+                
                 std::stringstream created_at_ss;
-                created_at_ss << std::put_time(std::gmtime(&time_t), "%Y-%m-%dT%H:%M:%S.000Z");
+                created_at_ss << std::put_time(std::gmtime(&time_t), "%Y-%m-%dT%H:%M:%S");
+                created_at_ss << '.' << std::setfill('0') << std::setw(3) << ms.count() << 'Z';
                 
                 nlohmann::json msg_json = {
                     {"id", msg.id},
@@ -622,8 +738,16 @@ void QueenServer::handle_transaction(uWS::HttpResponse<false>* res, uWS::HttpReq
 }
 
 void QueenServer::handle_ack_batch(uWS::HttpResponse<false>* res, uWS::HttpRequest* req) {
+    // Track if connection was aborted
+    auto aborted = std::make_shared<bool>(false);
+    res->onAborted([aborted]() {
+        *aborted = true;
+    });
+    
     read_json_body(res,
-        [this, res](const nlohmann::json& body) {
+        [this, res, aborted](const nlohmann::json& body) {
+            if (*aborted) return;
+            
             try {
                 if (!body.contains("acknowledgments") || !body["acknowledgments"].is_array()) {
                     send_error_response(res, "acknowledgments array is required", 400);
@@ -660,29 +784,79 @@ void QueenServer::handle_ack_batch(uWS::HttpResponse<false>* res, uWS::HttpReque
                     ack_items.push_back(ack);
                 }
                 
-                auto results = queue_manager_->acknowledge_messages(ack_items, consumer_group);
-                
-                nlohmann::json response = {
-                    {"processed", results.size()},
-                    {"results", nlohmann::json::array()}
-                };
-                
-                // Build results array - match Node.js format
-                for (const auto& ack_result : results) {
-                    nlohmann::json result_item = {
-                        {"transactionId", ack_result.transaction_id},
-                        {"status", ack_result.status}
-                    };
-                    response["results"].push_back(result_item);
-                }
-                
-                send_json_response(res, response);
+                // ⚡ Offload to ThreadPool - worker does ONLY database work
+                thread_pool_->push([this, res, ack_items, consumer_group, aborted]() {
+                    if (is_shutting_down_.load()) return;
+                    
+                    spdlog::info("Worker thread: Starting batch ACK for {} items", ack_items.size());
+                    
+                    try {
+                        // Worker thread: ONLY blocking database work
+                        auto results = queue_manager_->acknowledge_messages(ack_items, consumer_group);
+                        
+                        spdlog::info("Worker thread: Batch ACK completed");
+                        
+                        if (*aborted) {
+                            spdlog::debug("Request aborted, skipping defer");
+                            return;
+                        }
+                        
+                        // ✅ CRITICAL: Use Loop::defer to get back to event loop thread!
+                        uWS::Loop::get()->defer([this, res, results, aborted]() {
+                            // NOW in event loop thread - safe to use res!
+                            if (*aborted) return;
+                            
+                            try {
+                                // Build response
+                                nlohmann::json response = {
+                                    {"processed", results.size()},
+                                    {"results", nlohmann::json::array()}
+                                };
+                                
+                                for (const auto& ack_result : results) {
+                                    nlohmann::json result_item = {
+                                        {"transactionId", ack_result.transaction_id},
+                                        {"status", ack_result.status}
+                                    };
+                                    response["results"].push_back(result_item);
+                                }
+                                
+                                // Send in event loop thread with cork
+                                res->cork([this, res, response]() {
+                                    send_json_response(res, response);
+                                });
+                                
+                            } catch (const std::exception& e) {
+                                spdlog::error("Error building ACK response: {}", e.what());
+                                res->cork([this, res, e]() {
+                                    send_error_response(res, e.what(), 500);
+                                });
+                            }
+                        });
+                        
+                    } catch (const std::exception& e) {
+                        spdlog::error("Error in ACK worker thread: {}", e.what());
+                        
+                        if (*aborted) return;
+                        
+                        // Defer error response back to event loop
+                        uWS::Loop::get()->defer([this, res, e, aborted]() {
+                            if (*aborted) return;
+                            
+                            res->cork([this, res, e]() {
+                                send_error_response(res, e.what(), 500);
+                            });
+                        });
+                    }
+                });  // Lambda returns void ✓
                 
             } catch (const std::exception& e) {
+                if (*aborted) return;
                 send_error_response(res, e.what(), 500);
             }
         },
-        [this, res](const std::string& error) {
+        [this, res, aborted](const std::string& error) {
+            if (*aborted) return;
             send_error_response(res, error, 400);
         }
     );
@@ -755,7 +929,33 @@ void QueenServer::handle_health(uWS::HttpResponse<false>* res, uWS::HttpRequest*
     }
 }
 
-void QueenServer::setup_routes() {
+// Static helper for CORS headers (used by all threads)
+static void setup_cors_headers(uWS::HttpResponse<false>* res) {
+    res->writeHeader("Access-Control-Allow-Origin", "*");
+    res->writeHeader("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS");
+    res->writeHeader("Access-Control-Allow-Headers", "Content-Type, Authorization");
+    res->writeHeader("Access-Control-Max-Age", "86400");
+}
+
+// Static helper to send JSON responses
+static void send_json_response(uWS::HttpResponse<false>* res, const nlohmann::json& json, int status_code = 200) {
+    setup_cors_headers(res);
+    res->writeHeader("Content-Type", "application/json");
+    std::string status_str = std::to_string(status_code);
+    res->writeStatus(status_str);
+    res->end(json.dump());
+}
+
+// Static helper to send error responses
+static void send_error_response(uWS::HttpResponse<false>* res, const std::string& error, int status_code = 500) {
+    nlohmann::json error_json = {{"error", error}};
+    send_json_response(res, error_json, status_code);
+}
+
+// Setup all routes on an App instance (called by each worker thread)
+void QueenServer::setup_app_routes(uWS::App& app, 
+                                   std::shared_ptr<QueueManager> queue_manager,
+                                   const Config& config) {
     // CORS preflight
     app_->options("/*", [this](auto* res, auto* req) {
         setup_cors_headers(res);
@@ -836,9 +1036,27 @@ bool QueenServer::start() {
 }
 
 void QueenServer::stop() {
-    // uWebSockets doesn't have a clean shutdown method in the simple API
-    // In a production implementation, you'd need to handle this more gracefully
-    spdlog::info("Server shutdown requested");
+    if (is_shutting_down_.exchange(true)) {
+        spdlog::warn("Shutdown already in progress - forcing exit");
+        std::_Exit(0);  // Force immediate exit, skip destructors
+    }
+    
+    spdlog::info("Server shutdown requested - stopping thread pool");
+    
+    if (thread_pool_) {
+        try {
+            spdlog::info("Waiting for {} worker threads to finish...", thread_pool_->pool_size());
+            thread_pool_->stop();
+            spdlog::info("✅ Thread pool stopped gracefully");
+        } catch (const std::exception& e) {
+            spdlog::error("Error stopping thread pool: {}", e.what());
+        }
+    }
+    
+    spdlog::info("✅ Shutdown complete - exiting cleanly");
+    
+    // Clean exit - skip static destructors that may cause issues
+    std::_Exit(0);
 }
 
 // HttpUtils implementation

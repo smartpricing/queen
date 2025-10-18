@@ -41,8 +41,12 @@ VENDOR_DIR = vendor
 BUILD_DIR = build
 BIN_DIR = bin
 
-# Source files
-SOURCES = $(wildcard $(SRC_DIR)/*.cpp) $(wildcard $(SRC_DIR)/**/*.cpp)
+# Source files - use multi_app versions
+SOURCES = $(SRC_DIR)/main_multi_app.cpp \
+          $(SRC_DIR)/multi_app_server.cpp \
+          $(wildcard $(SRC_DIR)/database/*.cpp) \
+          $(wildcard $(SRC_DIR)/managers/*.cpp) \
+          $(wildcard $(SRC_DIR)/services/*.cpp)
 OBJECTS = $(SOURCES:$(SRC_DIR)/%.cpp=$(BUILD_DIR)/%.o)
 
 # uSockets source files (C and C++ files)

@@ -3,7 +3,7 @@ import fs from 'fs';
 
 const QUEUE_NAME = 'benchmark-queue-001';
 const NUMBER_OF_CONSUMERS = 10;
-const BATCH_SIZE = 10;
+const BATCH_SIZE = 1000;
 const CONSUME_MODE = 'partition';
 
 // Global metrics tracking
