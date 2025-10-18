@@ -113,19 +113,23 @@ export async function testBatchMessagePush(client) {
     
     // Push batch
     await client.push(`${queue}/batch-partition`, messages);
-    
+
     // Verify messages were stored
     const count = await getMessageCount(queue, 'batch-partition');
+    console.log('count', count, batchSize);
     if (count !== batchSize) {
       throw new Error(`Expected ${batchSize} messages in database, got ${count}`);
     }
-    
+    console.log('count', count);
     // Take all messages
     const received = [];
     for await (const msg of client.take(`${queue}/batch-partition`, { limit: batchSize })) {
       received.push(msg);
+      console.log('msg', msg);
       await client.ack(msg);
     }
+
+    console.log('received', received.length);
     
     if (received.length !== batchSize) {
       throw new Error(`Expected ${batchSize} messages, got ${received.length}`);
@@ -233,6 +237,7 @@ export async function testDelayedProcessing(client) {
     await client.queue(queue, {
       delayedProcessing: 2 // 2 seconds delay
     });
+
     
     const startTime = Date.now();
     

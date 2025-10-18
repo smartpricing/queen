@@ -7,3 +7,7 @@ node_modules
 src/webapp-dist
 webapp/node_modules
 webapp/dist
+
+src-cpp/vendor
+src-cpp/build
+src-cpp/bin

@@ -154,8 +154,6 @@ export async function workerQueueTest(client) {
         failTest('Expected transaction to fail, got ' + error);
         } catch (error) {}
 
-
-
         passTest('Worker Queue test passed');
     } catch (error) {
         console.error(error);
