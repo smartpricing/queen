@@ -95,6 +95,133 @@ static bool get_query_param_bool(uWS::HttpRequest* req, const std::string& key, 
     return value == "true" || value == "1";
 }
 
+// Async POP polling helper structure
+struct AsyncPopState {
+    uWS::HttpResponse<false>* res;
+    std::shared_ptr<QueueManager> queue_manager;
+    std::string queue_name;
+    std::string partition_name;
+    std::string consumer_group;
+    int batch;
+    int worker_id;
+    std::chrono::steady_clock::time_point deadline;
+    std::chrono::steady_clock::time_point start_time;
+    std::shared_ptr<bool> aborted;
+    uWS::Loop* loop;
+    us_timer_t* timer;
+    int retry_count;
+    int current_interval_ms;  // Current backoff interval
+};
+
+// Timer callback for async POP retries
+static void pop_retry_timer(us_timer_t* timer) {
+    // Correctly read the pointer (we stored AsyncPopState*, not AsyncPopState**)
+    AsyncPopState* state = *(AsyncPopState**)us_timer_ext(timer);
+    
+    // Check if already cleaned up (safety)
+    if (state == nullptr) {
+        us_timer_close(timer);
+        return;
+    }
+    
+    if (*state->aborted) {
+        spdlog::debug("[Worker {}] POP aborted, canceling retries", state->worker_id);
+        *(AsyncPopState**)us_timer_ext(timer) = nullptr;  // Mark as cleaned up
+        us_timer_close(timer);
+        delete state;
+        return;
+    }
+    
+    auto now = std::chrono::steady_clock::now();
+    if (now >= state->deadline) {
+        // Timeout reached, send empty response
+        auto duration_ms = std::chrono::duration_cast<std::chrono::milliseconds>(now - state->start_time).count();
+        spdlog::info("[Worker {}] <<< POP END (timeout): {}/{}, got 0 msgs, took {}ms, retries={}", 
+                    state->worker_id, state->queue_name, state->partition_name, duration_ms, state->retry_count);
+        
+        if (!*state->aborted) {
+            setup_cors_headers(state->res);
+            state->res->writeStatus("204");
+            state->res->end();
+        }
+        
+        *(AsyncPopState**)us_timer_ext(timer) = nullptr;  // Mark as cleaned up
+        us_timer_close(timer);
+        delete state;
+        return;
+    }
+    
+    // Try to pop again (non-blocking single attempt)
+    PopOptions options;
+    options.wait = false;  // Non-blocking!
+    options.timeout = 0;
+    options.batch = state->batch;
+    
+    state->retry_count++;
+    
+    try {
+        auto result = state->queue_manager->pop_messages(
+            state->queue_name, 
+            state->partition_name.empty() ? std::nullopt : std::optional<std::string>(state->partition_name),
+            state->consumer_group, 
+            options
+        );
+        
+        if (!result.messages.empty()) {
+            // Found messages! Send response
+            auto duration_ms = std::chrono::duration_cast<std::chrono::milliseconds>(now - state->start_time).count();
+            spdlog::info("[Worker {}] <<< POP END (found): {}/{}, got {} msgs, took {}ms, retries={}", 
+                        state->worker_id, state->queue_name, state->partition_name, 
+                        result.messages.size(), duration_ms, state->retry_count);
+            
+            if (!*state->aborted) {
+                nlohmann::json response = {{"messages", nlohmann::json::array()}};
+                
+                for (const auto& msg : result.messages) {
+                    auto time_t = std::chrono::system_clock::to_time_t(msg.created_at);
+                    auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+                        msg.created_at.time_since_epoch()) % 1000;
+                    
+                    std::stringstream created_at_ss;
+                    created_at_ss << std::put_time(std::gmtime(&time_t), "%Y-%m-%dT%H:%M:%S");
+                    created_at_ss << '.' << std::setfill('0') << std::setw(3) << ms.count() << 'Z';
+                    
+                    nlohmann::json msg_json = {
+                        {"id", msg.id},
+                        {"transactionId", msg.transaction_id},
+                        {"traceId", msg.trace_id.empty() ? nlohmann::json(nullptr) : nlohmann::json(msg.trace_id)},
+                        {"queue", msg.queue_name},
+                        {"partition", msg.partition_name},
+                        {"data", msg.payload},
+                        {"retryCount", msg.retry_count},
+                        {"priority", msg.priority},
+                        {"createdAt", created_at_ss.str()},
+                        {"consumerGroup", nlohmann::json(nullptr)},
+                        {"leaseId", result.lease_id.has_value() ? nlohmann::json(*result.lease_id) : nlohmann::json(nullptr)}
+                    };
+                    response["messages"].push_back(msg_json);
+                }
+                
+                send_json_response(state->res, response);
+            }
+            
+            *(AsyncPopState**)us_timer_ext(timer) = nullptr;  // Mark as cleaned up
+            us_timer_close(timer);
+            delete state;
+            return;
+        }
+    } catch (const std::exception& e) {
+        spdlog::error("[Worker {}] POP retry error: {}", state->worker_id, e.what());
+    }
+    
+    // No messages yet, apply exponential backoff
+    // Double the interval, max 2000ms
+    state->current_interval_ms = std::min(state->current_interval_ms * 2, 2000);
+    
+    // Update timer with new interval
+    us_timer_set(timer, pop_retry_timer, state->current_interval_ms, state->current_interval_ms);
+}
+
 // Setup routes for a worker app
 static void setup_worker_routes(uWS::App* app, 
                                 std::shared_ptr<QueueManager> queue_manager,
@@ -263,7 +390,7 @@ static void setup_worker_routes(uWS::App* app,
         );
     });
     
-    // POP from queue/partition
+    // POP from queue/partition (ASYNC - non-blocking!)
     app->get("/api/v1/pop/queue/:queue/partition/:partition", [queue_manager, config, worker_id](auto* res, auto* req) {
         auto aborted = std::make_shared<bool>(false);
         res->onAborted([aborted]() { *aborted = true; });
@@ -273,33 +400,35 @@ static void setup_worker_routes(uWS::App* app,
             std::string partition_name = std::string(req->getParameter(1));
             std::string consumer_group = get_query_param(req, "consumerGroup", "__QUEUE_MODE__");
             
-            PopOptions options;
-            options.wait = get_query_param_bool(req, "wait", false);
-            options.timeout = get_query_param_int(req, "timeout", config.queue.default_timeout);
-            options.batch = get_query_param_int(req, "batch", config.queue.default_batch_size);
+            bool wait = get_query_param_bool(req, "wait", false);
+            int timeout_ms = get_query_param_int(req, "timeout", config.queue.default_timeout);
+            int batch = get_query_param_int(req, "batch", config.queue.default_batch_size);
             
             spdlog::info("[Worker {}] >>> POP START: {}/{}, batch={}, wait={}, timeout={}ms", 
-                        worker_id, queue_name, partition_name, options.batch, options.wait, options.timeout);
+                        worker_id, queue_name, partition_name, batch, wait, timeout_ms);
             
-            auto pop_start = std::chrono::steady_clock::now();
+            auto start_time = std::chrono::steady_clock::now();
+            
+            // Try once immediately (non-blocking)
+            PopOptions options;
+            options.wait = false;
+            options.timeout = 0;
+            options.batch = batch;
+            
             auto result = queue_manager->pop_messages(queue_name, partition_name, consumer_group, options);
-            auto pop_end = std::chrono::steady_clock::now();
-            auto pop_duration_ms = std::chrono::duration_cast<std::chrono::milliseconds>(pop_end - pop_start).count();
             
-            spdlog::info("[Worker {}] <<< POP END: {}/{}, got {} msgs, took {}ms", 
-                        worker_id, queue_name, partition_name, result.messages.size(), pop_duration_ms);
-            
-            if (*aborted) return;
-            
-            if (result.messages.empty()) {
-                setup_cors_headers(res);
-                res->writeStatus("204");
-                res->end();
-            } else {
+            if (!result.messages.empty()) {
+                // Found messages immediately!
+                auto duration_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+                    std::chrono::steady_clock::now() - start_time).count();
+                spdlog::info("[Worker {}] <<< POP END (immediate): {}/{}, got {} msgs, took {}ms", 
+                            worker_id, queue_name, partition_name, result.messages.size(), duration_ms);
+                
+                if (*aborted) return;
+                
                 nlohmann::json response = {{"messages", nlohmann::json::array()}};
                 
                 for (const auto& msg : result.messages) {
-                    // Format timestamp
                     auto time_t = std::chrono::system_clock::to_time_t(msg.created_at);
                     auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(
                         msg.created_at.time_since_epoch()) % 1000;
@@ -325,7 +454,51 @@ static void setup_worker_routes(uWS::App* app,
                 }
                 
                 send_json_response(res, response);
+                return;
             }
+            
+            // No messages found
+            if (!wait) {
+                // Not waiting, return empty immediately
+                spdlog::info("[Worker {}] <<< POP END (no-wait): {}/{}, got 0 msgs", 
+                            worker_id, queue_name, partition_name);
+                
+                if (!*aborted) {
+                    setup_cors_headers(res);
+                    res->writeStatus("204");
+                    res->end();
+                }
+                return;
+            }
+            
+            // Start async polling (non-blocking!)
+            spdlog::debug("[Worker {}] POP starting async polling for {}/{}", 
+                         worker_id, queue_name, partition_name);
+            
+            auto* state = new AsyncPopState{
+                res,
+                queue_manager,
+                queue_name,
+                partition_name,
+                consumer_group,
+                batch,
+                worker_id,
+                start_time + std::chrono::milliseconds(timeout_ms),  // deadline
+                start_time,
+                aborted,
+                uWS::Loop::get(),
+                nullptr,
+                0,   // retry_count
+                100  // current_interval_ms - start with 100ms
+            };
+            
+            // Create timer with exponential backoff (100ms -> 200ms -> 400ms -> ... -> 2000ms max)
+            state->timer = us_create_timer((struct us_loop_t*)uWS::Loop::get(), 0, sizeof(AsyncPopState*));
+            *(AsyncPopState**)us_timer_ext(state->timer) = state;
+            
+            // Set initial timer to fire at 100ms
+            us_timer_set(state->timer, pop_retry_timer, 100, 100);
+            
         } catch (const std::exception& e) {
             if (!*aborted) {
                 send_error_response(res, e.what(), 500);
