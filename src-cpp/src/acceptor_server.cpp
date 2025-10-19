@@ -296,6 +296,16 @@ static void setup_worker_routes(uWS::App* app,
                         options.ttl = opts.value("ttl", 3600);
                         options.retry_limit = opts.value("retryLimit", 3);
                         options.retry_delay = opts.value("retryDelay", 1000);
+                        options.dead_letter_queue = opts.value("deadLetterQueue", false);
+                        options.dlq_after_max_retries = opts.value("dlqAfterMaxRetries", false);
+                        options.priority = opts.value("priority", 0);
+                        options.delayed_processing = opts.value("delayedProcessing", 0);
+                        options.window_buffer = opts.value("windowBuffer", 0);
+                        options.retention_seconds = opts.value("retentionSeconds", 0);
+                        options.completed_retention_seconds = opts.value("completedRetentionSeconds", 0);
+                        options.retention_enabled = opts.value("retentionEnabled", false);
+                        options.encryption_enabled = opts.value("encryptionEnabled", false);
+                        options.max_wait_time_seconds = opts.value("maxWaitTimeSeconds", 0);
                     }
                     
                     spdlog::info("[Worker {}] Configuring queue: {}", worker_id, queue_name);
@@ -308,19 +318,21 @@ static void setup_worker_routes(uWS::App* app,
                             {"task", task_name},
                             {"queue", queue_name},
                             {"options", {
-                                {"completedRetentionSeconds", 0},
-                                {"deadLetterQueue", false},
-                                {"delayedProcessing", 0},
-                                {"dlqAfterMaxRetries", false},
+                                {"completedRetentionSeconds", options.completed_retention_seconds},
+                                {"deadLetterQueue", options.dead_letter_queue},
+                                {"delayedProcessing", options.delayed_processing},
+                                {"dlqAfterMaxRetries", options.dlq_after_max_retries},
                                 {"leaseTime", options.lease_time},
                                 {"maxSize", options.max_size},
-                                {"priority", 0},
-                                {"retentionEnabled", false},
-                                {"retentionSeconds", 0},
+                                {"priority", options.priority},
+                                {"retentionEnabled", options.retention_enabled},
+                                {"retentionSeconds", options.retention_seconds},
                                 {"retryDelay", options.retry_delay},
                                 {"retryLimit", options.retry_limit},
                                 {"ttl", options.ttl},
-                                {"windowBuffer", 0}
+                                {"windowBuffer", options.window_buffer},
+                                {"encryptionEnabled", options.encryption_enabled},
+                                {"maxWaitTimeSeconds", options.max_wait_time_seconds}
                             }}
                         };
                         send_json_response(res, response, 200);
@@ -364,6 +376,15 @@ static void setup_worker_routes(uWS::App* app,
                     
                     spdlog::info("[Worker {}] PUSH: {} items", worker_id, items.size());
                     auto results = queue_manager->push_messages(items);
+                    
+                    // Check if any message failed due to queue not existing - this should be a top-level error
+                    for (const auto& result : results) {
+                        if (result.status == "failed" && result.error && 
+                            result.error->find("does not exist") != std::string::npos) {
+                            send_error_response(res, *result.error, 400);
+                            return;
+                        }
+                    }
                     
                     nlohmann::json response = {{"messages", nlohmann::json::array()}};
                     for (const auto& result : results) {
@@ -414,6 +435,16 @@ static void setup_worker_routes(uWS::App* app,
             options.wait = false;
             options.timeout = 0;
             options.batch = batch;
+            
+            // Parse subscription mode
+            std::string sub_mode = get_query_param(req, "subscriptionMode", "");
+            if (!sub_mode.empty()) {
+                options.subscription_mode = sub_mode;
+            }
+            std::string sub_from = get_query_param(req, "subscriptionFrom", "");
+            if (!sub_from.empty()) {
+                options.subscription_from = sub_from;
+            }
             
             auto result = queue_manager->pop_messages(queue_name, partition_name, consumer_group, options);
             
@@ -597,6 +628,334 @@ static void setup_worker_routes(uWS::App* app,
         } catch (const std::exception& e) {
             send_error_response(res, e.what(), 500);
         }
+    });
+    
+    // POP from queue (any partition)
+    app->get("/api/v1/pop/queue/:queue", [queue_manager, config, worker_id](auto* res, auto* req) {
+        try {
+            std::string queue_name = std::string(req->getParameter(0));
+            std::string consumer_group = get_query_param(req, "consumerGroup", "__QUEUE_MODE__");
+            
+            bool wait = get_query_param_bool(req, "wait", false);
+            int timeout_ms = get_query_param_int(req, "timeout", config.queue.default_timeout);
+            int batch = get_query_param_int(req, "batch", config.queue.default_batch_size);
+            
+            spdlog::info("[Worker {}] >>> POP START (any partition): queue={}, batch={}, wait={}, timeout={}ms", 
+                        worker_id, queue_name, batch, wait, timeout_ms);
+            
+            PopOptions options;
+            options.wait = false;  // Force non-blocking for now
+            options.timeout = 0;
+            options.batch = batch;
+            
+            std::string sub_mode = get_query_param(req, "subscriptionMode", "");
+            if (!sub_mode.empty()) options.subscription_mode = sub_mode;
+            std::string sub_from = get_query_param(req, "subscriptionFrom", "");
+            if (!sub_from.empty()) options.subscription_from = sub_from;
+            
+            auto pop_start = std::chrono::steady_clock::now();
+            auto result = queue_manager->pop_messages(queue_name, std::nullopt, consumer_group, options);
+            auto pop_end = std::chrono::steady_clock::now();
+            auto pop_duration_ms = std::chrono::duration_cast<std::chrono::milliseconds>(pop_end - pop_start).count();
+            
+            spdlog::info("[Worker {}] <<< POP END (any partition): queue={}, got {} msgs, took {}ms", 
+                        worker_id, queue_name, result.messages.size(), pop_duration_ms);
+            
+            if (result.messages.empty()) {
+                setup_cors_headers(res);
+                res->writeStatus("204");
+                res->end();
+                return;
+            }
+            
+            nlohmann::json response = {{"messages", nlohmann::json::array()}};
+            for (const auto& msg : result.messages) {
+                auto time_t = std::chrono::system_clock::to_time_t(msg.created_at);
+                auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+                    msg.created_at.time_since_epoch()) % 1000;
+                
+                std::stringstream created_at_ss;
+                created_at_ss << std::put_time(std::gmtime(&time_t), "%Y-%m-%dT%H:%M:%S");
+                created_at_ss << '.' << std::setfill('0') << std::setw(3) << ms.count() << 'Z';
+                
+                nlohmann::json msg_json = {
+                    {"id", msg.id},
+                    {"transactionId", msg.transaction_id},
+                    {"traceId", msg.trace_id.empty() ? nlohmann::json(nullptr) : nlohmann::json(msg.trace_id)},
+                    {"queue", msg.queue_name},
+                    {"partition", msg.partition_name},
+                    {"data", msg.payload},
+                    {"retryCount", msg.retry_count},
+                    {"priority", msg.priority},
+                    {"createdAt", created_at_ss.str()},
+                    {"consumerGroup", nlohmann::json(nullptr)},
+                    {"leaseId", result.lease_id.has_value() ? nlohmann::json(*result.lease_id) : nlohmann::json(nullptr)}
+                };
+                response["messages"].push_back(msg_json);
+            }
+            
+            send_json_response(res, response);
+            
+        } catch (const std::exception& e) {
+            send_error_response(res, e.what(), 500);
+        }
+    });
+    
+    // Single ACK
+    app->post("/api/v1/ack", [queue_manager, worker_id](auto* res, auto* req) {
+        read_json_body(res,
+            [res, queue_manager, worker_id](const nlohmann::json& body) {
+                try {
+                    std::string transaction_id = "";
+                    if (body.contains("transactionId") && !body["transactionId"].is_null() && body["transactionId"].is_string()) {
+                        transaction_id = body["transactionId"];
+                    } else {
+                        send_error_response(res, "transactionId is required", 400);
+                        return;
+                    }
+                    
+                    std::string status = "completed";
+                    if (body.contains("status") && !body["status"].is_null() && body["status"].is_string()) {
+                        status = body["status"];
+                    }
+                    
+                    std::string consumer_group = "__QUEUE_MODE__";
+                    if (body.contains("consumerGroup") && !body["consumerGroup"].is_null() && body["consumerGroup"].is_string()) {
+                        consumer_group = body["consumerGroup"];
+                    }
+                    
+                    std::optional<std::string> error;
+                    if (body.contains("error") && !body["error"].is_null() && body["error"].is_string()) {
+                        error = body["error"];
+                    }
+                    
+                    std::optional<std::string> lease_id;
+                    if (body.contains("leaseId") && !body["leaseId"].is_null() && body["leaseId"].is_string()) {
+                        lease_id = body["leaseId"];
+                    }
+                    
+                    spdlog::debug("[Worker {}] >>> ACK START (single): {}", worker_id, transaction_id);
+                    
+                    auto ack_start = std::chrono::steady_clock::now();
+                    auto ack_result = queue_manager->acknowledge_message(transaction_id, status, error, consumer_group, lease_id);
+                    auto ack_end = std::chrono::steady_clock::now();
+                    auto ack_duration_ms = std::chrono::duration_cast<std::chrono::milliseconds>(ack_end - ack_start).count();
+                    
+                    spdlog::debug("[Worker {}] <<< ACK END (single): {}, took {}ms", worker_id, transaction_id, ack_duration_ms);
+                    
+                    if (ack_result.success) {
+                        auto now = std::chrono::system_clock::now();
+                        auto time_t = std::chrono::system_clock::to_time_t(now);
+                        auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+                            now.time_since_epoch()) % 1000;
+                        
+                        std::stringstream ss;
+                        ss << std::put_time(std::gmtime(&time_t), "%Y-%m-%dT%H:%M:%S");
+                        ss << '.' << std::setfill('0') << std::setw(3) << ms.count() << 'Z';
+                        
+                        nlohmann::json response = {
+                            {"transactionId", transaction_id},
+                            {"status", ack_result.status},
+                            {"consumerGroup", consumer_group == "__QUEUE_MODE__" ? nlohmann::json(nullptr) : nlohmann::json(consumer_group)},
+                            {"acknowledgedAt", ss.str()}
+                        };
+                        send_json_response(res, response);
+                    } else {
+                        send_error_response(res, "Failed to acknowledge message: " + ack_result.status, 500);
+                    }
+                    
+                } catch (const std::exception& e) {
+                    send_error_response(res, e.what(), 500);
+                }
+            },
+            [res](const std::string& error) {
+                send_error_response(res, error, 400);
+            }
+        );
+    });
+    
+    // POP with namespace/task filtering (no specific queue)
+    app->get("/api/v1/pop", [queue_manager, config, worker_id](auto* res, auto* req) {
+        try {
+            std::string consumer_group = get_query_param(req, "consumerGroup", "__QUEUE_MODE__");
+            std::string namespace_param = get_query_param(req, "namespace", "");
+            std::string task_param = get_query_param(req, "task", "");
+            
+            std::optional<std::string> namespace_name = namespace_param.empty() ? std::nullopt : std::optional<std::string>(namespace_param);
+            std::optional<std::string> task_name = task_param.empty() ? std::nullopt : std::optional<std::string>(task_param);
+            
+            PopOptions options;
+            options.wait = get_query_param_bool(req, "wait", false);
+            options.timeout = get_query_param_int(req, "timeout", config.queue.default_timeout);
+            options.batch = get_query_param_int(req, "batch", config.queue.default_batch_size);
+            
+            std::string sub_mode = get_query_param(req, "subscriptionMode", "");
+            if (!sub_mode.empty()) options.subscription_mode = sub_mode;
+            std::string sub_from = get_query_param(req, "subscriptionFrom", "");
+            if (!sub_from.empty()) options.subscription_from = sub_from;
+            
+            auto result = queue_manager->pop_with_namespace_task(namespace_name, task_name, consumer_group, options);
+            
+            if (result.messages.empty()) {
+                setup_cors_headers(res);
+                res->writeStatus("204");
+                res->end();
+                return;
+            }
+            
+            nlohmann::json response = {{"messages", nlohmann::json::array()}};
+            for (const auto& msg : result.messages) {
+                auto time_t = std::chrono::system_clock::to_time_t(msg.created_at);
+                auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+                    msg.created_at.time_since_epoch()) % 1000;
+                
+                std::stringstream created_at_ss;
+                created_at_ss << std::put_time(std::gmtime(&time_t), "%Y-%m-%dT%H:%M:%S");
+                created_at_ss << '.' << std::setfill('0') << std::setw(3) << ms.count() << 'Z';
+                
+                nlohmann::json msg_json = {
+                    {"id", msg.id},
+                    {"transactionId", msg.transaction_id},
+                    {"traceId", msg.trace_id.empty() ? nlohmann::json(nullptr) : nlohmann::json(msg.trace_id)},
+                    {"queue", msg.queue_name},
+                    {"partition", msg.partition_name},
+                    {"data", msg.payload},
+                    {"retryCount", msg.retry_count},
+                    {"priority", msg.priority},
+                    {"createdAt", created_at_ss.str()},
+                    {"consumerGroup", nlohmann::json(nullptr)},
+                    {"leaseId", result.lease_id.has_value() ? nlohmann::json(*result.lease_id) : nlohmann::json(nullptr)}
+                };
+                response["messages"].push_back(msg_json);
+            }
+            
+            send_json_response(res, response);
+            
+        } catch (const std::exception& e) {
+            send_error_response(res, e.what(), 500);
+        }
+    });
+    
+    // Transaction API (atomic operations)
+    app->post("/api/v1/transaction", [queue_manager, worker_id](auto* res, auto* req) {
+        read_json_body(res,
+            [res, queue_manager, worker_id](const nlohmann::json& body) {
+                try {
+                    if (!body.contains("operations") || !body["operations"].is_array()) {
+                        send_error_response(res, "operations array required", 400);
+                        return;
+                    }
+                    
+                    auto operations = body["operations"];
+                    if (operations.empty()) {
+                        send_error_response(res, "operations array cannot be empty", 400);
+                        return;
+                    }
+                    
+                    // Execute operations sequentially
+                    nlohmann::json results = nlohmann::json::array();
+                    
+                    for (const auto& op : operations) {
+                        if (!op.contains("type")) {
+                            send_error_response(res, "operation type required", 400);
+                            return;
+                        }
+                        
+                        std::string op_type = op["type"];
+                        
+                        if (op_type == "push") {
+                            // Push operation
+                            auto items_json = op["items"];
+                            std::vector<PushItem> items;
+                            
+                            for (const auto& item_json : items_json) {
+                                PushItem item;
+                                item.queue = item_json["queue"];
+                                item.partition = item_json.value("partition", "Default");
+                                item.payload = item_json.value("payload", nlohmann::json{});
+                                items.push_back(item);
+                            }
+                            
+                            auto push_results = queue_manager->push_messages(items);
+                            nlohmann::json push_result_json;
+                            push_result_json["type"] = "push";
+                            push_result_json["count"] = push_results.size();
+                            results.push_back(push_result_json);
+                            
+                        } else if (op_type == "ack") {
+                            // ACK operation
+                            std::string transaction_id = op["transactionId"];
+                            std::string status = op.value("status", "completed");
+                            std::string consumer_group = op.value("consumerGroup", "__QUEUE_MODE__");
+                            
+                            std::optional<std::string> error;
+                            if (op.contains("error") && !op["error"].is_null()) {
+                                error = op["error"];
+                            }
+                            
+                            auto ack_result = queue_manager->acknowledge_message(transaction_id, status, error, consumer_group, std::nullopt);
+                            nlohmann::json ack_result_json;
+                            ack_result_json["type"] = "ack";
+                            ack_result_json["success"] = ack_result.success;
+                            ack_result_json["transactionId"] = ack_result.transaction_id;
+                            ack_result_json["status"] = ack_result.status;
+                            results.push_back(ack_result_json);
+                            
+                        } else {
+                            send_error_response(res, "Unknown operation type: " + op_type, 400);
+                            return;
+                        }
+                    }
+                    
+                    nlohmann::json response = {
+                        {"success", true},
+                        {"results", results},
+                        {"transactionId", queue_manager->generate_uuid()}
+                    };
+                    
+                    send_json_response(res, response);
+                    
+                } catch (const std::exception& e) {
+                    send_error_response(res, e.what(), 400);
+                }
+            },
+            [res](const std::string& error) {
+                send_error_response(res, error, 400);
+            }
+        );
+    });
+    
+    // Lease extension
+    app->post("/api/v1/lease/:leaseId/extend", [queue_manager, worker_id](auto* res, auto* req) {
+        read_json_body(res,
+            [res, queue_manager, worker_id, req](const nlohmann::json& body) {
+                try {
+                    std::string lease_id = std::string(req->getParameter(0));
+                    int seconds = body.value("seconds", 60);
+                    
+                    spdlog::debug("[Worker {}] Extending lease: {}, seconds: {}", worker_id, lease_id, seconds);
+                    
+                    bool success = queue_manager->extend_message_lease(lease_id, seconds);
+                    
+                    if (success) {
+                        nlohmann::json response = {
+                            {"leaseId", lease_id},
+                            {"extended", true},
+                            {"seconds", seconds}
+                        };
+                        send_json_response(res, response);
+                    } else {
+                        send_error_response(res, "Lease not found or expired", 404);
+                    }
+                    
+                } catch (const std::exception& e) {
+                    send_error_response(res, e.what(), 500);
+                }
+            },
+            [res](const std::string& error) {
+                send_error_response(res, error, 400);
+            }
+        );
     });
 }
 

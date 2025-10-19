@@ -703,6 +703,24 @@ std::string QueueManager::acquire_partition_lease(const std::string& queue_name,
     try {
         ScopedConnection conn(db_pool_.get());
         
+        // Reclaim expired leases FIRST - this makes messages with expired leases available again
+        std::string reclaim_sql = R"(
+            UPDATE queen.partition_consumers
+            SET lease_expires_at = NULL,
+                lease_acquired_at = NULL,
+                message_batch = NULL,
+                batch_size = 0,
+                acked_count = 0,
+                worker_id = NULL
+            WHERE lease_expires_at IS NOT NULL
+              AND lease_expires_at < NOW()
+        )";
+        
+        auto reclaim_result = QueryResult(conn->exec(reclaim_sql));
+        if (reclaim_result.is_success()) {
+            spdlog::debug("Reclaimed expired leases");
+        }
+        
         std::string lease_id = generate_uuid();
         
         // Check if this is a new consumer group with subscription preferences
@@ -867,9 +885,31 @@ PopResult QueueManager::pop_from_queue_partition(const std::string& queue_name,
             return result; // Partition not accessible due to window buffer
         }
         
-        // Acquire lease for this partition
+        // Get queue configuration FIRST (for lease_time, delayed_processing, etc.)
+        ScopedConnection config_conn(db_pool_.get());
+        std::string config_sql = R"(
+            SELECT q.delayed_processing, q.max_wait_time_seconds, q.lease_time
+            FROM queen.queues q
+            WHERE q.name = $1
+        )";
+        
+        auto config_result = QueryResult(config_conn->exec_params(config_sql, {queue_name}));
+        int delayed_processing = 0;
+        int max_wait_time = 0;
+        int lease_time = 300;  // Default
+        
+        if (config_result.is_success() && config_result.num_rows() > 0) {
+            std::string delay_str = config_result.get_value(0, "delayed_processing");
+            std::string wait_str = config_result.get_value(0, "max_wait_time_seconds");
+            std::string lease_str = config_result.get_value(0, "lease_time");
+            delayed_processing = delay_str.empty() ? 0 : std::stoi(delay_str);
+            max_wait_time = wait_str.empty() ? 0 : std::stoi(wait_str);
+            lease_time = lease_str.empty() ? 300 : std::stoi(lease_str);
+        }
+        
+        // Acquire lease for this partition using the configured lease_time
         std::string lease_id = acquire_partition_lease(queue_name, partition_name, 
-                                                     consumer_group, 300, options);
+                                                     consumer_group, lease_time, options);
         if (lease_id.empty()) {
             return result; // No lease acquired, return empty result
         }
@@ -877,24 +917,6 @@ PopResult QueueManager::pop_from_queue_partition(const std::string& queue_name,
         result.lease_id = lease_id;
         
         ScopedConnection conn(db_pool_.get());
-        
-        // Get queue configuration for delayed_processing and max_wait_time_seconds
-        std::string config_sql = R"(
-            SELECT q.delayed_processing, q.max_wait_time_seconds
-            FROM queen.queues q
-            WHERE q.name = $1
-        )";
-        
-        auto config_result = QueryResult(conn->exec_params(config_sql, {queue_name}));
-        int delayed_processing = 0;
-        int max_wait_time = 0;
-        
-        if (config_result.is_success() && config_result.num_rows() > 0) {
-            std::string delay_str = config_result.get_value(0, "delayed_processing");
-            std::string wait_str = config_result.get_value(0, "max_wait_time_seconds");
-            delayed_processing = delay_str.empty() ? 0 : std::stoi(delay_str);
-            max_wait_time = wait_str.empty() ? 0 : std::stoi(wait_str);
-        }
         
         // Build WHERE clause with delayed processing and eviction filters
         std::string where_clause = R"(
@@ -930,19 +952,18 @@ PopResult QueueManager::pop_from_queue_partition(const std::string& queue_name,
         std::string limit_param = "$" + std::to_string(params.size());
         
         // Get messages from this partition with queue priority and encryption flag
+        // CRITICAL: Use FOR UPDATE OF m SKIP LOCKED for row-level locking and concurrency
         std::string sql = R"(
-            WITH message_batch AS (
-                SELECT m.id, m.transaction_id, m.payload, m.trace_id, m.created_at, m.is_encrypted,
-                       q.name as queue_name, p.name as partition_name, q.priority as queue_priority
-                FROM queen.messages m
-                JOIN queen.partitions p ON p.id = m.partition_id
-                JOIN queen.queues q ON q.id = p.queue_id
-                JOIN queen.partition_consumers pc ON pc.partition_id = p.id
-                )" + where_clause + R"(
-                ORDER BY m.created_at ASC, m.id ASC
-                LIMIT )" + limit_param + R"(
-            )
-            SELECT * FROM message_batch
+            SELECT m.id, m.transaction_id, m.payload, m.trace_id, m.created_at, m.is_encrypted,
+                   q.name as queue_name, p.name as partition_name, q.priority as queue_priority
+            FROM queen.messages m
+            JOIN queen.partitions p ON p.id = m.partition_id
+            JOIN queen.queues q ON q.id = p.queue_id
+            JOIN queen.partition_consumers pc ON pc.partition_id = p.id
+            )" + where_clause + R"(
+            ORDER BY m.created_at ASC, m.id ASC
+            LIMIT )" + limit_param + R"(
+            FOR UPDATE OF m SKIP LOCKED
         )";
         
         spdlog::debug("Pop query params: queue={}, partition={}, consumer_group={}, lease_id={}, batch={}", 
@@ -1147,6 +1168,31 @@ PopResult QueueManager::pop_from_any_partition(const std::string& queue_name,
     PopResult result;
     
     try {
+        // CRITICAL: Reclaim expired leases FIRST before looking for available partitions!
+        try {
+            ScopedConnection reclaim_conn(db_pool_.get());
+            std::string reclaim_sql = R"(
+                UPDATE queen.partition_consumers
+                SET lease_expires_at = NULL,
+                    lease_acquired_at = NULL,
+                    message_batch = NULL,
+                    batch_size = 0,
+                    acked_count = 0,
+                    worker_id = NULL
+                WHERE lease_expires_at IS NOT NULL
+                  AND lease_expires_at < NOW()
+            )";
+            
+            auto reclaim_result = QueryResult(reclaim_conn->exec(reclaim_sql));
+            if (reclaim_result.is_success()) {
+                spdlog::info("✅ Reclaimed expired leases in pop_from_any_partition for queue: {}", queue_name);
+            } else {
+                spdlog::warn("❌ Failed to reclaim leases: {}", reclaim_result.error_message());
+            }
+        } catch (const std::exception& e) {
+            spdlog::error("Exception during lease reclaim: {}", e.what());
+        }
+        
         // Get all partitions for this queue that have messages and no active lease
         ScopedConnection conn(db_pool_.get());
         
@@ -1218,9 +1264,11 @@ PopResult QueueManager::pop_from_any_partition(const std::string& queue_name,
         auto partitions_result = QueryResult(conn->exec_params(sql, params));
         
         if (!partitions_result.is_success() || partitions_result.num_rows() == 0) {
-            spdlog::debug("No available partitions found for queue: {}", queue_name);
+            spdlog::info("No available partitions found for queue: {} (expired lease reclaim needed?)", queue_name);
             return result; // Empty result
         }
+        
+        spdlog::debug("Found {} available partitions for queue: {}", partitions_result.num_rows(), queue_name);
         
         // Try each partition until we successfully acquire a lease and get messages
         for (int i = 0; i < partitions_result.num_rows(); ++i) {
