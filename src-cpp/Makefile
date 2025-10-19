@@ -41,13 +41,21 @@ VENDOR_DIR = vendor
 BUILD_DIR = build
 BIN_DIR = bin
 
-# Source files - use multi_app versions
+# Source files - use multi_app versions (default)
 SOURCES = $(SRC_DIR)/main_multi_app.cpp \
           $(SRC_DIR)/multi_app_server.cpp \
           $(wildcard $(SRC_DIR)/database/*.cpp) \
           $(wildcard $(SRC_DIR)/managers/*.cpp) \
           $(wildcard $(SRC_DIR)/services/*.cpp)
 OBJECTS = $(SOURCES:$(SRC_DIR)/%.cpp=$(BUILD_DIR)/%.o)
+
+# Acceptor/Worker pattern sources
+ACCEPTOR_SOURCES = $(SRC_DIR)/main_acceptor.cpp \
+                   $(SRC_DIR)/acceptor_server.cpp \
+                   $(wildcard $(SRC_DIR)/database/*.cpp) \
+                   $(wildcard $(SRC_DIR)/managers/*.cpp) \
+                   $(wildcard $(SRC_DIR)/services/*.cpp)
+ACCEPTOR_OBJECTS = $(ACCEPTOR_SOURCES:$(SRC_DIR)/%.cpp=$(BUILD_DIR)/%.o)
 
 # uSockets source files (C and C++ files)
 USOCKETS_C_SOURCES = $(wildcard $(VENDOR_DIR)/uSockets/src/*.c) $(wildcard $(VENDOR_DIR)/uSockets/src/**/*.c)
@@ -56,8 +64,9 @@ USOCKETS_C_OBJECTS = $(USOCKETS_C_SOURCES:$(VENDOR_DIR)/uSockets/src/%.c=$(BUILD
 USOCKETS_CPP_OBJECTS = $(USOCKETS_CPP_SOURCES:$(VENDOR_DIR)/uSockets/src/%.cpp=$(BUILD_DIR)/usockets/%.o)
 USOCKETS_OBJECTS = $(USOCKETS_C_OBJECTS) $(USOCKETS_CPP_OBJECTS)
 
-# Target executable
+# Target executables
 TARGET = $(BIN_DIR)/queen-server
+ACCEPTOR_TARGET = $(BIN_DIR)/queen-acceptor
 
 # Header-only dependencies (will be downloaded)
 UWS_URL = https://github.com/uNetworking/uWebSockets/archive/refs/heads/master.zip
@@ -65,9 +74,15 @@ USOCKETS_URL = https://github.com/uNetworking/uSockets/archive/refs/heads/master
 NLOHMANN_JSON_URL = https://github.com/nlohmann/json/releases/download/v3.11.3/json.hpp
 SPDLOG_URL = https://github.com/gabime/spdlog/archive/refs/heads/v1.x.zip
 
-.PHONY: all clean deps setup test
+.PHONY: all clean deps setup test acceptor both
 
 all: setup deps $(TARGET)
+
+# Build both server variants
+both: setup deps $(TARGET) $(ACCEPTOR_TARGET)
+
+# Build acceptor/worker variant
+acceptor: setup deps $(ACCEPTOR_TARGET)
 
 # Create directory structure
 setup:
@@ -110,11 +125,17 @@ $(VENDOR_DIR)/.deps_ready: setup
 	@touch $(VENDOR_DIR)/.deps_ready
 	@echo "Dependencies ready!"
 
-# Build target
+# Build SO_REUSEPORT target (default)
 $(TARGET): $(OBJECTS) $(USOCKETS_OBJECTS)
 	@echo "Linking $(TARGET)..."
 	@$(CXX) $(OBJECTS) $(USOCKETS_OBJECTS) -o $@ $(LIBS)
-	@echo "Build complete!"
+	@echo "Build complete! (SO_REUSEPORT pattern)"
+
+# Build Acceptor/Worker target
+$(ACCEPTOR_TARGET): $(ACCEPTOR_OBJECTS) $(USOCKETS_OBJECTS)
+	@echo "Linking $(ACCEPTOR_TARGET)..."
+	@$(CXX) $(ACCEPTOR_OBJECTS) $(USOCKETS_OBJECTS) -o $@ $(LIBS)
+	@echo "Build complete! (Acceptor/Worker pattern)"
 
 # Compile C++ source files
 $(BUILD_DIR)/%.o: $(SRC_DIR)/%.cpp
@@ -188,7 +209,9 @@ help:
 	@echo "Queen C++ Build System"
 	@echo ""
 	@echo "Targets:"
-	@echo "  all          - Build everything (default)"
+	@echo "  all          - Build queen-server (SO_REUSEPORT pattern, default)"
+	@echo "  acceptor     - Build queen-acceptor (Acceptor/Worker pattern)"
+	@echo "  both         - Build both server variants"
 	@echo "  deps         - Download header-only dependencies"
 	@echo "  test         - Run Node.js test suite against C++ server"
 	@echo "  clean        - Remove build artifacts"
@@ -196,6 +219,12 @@ help:
 	@echo "  dev          - Start development server"
 	@echo "  debug-paths  - Show detected include/library paths"
 	@echo ""
+	@echo "Server Variants:"
+	@echo "  queen-server     - SO_REUSEPORT (best on Linux, macOS falls back to 1 worker)"
+	@echo "  queen-acceptor   - Acceptor/Worker (cross-platform, works on all OSes)"
+	@echo ""
 	@echo "Dependencies:"
 	@echo "  install-deps-ubuntu  - Install system dependencies on Ubuntu"
 	@echo "  install-deps-macos   - Install system dependencies on macOS"
+	@echo ""
+	@echo "See SCALING_PATTERNS.md for detailed information on each pattern."

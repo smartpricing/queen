@@ -5,6 +5,7 @@ A high-performance C++ implementation of the Queen Message Queue system, built w
 ## Features
 
 - **High Performance**: Built with uWebSockets for maximum throughput
+- **Multiple Scaling Patterns**: SO_REUSEPORT (Linux) or Acceptor/Worker (cross-platform)
 - **PostgreSQL Backend**: Reliable, ACID-compliant message storage
 - **Header-Only Dependencies**: Easy compilation and deployment
 - **API Compatible**: Drop-in replacement for the Node.js version
@@ -31,24 +32,47 @@ brew install postgresql openssl curl unzip
 # Clone and build
 cd src-cpp
 make deps    # Download header-only dependencies
-make         # Build the server
+make         # Build queen-server (SO_REUSEPORT pattern, default)
+
+# Or build the acceptor/worker variant (cross-platform)
+make acceptor   # Build queen-acceptor
+
+# Or build both variants
+make both
 
 # Or do everything in one step
 make all
 ```
 
+**Two server variants are available:**
+
+1. **`queen-server`** - SO_REUSEPORT pattern (best performance on Linux)
+2. **`queen-acceptor`** - Acceptor/Worker pattern (works on all platforms)
+
+See [SCALING_PATTERNS.md](SCALING_PATTERNS.md) for detailed comparison.
+
 ### Run
 
 ```bash
-# Start the server
+# Start the SO_REUSEPORT server (default, best for Linux)
 ./bin/queen-server
 
-# Or with custom settings
+# Or start the Acceptor/Worker server (best for macOS/cross-platform)
+./bin/queen-acceptor
+
+# With custom settings
 ./bin/queen-server --port 6633 --host 0.0.0.0
 
 # Development mode with debug logging
 ./bin/queen-server --dev
+
+# Important: Set DB_POOL_SIZE to at least 2.5x the number of worker threads!
+DB_POOL_SIZE=50 ./bin/queen-server
 ```
+
+**Choosing which server to use:**
+- **Linux production**: Use `queen-server` (SO_REUSEPORT) for maximum performance
+- **macOS or cross-platform**: Use `queen-acceptor` (Acceptor/Worker) for true multi-threading
 
 ### Test with Existing Test Suite
 
@@ -63,6 +87,38 @@ make test
 cd .. && QUEEN_TEST_PORT=6633 node src/test/test-new.js
 ```
 
+## Scaling Patterns
+
+Queen C++ supports two scaling patterns:
+
+### 1. SO_REUSEPORT (Default - Linux Only)
+
+**File:** `bin/queen-server`
+
+Multiple workers listen on the same port. The OS kernel automatically load balances connections.
+
+```bash
+DB_POOL_SIZE=50 ./bin/queen-server
+```
+
+**Pros:** Maximum performance via kernel load balancing  
+**Cons:** Linux only (macOS falls back to 1 worker)
+
+### 2. Acceptor/Worker (Cross-Platform)
+
+**File:** `bin/queen-acceptor`
+
+One acceptor app distributes sockets to worker apps in round-robin fashion.
+
+```bash
+DB_POOL_SIZE=50 ./bin/queen-acceptor
+```
+
+**Pros:** Works on all platforms (macOS, Linux, Windows)  
+**Cons:** Slight overhead from socket transfer between threads
+
+See **[SCALING_PATTERNS.md](SCALING_PATTERNS.md)** for detailed comparison and performance benchmarks.
+
 ## Configuration
 
 The server uses the same environment variables as the Node.js version:
@@ -74,7 +130,7 @@ export PG_PORT=5432
 export PG_DB=postgres
 export PG_USER=postgres
 export PG_PASSWORD=postgres
-export DB_POOL_SIZE=150
+export DB_POOL_SIZE=50  # CRITICAL: Must be 2.5x worker count!
 
 # Server configuration  
 export HOST=0.0.0.0
@@ -85,6 +141,25 @@ export WORKER_ID=cpp-worker-1
 export DEFAULT_TIMEOUT=30000
 export DEFAULT_BATCH_SIZE=1
 ```
+
+### ⚠️ Critical: Database Pool Size
+
+**`DB_POOL_SIZE` must be at least 2.5x the number of worker threads!**
+
+```bash
+# 10 workers (default)
+DB_POOL_SIZE=50   # Minimum 25, recommended 50
+
+# 20 workers
+DB_POOL_SIZE=100  # Minimum 50, recommended 100
+
+# 50 workers  
+DB_POOL_SIZE=150  # Minimum 125, recommended 150
+```
+
+**Why?** Each worker can have multiple concurrent requests, and each needs a DB connection. Pool exhaustion causes "mutex lock failed" errors.
+
+See [CONFIGURATION.md](CONFIGURATION.md) for detailed tuning guide.
 
 ## API Compatibility
 
