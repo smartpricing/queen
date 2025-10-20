@@ -153,6 +153,10 @@ Includes:
 ./build.sh
 ```
 
+### Running on k8s
+
+[Running in k8s](server/k8s-example.yaml)
+
 ## 🔌 Raw HTTP API
 
 You can use Queen directly from HTTP without the JS client.

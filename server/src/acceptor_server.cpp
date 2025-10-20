@@ -1365,11 +1365,29 @@ static void setup_worker_routes(uWS::App* app,
     // Static File Serving (Frontend Dashboard)
     // ============================================================================
     
-    // Define webapp path (relative to binary location or absolute)
-    std::string webapp_root = "../webapp/dist";
+    // Define webapp path - check multiple locations
+    std::string webapp_root;
+    
+    // 1. Check environment variable first
+    const char* webapp_env = std::getenv("WEBAPP_ROOT");
+    if (webapp_env) {
+        webapp_root = webapp_env;
+    }
+    // 2. Check Docker/production location
+    else if (std::filesystem::exists("./webapp/dist")) {
+        webapp_root = "./webapp/dist";
+    }
+    // 3. Check development location (running from server/bin/)
+    else if (std::filesystem::exists("../webapp/dist")) {
+        webapp_root = "../webapp/dist";
+    }
+    // 4. Check alternative development location
+    else if (std::filesystem::exists("../../webapp/dist")) {
+        webapp_root = "../../webapp/dist";
+    }
     
     // Check if webapp directory exists
-    if (std::filesystem::exists(webapp_root)) {
+    if (!webapp_root.empty() && std::filesystem::exists(webapp_root)) {
         spdlog::info("[Worker {}] Static file serving enabled from: {}", worker_id, 
                     std::filesystem::absolute(webapp_root).string());
         
@@ -1433,8 +1451,9 @@ static void setup_worker_routes(uWS::App* app,
         });
         
     } else {
-        spdlog::warn("[Worker {}] Webapp directory not found at: {} - Static file serving disabled", 
-                    worker_id, std::filesystem::absolute(webapp_root).string());
+        spdlog::warn("[Worker {}] Webapp directory not found - Static file serving disabled", worker_id);
+        spdlog::warn("[Worker {}] Searched: ./webapp/dist, ../webapp/dist, ../../webapp/dist", worker_id);
+        spdlog::warn("[Worker {}] Set WEBAPP_ROOT environment variable to override", worker_id);
     }
 }
 
@@ -1524,7 +1543,6 @@ bool start_acceptor_server(const Config& config) {
     
     spdlog::info("Starting acceptor/worker pattern with {} workers (hardware cores: {})", 
                  num_workers, hardware_threads > 0 ? hardware_threads : 0);
-    spdlog::info("This pattern works on ALL platforms (macOS, Linux, Windows)");
     
     // Shared data for worker registration
     std::mutex init_mutex;
@@ -1551,7 +1569,7 @@ bool start_acceptor_server(const Config& config) {
         for (auto* worker : worker_apps) {
             acceptor->addChildApp(worker);
         }
-        spdlog::info("✅ Registered {} worker apps with acceptor", worker_apps.size());
+        spdlog::info("Registered {} worker apps with acceptor", worker_apps.size());
     }
     
     // Acceptor listens on port and distributes in round-robin

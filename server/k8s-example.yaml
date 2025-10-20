@@ -1,0 +1,64 @@
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  labels:
+    run: {{ $.Release.Name }}
+  name: {{ $.Release.Name }}
+  namespace: {{ $.Release.Namespace }}
+spec:
+  replicas: {{ $.Values.replicas }}
+  selector:
+    matchLabels:
+      run: {{ $.Release.Name }}
+  template:
+    metadata:
+      labels:
+        run: {{ $.Release.Name }}
+        app.kubernetes.io/name: {{ $.Release.Name }}
+        np.egress.postgres: 'true'
+      namespace: {{ $.Release.Namespace }}
+    spec:
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: kubernetes.io/hostname
+          whenUnsatisfiable: ScheduleAnyway
+          labelSelector:
+            matchLabels:
+              run: {{ $.Release.Name }}
+      containers:
+        - name: {{ $.Release.Name }}
+          imagePullPolicy: Always
+          image: {{ $.Values.image }}:{{ $.Values.imageTag }}
+          ports:
+            - containerPort: 6632
+          resources: {{- toYaml $.Values.resources | trim | nindent 12 }}
+          command: ['./bin/queen-server']
+          envFrom:
+            - secretRef:
+                name: postgres-{{ $.Values.env }}                
+          env:
+            - name: DB_POOL_SIZE
+              value: "{{ $.Values.dbPoolSize }}"
+            - name: NUM_WORKERS
+              value: "{{ $.Values.numWorkers }}"
+            - name: QUEUE_POLL_INTERVAL
+              value: "{{ $.Values.pollInterval }}"
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  labels:
+    run:  {{ .Release.Name }}
+  name:  {{ .Release.Name }}
+  namespace: {{ .Release.Namespace }}
+spec:
+  sessionAffinity: ClientIP
+  selector:
+    run: {{ .Release.Name }}
+  ports:
+    - name: port-1
+      port: 6632
+      protocol: TCP
+      targetPort: 6632

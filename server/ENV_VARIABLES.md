@@ -11,6 +11,7 @@ This document lists all environment variables supported by the Queen C++ server.
 | `WORKER_ID` | string | cpp-worker-1 | Unique identifier for this worker |
 | `APP_NAME` | string | queen-mq | Application name |
 | `NUM_WORKERS` | int | 10 | Number of worker threads (capped at CPU core count) |
+| `WEBAPP_ROOT` | string | auto-detect | Path to webapp/dist directory for dashboard (auto-detects if not set) |
 
 ## Database Configuration
 
