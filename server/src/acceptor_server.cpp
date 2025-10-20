@@ -16,6 +16,7 @@
 #include <fstream>
 #include <filesystem>
 #include <regex>
+#include <set>
 
 namespace queen {
 
@@ -140,8 +141,10 @@ static void pop_retry_timer(us_timer_t* timer) {
     if (now >= state->deadline) {
         // Timeout reached, send empty response
         auto duration_ms = std::chrono::duration_cast<std::chrono::milliseconds>(now - state->start_time).count();
-        spdlog::info("[Worker {}] <<< POP END (timeout): {}/{}, got 0 msgs, took {}ms, retries={}", 
-                    state->worker_id, state->queue_name, state->partition_name, duration_ms, state->retry_count);
+        auto pool_stats = state->queue_manager->get_pool_stats();
+        spdlog::info("[Worker {}] <<< POP END (timeout): {}/{}, got 0 msgs, took {}ms, retries={} | Pool: {}/{} conn ({} in use)", 
+                    state->worker_id, state->queue_name, state->partition_name, duration_ms, state->retry_count,
+                    pool_stats.available, pool_stats.total, pool_stats.in_use);
         
         if (!*state->aborted) {
             setup_cors_headers(state->res);
@@ -174,9 +177,11 @@ static void pop_retry_timer(us_timer_t* timer) {
         if (!result.messages.empty()) {
             // Found messages! Send response
             auto duration_ms = std::chrono::duration_cast<std::chrono::milliseconds>(now - state->start_time).count();
-            spdlog::info("[Worker {}] <<< POP END (found): {}/{}, got {} msgs, took {}ms, retries={}", 
+            auto pool_stats = state->queue_manager->get_pool_stats();
+            spdlog::info("[Worker {}] <<< POP END (found): {}/{}, got {} msgs, took {}ms, retries={} | Pool: {}/{} conn ({} in use)", 
                         state->worker_id, state->queue_name, state->partition_name, 
-                        result.messages.size(), duration_ms, state->retry_count);
+                        result.messages.size(), duration_ms, state->retry_count,
+                        pool_stats.available, pool_stats.total, pool_stats.in_use);
             
             if (!*state->aborted) {
                 nlohmann::json response = {{"messages", nlohmann::json::array()}};
@@ -501,7 +506,22 @@ static void setup_worker_routes(uWS::App* app,
                         items.push_back(std::move(item));
                     }
                     
-                    spdlog::info("[Worker {}] PUSH: {} items", worker_id, items.size());
+                    // Log unique queue/partition combinations
+                    std::set<std::string> targets;
+                    for (const auto& item : items) {
+                        targets.insert(item.queue + "/" + item.partition);
+                    }
+                    std::string targets_str;
+                    for (const auto& target : targets) {
+                        if (!targets_str.empty()) targets_str += ", ";
+                        targets_str += target;
+                    }
+                    
+                    auto pool_stats = queue_manager->get_pool_stats();
+                    spdlog::info("[Worker {}] >>> PUSH: {} items to [{}] | Pool: {}/{} conn ({} in use)", 
+                                worker_id, items.size(), targets_str, 
+                                pool_stats.available, pool_stats.total, pool_stats.in_use);
+                    
                     auto results = queue_manager->push_messages(items);
                     
                     // Check if any message failed due to queue not existing - this should be a top-level error
@@ -552,8 +572,10 @@ static void setup_worker_routes(uWS::App* app,
             int timeout_ms = get_query_param_int(req, "timeout", config.queue.default_timeout);
             int batch = get_query_param_int(req, "batch", config.queue.default_batch_size);
             
-            spdlog::info("[Worker {}] >>> POP START: {}/{}, batch={}, wait={}, timeout={}ms", 
-                        worker_id, queue_name, partition_name, batch, wait, timeout_ms);
+            auto pool_stats = queue_manager->get_pool_stats();
+            spdlog::info("[Worker {}] >>> POP START: {}/{}, batch={}, wait={}, timeout={}ms | Pool: {}/{} conn ({} in use)", 
+                        worker_id, queue_name, partition_name, batch, wait, timeout_ms,
+                        pool_stats.available, pool_stats.total, pool_stats.in_use);
             
             auto start_time = std::chrono::steady_clock::now();
             
@@ -579,8 +601,10 @@ static void setup_worker_routes(uWS::App* app,
                 // Found messages immediately!
                 auto duration_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
                     std::chrono::steady_clock::now() - start_time).count();
-                spdlog::info("[Worker {}] <<< POP END (immediate): {}/{}, got {} msgs, took {}ms", 
-                            worker_id, queue_name, partition_name, result.messages.size(), duration_ms);
+                auto pool_stats_end = queue_manager->get_pool_stats();
+                spdlog::info("[Worker {}] <<< POP END (immediate): {}/{}, got {} msgs, took {}ms | Pool: {}/{} conn ({} in use)", 
+                            worker_id, queue_name, partition_name, result.messages.size(), duration_ms,
+                            pool_stats_end.available, pool_stats_end.total, pool_stats_end.in_use);
                 
                 if (*aborted) return;
                 
@@ -618,8 +642,10 @@ static void setup_worker_routes(uWS::App* app,
             // No messages found
             if (!wait) {
                 // Not waiting, return empty immediately
-                spdlog::info("[Worker {}] <<< POP END (no-wait): {}/{}, got 0 msgs", 
-                            worker_id, queue_name, partition_name);
+                auto pool_stats_end = queue_manager->get_pool_stats();
+                spdlog::info("[Worker {}] <<< POP END (no-wait): {}/{}, got 0 msgs | Pool: {}/{} conn ({} in use)", 
+                            worker_id, queue_name, partition_name,
+                            pool_stats_end.available, pool_stats_end.total, pool_stats_end.in_use);
                 
                 if (!*aborted) {
                     setup_cors_headers(res);
@@ -759,6 +785,9 @@ static void setup_worker_routes(uWS::App* app,
     
     // POP from queue (any partition)
     app->get("/api/v1/pop/queue/:queue", [queue_manager, config, worker_id](auto* res, auto* req) {
+        auto aborted = std::make_shared<bool>(false);
+        res->onAborted([aborted]() { *aborted = true; });
+        
         try {
             std::string queue_name = std::string(req->getParameter(0));
             std::string consumer_group = get_query_param(req, "consumerGroup", "__QUEUE_MODE__");
@@ -767,64 +796,121 @@ static void setup_worker_routes(uWS::App* app,
             int timeout_ms = get_query_param_int(req, "timeout", config.queue.default_timeout);
             int batch = get_query_param_int(req, "batch", config.queue.default_batch_size);
             
-            spdlog::info("[Worker {}] >>> POP START (any partition): queue={}, batch={}, wait={}, timeout={}ms", 
-                        worker_id, queue_name, batch, wait, timeout_ms);
+            auto pool_stats = queue_manager->get_pool_stats();
+            spdlog::info("[Worker {}] >>> POP START (any partition): queue={}, batch={}, wait={}, timeout={}ms | Pool: {}/{} conn ({} in use)", 
+                        worker_id, queue_name, batch, wait, timeout_ms,
+                        pool_stats.available, pool_stats.total, pool_stats.in_use);
             
+            auto start_time = std::chrono::steady_clock::now();
+            
+            // Try once immediately (non-blocking)
             PopOptions options;
-            options.wait = false;  // Force non-blocking for now
+            options.wait = false;
             options.timeout = 0;
             options.batch = batch;
             
+            // Parse subscription mode
             std::string sub_mode = get_query_param(req, "subscriptionMode", "");
-            if (!sub_mode.empty()) options.subscription_mode = sub_mode;
+            if (!sub_mode.empty()) {
+                options.subscription_mode = sub_mode;
+            }
             std::string sub_from = get_query_param(req, "subscriptionFrom", "");
-            if (!sub_from.empty()) options.subscription_from = sub_from;
+            if (!sub_from.empty()) {
+                options.subscription_from = sub_from;
+            }
             
-            auto pop_start = std::chrono::steady_clock::now();
             auto result = queue_manager->pop_messages(queue_name, std::nullopt, consumer_group, options);
-            auto pop_end = std::chrono::steady_clock::now();
-            auto pop_duration_ms = std::chrono::duration_cast<std::chrono::milliseconds>(pop_end - pop_start).count();
             
-            spdlog::info("[Worker {}] <<< POP END (any partition): queue={}, got {} msgs, took {}ms", 
-                        worker_id, queue_name, result.messages.size(), pop_duration_ms);
-            
-            if (result.messages.empty()) {
-                setup_cors_headers(res);
-                res->writeStatus("204");
-                res->end();
+            if (!result.messages.empty()) {
+                // Found messages immediately!
+                auto duration_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+                    std::chrono::steady_clock::now() - start_time).count();
+                auto pool_stats_end = queue_manager->get_pool_stats();
+                spdlog::info("[Worker {}] <<< POP END (immediate, any partition): queue={}, got {} msgs, took {}ms | Pool: {}/{} conn ({} in use)", 
+                            worker_id, queue_name, result.messages.size(), duration_ms,
+                            pool_stats_end.available, pool_stats_end.total, pool_stats_end.in_use);
+                
+                if (*aborted) return;
+                
+                nlohmann::json response = {{"messages", nlohmann::json::array()}};
+                
+                for (const auto& msg : result.messages) {
+                    auto time_t = std::chrono::system_clock::to_time_t(msg.created_at);
+                    auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+                        msg.created_at.time_since_epoch()) % 1000;
+                    
+                    std::stringstream created_at_ss;
+                    created_at_ss << std::put_time(std::gmtime(&time_t), "%Y-%m-%dT%H:%M:%S");
+                    created_at_ss << '.' << std::setfill('0') << std::setw(3) << ms.count() << 'Z';
+                    
+                    nlohmann::json msg_json = {
+                        {"id", msg.id},
+                        {"transactionId", msg.transaction_id},
+                        {"traceId", msg.trace_id.empty() ? nlohmann::json(nullptr) : nlohmann::json(msg.trace_id)},
+                        {"queue", msg.queue_name},
+                        {"partition", msg.partition_name},
+                        {"data", msg.payload},
+                        {"retryCount", msg.retry_count},
+                        {"priority", msg.priority},
+                        {"createdAt", created_at_ss.str()},
+                        {"consumerGroup", nlohmann::json(nullptr)},
+                        {"leaseId", result.lease_id.has_value() ? nlohmann::json(*result.lease_id) : nlohmann::json(nullptr)}
+                    };
+                    response["messages"].push_back(msg_json);
+                }
+                
+                send_json_response(res, response);
                 return;
             }
             
-            nlohmann::json response = {{"messages", nlohmann::json::array()}};
-            for (const auto& msg : result.messages) {
-                auto time_t = std::chrono::system_clock::to_time_t(msg.created_at);
-                auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(
-                    msg.created_at.time_since_epoch()) % 1000;
+            // No messages found
+            if (!wait) {
+                // Not waiting, return empty immediately
+                auto pool_stats_end = queue_manager->get_pool_stats();
+                spdlog::info("[Worker {}] <<< POP END (no-wait, any partition): queue={}, got 0 msgs | Pool: {}/{} conn ({} in use)", 
+                            worker_id, queue_name,
+                            pool_stats_end.available, pool_stats_end.total, pool_stats_end.in_use);
                 
-                std::stringstream created_at_ss;
-                created_at_ss << std::put_time(std::gmtime(&time_t), "%Y-%m-%dT%H:%M:%S");
-                created_at_ss << '.' << std::setfill('0') << std::setw(3) << ms.count() << 'Z';
-                
-                nlohmann::json msg_json = {
-                    {"id", msg.id},
-                    {"transactionId", msg.transaction_id},
-                    {"traceId", msg.trace_id.empty() ? nlohmann::json(nullptr) : nlohmann::json(msg.trace_id)},
-                    {"queue", msg.queue_name},
-                    {"partition", msg.partition_name},
-                    {"data", msg.payload},
-                    {"retryCount", msg.retry_count},
-                    {"priority", msg.priority},
-                    {"createdAt", created_at_ss.str()},
-                    {"consumerGroup", nlohmann::json(nullptr)},
-                    {"leaseId", result.lease_id.has_value() ? nlohmann::json(*result.lease_id) : nlohmann::json(nullptr)}
-                };
-                response["messages"].push_back(msg_json);
+                if (!*aborted) {
+                    setup_cors_headers(res);
+                    res->writeStatus("204");
+                    res->end();
+                }
+                return;
             }
             
-            send_json_response(res, response);
+            // Start async polling (non-blocking!)
+            spdlog::debug("[Worker {}] POP starting async polling for queue={} (any partition)", 
+                         worker_id, queue_name);
+            
+            auto* state = new AsyncPopState{
+                res,
+                queue_manager,
+                queue_name,
+                "",  // Empty partition name means "any partition"
+                consumer_group,
+                batch,
+                worker_id,
+                start_time + std::chrono::milliseconds(timeout_ms),  // deadline
+                start_time,
+                aborted,
+                uWS::Loop::get(),
+                nullptr,
+                0,   // retry_count
+                100  // current_interval_ms - start with 100ms
+            };
+            
+            // Create timer with exponential backoff (100ms -> 200ms -> 400ms -> ... -> 2000ms max)
+            state->timer = us_create_timer((struct us_loop_t*)uWS::Loop::get(), 0, sizeof(AsyncPopState*));
+            *(AsyncPopState**)us_timer_ext(state->timer) = state;
+            
+            // Set initial timer to fire at 100ms
+            us_timer_set(state->timer, pop_retry_timer, 100, 100);
             
         } catch (const std::exception& e) {
-            send_error_response(res, e.what(), 500);
+            if (!*aborted) {
+                send_error_response(res, e.what(), 500);
+            }
         }
     });
     
@@ -1361,9 +1447,12 @@ static void worker_thread(const Config& config, int worker_id, int num_workers,
     try {
         // Thread-local database pool
         int pool_per_thread = std::max(5, config.database.pool_size / num_workers);
+        spdlog::debug("[Worker {}] Creating pool: size={}, acquisition_timeout={}", 
+                     worker_id, pool_per_thread, config.database.pool_acquisition_timeout);
         auto db_pool = std::make_shared<DatabasePool>(
             config.database.connection_string(),
-            pool_per_thread
+            pool_per_thread,
+            config.database.pool_acquisition_timeout
         );
         
         // Thread-local queue manager
@@ -1423,8 +1512,18 @@ bool start_acceptor_server(const Config& config) {
     spdlog::info("Encryption: {}", encryption_enabled ? "enabled" : "disabled");
     
     // Determine number of workers
-    int num_workers = std::min(10, static_cast<int>(std::thread::hardware_concurrency()));
-    spdlog::info("Starting acceptor/worker pattern with {} workers", num_workers);
+    int hardware_threads = static_cast<int>(std::thread::hardware_concurrency());
+    int num_workers = config.server.num_workers;
+    
+    // Only cap if hardware_threads is valid AND user requested more than 2x the hardware
+    // This allows users to override for containers/VMs where hardware_concurrency() may be wrong
+    if (hardware_threads > 0 && num_workers > hardware_threads * 2) {
+        spdlog::warn("NUM_WORKERS ({}) is more than 2x hardware concurrency ({}), this may cause performance issues", 
+                     num_workers, hardware_threads);
+    }
+    
+    spdlog::info("Starting acceptor/worker pattern with {} workers (hardware cores: {})", 
+                 num_workers, hardware_threads > 0 ? hardware_threads : 0);
     spdlog::info("This pattern works on ALL platforms (macOS, Linux, Windows)");
     
     // Shared data for worker registration

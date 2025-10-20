@@ -13,3 +13,4 @@ server/build
 server/bin
 
 helm
+upgrade.sh

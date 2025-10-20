@@ -102,6 +102,12 @@ private:
                                       const std::string& consumer_group,
                                       int lease_time_seconds,
                                       const PopOptions& options = PopOptions{});
+    std::string acquire_partition_lease(DatabaseConnection* conn,
+                                      const std::string& queue_name,
+                                      const std::string& partition_name,
+                                      const std::string& consumer_group,
+                                      int lease_time_seconds,
+                                      const PopOptions& options = PopOptions{});
     bool extend_lease(const std::string& lease_id, int seconds);
     void release_lease(const std::string& lease_id);
     
@@ -190,6 +196,14 @@ public:
     // Statistics and monitoring
     QueueStats get_queue_stats(const std::string& queue_name);
     std::vector<QueueStats> get_all_queue_stats();
+    
+    // Pool statistics
+    struct PoolStats {
+        size_t total;
+        size_t available;
+        size_t in_use;
+    };
+    PoolStats get_pool_stats() const;
     
     // Health check
     bool health_check();

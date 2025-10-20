@@ -48,11 +48,12 @@ private:
     std::string connection_string_;
     size_t pool_size_;
     size_t current_size_;
+    int acquisition_timeout_ms_;
     
     std::unique_ptr<DatabaseConnection> create_connection();
     
 public:
-    explicit DatabasePool(const std::string& connection_string, size_t pool_size = 10);
+    explicit DatabasePool(const std::string& connection_string, size_t pool_size = 10, int acquisition_timeout_ms = 10000);
     ~DatabasePool();
     
     std::unique_ptr<DatabaseConnection> get_connection();

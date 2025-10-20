@@ -84,8 +84,8 @@ bool DatabaseConnection::rollback_transaction() {
 }
 
 // DatabasePool Implementation
-DatabasePool::DatabasePool(const std::string& connection_string, size_t pool_size)
-    : connection_string_(connection_string), pool_size_(pool_size), current_size_(0) {
+DatabasePool::DatabasePool(const std::string& connection_string, size_t pool_size, int acquisition_timeout_ms)
+    : available_connections_(), mutex_(), condition_(), connection_string_(connection_string), pool_size_(pool_size), current_size_(0), acquisition_timeout_ms_(acquisition_timeout_ms) {
     
     // Pre-populate the pool
     for (size_t i = 0; i < pool_size_; ++i) {
@@ -104,7 +104,7 @@ DatabasePool::DatabasePool(const std::string& connection_string, size_t pool_siz
         throw std::runtime_error("Failed to create any database connections");
     }
     
-    spdlog::info("Database pool initialized with {}/{} connections", current_size_, pool_size_);
+    spdlog::info("Database pool initialized with {}/{} connections (acquisition timeout: {}ms)", current_size_, pool_size_, acquisition_timeout_ms_);
 }
 
 DatabasePool::~DatabasePool() {
@@ -121,10 +121,10 @@ std::unique_ptr<DatabaseConnection> DatabasePool::create_connection() {
 std::unique_ptr<DatabaseConnection> DatabasePool::get_connection() {
     std::unique_lock<std::mutex> lock(mutex_);
     
-    // Wait for available connection or timeout after 5 seconds
-    if (!condition_.wait_for(lock, std::chrono::seconds(5), 
+    // Wait for available connection or timeout
+    if (!condition_.wait_for(lock, std::chrono::milliseconds(acquisition_timeout_ms_), 
                             [this] { return !available_connections_.empty(); })) {
-        throw std::runtime_error("Database connection pool timeout");
+        throw std::runtime_error("Database connection pool timeout (waited " + std::to_string(acquisition_timeout_ms_) + "ms)");
     }
     
     auto conn = std::move(available_connections_.front());

@@ -37,6 +37,7 @@ struct ServerConfig {
     std::string worker_id = "cpp-worker-1";
     std::string application_name = "queen-mq";
     bool dev_mode = false;
+    int num_workers = 10;  // Number of worker threads
     
     static ServerConfig from_env() {
         ServerConfig config;
@@ -44,6 +45,7 @@ struct ServerConfig {
         config.host = get_env_string("HOST", "0.0.0.0");
         config.worker_id = get_env_string("WORKER_ID", "cpp-worker-1");
         config.application_name = get_env_string("APP_NAME", "queen-mq");
+        config.num_workers = get_env_int("NUM_WORKERS", 10);
         return config;
     }
 };
@@ -67,6 +69,7 @@ struct DatabaseConfig {
     int statement_timeout = 30000;       // 30 seconds
     int query_timeout = 30000;           // 30 seconds
     int lock_timeout = 10000;            // 10 seconds
+    int pool_acquisition_timeout = 10000; // 10 seconds - timeout for acquiring connection from pool
     
     // Pool manager settings
     int max_retries = 3;
@@ -88,6 +91,7 @@ struct DatabaseConfig {
         config.statement_timeout = get_env_int("DB_STATEMENT_TIMEOUT", 30000);
         config.query_timeout = get_env_int("DB_QUERY_TIMEOUT", 30000);
         config.lock_timeout = get_env_int("DB_LOCK_TIMEOUT", 10000);
+        config.pool_acquisition_timeout = get_env_int("DB_POOL_ACQUISITION_TIMEOUT", 10000);
         
         config.max_retries = get_env_int("DB_MAX_RETRIES", 3);
         

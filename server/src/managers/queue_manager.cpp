@@ -757,13 +757,14 @@ std::vector<PushResult> QueueManager::push_messages_chunk(const std::vector<Push
     return results;
 }
 
-std::string QueueManager::acquire_partition_lease(const std::string& queue_name,
+// Overload that accepts an existing connection (optimized for reuse)
+std::string QueueManager::acquire_partition_lease(DatabaseConnection* conn,
+                                                const std::string& queue_name,
                                                 const std::string& partition_name,
                                                 const std::string& consumer_group,
                                                 int lease_time_seconds,
                                                 const PopOptions& options) {
     try {
-        ScopedConnection conn(db_pool_.get());
         
         // Reclaim expired leases FIRST - this makes messages with expired leases available again
         std::string reclaim_sql = R"(
@@ -820,7 +821,7 @@ std::string QueueManager::acquire_partition_lease(const std::string& queue_name,
         
         // First, check if this consumer group already exists
         std::string check_sql = R"(
-            SELECT id FROM queen.partition_consumers pc
+            SELECT pc.id FROM queen.partition_consumers pc
             JOIN queen.partitions p ON pc.partition_id = p.id
             JOIN queen.queues q ON p.queue_id = q.id
             WHERE q.name = $1 AND p.name = $2 AND pc.consumer_group = $3
@@ -917,6 +918,22 @@ std::string QueueManager::acquire_partition_lease(const std::string& queue_name,
     return "";
 }
 
+// Original overload that creates its own connection
+std::string QueueManager::acquire_partition_lease(const std::string& queue_name,
+                                                const std::string& partition_name,
+                                                const std::string& consumer_group,
+                                                int lease_time_seconds,
+                                                const PopOptions& options) {
+    try {
+        ScopedConnection conn(db_pool_.get());
+        return acquire_partition_lease(conn.operator->(), queue_name, partition_name, 
+                                      consumer_group, lease_time_seconds, options);
+    } catch (const std::exception& e) {
+        spdlog::error("Failed to acquire partition lease (wrapper): {}", e.what());
+        return "";
+    }
+}
+
 PopResult QueueManager::pop_from_queue_partition(const std::string& queue_name,
                                                const std::string& partition_name,
                                                const std::string& consumer_group,
@@ -924,7 +941,8 @@ PopResult QueueManager::pop_from_queue_partition(const std::string& queue_name,
     PopResult result;
     
     try {
-        ScopedConnection check_conn(db_pool_.get());
+        // OPTIMIZATION: Use single connection for all operations to reduce pool contention
+        ScopedConnection conn(db_pool_.get());
         
         // Check if partition is accessible considering window_buffer
         std::string window_check_sql = R"(
@@ -939,7 +957,7 @@ PopResult QueueManager::pop_from_queue_partition(const std::string& queue_name,
               ))
         )";
         
-        auto window_result = QueryResult(check_conn->exec_params(window_check_sql, {queue_name, partition_name}));
+        auto window_result = QueryResult(conn->exec_params(window_check_sql, {queue_name, partition_name}));
         
         if (!window_result.is_success() || window_result.num_rows() == 0) {
             std::string window_buffer_str = window_result.num_rows() > 0 ? window_result.get_value(0, "window_buffer") : "unknown";
@@ -947,16 +965,14 @@ PopResult QueueManager::pop_from_queue_partition(const std::string& queue_name,
             return result; // Partition not accessible due to window buffer
         }
         
-        // Acquire lease for this partition
-        std::string lease_id = acquire_partition_lease(queue_name, partition_name, 
+        // Acquire lease for this partition (reusing the same connection)
+        std::string lease_id = acquire_partition_lease(conn.operator->(), queue_name, partition_name, 
                                                      consumer_group, 300, options);
         if (lease_id.empty()) {
             return result; // No lease acquired, return empty result
         }
         
         result.lease_id = lease_id;
-        
-        ScopedConnection conn(db_pool_.get());
         
         // Get queue configuration for delayed_processing and max_wait_time_seconds
         std::string config_sql = R"(
@@ -1956,6 +1972,14 @@ bool QueueManager::extend_message_lease(const std::string& lease_id, int seconds
         spdlog::error("Failed to extend lease: {}", e.what());
         return false;
     }
+}
+
+QueueManager::PoolStats QueueManager::get_pool_stats() const {
+    PoolStats stats;
+    stats.total = db_pool_->size();
+    stats.available = db_pool_->available();
+    stats.in_use = stats.total - stats.available;
+    return stats;
 }
 
 bool QueueManager::health_check() {

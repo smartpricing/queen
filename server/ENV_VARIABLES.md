@@ -10,6 +10,7 @@ This document lists all environment variables supported by the Queen C++ server.
 | `HOST` | string | 0.0.0.0 | HTTP server host |
 | `WORKER_ID` | string | cpp-worker-1 | Unique identifier for this worker |
 | `APP_NAME` | string | queen-mq | Application name |
+| `NUM_WORKERS` | int | 10 | Number of worker threads (capped at CPU core count) |
 
 ## Database Configuration
 
@@ -34,6 +35,7 @@ This document lists all environment variables supported by the Queen C++ server.
 | `DB_POOL_SIZE` | int | 150 | Connection pool size |
 | `DB_IDLE_TIMEOUT` | int | 30000 | Idle timeout in milliseconds |
 | `DB_CONNECTION_TIMEOUT` | int | 2000 | Connection timeout in milliseconds |
+| `DB_POOL_ACQUISITION_TIMEOUT` | int | 10000 | Pool acquisition timeout in milliseconds (wait time for available connection) |
 | `DB_STATEMENT_TIMEOUT` | int | 30000 | Statement timeout in milliseconds |
 | `DB_QUERY_TIMEOUT` | int | 30000 | Query timeout in milliseconds |
 | `DB_LOCK_TIMEOUT` | int | 10000 | Lock timeout in milliseconds |
