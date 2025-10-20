@@ -132,9 +132,27 @@ std::unique_ptr<DatabaseConnection> DatabasePool::get_connection() {
     
     // Verify connection is still valid
     if (!conn->is_valid()) {
-        spdlog::warn("Invalid connection found in pool, creating new one");
-        lock.unlock();
-        return create_connection();
+        spdlog::warn("Invalid connection found in pool, replacing it");
+        --current_size_;
+        
+        // Try to create a replacement connection
+        try {
+            lock.unlock();
+            auto new_conn = create_connection();
+            lock.lock();
+            
+            if (new_conn && new_conn->is_valid()) {
+                ++current_size_;
+                new_conn->set_in_use(true);
+                return new_conn;
+            } else {
+                spdlog::error("Failed to create replacement connection, pool size reduced to {}/{}", current_size_, pool_size_);
+                throw std::runtime_error("Failed to create valid database connection");
+            }
+        } catch (const std::exception& e) {
+            spdlog::error("Exception creating replacement connection: {}", e.what());
+            throw;
+        }
     }
     
     conn->set_in_use(true);
@@ -149,11 +167,29 @@ void DatabasePool::return_connection(std::unique_ptr<DatabaseConnection> conn) {
     std::lock_guard<std::mutex> lock(mutex_);
     if (conn->is_valid()) {
         available_connections_.push(std::move(conn));
+        condition_.notify_one();
     } else {
-        spdlog::warn("Returned invalid connection to pool");
-        // Connection will be destroyed automatically
+        spdlog::warn("Returned invalid connection to pool, attempting to create replacement");
+        --current_size_;
+        
+        // Try to create a replacement connection in the background
+        // We do this asynchronously to avoid blocking the caller
+        try {
+            auto new_conn = create_connection();
+            if (new_conn && new_conn->is_valid()) {
+                available_connections_.push(std::move(new_conn));
+                ++current_size_;
+                condition_.notify_one();
+                spdlog::info("Successfully replaced invalid connection, pool at {}/{}", current_size_, pool_size_);
+            } else {
+                spdlog::error("Failed to create replacement connection, pool size reduced to {}/{}", current_size_, pool_size_);
+                condition_.notify_one(); // Still notify in case threads are waiting
+            }
+        } catch (const std::exception& e) {
+            spdlog::error("Exception creating replacement connection: {} - pool size now {}/{}", e.what(), current_size_, pool_size_);
+            condition_.notify_one(); // Still notify in case threads are waiting
+        }
     }
-    condition_.notify_one();
 }
 
 PGresult* DatabasePool::query(const std::string& sql) {
