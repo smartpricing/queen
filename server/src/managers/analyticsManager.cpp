@@ -124,7 +124,7 @@ nlohmann::json AnalyticsManager::get_metrics(int total_messages) {
 
 nlohmann::json AnalyticsManager::get_queues() {
     try {
-        auto conn = db_pool_->get_connection();
+        ScopedConnection conn(db_pool_.get());
         
         std::string query = R"(
             SELECT DISTINCT
@@ -176,7 +176,7 @@ nlohmann::json AnalyticsManager::get_queues() {
 
 nlohmann::json AnalyticsManager::get_queue(const std::string& queue_name) {
     try {
-        auto conn = db_pool_->get_connection();
+        ScopedConnection conn(db_pool_.get());
         
         // Get queue info
         std::string queue_query = R"(
@@ -291,7 +291,7 @@ nlohmann::json AnalyticsManager::get_queue(const std::string& queue_name) {
 
 nlohmann::json AnalyticsManager::get_namespaces() {
     try {
-        auto conn = db_pool_->get_connection();
+        ScopedConnection conn(db_pool_.get());
         
         std::string query = R"(
             SELECT DISTINCT
@@ -333,7 +333,7 @@ nlohmann::json AnalyticsManager::get_namespaces() {
 
 nlohmann::json AnalyticsManager::get_tasks() {
     try {
-        auto conn = db_pool_->get_connection();
+        ScopedConnection conn(db_pool_.get());
         
         std::string query = R"(
             SELECT DISTINCT
@@ -375,7 +375,7 @@ nlohmann::json AnalyticsManager::get_tasks() {
 
 nlohmann::json AnalyticsManager::get_system_overview() {
     try {
-        auto conn = db_pool_->get_connection();
+        ScopedConnection conn(db_pool_.get());
         
         std::string query = R"(
             SELECT
@@ -427,7 +427,7 @@ nlohmann::json AnalyticsManager::get_system_overview() {
 
 nlohmann::json AnalyticsManager::list_messages(const MessageFilters& filters) {
     try {
-        auto conn = db_pool_->get_connection();
+        ScopedConnection conn(db_pool_.get());
         
         std::string query = R"(
             SELECT 
@@ -538,7 +538,7 @@ nlohmann::json AnalyticsManager::list_messages(const MessageFilters& filters) {
 
 nlohmann::json AnalyticsManager::get_message(const std::string& transaction_id) {
     try {
-        auto conn = db_pool_->get_connection();
+        ScopedConnection conn(db_pool_.get());
         
         std::string query = R"(
             SELECT 
@@ -630,7 +630,7 @@ nlohmann::json AnalyticsManager::get_message(const std::string& transaction_id) 
 
 nlohmann::json AnalyticsManager::get_status(const StatusFilters& filters) {
     try {
-        auto conn = db_pool_->get_connection();
+        ScopedConnection conn(db_pool_.get());
         
         std::string from_iso, to_iso;
         get_time_range(filters.from, filters.to, from_iso, to_iso, 1);
@@ -845,7 +845,7 @@ nlohmann::json AnalyticsManager::get_status(const StatusFilters& filters) {
 
 nlohmann::json AnalyticsManager::get_status_queues(const StatusFilters& filters, int limit, int offset) {
     try {
-        auto conn = db_pool_->get_connection();
+        ScopedConnection conn(db_pool_.get());
         
         std::string from_iso, to_iso;
         get_time_range(filters.from, filters.to, from_iso, to_iso, 1);
@@ -921,7 +921,7 @@ nlohmann::json AnalyticsManager::get_status_queues(const StatusFilters& filters,
 
 nlohmann::json AnalyticsManager::get_queue_detail(const std::string& queue_name) {
     try {
-        auto conn = db_pool_->get_connection();
+        ScopedConnection conn(db_pool_.get());
         
         std::string query = R"(
             SELECT 
@@ -1041,7 +1041,7 @@ nlohmann::json AnalyticsManager::get_queue_detail(const std::string& queue_name)
 
 nlohmann::json AnalyticsManager::get_queue_messages(const std::string& queue_name, int limit, int offset) {
     try {
-        auto conn = db_pool_->get_connection();
+        ScopedConnection conn(db_pool_.get());
         
         std::string from_iso, to_iso;
         get_time_range("", "", from_iso, to_iso, 1);
@@ -1129,7 +1129,7 @@ nlohmann::json AnalyticsManager::get_queue_messages(const std::string& queue_nam
 
 nlohmann::json AnalyticsManager::get_analytics(const AnalyticsFilters& filters) {
     try {
-        auto conn = db_pool_->get_connection();
+        ScopedConnection conn(db_pool_.get());
         
         std::string from_iso, to_iso;
         get_time_range(filters.from, filters.to, from_iso, to_iso, 24);

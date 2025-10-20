@@ -209,10 +209,27 @@ export PG_PASSWORD=your_password
 
 ### SSL Configuration
 
+**For production (Cloud SQL, RDS, Azure Database, etc):**
 ```bash
-export PG_USE_SSL=true
-export PG_SSL_REJECT_UNAUTHORIZED=true
+export PG_USE_SSL=true                      # Enable SSL
+export PG_SSL_REJECT_UNAUTHORIZED=true      # Require valid certificates (recommended)
 ```
+
+**For development or self-signed certificates:**
+```bash
+export PG_USE_SSL=true                      # Enable SSL
+export PG_SSL_REJECT_UNAUTHORIZED=false     # Allow self-signed certs
+```
+
+**For local development (no SSL):**
+```bash
+export PG_USE_SSL=false                     # Disable SSL (default)
+```
+
+**SSL Mode Mapping:**
+- `PG_USE_SSL=true` + `PG_SSL_REJECT_UNAUTHORIZED=true` → `sslmode=require`
+- `PG_USE_SSL=true` + `PG_SSL_REJECT_UNAUTHORIZED=false` → `sslmode=prefer`
+- `PG_USE_SSL=false` → `sslmode=disable`
 
 ### Pool Tuning
 

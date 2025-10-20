@@ -1480,6 +1480,16 @@ static void worker_thread(const Config& config, int worker_id, int num_workers,
         // Thread-local analytics manager
         auto analytics_manager = std::make_shared<AnalyticsManager>(db_pool);
         
+        // Test database connection and log pool stats
+        if (!queue_manager->health_check()) {
+            spdlog::error("[Worker {}] FATAL: Cannot connect to database!", worker_id);
+            throw std::runtime_error("Database connection failed at startup");
+        }
+        
+        auto pool_stats = queue_manager->get_pool_stats();
+        spdlog::info("[Worker {}] Database connection: OK | Pool: {}/{} conn available", 
+                     worker_id, pool_stats.available, pool_stats.total);
+        
         // Only first worker initializes schema
         if (worker_id == 0) {
             spdlog::info("[Worker 0] Initializing database schema...");

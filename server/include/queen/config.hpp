@@ -99,8 +99,21 @@ struct DatabaseConfig {
     }
     
     std::string connection_string() const {
-        return "host=" + host + " port=" + port + " dbname=" + database + 
-               " user=" + user + " password=" + password;
+        std::string conn_str = "host=" + host + " port=" + port + " dbname=" + database + 
+                               " user=" + user + " password=" + password;
+        
+        // Add SSL configuration
+        if (use_ssl) {
+            conn_str += " sslmode=require";
+            if (!ssl_reject_unauthorized) {
+                // Allow self-signed certificates
+                conn_str += " sslmode=prefer";
+            }
+        } else {
+            conn_str += " sslmode=disable";
+        }
+        
+        return conn_str;
     }
 };
 

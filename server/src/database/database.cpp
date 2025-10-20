@@ -158,16 +158,26 @@ void DatabasePool::return_connection(std::unique_ptr<DatabaseConnection> conn) {
 
 PGresult* DatabasePool::query(const std::string& sql) {
     auto conn = get_connection();
-    auto result = conn->exec(sql);
-    return_connection(std::move(conn));
-    return result;
+    try {
+        auto result = conn->exec(sql);
+        return_connection(std::move(conn));
+        return result;
+    } catch (...) {
+        return_connection(std::move(conn));
+        throw;
+    }
 }
 
 PGresult* DatabasePool::query_params(const std::string& sql, const std::vector<std::string>& params) {
     auto conn = get_connection();
-    auto result = conn->exec_params(sql, params);
-    return_connection(std::move(conn));
-    return result;
+    try {
+        auto result = conn->exec_params(sql, params);
+        return_connection(std::move(conn));
+        return result;
+    } catch (...) {
+        return_connection(std::move(conn));
+        throw;
+    }
 }
 
 size_t DatabasePool::available() const {
