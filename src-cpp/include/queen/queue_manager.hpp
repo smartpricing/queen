@@ -196,6 +196,9 @@ public:
     
     // Initialize database schema
     bool initialize_schema();
+    
+    // Database pool access (for status/analytics queries)
+    std::shared_ptr<DatabasePool> get_db_pool() const { return db_pool_; }
 };
 
 } // namespace queen

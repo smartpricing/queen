@@ -41,21 +41,21 @@ int main(int argc, char* argv[]) {
     std::signal(SIGTERM, signal_handler);
     
     try {
-        spdlog::info("🚀 Queen C++ Message Queue Server (Acceptor/Worker Pattern)");
-        spdlog::info("📊 Configuration:");
-        spdlog::info("   - Host: {}", config.server.host);
-        spdlog::info("   - Port: {}", config.server.port);
-        spdlog::info("   - Database: {}:{}/{}", config.database.host, config.database.port, config.database.database);
-        spdlog::info("   - Pattern: Acceptor distributes to workers (cross-platform)");
+        spdlog::info("Queen C++ Message Queue Server (Acceptor/Worker Pattern)");
+        spdlog::info("Configuration:");
+        spdlog::info("  - Host: {}", config.server.host);
+        spdlog::info("  - Port: {}", config.server.port);
+        spdlog::info("  - Database: {}:{}/{}", config.database.host, config.database.port, config.database.database);
+        spdlog::info("  - Pattern: Acceptor distributes to workers (cross-platform)");
         
         // Start acceptor/worker server
         if (!queen::start_acceptor_server(config)) {
-            spdlog::error("❌ Failed to start server");
+            spdlog::error("Failed to start server");
             return 1;
         }
         
     } catch (const std::exception& e) {
-        spdlog::error("❌ Server error: {}", e.what());
+        spdlog::error("Server error: {}", e.what());
         return 1;
     }
     

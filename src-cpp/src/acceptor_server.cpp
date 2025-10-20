@@ -1,5 +1,6 @@
 #include "queen/database.hpp"
 #include "queen/queue_manager.hpp"
+#include "queen/analytics_manager.hpp"
 #include "queen/config.hpp"
 #include "queen/encryption.hpp"
 #include <App.h>
@@ -12,6 +13,9 @@
 #include <sstream>
 #include <iomanip>
 #include <chrono>
+#include <fstream>
+#include <filesystem>
+#include <regex>
 
 namespace queen {
 
@@ -222,9 +226,132 @@ static void pop_retry_timer(us_timer_t* timer) {
     us_timer_set(timer, pop_retry_timer, state->current_interval_ms, state->current_interval_ms);
 }
 
+// ============================================================================
+// Static File Serving Helpers
+// ============================================================================
+
+// Get MIME type based on file extension
+static std::string get_mime_type(const std::string& file_path) {
+    std::filesystem::path p(file_path);
+    std::string ext = p.extension().string();
+    std::transform(ext.begin(), ext.end(), ext.begin(), ::tolower);
+    
+    static const std::map<std::string, std::string> mime_types = {
+        {".html", "text/html; charset=utf-8"},
+        {".htm", "text/html; charset=utf-8"},
+        {".js", "application/javascript; charset=utf-8"},
+        {".mjs", "application/javascript; charset=utf-8"},
+        {".css", "text/css; charset=utf-8"},
+        {".json", "application/json; charset=utf-8"},
+        {".png", "image/png"},
+        {".jpg", "image/jpeg"},
+        {".jpeg", "image/jpeg"},
+        {".gif", "image/gif"},
+        {".svg", "image/svg+xml"},
+        {".ico", "image/x-icon"},
+        {".woff", "font/woff"},
+        {".woff2", "font/woff2"},
+        {".ttf", "font/ttf"},
+        {".eot", "application/vnd.ms-fontobject"},
+        {".webp", "image/webp"},
+        {".wasm", "application/wasm"}
+    };
+    
+    auto it = mime_types.find(ext);
+    return it != mime_types.end() ? it->second : "application/octet-stream";
+}
+
+// Serve static file from disk (on-demand)
+static bool serve_static_file(uWS::HttpResponse<false>* res, 
+                              const std::string& file_path,
+                              const std::string& webapp_root) {
+    try {
+        // Convert to absolute paths first
+        std::filesystem::path abs_file_path = std::filesystem::absolute(file_path);
+        std::filesystem::path abs_webapp_root = std::filesystem::absolute(webapp_root);
+        
+        // Check if file exists first (canonical throws if file doesn't exist)
+        if (!std::filesystem::exists(abs_file_path)) {
+            return false; // File not found
+        }
+        
+        if (!std::filesystem::is_regular_file(abs_file_path)) {
+            return false; // Not a file
+        }
+        
+        // Now safe to get canonical path for security check
+        std::filesystem::path normalized_path = std::filesystem::canonical(abs_file_path);
+        std::filesystem::path root_path = std::filesystem::canonical(abs_webapp_root);
+        
+        // Security check - ensure normalized path is within webapp root
+        auto normalized_str = normalized_path.string();
+        auto root_str = root_path.string();
+        if (normalized_str.substr(0, root_str.length()) != root_str) {
+            spdlog::warn("Directory traversal attempt blocked: {}", file_path);
+            res->writeStatus("403");
+            res->end("Forbidden");
+            return true;
+        }
+        
+        // Read file content
+        std::ifstream file(normalized_path, std::ios::binary);
+        if (!file) {
+            return false;
+        }
+        
+        // Get file size
+        file.seekg(0, std::ios::end);
+        size_t file_size = file.tellg();
+        file.seekg(0, std::ios::beg);
+        
+        // Read into string
+        std::string content(file_size, '\0');
+        file.read(&content[0], file_size);
+        file.close();
+        
+        // Determine MIME type
+        std::string mime_type = get_mime_type(file_path);
+        
+        // Determine cache strategy
+        std::string cache_control;
+        std::string file_name = normalized_path.filename().string();
+        
+        // Fingerprinted assets (Vite-style: name-hash.js)
+        std::regex fingerprint_regex(R"(.*\.[a-f0-9]{8,}\.(js|css)$)");
+        if (std::regex_match(file_name, fingerprint_regex)) {
+            cache_control = "public, max-age=31536000, immutable";
+        }
+        // index.html - never cache
+        else if (file_name == "index.html") {
+            cache_control = "no-cache, no-store, must-revalidate";
+        }
+        // Other files - cache for 1 hour
+        else {
+            cache_control = "public, max-age=3600";
+        }
+        
+        // Send response
+        setup_cors_headers(res);
+        res->writeHeader("Content-Type", mime_type);
+        res->writeHeader("Content-Length", std::to_string(file_size));
+        res->writeHeader("Cache-Control", cache_control);
+        res->writeStatus("200");
+        res->end(content);
+        
+        return true;
+        
+    } catch (const std::exception& e) {
+        spdlog::error("Error serving static file {}: {}", file_path, e.what());
+        res->writeStatus("500");
+        res->end("Internal Server Error");
+        return true;
+    }
+}
+
 // Setup routes for a worker app
 static void setup_worker_routes(uWS::App* app, 
                                 std::shared_ptr<QueueManager> queue_manager,
+                                std::shared_ptr<AnalyticsManager> analytics_manager,
                                 const Config& config,
                                 int worker_id) {
     
@@ -957,6 +1084,272 @@ static void setup_worker_routes(uWS::App* app,
             }
         );
     });
+    
+    // ============================================================================
+    // Metrics & Resources Routes
+    // ============================================================================
+    
+    // GET /metrics - Performance metrics
+    app->get("/metrics", [analytics_manager](auto* res, auto* req) {
+        try {
+            auto response = analytics_manager->get_metrics();
+            send_json_response(res, response);
+        } catch (const std::exception& e) {
+            send_error_response(res, e.what(), 500);
+        }
+    });
+    
+    // GET /api/v1/resources/queues - List all queues
+    app->get("/api/v1/resources/queues", [analytics_manager](auto* res, auto* req) {
+        try {
+            auto response = analytics_manager->get_queues();
+            send_json_response(res, response);
+        } catch (const std::exception& e) {
+            send_error_response(res, e.what(), 500);
+        }
+    });
+    
+    // GET /api/v1/resources/queues/:queue - Get single queue detail
+    app->get("/api/v1/resources/queues/:queue", [analytics_manager](auto* res, auto* req) {
+        try {
+            std::string queue_name = std::string(req->getParameter(0));
+            auto response = analytics_manager->get_queue(queue_name);
+            send_json_response(res, response);
+        } catch (const std::exception& e) {
+            if (std::string(e.what()).find("not found") != std::string::npos) {
+                send_error_response(res, e.what(), 404);
+            } else {
+                send_error_response(res, e.what(), 500);
+            }
+        }
+    });
+    
+    // GET /api/v1/resources/namespaces - List all namespaces
+    app->get("/api/v1/resources/namespaces", [analytics_manager](auto* res, auto* req) {
+        try {
+            auto response = analytics_manager->get_namespaces();
+            send_json_response(res, response);
+        } catch (const std::exception& e) {
+            send_error_response(res, e.what(), 500);
+        }
+    });
+    
+    // GET /api/v1/resources/tasks - List all tasks
+    app->get("/api/v1/resources/tasks", [analytics_manager](auto* res, auto* req) {
+        try {
+            auto response = analytics_manager->get_tasks();
+            send_json_response(res, response);
+        } catch (const std::exception& e) {
+            send_error_response(res, e.what(), 500);
+        }
+    });
+    
+    // GET /api/v1/resources/overview - System overview
+    app->get("/api/v1/resources/overview", [analytics_manager](auto* res, auto* req) {
+        try {
+            auto response = analytics_manager->get_system_overview();
+            send_json_response(res, response);
+        } catch (const std::exception& e) {
+            send_error_response(res, e.what(), 500);
+        }
+    });
+    
+    // GET /api/v1/messages - List messages with filters
+    app->get("/api/v1/messages", [analytics_manager](auto* res, auto* req) {
+        try {
+            AnalyticsManager::MessageFilters filters;
+            filters.queue = get_query_param(req, "queue");
+            filters.partition = get_query_param(req, "partition");
+            filters.namespace_name = get_query_param(req, "ns");
+            filters.task = get_query_param(req, "task");
+            filters.status = get_query_param(req, "status");
+            filters.limit = get_query_param_int(req, "limit", 50);
+            filters.offset = get_query_param_int(req, "offset", 0);
+            
+            auto messages = analytics_manager->list_messages(filters);
+            send_json_response(res, messages);
+        } catch (const std::exception& e) {
+            send_error_response(res, e.what(), 500);
+        }
+    });
+    
+    // GET /api/v1/messages/:transactionId - Get single message detail
+    app->get("/api/v1/messages/:transactionId", [analytics_manager](auto* res, auto* req) {
+        try {
+            std::string transaction_id = std::string(req->getParameter(0));
+            auto message = analytics_manager->get_message(transaction_id);
+            send_json_response(res, message);
+        } catch (const std::exception& e) {
+            if (std::string(e.what()).find("not found") != std::string::npos) {
+                send_error_response(res, e.what(), 404);
+            } else {
+                send_error_response(res, e.what(), 500);
+            }
+        }
+    });
+    
+    // ============================================================================
+    // Status/Dashboard Routes
+    // ============================================================================
+    
+    // GET /api/v1/status - Dashboard overview
+    app->get("/api/v1/status", [analytics_manager](auto* res, auto* req) {
+        try {
+            AnalyticsManager::StatusFilters filters;
+            filters.from = get_query_param(req, "from");
+            filters.to = get_query_param(req, "to");
+            filters.queue = get_query_param(req, "queue");
+            filters.namespace_name = get_query_param(req, "namespace");
+            filters.task = get_query_param(req, "task");
+            
+            auto response = analytics_manager->get_status(filters);
+            send_json_response(res, response);
+        } catch (const std::exception& e) {
+            send_error_response(res, e.what(), 500);
+        }
+    });
+    
+    // GET /api/v1/status/queues - Queues list
+    app->get("/api/v1/status/queues", [analytics_manager](auto* res, auto* req) {
+        try {
+            AnalyticsManager::StatusFilters filters;
+            filters.from = get_query_param(req, "from");
+            filters.to = get_query_param(req, "to");
+            filters.namespace_name = get_query_param(req, "namespace");
+            filters.task = get_query_param(req, "task");
+            
+            int limit = get_query_param_int(req, "limit", 100);
+            int offset = get_query_param_int(req, "offset", 0);
+            
+            auto response = analytics_manager->get_status_queues(filters, limit, offset);
+            send_json_response(res, response);
+        } catch (const std::exception& e) {
+            send_error_response(res, e.what(), 500);
+        }
+    });
+    
+    // GET /api/v1/status/queues/:queue - Queue detail
+    app->get("/api/v1/status/queues/:queue", [analytics_manager](auto* res, auto* req) {
+        try {
+            std::string queue_name = std::string(req->getParameter(0));
+            auto response = analytics_manager->get_queue_detail(queue_name);
+            send_json_response(res, response);
+        } catch (const std::exception& e) {
+            if (std::string(e.what()).find("not found") != std::string::npos) {
+                send_error_response(res, e.what(), 404);
+            } else {
+                send_error_response(res, e.what(), 500);
+            }
+        }
+    });
+    
+    // GET /api/v1/status/queues/:queue/messages - Queue messages
+    app->get("/api/v1/status/queues/:queue/messages", [analytics_manager](auto* res, auto* req) {
+        try {
+            std::string queue_name = std::string(req->getParameter(0));
+            int limit = get_query_param_int(req, "limit", 50);
+            int offset = get_query_param_int(req, "offset", 0);
+            
+            auto response = analytics_manager->get_queue_messages(queue_name, limit, offset);
+            send_json_response(res, response);
+        } catch (const std::exception& e) {
+            send_error_response(res, e.what(), 500);
+        }
+    });
+    
+    // GET /api/v1/status/analytics - Analytics
+    app->get("/api/v1/status/analytics", [analytics_manager](auto* res, auto* req) {
+        try {
+            AnalyticsManager::AnalyticsFilters filters;
+            filters.from = get_query_param(req, "from");
+            filters.to = get_query_param(req, "to");
+            filters.interval = get_query_param(req, "interval", "hour");
+            filters.queue = get_query_param(req, "queue");
+            filters.namespace_name = get_query_param(req, "namespace");
+            filters.task = get_query_param(req, "task");
+            
+            auto response = analytics_manager->get_analytics(filters);
+            send_json_response(res, response);
+        } catch (const std::exception& e) {
+            send_error_response(res, e.what(), 500);
+        }
+    });
+    
+    // ============================================================================
+    // Static File Serving (Frontend Dashboard)
+    // ============================================================================
+    
+    // Define webapp path (relative to binary location or absolute)
+    std::string webapp_root = "../src/webapp-dist";
+    
+    // Check if webapp directory exists
+    if (std::filesystem::exists(webapp_root)) {
+        spdlog::info("[Worker {}] Static file serving enabled from: {}", worker_id, 
+                    std::filesystem::absolute(webapp_root).string());
+        
+        // Route 1: GET /assets/* - Serve static assets (JS, CSS, images, fonts)
+        app->get("/assets/*", [webapp_root](auto* res, auto* req) {
+            auto aborted = std::make_shared<bool>(false);
+            res->onAborted([aborted]() { *aborted = true; });
+            
+            if (*aborted) return;
+            
+            std::string url = std::string(req->getUrl());
+            std::string file_path = webapp_root + url;
+            
+            bool served = serve_static_file(res, file_path, webapp_root);
+            if (!served && !*aborted) {
+                res->writeStatus("404");
+                res->end("Not Found");
+            }
+        });
+        
+        // Route 2: GET / - Serve root index.html
+        app->get("/", [webapp_root](auto* res, auto* req) {
+            auto aborted = std::make_shared<bool>(false);
+            res->onAborted([aborted]() { *aborted = true; });
+            
+            if (*aborted) return;
+            
+            std::string index_path = webapp_root + "/index.html";
+            serve_static_file(res, index_path, webapp_root);
+        });
+        
+        // Route 3: GET /* - SPA fallback (for Vue Router client-side routing)
+        // MUST be registered LAST to not override API routes
+        app->get("/*", [webapp_root](auto* res, auto* req) {
+            auto aborted = std::make_shared<bool>(false);
+            res->onAborted([aborted]() { *aborted = true; });
+            
+            if (*aborted) return;
+            
+            std::string url = std::string(req->getUrl());
+            
+            // Don't serve index.html for API routes or special endpoints
+            if (url.find("/api/") == 0 || 
+                url.find("/health") == 0 || 
+                url.find("/metrics") == 0 ||
+                url.find("/ws/") == 0) {
+                res->writeStatus("404");
+                res->end("Not Found");
+                return;
+            }
+            
+            // Try to serve as a direct file first (e.g., favicon.ico)
+            std::string file_path = webapp_root + url;
+            bool served = serve_static_file(res, file_path, webapp_root);
+            
+            // If file doesn't exist, serve index.html for SPA routing
+            if (!served && !*aborted) {
+                std::string index_path = webapp_root + "/index.html";
+                serve_static_file(res, index_path, webapp_root);
+            }
+        });
+        
+    } else {
+        spdlog::warn("[Worker {}] Webapp directory not found at: {} - Static file serving disabled", 
+                    worker_id, std::filesystem::absolute(webapp_root).string());
+    }
 }
 
 // Worker thread function
@@ -976,6 +1369,9 @@ static void worker_thread(const Config& config, int worker_id, int num_workers,
         // Thread-local queue manager
         auto queue_manager = std::make_shared<QueueManager>(db_pool, config.queue);
         
+        // Thread-local analytics manager
+        auto analytics_manager = std::make_shared<AnalyticsManager>(db_pool);
+        
         // Only first worker initializes schema
         if (worker_id == 0) {
             spdlog::info("[Worker 0] Initializing database schema...");
@@ -986,7 +1382,7 @@ static void worker_thread(const Config& config, int worker_id, int num_workers,
         auto worker_app = new uWS::App();
         
         // Setup routes
-        setup_worker_routes(worker_app, queue_manager, config, worker_id);
+        setup_worker_routes(worker_app, queue_manager, analytics_manager, config, worker_id);
         
         // Register this worker app with the acceptor (thread-safe)
         {
@@ -1028,8 +1424,8 @@ bool start_acceptor_server(const Config& config) {
     
     // Determine number of workers
     int num_workers = std::min(10, static_cast<int>(std::thread::hardware_concurrency()));
-    spdlog::info("🚀 Starting acceptor/worker pattern with {} workers", num_workers);
-    spdlog::info("✅ This pattern works on ALL platforms (macOS, Linux, Windows)");
+    spdlog::info("Starting acceptor/worker pattern with {} workers", num_workers);
+    spdlog::info("This pattern works on ALL platforms (macOS, Linux, Windows)");
     
     // Shared data for worker registration
     std::mutex init_mutex;
@@ -1062,10 +1458,10 @@ bool start_acceptor_server(const Config& config) {
     // Acceptor listens on port and distributes in round-robin
     acceptor->listen(config.server.host, config.server.port, [config, num_workers](auto* listen_socket) {
         if (listen_socket) {
-            spdlog::info("✅ Acceptor listening on {}:{}", config.server.host, config.server.port);
-            spdlog::info("🎯 Round-robin load balancing across {} workers", num_workers);
+            spdlog::info("Acceptor listening on {}:{}", config.server.host, config.server.port);
+            spdlog::info("Round-robin load balancing across {} workers", num_workers);
         } else {
-            spdlog::error("❌ Failed to listen on {}:{}", config.server.host, config.server.port);
+            spdlog::error("Failed to listen on {}:{}", config.server.host, config.server.port);
         }
     });
     
@@ -1081,7 +1477,7 @@ bool start_acceptor_server(const Config& config) {
         }
     }
     
-    spdlog::info("✅ Clean shutdown");
+    spdlog::info("Clean shutdown");
     return true;
 }
 

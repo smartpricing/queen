@@ -126,7 +126,7 @@ EncryptionService::EncryptionService() : enabled_(false) {
     }
     
     enabled_ = true;
-    spdlog::info("✅ Encryption service initialized (AES-256-GCM)");
+    spdlog::info("Encryption service initialized (AES-256-GCM)");
 }
 
 std::optional<EncryptionService::EncryptedData> EncryptionService::encrypt_payload(const std::string& payload_json) {
