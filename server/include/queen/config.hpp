@@ -113,27 +113,14 @@ struct DatabaseConfig {
             conn_str += " sslmode=disable";
         }
         
-        // CRITICAL: Add timeout parameters to prevent connection invalidation
-        // connect_timeout is in seconds for initial connection
+        // CRITICAL: Add connect_timeout (in seconds) for initial connection
+        // This is the only timeout that can safely be in connection string
+        // (works with both direct PostgreSQL and PgBouncer)
         conn_str += " connect_timeout=" + std::to_string(connection_timeout / 1000);
         
-        // PostgreSQL session parameters (applied after connection)
-        // Use options parameter to set session variables
-        std::string options = "";
-        
-        // statement_timeout: Maximum execution time for any statement (in ms)
-        options += "-c statement_timeout=" + std::to_string(statement_timeout);
-        
-        // lock_timeout: Maximum time to wait for locks (in ms)
-        options += " -c lock_timeout=" + std::to_string(lock_timeout);
-        
-        // idle_in_transaction_session_timeout: Kill idle transactions (in ms)
-        // This prevents connections from staying in transaction state indefinitely
-        options += " -c idle_in_transaction_session_timeout=" + std::to_string(idle_timeout);
-        
-        if (!options.empty()) {
-            conn_str += " options='" + options + "'";
-        }
+        // NOTE: statement_timeout, lock_timeout, and idle_in_transaction_session_timeout
+        // CANNOT be set via connection string options when using PgBouncer
+        // These are now set in DatabaseConnection constructor via SET commands
         
         return conn_str;
     }

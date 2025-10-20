@@ -51,12 +51,16 @@ bool test_connection_string_timeouts() {
                 "Connection string contains host");
     TEST_ASSERT(conn_str.find("connect_timeout=") != std::string::npos, 
                 "Connection string contains connect_timeout");
-    TEST_ASSERT(conn_str.find("statement_timeout=30000") != std::string::npos, 
-                "Connection string contains statement_timeout");
-    TEST_ASSERT(conn_str.find("lock_timeout=10000") != std::string::npos, 
-                "Connection string contains lock_timeout");
-    TEST_ASSERT(conn_str.find("idle_in_transaction_session_timeout=30000") != std::string::npos, 
-                "Connection string contains idle_in_transaction_session_timeout");
+    
+    // NOTE: statement_timeout, lock_timeout, and idle_in_transaction_session_timeout
+    // are NOT in connection string (they break PgBouncer compatibility)
+    // They are now set via SET commands in DatabaseConnection constructor
+    TEST_ASSERT(conn_str.find("statement_timeout") == std::string::npos, 
+                "Connection string does NOT contain statement_timeout (for PgBouncer compatibility)");
+    TEST_ASSERT(conn_str.find("lock_timeout") == std::string::npos, 
+                "Connection string does NOT contain lock_timeout (for PgBouncer compatibility)");
+    TEST_ASSERT(conn_str.find("idle_in_transaction_session_timeout") == std::string::npos, 
+                "Connection string does NOT contain idle_in_transaction_session_timeout (for PgBouncer compatibility)");
     
     std::cout << "Connection string: " << conn_str << std::endl;
     

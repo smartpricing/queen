@@ -7,7 +7,10 @@
 namespace queen {
 
 // DatabaseConnection Implementation
-DatabaseConnection::DatabaseConnection(const std::string& connection_string) 
+DatabaseConnection::DatabaseConnection(const std::string& connection_string,
+                                     int statement_timeout_ms,
+                                     int lock_timeout_ms,
+                                     int idle_in_transaction_timeout_ms) 
     : conn_(nullptr), in_use_(false) {
     conn_ = PQconnectdb(connection_string.c_str());
     
@@ -20,6 +23,23 @@ DatabaseConnection::DatabaseConnection(const std::string& connection_string)
     
     // Set client encoding to UTF8
     PQsetClientEncoding(conn_, "UTF8");
+    
+    // CRITICAL: Set timeout parameters via SET commands (works with PgBouncer)
+    // These prevent connections from being killed by server-side timeouts
+    std::string set_timeouts = 
+        "SET statement_timeout = " + std::to_string(statement_timeout_ms) + "; " +
+        "SET lock_timeout = " + std::to_string(lock_timeout_ms) + "; " +
+        "SET idle_in_transaction_session_timeout = " + std::to_string(idle_in_transaction_timeout_ms) + ";";
+    
+    PGresult* result = PQexec(conn_, set_timeouts.c_str());
+    if (PQresultStatus(result) != PGRES_COMMAND_OK) {
+        std::string error = PQerrorMessage(conn_);
+        PQclear(result);
+        PQfinish(conn_);
+        conn_ = nullptr;
+        throw std::runtime_error("Failed to set timeout parameters: " + error);
+    }
+    PQclear(result);
 }
 
 DatabaseConnection::~DatabaseConnection() {
@@ -84,8 +104,20 @@ bool DatabaseConnection::rollback_transaction() {
 }
 
 // DatabasePool Implementation
-DatabasePool::DatabasePool(const std::string& connection_string, size_t pool_size, int acquisition_timeout_ms)
-    : available_connections_(), mutex_(), condition_(), connection_string_(connection_string), pool_size_(pool_size), current_size_(0), acquisition_timeout_ms_(acquisition_timeout_ms) {
+DatabasePool::DatabasePool(const std::string& connection_string, 
+                         size_t pool_size, 
+                         int acquisition_timeout_ms,
+                         int statement_timeout_ms,
+                         int lock_timeout_ms,
+                         int idle_in_transaction_timeout_ms)
+    : available_connections_(), mutex_(), condition_(), 
+      connection_string_(connection_string), 
+      pool_size_(pool_size), 
+      current_size_(0), 
+      acquisition_timeout_ms_(acquisition_timeout_ms),
+      statement_timeout_ms_(statement_timeout_ms),
+      lock_timeout_ms_(lock_timeout_ms),
+      idle_in_transaction_timeout_ms_(idle_in_transaction_timeout_ms) {
     
     // Pre-populate the pool
     for (size_t i = 0; i < pool_size_; ++i) {
@@ -104,7 +136,8 @@ DatabasePool::DatabasePool(const std::string& connection_string, size_t pool_siz
         throw std::runtime_error("Failed to create any database connections");
     }
     
-    spdlog::info("Database pool initialized with {}/{} connections (acquisition timeout: {}ms)", current_size_, pool_size_, acquisition_timeout_ms_);
+    spdlog::info("Database pool initialized with {}/{} connections (acquisition timeout: {}ms, statement timeout: {}ms)", 
+                current_size_, pool_size_, acquisition_timeout_ms_, statement_timeout_ms_);
 }
 
 DatabasePool::~DatabasePool() {
@@ -115,7 +148,10 @@ DatabasePool::~DatabasePool() {
 }
 
 std::unique_ptr<DatabaseConnection> DatabasePool::create_connection() {
-    return std::make_unique<DatabaseConnection>(connection_string_);
+    return std::make_unique<DatabaseConnection>(connection_string_,
+                                                statement_timeout_ms_,
+                                                lock_timeout_ms_,
+                                                idle_in_transaction_timeout_ms_);
 }
 
 std::unique_ptr<DatabaseConnection> DatabasePool::get_connection() {

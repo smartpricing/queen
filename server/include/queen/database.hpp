@@ -18,7 +18,10 @@ private:
     bool in_use_;
     
 public:
-    explicit DatabaseConnection(const std::string& connection_string);
+    explicit DatabaseConnection(const std::string& connection_string, 
+                               int statement_timeout_ms = 30000,
+                               int lock_timeout_ms = 10000,
+                               int idle_in_transaction_timeout_ms = 30000);
     ~DatabaseConnection();
     
     // Non-copyable, movable
@@ -49,11 +52,19 @@ private:
     size_t pool_size_;
     size_t current_size_;
     int acquisition_timeout_ms_;
+    int statement_timeout_ms_;
+    int lock_timeout_ms_;
+    int idle_in_transaction_timeout_ms_;
     
     std::unique_ptr<DatabaseConnection> create_connection();
     
 public:
-    explicit DatabasePool(const std::string& connection_string, size_t pool_size = 10, int acquisition_timeout_ms = 10000);
+    explicit DatabasePool(const std::string& connection_string, 
+                         size_t pool_size = 10, 
+                         int acquisition_timeout_ms = 10000,
+                         int statement_timeout_ms = 30000,
+                         int lock_timeout_ms = 10000,
+                         int idle_in_transaction_timeout_ms = 30000);
     ~DatabasePool();
     
     std::unique_ptr<DatabaseConnection> get_connection();

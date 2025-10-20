@@ -1471,7 +1471,10 @@ static void worker_thread(const Config& config, int worker_id, int num_workers,
         auto db_pool = std::make_shared<DatabasePool>(
             config.database.connection_string(),
             pool_per_thread,
-            config.database.pool_acquisition_timeout
+            config.database.pool_acquisition_timeout,
+            config.database.statement_timeout,
+            config.database.lock_timeout,
+            config.database.idle_timeout
         );
         
         // Thread-local queue manager
