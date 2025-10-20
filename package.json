@@ -2,31 +2,22 @@
   "name": "queen-mq",
   "version": "0.2.0",
   "type": "module",
-  "description": "High-performance message queue backed by PostgreSQL",
-  "main": "src/client/index.js",
+  "description": "High-performance C++ message queue backed by PostgreSQL",
+  "main": "client-js/client/index.js",
   "scripts": {
-    "start": "node src/server.js",
-    "start:cluster": "node src/cluster-server.js",
+    "start": "./server/bin/queen-server",
     "build:webapp": "cd webapp && npm install && npm run build",
-    "copy:webapp": "rm -rf src/webapp-dist && cp -r webapp/dist src/webapp-dist",
-    "prepublishOnly": "npm run build:webapp && npm run copy:webapp",
-    "publish:public": "npm run build:webapp && npm run copy:webapp && npm publish --access public",
-    "test": "node src/test/test-new.js",
-    "init": "node init-db.js"
+    "publish:public": "npm publish --access public",
+    "test": "node client-js/test/test-new.js"
   },
   "files": [
-    "src/",
-    "init-db.js",
+    "client-js/",
     "LICENSE.md",
     "README.md"
   ],
   "dependencies": {
     "axios": "^1.12.2",
-    "chart.js": "^4.5.1",
-    "pg": "^8.13.3",
-    "uuid": "^13.0.0",
-    "uWebSockets.js": "github:uNetworking/uWebSockets.js#v20.52.0",
-    "ws": "^8.18.3"
+    "uuid": "^13.0.0"
   },
   "engines": {
     "node": ">=22.0.0"

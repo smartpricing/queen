@@ -1,4 +1,4 @@
-# Queen - PostgreSQL-backed Message Queue System
+# Queen MQ - C++ PostgreSQL-backed Message Queue System
 
 <div align="center">
 

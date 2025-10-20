@@ -13,18 +13,8 @@ node_modules
 migrations/
 examples/
 assets/
-webapp/src/
-webapp/public/
-webapp/node_modules/
-webapp/*.config.js
-webapp/*.config.cjs
-webapp/package.json
-webapp/package-lock.json
-# Note: webapp/index.html is source, webapp/dist/index.html is built - keep dist version!
-
-# Test files
-src/test/
-src/benchmark/
+client-js/test/
+client-js/benchmark/
 
 # Build artifacts (except webapp/dist which we WANT)
 *.tgz
@@ -38,8 +28,3 @@ CHANGELOG_*.md
 *.md
 !README.md
 !LICENSE.md
-
-# But INCLUDE these (explicit overrides):
-!webapp/dist
-!webapp/dist/**
-

@@ -1,0 +1,46 @@
+# Node modules
+node_modules/
+webapp/node_modules/
+
+# Build artifacts
+server/build/
+server/bin/
+server/vendor/
+webapp/dist/
+
+# Git
+.git/
+.gitignore
+
+# Documentation
+*.md
+!README.md
+docs/
+
+# IDE and editor files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+logs/
+
+# Test files
+src/test/
+examples/
+test-*.js
+debug-*.js
+
+# Other
+.env
+.env.*
+*.zip
+*.tar.gz
+
