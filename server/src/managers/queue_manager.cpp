@@ -1509,6 +1509,24 @@ QueueManager::AckResult QueueManager::acknowledge_message(const std::string& tra
                 bool lease_released = query_result.get_value(0, "lease_released") == "t";
                 if (lease_released) {
                     spdlog::debug("Lease released after ACK for transaction: {}", transaction_id);
+                    
+                    // CRITICAL: Insert into messages_consumed for analytics when batch completes
+                    // Get partition_id for this transaction
+                    std::string partition_sql = R"(
+                        SELECT p.id as partition_id
+                        FROM queen.messages m
+                        JOIN queen.partitions p ON p.id = m.partition_id
+                        WHERE m.transaction_id = $1
+                    )";
+                    auto partition_result = QueryResult(conn->exec_params(partition_sql, {transaction_id}));
+                    if (partition_result.is_success() && partition_result.num_rows() > 0) {
+                        std::string partition_id = partition_result.get_value(0, "partition_id");
+                        std::string insert_consumed_sql = R"(
+                            INSERT INTO queen.messages_consumed (partition_id, consumer_group, messages_completed, messages_failed, acked_at)
+                            VALUES ($1, $2, 1, 0, NOW())
+                        )";
+                        conn->exec_params(insert_consumed_sql, {partition_id, consumer_group});
+                    }
                 }
                 result.status = "completed";
                 result.success = true;
@@ -1756,6 +1774,13 @@ std::vector<QueueManager::AckResult> QueueManager::acknowledge_messages(const st
                     
                     conn->exec_params(cursor_sql, {last_created, last_id, std::to_string(total_messages), partition_id, actual_consumer_group});
                     
+                    // CRITICAL: Insert into messages_consumed for analytics/throughput tracking
+                    std::string insert_consumed_sql = R"(
+                        INSERT INTO queen.messages_consumed (partition_id, consumer_group, messages_completed, messages_failed, acked_at)
+                        VALUES ($1, $2, 0, $3, NOW())
+                    )";
+                    conn->exec_params(insert_consumed_sql, {partition_id, actual_consumer_group, std::to_string(failed_count)});
+                    
                     for (const auto& ack : failed) {
                         QueueManager::AckResult result;
                         result.transaction_id = ack.transaction_id;
@@ -1896,6 +1921,18 @@ std::vector<QueueManager::AckResult> QueueManager::acknowledge_messages(const st
                     
                     spdlog::info("Moved {} failed messages to DLQ", failed_count);
                 }
+                
+                // CRITICAL: Insert into messages_consumed for analytics/throughput tracking
+                std::string insert_consumed_sql = R"(
+                    INSERT INTO queen.messages_consumed (partition_id, consumer_group, messages_completed, messages_failed, acked_at)
+                    VALUES ($1, $2, $3, $4, NOW())
+                )";
+                conn->exec_params(insert_consumed_sql, {
+                    partition_id, 
+                    actual_consumer_group, 
+                    std::to_string(success_count), 
+                    std::to_string(failed_count)
+                });
                 
                 // Build results
                 for (const auto& ack : completed) {
