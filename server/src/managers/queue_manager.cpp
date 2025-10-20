@@ -965,18 +965,10 @@ PopResult QueueManager::pop_from_queue_partition(const std::string& queue_name,
             return result; // Partition not accessible due to window buffer
         }
         
-        // Acquire lease for this partition (reusing the same connection)
-        std::string lease_id = acquire_partition_lease(conn.operator->(), queue_name, partition_name, 
-                                                     consumer_group, 300, options);
-        if (lease_id.empty()) {
-            return result; // No lease acquired, return empty result
-        }
-        
-        result.lease_id = lease_id;
-        
-        // Get queue configuration for delayed_processing and max_wait_time_seconds
+        // Get queue configuration for delayed_processing, max_wait_time_seconds, and lease_time
+        // CRITICAL: Must read lease_time BEFORE acquiring lease!
         std::string config_sql = R"(
-            SELECT q.delayed_processing, q.max_wait_time_seconds
+            SELECT q.delayed_processing, q.max_wait_time_seconds, q.lease_time
             FROM queen.queues q
             WHERE q.name = $1
         )";
@@ -984,13 +976,25 @@ PopResult QueueManager::pop_from_queue_partition(const std::string& queue_name,
         auto config_result = QueryResult(conn->exec_params(config_sql, {queue_name}));
         int delayed_processing = 0;
         int max_wait_time = 0;
+        int lease_time = 300; // Default to 300 seconds if not specified
         
         if (config_result.is_success() && config_result.num_rows() > 0) {
             std::string delay_str = config_result.get_value(0, "delayed_processing");
             std::string wait_str = config_result.get_value(0, "max_wait_time_seconds");
+            std::string lease_str = config_result.get_value(0, "lease_time");
             delayed_processing = delay_str.empty() ? 0 : std::stoi(delay_str);
             max_wait_time = wait_str.empty() ? 0 : std::stoi(wait_str);
+            lease_time = lease_str.empty() ? 300 : std::stoi(lease_str);
         }
+        
+        // Acquire lease for this partition (reusing the same connection)
+        std::string lease_id = acquire_partition_lease(conn.operator->(), queue_name, partition_name, 
+                                                     consumer_group, lease_time, options);
+        if (lease_id.empty()) {
+            return result; // No lease acquired, return empty result
+        }
+        
+        result.lease_id = lease_id;
         
         // Build WHERE clause with delayed processing and eviction filters
         std::string where_clause = R"(
