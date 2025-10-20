@@ -19,6 +19,68 @@ QueueManager::QueueManager(std::shared_ptr<DatabasePool> db_pool, const QueueCon
 }
 
 std::string QueueManager::generate_uuid() {
+    static std::mutex uuid_mutex;
+    static uint64_t last_ms = 0;
+    static uint16_t sequence = 0;
+    
+    // Static random number generator to be seeded once
+    static std::random_device rd;
+    static std::mt19937_64 gen(rd());
+    
+    std::lock_guard<std::mutex> lock(uuid_mutex);
+    
+    // Get current time in milliseconds since epoch
+    auto now = std::chrono::system_clock::now();
+    uint64_t current_ms = std::chrono::duration_cast<std::chrono::milliseconds>(now.time_since_epoch()).count();
+
+    // If the clock moved backwards or stayed the same, increment the sequence
+    if (current_ms <= last_ms) {
+        sequence++;
+    } else {
+        last_ms = current_ms;
+        // If time has advanced, we can reset the sequence or re-randomize it
+        sequence = 0; 
+    }
+
+    std::array<uint8_t, 16> bytes;
+
+    // 48-bit unix_ts_ms (big-endian)
+    bytes[0] = (last_ms >> 40) & 0xFF;
+    bytes[1] = (last_ms >> 32) & 0xFF;
+    bytes[2] = (last_ms >> 24) & 0xFF;
+    bytes[3] = (last_ms >> 16) & 0xFF;
+    bytes[4] = (last_ms >> 8) & 0xFF;
+    bytes[5] = last_ms & 0xFF;
+
+    // 4-bit version (0111) and 12-bit sequence
+    uint16_t sequence_and_version = sequence & 0x0FFF; // Ensure sequence is 12 bits max
+    bytes[6] = 0x70 | (sequence_and_version >> 8);
+    bytes[7] = sequence_and_version & 0xFF;
+
+    // 2-bit variant (10) and 62-bits of random data
+    uint64_t rand_data = gen();
+    bytes[8] = 0x80 | ((rand_data >> 56) & 0x3F); // variant is 10xx xxxx
+    bytes[9] = (rand_data >> 48) & 0xFF;
+    bytes[10] = (rand_data >> 40) & 0xFF;
+    bytes[11] = (rand_data >> 32) & 0xFF;
+    bytes[12] = (rand_data >> 24) & 0xFF;
+    bytes[13] = (rand_data >> 16) & 0xFF;
+    bytes[14] = (rand_data >> 8) & 0xFF;
+    bytes[15] = rand_data & 0xFF;
+
+    // Format to string
+    std::stringstream ss;
+    ss << std::hex << std::setfill('0');
+    for (int i = 0; i < 16; ++i) {
+        if (i == 4 || i == 6 || i == 8 || i == 10) ss << '-';
+        ss << std::setw(2) << static_cast<int>(bytes[i]);
+    }
+    
+    return ss.str();
+}
+
+/*
+std::string QueueManager::generate_uuid() {
     // UUIDv7 with monotonic counter - ensures strict ordering within same millisecond
     static std::mutex uuid_mutex;
     static uint64_t last_timestamp_ms = 0;
@@ -73,7 +135,7 @@ std::string QueueManager::generate_uuid() {
     }
     
     return ss.str();
-}
+}*/
 
 std::string QueueManager::generate_transaction_id() {
     return generate_uuid();

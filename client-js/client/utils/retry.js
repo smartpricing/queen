@@ -1,4 +1,10 @@
-import config from '../../config.js';
+const config = {
+  CLIENT: {
+    DEFAULT_RETRY_ATTEMPTS: 3,
+    DEFAULT_RETRY_DELAY: 1000,
+    DEFAULT_RETRY_BACKOFF: 2 
+  }
+}
 
 export const withRetry = async (fn, attempts = config.CLIENT.DEFAULT_RETRY_ATTEMPTS, delay = config.CLIENT.DEFAULT_RETRY_DELAY, backoff = config.CLIENT.DEFAULT_RETRY_BACKOFF) => {
   let lastError;

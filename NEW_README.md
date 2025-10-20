@@ -1,4 +1,4 @@
-# Queen MQ - PostgreSQL-backed C++ Message Queue System
+# Queen MQ - PostgreSQL-backed C++ Message Queue
 
 <div align="center">
 
@@ -7,7 +7,7 @@
 [![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE.md)
 [![Node](https://img.shields.io/badge/node-%3E%3D22.0.0-brightgreen.svg)](https://nodejs.org/)
 
-[Quick Start](#-quick-start) • [Client Examples](#-client-examples) • [Server Setup](#-server-setup) • [Core Concepts](#-core-concepts) • [API Reference](#-http-api-reference) • [Dashboard](#-dashboard)
+[Quick Start](#js-client-usage) • [Examples](#-examples) • [Webapp](#webapp) • [Server Setup](#install-server-and-configure-it) • [HTTP API](#raw-http-api)
 
 <p align="center">
   <img src="assets/queen-logo-rose.svg" alt="Queen Logo" width="120" />
@@ -52,6 +52,12 @@ for await (const messages of client.takeBatch(queue, { limit: 1, batch: 10 })) {
     await client.ack(messages) //  OR await client.ack(messages, false) for nack
 }
 
+// Consume data with a consumer group
+for await (const msg of client.take(`${queue}@analytics-data`, { limit: 2, batch: 2 })) {
+    // Do your computation and than ack with consumer group
+    await client.ack(msg, true, { group: 'analytics-data' });
+}
+
 // Consume data from any partition of the queue, continusly
 // This "pipeline" is useful for doing exactly one processing
 await client 
@@ -68,20 +74,47 @@ await client
 .execute();
 ```
 
-## Use cases and examples
+## 📚 Examples
 
-#### Advanced queue configuration
+### Basic Usage
+- **[Basic Queue Operations](examples/01-basic-usage.js)** - Create queue, push, take, and ack messages
+- **[Batch Operations](examples/02-batch-operations.js)** - Push and consume messages in batches
 
-MaxSize, window buffer, delay
+### Advanced Features
+- **[Queue Configuration](examples/06-queue-configuration.js)** - Configure maxSize, windowBuffer, delay, retryLimit, and priority
+- **[Delayed Processing](examples/04-delayed-processing.js)** - Process messages after a delay
+- **[Window Buffer](examples/05-window-buffer.js)** - Delay message availability after push
 
-#### Using namespace and task filters 
+### Filtering & Routing
+- **[Namespace & Task Filtering](examples/07-namespace-task-filtering.js)** - Route and filter messages by namespace and task
+- **[Consumer Groups](examples/08-consumer-groups.js)** - Multiple consumer groups processing same messages
 
-#### Client usage
-
-#### Transactional pipelines
+### Pipelines
+- **[Transactional Pipelines](examples/03-transactional-pipeline.js)** - Atomic processing with ack and push in a transaction
 
 ## Webapp
 
+A modern Vue 3 web interface for managing and monitoring Queen MQ.
+
+**Features:**
+- 📊 Real-time dashboard with system metrics
+- 📈 Message throughput visualization
+- 🔍 Queue management and monitoring
+- 👥 Consumer group tracking
+- 💬 Message browser
+- 📉 Analytics and insights
+- 🌓 Dark/light theme support
+
+**Quick Start:**
+```bash
+cd webapp
+npm install
+npm run dev
+```
+
+The dashboard will be available at `http://localhost:4000`
+
+See [webapp/README.md](webapp/README.md) for more details.
 
 ## Install server and configure it
 
@@ -95,9 +128,8 @@ make build-only
 ./bin/queen-server
 ```
 
-The full list of enviroment variables is here:
 
-[ENVVAR](server/ENV_VARIABLES.md)
+[The full list of enviroment variables is here](server/ENV_VARIABLES.md)
 
 
 ### With Docker
@@ -105,8 +137,8 @@ The full list of enviroment variables is here:
 ./build.sh
 ```
 
-## Raw HTTP API
+## 🔌 Raw HTTP API
 
-You can use Queen directly from HTTP.
+You can use Queen directly from HTTP without the JS client.
 
-
+[Here the complete list of API endpoints](API.md)
