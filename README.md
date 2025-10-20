@@ -129,11 +129,13 @@ See [webapp/README.md](webapp/README.md) for more details.
 
 ```sh
 cd server
-make all                      # Download deps and build
+make clean
+make deps
+make build-only
 DB_POOL_SIZE=50 ./bin/queen-server
 ```
 
-**📖 Complete Build & Tuning Guide:** [server/SERVER.md](server/SERVER.md)
+**📖 Complete Build & Tuning Guide:** [server/README.md](server/README.md)
 
 Includes:
 - Build instructions and optimization
