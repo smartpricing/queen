@@ -248,7 +248,7 @@ std::optional<std::string> EncryptionService::decrypt_payload(const EncryptedDat
         
         int plaintext_len = len;
         
-        // Set authentication tag
+        // Set authentication tag AFTER decrypting but BEFORE finalizing (required for GCM mode)
         if (EVP_CIPHER_CTX_ctrl(ctx, EVP_CTRL_GCM_SET_TAG, TAG_SIZE, const_cast<uint8_t*>(tag.data())) != 1) {
             EVP_CIPHER_CTX_free(ctx);
             spdlog::error("Failed to set authentication tag");

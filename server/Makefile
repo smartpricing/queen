@@ -24,8 +24,8 @@ ifeq ($(UNAME_S),Darwin)
             PG_LIBS := $(BREW_PREFIX)/lib $(BREW_PREFIX)/opt/postgresql/lib
         endif
     endif
-    SSL_INCLUDES := $(BREW_PREFIX)/include $(BREW_PREFIX)/opt/openssl/include
-    SSL_LIBS := $(BREW_PREFIX)/lib $(BREW_PREFIX)/opt/openssl/lib
+    SSL_INCLUDES := $(BREW_PREFIX)/opt/openssl@3/include $(BREW_PREFIX)/include $(BREW_PREFIX)/opt/openssl/include
+    SSL_LIBS := $(BREW_PREFIX)/opt/openssl@3/lib $(BREW_PREFIX)/lib $(BREW_PREFIX)/opt/openssl/lib
     INCLUDES = -I./include -I./vendor -I./vendor/uSockets/src $(addprefix -I,$(PG_INCLUDES)) $(addprefix -I,$(SSL_INCLUDES))
     LIBS = $(addprefix -L,$(PG_LIBS)) $(addprefix -L,$(SSL_LIBS)) -lpq -lssl -lcrypto -lz
 else
