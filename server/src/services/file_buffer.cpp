@@ -595,7 +595,55 @@ bool FileBufferManager::flush_batched_to_db(const std::vector<nlohmann::json>& e
         return true;
         
     } catch (const std::exception& e) {
-        spdlog::error("Failed to flush batch to DB: {}", e.what());
+        std::string error_msg = e.what();
+        
+        // Check if this is a duplicate key error (messages already in DB)
+        if (error_msg.find("duplicate key value violates unique constraint") != std::string::npos ||
+            error_msg.find("messages_transaction_id_key") != std::string::npos) {
+            
+            spdlog::warn("Duplicate key detected in batch, retrying individual messages to skip duplicates");
+            
+            // Retry each message individually to skip duplicates
+            size_t succeeded = 0;
+            size_t duplicates = 0;
+            
+            for (const auto& event : events) {
+                try {
+                    queue_manager_->push_single_message(
+                        event["queue"],
+                        event.value("partition", "Default"),
+                        event["payload"],
+                        event.value("namespace", ""),
+                        event.value("task", ""),
+                        event.value("transactionId", ""),
+                        event.value("traceId", "")
+                    );
+                    succeeded++;
+                } catch (const std::exception& single_error) {
+                    std::string single_msg = single_error.what();
+                    if (single_msg.find("duplicate key") != std::string::npos) {
+                        // This message was already inserted - skip it
+                        duplicates++;
+                    } else {
+                        // Real error - rethrow
+                        throw;
+                    }
+                }
+            }
+            
+            spdlog::info("Batch recovery: {} succeeded, {} duplicates skipped", succeeded, duplicates);
+            
+            // If we successfully processed or skipped all messages, consider it success
+            // DB is actually healthy if we got duplicate key errors
+            if (!db_healthy_.load()) {
+                spdlog::info("PostgreSQL recovered! Database is healthy again");
+                db_healthy_ = true;
+            }
+            return true;
+        }
+        
+        // Not a duplicate key error - treat as DB failure
+        spdlog::error("Failed to flush batch to DB: {}", error_msg);
         if (db_healthy_.load()) {
             spdlog::warn("PostgreSQL appears to be down");
             db_healthy_ = false;
@@ -624,7 +672,26 @@ bool FileBufferManager::flush_single_to_db(const nlohmann::json& event) {
         return true;
         
     } catch (const std::exception& e) {
-        spdlog::error("Failed to flush single event to DB: {}", e.what());
+        std::string error_msg = e.what();
+        
+        // Check if this is a duplicate key error (message already in DB)
+        if (error_msg.find("duplicate key value violates unique constraint") != std::string::npos ||
+            error_msg.find("messages_transaction_id_key") != std::string::npos) {
+            
+            // Message already exists - this is actually success!
+            spdlog::debug("Message already exists in DB (duplicate), skipping: {}", 
+                         event.value("transactionId", "unknown"));
+            
+            // DB is healthy if we got a duplicate key error
+            if (!db_healthy_.load()) {
+                spdlog::info("PostgreSQL recovered! Database is healthy again");
+                db_healthy_ = true;
+            }
+            return true;
+        }
+        
+        // Not a duplicate key error - treat as DB failure
+        spdlog::error("Failed to flush single event to DB: {}", error_msg);
         if (db_healthy_.load()) {
             spdlog::warn("PostgreSQL appears to be down");
             db_healthy_ = false;
