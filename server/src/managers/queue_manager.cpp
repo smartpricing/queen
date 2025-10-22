@@ -137,6 +137,68 @@ std::string QueueManager::generate_uuid() {
     return ss.str();
 }*/
 
+// Helper for FileBufferManager - push single message with explicit parameters
+void QueueManager::push_single_message(
+    const std::string& queue_name,
+    const std::string& partition_name,
+    const nlohmann::json& payload,
+    const std::string& namespace_name,
+    const std::string& task,
+    const std::string& transaction_id,
+    const std::string& trace_id
+) {
+    auto conn = db_pool_->get_connection();
+    
+    // Generate transaction ID if not provided
+    std::string tx_id = transaction_id.empty() ? generate_uuid() : transaction_id;
+    
+    // Ensure queue exists
+    ensure_queue_exists(queue_name, namespace_name, task);
+    
+    // Ensure partition exists
+    ensure_partition_exists(queue_name, partition_name);
+    
+    // Get next sequence number
+    auto seq_result = QueryResult(conn->exec_params(R"(
+        SELECT COALESCE(MAX(sequence), 0) + 1 as next_seq
+        FROM queen.messages
+        WHERE queue_name = $1 AND partition_name = $2
+    )", {queue_name, partition_name}));
+    
+    int64_t sequence = 1;
+    if (seq_result.num_rows() > 0) {
+        sequence = std::stoll(seq_result.get_value(0, "next_seq"));
+    }
+    
+    // Serialize payload
+    std::string payload_str = payload.dump();
+    
+    // TODO: Add encryption support
+    // For now, encryption is handled by push_messages()
+    // This helper is for simple file buffer use case
+    
+    // Insert message
+    auto insert_sql = R"(
+        INSERT INTO queen.messages 
+        (queue_name, partition_name, payload, transaction_id, trace_id, 
+         namespace, task, status, sequence, created_at)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, 'pending', $8, NOW())
+    )";
+    
+    conn->exec_params(insert_sql, {
+        queue_name,
+        partition_name,
+        payload_str,
+        tx_id,
+        trace_id,
+        namespace_name,
+        task,
+        std::to_string(sequence)
+    });
+    
+    db_pool_->return_connection(std::move(conn));
+}
+
 std::string QueueManager::generate_transaction_id() {
     return generate_uuid();
 }
@@ -1201,6 +1263,62 @@ PopResult QueueManager::pop_from_queue_partition(const std::string& queue_name,
                 }
                 
                 result.messages.push_back(std::move(msg));
+            }
+            
+            // Auto-ack: Immediately update cursor and release lease if configured
+            if (options.auto_ack && !result.messages.empty()) {
+                spdlog::debug("Auto-ack enabled, immediately updating cursor for {} messages", result.messages.size());
+                
+                // Get the last message to update cursor
+                const auto& last_msg = result.messages.back();
+                
+                std::string auto_ack_sql = R"(
+                    UPDATE queen.partition_consumers
+                    SET last_consumed_id = $1,
+                        last_consumed_created_at = (SELECT created_at FROM queen.messages WHERE id = $1),
+                        last_consumed_at = NOW(),
+                        total_messages_consumed = total_messages_consumed + $2,
+                        lease_expires_at = NULL,
+                        lease_acquired_at = NULL,
+                        batch_size = 0,
+                        acked_count = 0
+                    WHERE partition_id = (
+                        SELECT p.id FROM queen.partitions p
+                        JOIN queen.queues q ON p.queue_id = q.id
+                        WHERE q.name = $3 AND p.name = $4
+                    )
+                    AND consumer_group = $5
+                )";
+                
+                auto auto_ack_result = QueryResult(conn->exec_params(auto_ack_sql, {
+                    last_msg.id,
+                    std::to_string(result.messages.size()),
+                    queue_name,
+                    partition_name,
+                    consumer_group
+                }));
+                
+                if (!auto_ack_result.is_success()) {
+                    spdlog::warn("Failed to auto-ack messages: {}", auto_ack_result.error_message());
+                } else {
+                    spdlog::debug("Auto-acked {} messages, cursor updated to {}", result.messages.size(), last_msg.id);
+                    
+                    // Insert into messages_consumed for analytics
+                    std::string consumed_sql = R"(
+                        INSERT INTO queen.messages_consumed (partition_id, consumer_group, messages_completed, messages_failed, acked_at)
+                        SELECT p.id, $2, $3, 0, NOW()
+                        FROM queen.partitions p
+                        JOIN queen.queues q ON p.queue_id = q.id
+                        WHERE q.name = $4 AND p.name = $5
+                    )";
+                    
+                    conn->exec_params(consumed_sql, {
+                        consumer_group,
+                        std::to_string(result.messages.size()),
+                        queue_name,
+                        partition_name
+                    });
+                }
             }
         }
         

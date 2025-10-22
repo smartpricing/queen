@@ -394,6 +394,34 @@ struct LoggingConfig {
     }
 };
 
+struct FileBufferConfig {
+    // Platform-specific default
+    #ifdef __APPLE__
+        std::string buffer_dir = "/tmp/queen";
+    #else
+        std::string buffer_dir = "/var/lib/queen/buffers";
+    #endif
+    
+    int flush_interval_ms = 100;
+    size_t max_batch_size = 100;
+    
+    static FileBufferConfig from_env() {
+        FileBufferConfig config;
+        
+        // Get from environment or use platform default
+        const char* env_dir = std::getenv("FILE_BUFFER_DIR");
+        if (env_dir && env_dir[0] != '\0') {
+            config.buffer_dir = env_dir;
+        }
+        // else: use default already set above
+        
+        config.flush_interval_ms = get_env_int("FILE_BUFFER_FLUSH_MS", 100);
+        config.max_batch_size = get_env_int("FILE_BUFFER_MAX_BATCH", 100);
+        
+        return config;
+    }
+};
+
 struct Config {
     ServerConfig server;
     DatabaseConfig database;
@@ -407,6 +435,7 @@ struct Config {
     AnalyticsConfig analytics;
     MonitoringConfig monitoring;
     LoggingConfig logging;
+    FileBufferConfig file_buffer;
     
     static Config load() {
         Config config;
@@ -422,6 +451,7 @@ struct Config {
         config.analytics = AnalyticsConfig::from_env();
         config.monitoring = MonitoringConfig::from_env();
         config.logging = LoggingConfig::from_env();
+        config.file_buffer = FileBufferConfig::from_env();
         return config;
     }
 };

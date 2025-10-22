@@ -160,7 +160,28 @@ std::unique_ptr<DatabaseConnection> DatabasePool::get_connection() {
     // Wait for available connection or timeout
     if (!condition_.wait_for(lock, std::chrono::milliseconds(acquisition_timeout_ms_), 
                             [this] { return !available_connections_.empty(); })) {
-        throw std::runtime_error("Database connection pool timeout (waited " + std::to_string(acquisition_timeout_ms_) + "ms)");
+        
+        // CRITICAL FIX: Pool is empty - try to create a new connection instead of just failing
+        // This allows recovery when PostgreSQL comes back online
+        spdlog::warn("Pool timeout - attempting to create new connection (pool: {}/{})", current_size_, pool_size_);
+        
+        try {
+            lock.unlock();
+            auto new_conn = create_connection();
+            lock.lock();
+            
+            if (new_conn && new_conn->is_valid()) {
+                ++current_size_;
+                new_conn->set_in_use(true);
+                spdlog::info("Created new connection during timeout, pool now {}/{}", current_size_, pool_size_);
+                return new_conn;
+            } else {
+                throw std::runtime_error("Failed to create connection - database may be down");
+            }
+        } catch (const std::exception& e) {
+            spdlog::error("Failed to create connection on timeout: {}", e.what());
+            throw std::runtime_error("Database connection pool timeout (waited " + std::to_string(acquisition_timeout_ms_) + "ms)");
+        }
     }
     
     auto conn = std::move(available_connections_.front());
@@ -204,6 +225,33 @@ void DatabasePool::return_connection(std::unique_ptr<DatabaseConnection> conn) {
     if (conn->is_valid()) {
         available_connections_.push(std::move(conn));
         condition_.notify_one();
+        
+        // POOL REFILL: If pool is below target size, try to create more connections
+        // This helps recovery when PostgreSQL comes back after being down
+        if (current_size_ < pool_size_) {
+            size_t to_create = pool_size_ - current_size_;
+            spdlog::info("Pool below target ({}/{}), attempting to create {} connections", 
+                        current_size_, pool_size_, to_create);
+            
+            for (size_t i = 0; i < to_create; ++i) {
+                try {
+                    auto new_conn = create_connection();
+                    if (new_conn && new_conn->is_valid()) {
+                        available_connections_.push(std::move(new_conn));
+                        ++current_size_;
+                        spdlog::info("Refilled pool: {}/{}", current_size_, pool_size_);
+                    } else {
+                        // Failed to create - probably DB still having issues
+                        break;
+                    }
+                } catch (const std::exception& e) {
+                    // Failed to create - DB might still be down
+                    spdlog::debug("Failed to refill pool: {}", e.what());
+                    break;
+                }
+            }
+            condition_.notify_all();
+        }
     } else {
         spdlog::warn("Returned invalid connection to pool, attempting to create replacement");
         --current_size_;

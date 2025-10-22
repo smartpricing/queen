@@ -3,6 +3,7 @@
 #include "queen/analytics_manager.hpp"
 #include "queen/config.hpp"
 #include "queen/encryption.hpp"
+#include "queen/file_buffer.hpp"
 #include <App.h>
 #include <json.hpp>
 #include <spdlog/spdlog.h>
@@ -10,6 +11,7 @@
 #include <vector>
 #include <atomic>
 #include <mutex>
+#include <condition_variable>
 #include <sstream>
 #include <iomanip>
 #include <chrono>
@@ -357,6 +359,7 @@ static bool serve_static_file(uWS::HttpResponse<false>* res,
 static void setup_worker_routes(uWS::App* app, 
                                 std::shared_ptr<QueueManager> queue_manager,
                                 std::shared_ptr<AnalyticsManager> analytics_manager,
+                                std::shared_ptr<FileBufferManager> file_buffer,
                                 const Config& config,
                                 int worker_id) {
     
@@ -482,72 +485,243 @@ static void setup_worker_routes(uWS::App* app,
     });
     
     // Push messages
-    app->post("/api/v1/push", [queue_manager, worker_id](auto* res, auto* req) {
+    app->post("/api/v1/push", [queue_manager, file_buffer, worker_id](auto* res, auto* req) {
         read_json_body(res,
-            [res, queue_manager, worker_id](const nlohmann::json& body) {
+            [res, queue_manager, file_buffer, worker_id](const nlohmann::json& body) {
                 try {
                     if (!body.contains("items") || !body["items"].is_array()) {
                         send_error_response(res, "items array is required", 400);
                         return;
                     }
                     
-                    std::vector<PushItem> items;
-                    for (const auto& item_json : body["items"]) {
-                        PushItem item;
-                        item.queue = item_json["queue"];
-                        item.partition = item_json.value("partition", "Default");
-                        item.payload = item_json.value("payload", nlohmann::json{});
-                        if (item_json.contains("transactionId")) {
-                            item.transaction_id = item_json["transactionId"];
+                    // Check if QoS 0 (explicit buffering requested)
+                    bool qos0_buffering = body.contains("bufferMs") || body.contains("bufferMax");
+                    
+                    spdlog::info("[Worker {}] >>> PUSH: {} items, qos0={}, dbHealthy={}", 
+                               worker_id, body["items"].size(), qos0_buffering, 
+                               file_buffer ? file_buffer->is_db_healthy() : true);
+                    
+                    if (qos0_buffering && file_buffer) {
+                        // QoS 0: Use file buffer for batching (only available on Worker 0)
+                        for (const auto& item_json : body["items"]) {
+                            nlohmann::json buffered_event = {
+                                {"queue", item_json["queue"]},
+                                {"partition", item_json.value("partition", "Default")},
+                                {"payload", item_json.value("payload", nlohmann::json{})},
+                                {"namespace", item_json.value("namespace", "")},
+                                {"task", item_json.value("task", "")},
+                                {"traceId", item_json.value("traceId", "")},
+                                {"transactionId", item_json.value("transactionId", queue_manager->generate_uuid())}
+                            };
+                            
+                            bool success = file_buffer->write_event(buffered_event);
+                            if (!success) {
+                                send_error_response(res, "Buffer write failed (disk full?)", 500);
+                                return;
+                            }
                         }
-                        if (item_json.contains("traceId")) {
-                            item.trace_id = item_json["traceId"];
-                        }
-                        items.push_back(std::move(item));
-                    }
-                    
-                    // Log unique queue/partition combinations
-                    std::set<std::string> targets;
-                    for (const auto& item : items) {
-                        targets.insert(item.queue + "/" + item.partition);
-                    }
-                    std::string targets_str;
-                    for (const auto& target : targets) {
-                        if (!targets_str.empty()) targets_str += ", ";
-                        targets_str += target;
-                    }
-                    
-                    auto pool_stats = queue_manager->get_pool_stats();
-                    spdlog::info("[Worker {}] >>> PUSH: {} items to [{}] | Pool: {}/{} conn ({} in use)", 
-                                worker_id, items.size(), targets_str, 
-                                pool_stats.available, pool_stats.total, pool_stats.in_use);
-                    
-                    auto results = queue_manager->push_messages(items);
-                    
-                    // Check if any message failed due to queue not existing - this should be a top-level error
-                    for (const auto& result : results) {
-                        if (result.status == "failed" && result.error && 
-                            result.error->find("does not exist") != std::string::npos) {
-                            send_error_response(res, *result.error, 400);
+                        
+                        nlohmann::json response = {
+                            {"pushed", true},
+                            {"qos0", true},
+                            {"dbHealthy", file_buffer->is_db_healthy()}
+                        };
+                        send_json_response(res, response, 201);
+                        
+                    } else {
+                        // Normal push: Use original push_messages() for batch efficiency
+                        
+                        // Quick health check first - if DB is known to be down, skip directly to failover
+                        // (only applicable if file_buffer exists - Worker 0)
+                        if (file_buffer && !file_buffer->is_db_healthy()) {
+                            spdlog::warn("[Worker {}] DB known to be down, using file buffer immediately", worker_id);
+                            
+                            for (const auto& item_json : body["items"]) {
+                                nlohmann::json buffered_event = {
+                                    {"queue", item_json["queue"]},
+                                    {"partition", item_json.value("partition", "Default")},
+                                    {"payload", item_json.value("payload", nlohmann::json{})},
+                                    {"namespace", item_json.value("namespace", "")},
+                                    {"task", item_json.value("task", "")},
+                                    {"traceId", item_json.value("traceId", "")},
+                                    {"transactionId", item_json.value("transactionId", queue_manager->generate_uuid())},
+                                    {"failover", true}
+                                };
+                                
+                                file_buffer->write_event(buffered_event);
+                            }
+                            
+                            nlohmann::json response = {
+                                {"pushed", true},
+                                {"qos0", false},
+                                {"dbHealthy", false},
+                                {"failover", true}
+                            };
+                            send_json_response(res, response, 201);
                             return;
                         }
-                    }
-                    
-                    nlohmann::json response = {{"messages", nlohmann::json::array()}};
-                    for (const auto& result : results) {
-                        nlohmann::json msg_result = {
-                            {"id", result.message_id.value_or("")},
-                            {"transactionId", result.transaction_id},
-                            {"traceId", result.trace_id.has_value() ? nlohmann::json(*result.trace_id) : nlohmann::json(nullptr)},
-                            {"status", result.status}
-                        };
-                        if (result.error) {
-                            msg_result["error"] = *result.error;
+                        
+                        try {
+                            std::vector<PushItem> items;
+                            for (const auto& item_json : body["items"]) {
+                                PushItem item;
+                                item.queue = item_json["queue"];
+                                item.partition = item_json.value("partition", "Default");
+                                item.payload = item_json.value("payload", nlohmann::json{});
+                                if (item_json.contains("transactionId")) {
+                                    item.transaction_id = item_json["transactionId"];
+                                }
+                                if (item_json.contains("traceId")) {
+                                    item.trace_id = item_json["traceId"];
+                                }
+                                items.push_back(std::move(item));
+                            }
+                            
+                            auto results = queue_manager->push_messages(items);
+                            
+                            // Check if push failed - distinguish between DB down vs real errors
+                            bool db_failure = false;
+                            bool has_real_error = false;
+                            std::string real_error_msg;
+                            
+                            for (const auto& result : results) {
+                                if (result.status == "failed" && result.error) {
+                                    // Check for DB connection errors FIRST
+                                    if (result.error->find("pool timeout") != std::string::npos ||
+                                        result.error->find("Connection refused") != std::string::npos ||
+                                        result.error->find("Failed to connect") != std::string::npos ||
+                                        result.error->find("connection pool") != std::string::npos) {
+                                        db_failure = true;
+                                        break;
+                                    }
+                                    
+                                    // If "does not exist" but we're not sure if it's due to DB being down
+                                    // Check pool stats - if pool is empty/exhausted, it's likely DB down
+                                    if (result.error->find("does not exist") != std::string::npos) {
+                                        auto pool_stats = queue_manager->get_pool_stats();
+                                        if (pool_stats.available == 0 || pool_stats.total < pool_stats.in_use) {
+                                            // Pool exhausted - likely DB is down, not that queue doesn't exist
+                                            spdlog::warn("[Worker {}] Queue check failed but pool exhausted ({}/{} available) - assuming DB down",
+                                                       worker_id, pool_stats.available, pool_stats.total);
+                                            db_failure = true;
+                                            break;
+                                        } else {
+                                            // Pool has connections - queue genuinely doesn't exist
+                                            has_real_error = true;
+                                            real_error_msg = *result.error;
+                                            break;
+                                        }
+                                    }
+                                    
+                                    // Other errors
+                                    has_real_error = true;
+                                    real_error_msg = *result.error;
+                                    break;
+                                }
+                            }
+                            
+                            // Handle real errors (not DB failure)
+                            if (has_real_error && !db_failure) {
+                                send_error_response(res, real_error_msg, 400);
+                                return;
+                            }
+                            
+                            // If DB failure detected, use file buffer failover (if available)
+                            if (db_failure) {
+                                if (file_buffer) {
+                                    spdlog::warn("[Worker {}] DB connection failed, using file buffer for failover", worker_id);
+                                    file_buffer->mark_db_unhealthy();
+                                    
+                                    for (const auto& item_json : body["items"]) {
+                                        nlohmann::json buffered_event = {
+                                            {"queue", item_json["queue"]},
+                                            {"partition", item_json.value("partition", "Default")},
+                                            {"payload", item_json.value("payload", nlohmann::json{})},
+                                            {"namespace", item_json.value("namespace", "")},
+                                            {"task", item_json.value("task", "")},
+                                            {"traceId", item_json.value("traceId", "")},
+                                            {"transactionId", item_json.value("transactionId", queue_manager->generate_uuid())},
+                                            {"failover", true}
+                                        };
+                                        
+                                        file_buffer->write_event(buffered_event);
+                                    }
+                                    
+                                    nlohmann::json response = {
+                                        {"pushed", true},
+                                        {"qos0", false},
+                                        {"dbHealthy", false},
+                                        {"failover", true}
+                                    };
+                                    send_json_response(res, response, 201);
+                                    return;
+                                } else {
+                                    // No file buffer available (non-zero worker) - return error
+                                    spdlog::error("[Worker {}] DB connection failed and no file buffer available", worker_id);
+                                    send_error_response(res, "Database unavailable and failover not available on this worker", 503);
+                                    return;
+                                }
+                            }
+                            
+                            nlohmann::json response = {{"messages", nlohmann::json::array()}};
+                            for (const auto& result : results) {
+                                nlohmann::json msg_result = {
+                                    {"id", result.message_id.value_or("")},
+                                    {"transactionId", result.transaction_id},
+                                    {"traceId", result.trace_id.has_value() ? nlohmann::json(*result.trace_id) : nlohmann::json(nullptr)},
+                                    {"status", result.status}
+                                };
+                                if (result.error) {
+                                    msg_result["error"] = *result.error;
+                                }
+                                response["messages"].push_back(msg_result);
+                            }
+                            
+                            response["pushed"] = true;
+                            response["qos0"] = false;
+                            response["dbHealthy"] = file_buffer ? file_buffer->is_db_healthy() : true;  // Assume healthy if no buffer
+                            
+                            send_json_response(res, response, 201);
+                            
+                        } catch (const std::exception& db_error) {
+                            // PostgreSQL is down - fallback to file buffer for all items (if available)
+                            if (file_buffer) {
+                                spdlog::warn("[Worker {}] PostgreSQL unavailable, using file buffer for failover: {}", 
+                                           worker_id, db_error.what());
+                                
+                                // Mark DB as unhealthy so subsequent pushes skip DB attempt
+                                file_buffer->mark_db_unhealthy();
+                                
+                                for (const auto& item_json : body["items"]) {
+                                    nlohmann::json buffered_event = {
+                                        {"queue", item_json["queue"]},
+                                        {"partition", item_json.value("partition", "Default")},
+                                        {"payload", item_json.value("payload", nlohmann::json{})},
+                                        {"namespace", item_json.value("namespace", "")},
+                                        {"task", item_json.value("task", "")},
+                                        {"traceId", item_json.value("traceId", "")},
+                                        {"transactionId", item_json.value("transactionId", queue_manager->generate_uuid())},
+                                        {"failover", true}
+                                    };
+                                    
+                                    file_buffer->write_event(buffered_event);
+                                }
+                                
+                                nlohmann::json response = {
+                                    {"pushed", true},
+                                    {"qos0", false},
+                                    {"dbHealthy", false},
+                                    {"failover", true}
+                                };
+                                send_json_response(res, response, 201);
+                            } else {
+                                // No file buffer available (non-zero worker) - return error
+                                spdlog::error("[Worker {}] PostgreSQL unavailable and no file buffer available: {}", 
+                                            worker_id, db_error.what());
+                                send_error_response(res, "Database unavailable and failover not available on this worker", 503);
+                            }
                         }
-                        response["messages"].push_back(msg_result);
                     }
-                    
-                    send_json_response(res, response, 201);
                 } catch (const std::exception& e) {
                     send_error_response(res, e.what(), 500);
                 }
@@ -584,6 +758,7 @@ static void setup_worker_routes(uWS::App* app,
             options.wait = false;
             options.timeout = 0;
             options.batch = batch;
+            options.auto_ack = get_query_param_bool(req, "autoAck", false);
             
             // Parse subscription mode
             std::string sub_mode = get_query_param(req, "subscriptionMode", "");
@@ -808,6 +983,7 @@ static void setup_worker_routes(uWS::App* app,
             options.wait = false;
             options.timeout = 0;
             options.batch = batch;
+            options.auto_ack = get_query_param_bool(req, "autoAck", false);
             
             // Parse subscription mode
             std::string sub_mode = get_query_param(req, "subscriptionMode", "");
@@ -1001,6 +1177,7 @@ static void setup_worker_routes(uWS::App* app,
             options.wait = get_query_param_bool(req, "wait", false);
             options.timeout = get_query_param_int(req, "timeout", config.queue.default_timeout);
             options.batch = get_query_param_int(req, "batch", config.queue.default_batch_size);
+            options.auto_ack = get_query_param_bool(req, "autoAck", false);
             
             std::string sub_mode = get_query_param(req, "subscriptionMode", "");
             if (!sub_mode.empty()) options.subscription_mode = sub_mode;
@@ -1361,6 +1538,33 @@ static void setup_worker_routes(uWS::App* app,
         }
     });
     
+    // GET /api/v1/status/buffers - File buffer stats
+    app->get("/api/v1/status/buffers", [file_buffer, worker_id](auto* res, auto* req) {
+        try {
+            if (file_buffer) {
+                nlohmann::json response = {
+                    {"pending", file_buffer->get_pending_count()},
+                    {"failed", file_buffer->get_failed_count()},
+                    {"dbHealthy", file_buffer->is_db_healthy()},
+                    {"worker", worker_id}
+                };
+                send_json_response(res, response);
+            } else {
+                // Non-zero worker - no file buffer
+                nlohmann::json response = {
+                    {"pending", 0},
+                    {"failed", 0},
+                    {"dbHealthy", true},
+                    {"worker", worker_id},
+                    {"note", "File buffer only available on Worker 0"}
+                };
+                send_json_response(res, response);
+            }
+        } catch (const std::exception& e) {
+            send_error_response(res, e.what(), 500);
+        }
+    });
+    
     // ============================================================================
     // Static File Serving (Frontend Dashboard)
     // ============================================================================
@@ -1460,7 +1664,10 @@ static void setup_worker_routes(uWS::App* app,
 // Worker thread function
 static void worker_thread(const Config& config, int worker_id, int num_workers,
                          std::mutex& init_mutex,
-                         std::vector<uWS::App*>& worker_apps) {
+                         std::vector<uWS::App*>& worker_apps,
+                         std::shared_ptr<FileBufferManager>& shared_file_buffer,
+                         std::mutex& file_buffer_mutex,
+                         std::condition_variable& file_buffer_ready) {
     spdlog::info("[Worker {}] Starting...", worker_id);
     
     try {
@@ -1499,11 +1706,58 @@ static void worker_thread(const Config& config, int worker_id, int num_workers,
             queue_manager->initialize_schema();
         }
         
+        // Create or wait for SHARED FileBufferManager
+        // Worker 0 creates it, other workers wait for it to be ready
+        std::shared_ptr<FileBufferManager> file_buffer;
+        
+        if (worker_id == 0) {
+            spdlog::info("[Worker 0] Creating SHARED file buffer manager (dir={})...", 
+                         config.file_buffer.buffer_dir);
+            
+            auto new_file_buffer = std::make_shared<FileBufferManager>(
+                queue_manager,
+                config.file_buffer.buffer_dir,
+                config.file_buffer.flush_interval_ms,
+                config.file_buffer.max_batch_size,
+                true  // Do startup recovery
+            );
+            
+            // Wait for recovery to complete
+            while (!new_file_buffer->is_ready()) {
+                std::this_thread::sleep_for(std::chrono::milliseconds(100));
+            }
+            
+            spdlog::info("[Worker 0] File buffer ready - Pending: {}, Failed: {}, DB: {}", 
+                         new_file_buffer->get_pending_count(),
+                         new_file_buffer->get_failed_count(),
+                         new_file_buffer->is_db_healthy() ? "healthy" : "down");
+            
+            // Share with other workers
+            {
+                std::lock_guard<std::mutex> lock(file_buffer_mutex);
+                shared_file_buffer = new_file_buffer;
+                file_buffer = new_file_buffer;
+            }
+            file_buffer_ready.notify_all();
+            
+        } else {
+            // Wait for Worker 0 to create the shared file buffer
+            spdlog::info("[Worker {}] Waiting for shared file buffer from Worker 0...", worker_id);
+            {
+                std::unique_lock<std::mutex> lock(file_buffer_mutex);
+                file_buffer_ready.wait(lock, [&shared_file_buffer]() { 
+                    return shared_file_buffer != nullptr; 
+                });
+                file_buffer = shared_file_buffer;
+            }
+            spdlog::info("[Worker {}] Using shared file buffer from Worker 0", worker_id);
+        }
+        
         // Create worker App
         auto worker_app = new uWS::App();
         
         // Setup routes
-        setup_worker_routes(worker_app, queue_manager, analytics_manager, config, worker_id);
+        setup_worker_routes(worker_app, queue_manager, analytics_manager, file_buffer, config, worker_id);
         
         // Register this worker app with the acceptor (thread-safe)
         {
@@ -1562,10 +1816,17 @@ bool start_acceptor_server(const Config& config) {
     std::vector<uWS::App*> worker_apps;
     std::vector<std::thread> worker_threads;
     
+    // Create SHARED FileBufferManager (will be initialized by Worker 0)
+    std::shared_ptr<FileBufferManager> shared_file_buffer;
+    std::mutex file_buffer_mutex;
+    std::condition_variable file_buffer_ready;
+    
     // Create worker threads
     for (int i = 0; i < num_workers; i++) {
         worker_threads.emplace_back(worker_thread, config, i, num_workers,
-                                   std::ref(init_mutex), std::ref(worker_apps));
+                                   std::ref(init_mutex), std::ref(worker_apps),
+                                   std::ref(shared_file_buffer), std::ref(file_buffer_mutex),
+                                   std::ref(file_buffer_ready));
     }
     
     // Wait for all workers to register

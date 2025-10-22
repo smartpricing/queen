@@ -47,6 +47,7 @@ struct PopOptions {
     int batch = 1;
     std::optional<std::string> subscription_mode;
     std::optional<std::string> subscription_from;
+    bool auto_ack = false;  // Auto-acknowledge messages on delivery (QoS 0)
 };
 
 struct PopResult {
@@ -67,6 +68,17 @@ class QueueManager {
 public:
     // Utility methods
     std::string generate_uuid();
+    
+    // Helper for FileBufferManager - push single message with explicit parameters
+    void push_single_message(
+        const std::string& queue_name,
+        const std::string& partition_name,
+        const nlohmann::json& payload,
+        const std::string& namespace_name = "",
+        const std::string& task = "",
+        const std::string& transaction_id = "",
+        const std::string& trace_id = ""
+    );
     
 private:
     std::shared_ptr<DatabasePool> db_pool_;

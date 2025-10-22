@@ -210,6 +210,31 @@ This document lists all environment variables supported by the Queen C++ server.
 | `LOG_FORMAT` | string | json | Log format (json, text) |
 | `LOG_TIMESTAMP` | bool | true | Include timestamps in logs |
 
+## File Buffer Configuration (QoS 0)
+
+| Variable | Type | Default | Description |
+|----------|------|---------|-------------|
+| `FILE_BUFFER_DIR` | string | Platform-specific* | Directory for file buffers |
+| `FILE_BUFFER_FLUSH_MS` | int | 100 | Process buffered events every N milliseconds |
+| `FILE_BUFFER_MAX_BATCH` | int | 100 | Maximum events per batch write to database |
+
+**Platform-specific defaults:**
+- **macOS**: `/tmp/queen`
+- **Linux**: `/var/lib/queen/buffers`
+
+The file buffer serves dual purposes:
+1. **QoS 0 batching** - Batch events for 10-100x performance improvement
+2. **PostgreSQL failover** - Buffer messages when database is unavailable (zero message loss)
+
+**Example:**
+```bash
+# Use custom directory
+FILE_BUFFER_DIR=/data/queen/buffers ./bin/queen-server
+
+# Tune flush interval and batch size
+FILE_BUFFER_FLUSH_MS=50 FILE_BUFFER_MAX_BATCH=200 ./bin/queen-server
+```
+
 ## Usage Examples
 
 ### Development Environment

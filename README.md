@@ -99,6 +99,82 @@ await client
 ### Pipelines
 - **[Transactional Pipelines](examples/03-transactional-pipeline.js)** - Atomic processing with ack and push in a transaction
 
+### Event Streaming (QoS 0)
+- **[Event Streaming](examples/09-event-streaming.js)** - At-most-once delivery with buffering and auto-ack
+
+## QoS 0: At-Most-Once Event Streaming
+
+For high-throughput event streams, Queen supports **at-most-once delivery** with server-side buffering and auto-acknowledgment.
+
+### Server-Side Buffering
+
+Batch events on the server for 10-100x reduction in database writes:
+
+```javascript
+// Push with buffering (QoS 0)
+await client.push('metrics', { cpu: 45, memory: 67 }, {
+  bufferMs: 100,      // Server batches for 100ms
+  bufferMax: 100      // Or until 100 events
+});
+
+// Result: 1000 events = ~10 DB writes (instead of 1000)
+```
+
+### Auto-Acknowledgment
+
+Skip manual ack for fire-and-forget consumption:
+
+```javascript
+// Consume with auto-ack
+for await (const msg of client.take('metrics', { autoAck: true })) {
+  updateDashboard(msg.data);
+  // No ack() needed - automatically acknowledged!
+}
+```
+
+### Fan-Out Pattern (Consumer Groups)
+
+Combine buffering + auto-ack + consumer groups for pub/sub:
+
+```javascript
+// Publisher (buffered)
+await client.push('events', { action: 'login' }, { bufferMs: 100 });
+
+// Multiple subscribers (each group gets all messages)
+for await (const e of client.take('events@dashboard', { autoAck: true })) {
+  updateUI(e.data);
+}
+
+for await (const e of client.take('events@analytics', { autoAck: true })) {
+  trackEvent(e.data);
+}
+```
+
+### PostgreSQL Failover
+
+Queen automatically buffers messages to disk when PostgreSQL is unavailable - **zero message loss**:
+
+- Normal pushes go directly to PostgreSQL (FIFO preserved)
+- If PostgreSQL is down, messages buffered to file (macOS: `/tmp/queen`, Linux: `/var/lib/queen/buffers`)
+- Automatic replay when PostgreSQL recovers
+- Survives server crashes and restarts
+- Directory auto-created on first run
+
+**No configuration needed** - failover is automatic!
+
+**Custom directory:**
+```bash
+FILE_BUFFER_DIR=/custom/path ./bin/queen-server
+```
+
+### When to Use
+
+| Feature | Use For | Don't Use For |
+|---------|---------|---------------|
+| **Buffering** | Metrics, logs, analytics, UI updates | Critical tasks, payments |
+| **Auto-Ack** | Fire-and-forget events, notifications | Tasks requiring retry logic |
+| **Failover** | Everything (automatic) | N/A - always beneficial |
+
 ## Webapp
 
 A modern Vue 3 web interface for managing and monitoring Queen MQ.
@@ -162,3 +238,11 @@ Includes:
 You can use Queen directly from HTTP without the JS client.
 
 [Here the complete list of API endpoints](API.md)
+
+
+- retention jobs
+- reconsume
+- fix frontend
+- pg async
+- pg reconnect
+- memory leak?

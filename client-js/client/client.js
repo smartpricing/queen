@@ -196,10 +196,17 @@ export class Queen {
       return result;
     });
     
+    // Build request body
+    const requestBody = { items: formattedItems };
+    
+    // Add buffer options if specified (QoS 0)
+    if (options.bufferMs !== undefined || options.bufferMax !== undefined) {
+      requestBody.bufferMs = options.bufferMs !== undefined ? options.bufferMs : 100;
+      requestBody.bufferMax = options.bufferMax !== undefined ? options.bufferMax : 100;
+    }
+    
     const result = await withRetry(
-      () => this.#http.post('/api/v1/push', { 
-        items: formattedItems 
-      }),
+      () => this.#http.post('/api/v1/push', requestBody),
       this.#config.retryAttempts,
       this.#config.retryDelay
     );
@@ -265,6 +272,9 @@ export class Queen {
       if (consumerGroup) params.append('consumerGroup', consumerGroup);
       if (subscriptionMode) params.append('subscriptionMode', subscriptionMode);
       if (subscriptionFrom) params.append('subscriptionFrom', subscriptionFrom);
+      
+      // Add auto-ack option if specified
+      if (options.autoAck) params.append('autoAck', 'true');
       
       // Determine the endpoint based on parameters
       if (queue) {

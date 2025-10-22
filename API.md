@@ -115,6 +115,34 @@ curl -X POST http://localhost:6632/api/v1/push \
   }'
 ```
 
+**QoS 0 Buffering (Optional):**
+
+Add `bufferMs` and `bufferMax` to enable server-side batching for 10-100x performance improvement:
+
+```bash
+curl -X POST http://localhost:6632/api/v1/push \
+  -H "Content-Type: application/json" \
+  -d '{
+    "items": [
+      { "queue": "events", "payload": {"type": "login"} }
+    ],
+    "bufferMs": 100,
+    "bufferMax": 100
+  }'
+```
+
+Response includes buffer status:
+```json
+{
+  "pushed": true,
+  "qos0": true,
+  "dbHealthy": true,
+  "messages": [...]
+}
+```
+
+Server batches events and flushes to database after 100ms or 100 events (whichever comes first).
+
 #### `GET /api/v1/pop/queue/:queue`
 Pop messages from any partition of a queue.
 ```bash
@@ -130,6 +158,16 @@ curl "http://localhost:6632/api/v1/pop/queue/myqueue?consumerGroup=workers&batch
 - `wait` - Wait for messages if queue empty (default: false)
 - `timeout` - Timeout in ms for long polling (default: 30000)
 - `consumerGroup` - Consumer group name for bus mode (default: "__QUEUE_MODE__")
+- `autoAck` - Auto-acknowledge messages on delivery (default: false)
+
+**Auto-Ack Example:**
+
+```bash
+# Pop with auto-acknowledgment (no manual ack needed)
+curl "http://localhost:6632/api/v1/pop/queue/events?autoAck=true&batch=10"
+```
+
+Messages are immediately marked as consumed upon delivery.
 
 #### `GET /api/v1/pop/queue/:queue/partition/:partition`
 Pop messages from a specific partition.
