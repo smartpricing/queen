@@ -12,14 +12,15 @@ const q = new Queen({
   timeout: 120000
 });
 
+
 try {
   await q.queueDelete(QUEUE_NAME);
-await q.queue(QUEUE_NAME, {
+  await q.queue(QUEUE_NAME, {
   leaseTime: 10,
   retryLimit: 3
 }, { namespace: 'benchmark' });
 } catch (e) {
-  // Queue might not exist
+  console.error(e);
 }
 
 

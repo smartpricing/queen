@@ -590,7 +590,10 @@ static void setup_worker_routes(uWS::App* app,
                                     if (result.error->find("pool timeout") != std::string::npos ||
                                         result.error->find("Connection refused") != std::string::npos ||
                                         result.error->find("Failed to connect") != std::string::npos ||
-                                        result.error->find("connection pool") != std::string::npos) {
+                                        result.error->find("connection pool") != std::string::npos ||
+                                        result.error->find("Failed to commit") != std::string::npos ||
+                                        result.error->find("server closed") != std::string::npos ||
+                                        result.error->find("terminating connection") != std::string::npos) {
                                         db_failure = true;
                                         break;
                                     }
@@ -1691,19 +1694,24 @@ static void worker_thread(const Config& config, int worker_id, int num_workers,
         auto analytics_manager = std::make_shared<AnalyticsManager>(db_pool);
         
         // Test database connection and log pool stats
-        if (!queue_manager->health_check()) {
-            spdlog::error("[Worker {}] FATAL: Cannot connect to database!", worker_id);
-            throw std::runtime_error("Database connection failed at startup");
-        }
+        // FAILOVER: Don't fail at startup if DB is down - use file buffer instead
+        bool db_available = queue_manager->health_check();
         
         auto pool_stats = queue_manager->get_pool_stats();
-        spdlog::info("[Worker {}] Database connection: OK | Pool: {}/{} conn available", 
-                     worker_id, pool_stats.available, pool_stats.total);
         
-        // Only first worker initializes schema
-        if (worker_id == 0) {
-            spdlog::info("[Worker 0] Initializing database schema...");
-            queue_manager->initialize_schema();
+        if (db_available) {
+            spdlog::info("[Worker {}] Database connection: OK | Pool: {}/{} conn available", 
+                         worker_id, pool_stats.available, pool_stats.total);
+            
+            // Only first worker initializes schema (only if DB is available)
+            if (worker_id == 0) {
+                spdlog::info("[Worker 0] Initializing database schema...");
+                queue_manager->initialize_schema();
+            }
+        } else {
+            spdlog::warn("[Worker {}] Database connection: UNAVAILABLE (Pool: 0/{}) - Will use file buffer for failover", 
+                         worker_id, pool_stats.total);
+            spdlog::warn("[Worker {}] Server will operate with file buffer until PostgreSQL becomes available", worker_id);
         }
         
         // Create or wait for SHARED FileBufferManager
@@ -1831,7 +1839,31 @@ bool start_acceptor_server(const Config& config) {
     
     // Wait for all workers to register
     spdlog::info("Waiting for workers to initialize...");
-    std::this_thread::sleep_for(std::chrono::seconds(1));
+    auto start_wait = std::chrono::steady_clock::now();
+    
+    while (true) {
+        {
+            std::lock_guard<std::mutex> lock(init_mutex);
+            if (worker_apps.size() == static_cast<size_t>(num_workers)) {
+                auto wait_time = std::chrono::duration_cast<std::chrono::milliseconds>(
+                    std::chrono::steady_clock::now() - start_wait
+                ).count();
+                spdlog::info("All {} workers initialized in {}ms", num_workers, wait_time);
+                break;
+            }
+        }
+        
+        std::this_thread::sleep_for(std::chrono::milliseconds(50));
+        
+        // Timeout after 30 seconds
+        auto elapsed = std::chrono::duration_cast<std::chrono::seconds>(
+            std::chrono::steady_clock::now() - start_wait
+        ).count();
+        if (elapsed > 30) {
+            spdlog::error("Timeout waiting for workers to initialize");
+            break;
+        }
+    }
     
     // Create acceptor app
     spdlog::info("Creating acceptor app...");

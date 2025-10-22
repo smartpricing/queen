@@ -132,12 +132,15 @@ DatabasePool::DatabasePool(const std::string& connection_string,
         }
     }
     
+    // FAILOVER: Allow pool to start with 0 connections if PostgreSQL is down
+    // The get_connection() and return_connection() methods will handle recovery
     if (current_size_ == 0) {
-        throw std::runtime_error("Failed to create any database connections");
+        spdlog::warn("Database pool initialized with 0/{} connections - PostgreSQL may be down. Will use file buffer for failover.", pool_size_);
+        spdlog::warn("Connections will be created on-demand when PostgreSQL becomes available.");
+    } else {
+        spdlog::info("Database pool initialized with {}/{} connections (acquisition timeout: {}ms, statement timeout: {}ms)", 
+                    current_size_, pool_size_, acquisition_timeout_ms_, statement_timeout_ms_);
     }
-    
-    spdlog::info("Database pool initialized with {}/{} connections (acquisition timeout: {}ms, statement timeout: {}ms)", 
-                current_size_, pool_size_, acquisition_timeout_ms_, statement_timeout_ms_);
 }
 
 DatabasePool::~DatabasePool() {

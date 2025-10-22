@@ -51,26 +51,58 @@ FILE_BUFFER_FLUSH_MS=50 \
 
 ## 🧪 Testing PostgreSQL Failover
 
-### Test 1: Stop PostgreSQL
+### Test 0: Startup with PostgreSQL Down (NEW)
 
 ```bash
-# Terminal 1: Start server with fast timeout
-cd server
-DB_STATEMENT_TIMEOUT=2000 ./bin/queen-server
-
-# Terminal 2: Stop PostgreSQL
+# Terminal 1: Stop PostgreSQL first
 sudo systemctl stop postgresql
 # Or on macOS: brew services stop postgresql
 
-# Terminal 3: Push messages
+# Terminal 2: Start Queen server
+cd server
+DB_POOL_ACQUISITION_TIMEOUT=2000 \
+DB_STATEMENT_TIMEOUT=2000 \
+./bin/queen-server
+
+# Should see:
+# [Worker 0] Database connection: UNAVAILABLE (Pool: 0/5) - Will use file buffer for failover
+# [Worker 0] Server will operate with file buffer until PostgreSQL becomes available
+# Acceptor listening on 0.0.0.0:6632
+
+# Terminal 3: Push messages (should work!)
 node client-js/benchmark/producer.js
+
+# Terminal 4: Start PostgreSQL
+brew services start postgresql
+# Wait 1-2 seconds
+
+# Messages will automatically replay from buffer to database
+```
+
+### Test 1: Stop PostgreSQL During Operation
+
+```bash
+# Terminal 1: Start server with fast failover
+cd server
+DB_POOL_ACQUISITION_TIMEOUT=2000 \
+DB_STATEMENT_TIMEOUT=2000 \
+./bin/queen-server
+
+# Terminal 2: Push messages (should work normally)
+node client-js/benchmark/producer.js
+
+# Terminal 3: Stop PostgreSQL DURING push
+sudo systemctl stop postgresql
+# Or on macOS: brew services stop postgresql@14
 
 # Watch Terminal 1 logs - you should see:
 # [Worker 0] >>> PUSH: 1000 items, qos0=false, dbHealthy=true
-# ... (waits 2 seconds)
-# [Worker 0] PostgreSQL unavailable, using file buffer for failover
-# [Worker 0] >>> PUSH: 1000 items, qos0=false, dbHealthy=false  ← Fast now!
+# ... (waits up to 2 seconds for first batch to detect failure)
+# [Worker 0] DB connection failed, using file buffer for failover
 # [Worker 1] DB known to be down, using file buffer immediately  ← Instant!
+# [Worker 0] >>> PUSH: 1000 items, qos0=false, dbHealthy=false  ← Fast now!
+
+# Producer should continue without errors!
 ```
 
 ### Test 2: Check Buffer Files
@@ -192,7 +224,8 @@ psql -U postgres -c "SHOW statement_timeout;"
 ## 💡 Recommended Production Settings
 
 ```bash
-# Fast failover detection
+# Fast failover detection (CRITICAL for startup with PG down)
+export DB_POOL_ACQUISITION_TIMEOUT=2000  # Reduce from 10s to 2s
 export DB_STATEMENT_TIMEOUT=2000
 export DB_CONNECTION_TIMEOUT=1000
 export DB_LOCK_TIMEOUT=2000
@@ -204,6 +237,20 @@ export FILE_BUFFER_MAX_BATCH=500
 
 ./bin/queen-server
 ```
+
+### Key Improvements (v2.0)
+
+**Now Handles:**
+1. ✅ **Startup with PostgreSQL down** - Server starts successfully and uses file buffer
+2. ✅ **Mid-operation PostgreSQL failure** - Detects all failure types including transaction commits
+3. ✅ **Automatic recovery** - Reconnects when PostgreSQL comes back online
+
+**Failover Detection Now Includes:**
+- Connection refused
+- Pool timeout
+- Failed commits (NEW)
+- Server closed (NEW)  
+- Terminating connections (NEW)
 
 ---
 

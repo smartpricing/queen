@@ -270,6 +270,21 @@ bool QueueManager::delete_queue(const std::string& queue_name) {
     try {
         ScopedConnection conn(db_pool_.get());
         
+        // Start transaction and increase statement timeout for large queue deletions
+        // Deleting millions of messages with cascading deletes can take time
+        if (!conn->begin_transaction()) {
+            spdlog::error("Failed to begin transaction for queue deletion");
+            return false;
+        }
+        
+        // Set timeout to 10 minutes for this transaction
+        auto timeout_result = QueryResult(conn->exec("SET LOCAL statement_timeout = '600000'"));
+        if (!timeout_result.is_success()) {
+            conn->rollback_transaction();
+            spdlog::error("Failed to set statement timeout");
+            return false;
+        }
+        
         // First, delete consumer state for all partitions in this queue
         std::string delete_consumers_sql = R"(
             DELETE FROM queen.partition_consumers
@@ -279,17 +294,24 @@ bool QueueManager::delete_queue(const std::string& queue_name) {
                 WHERE q.name = $1
             )
         )";
-        conn->exec_params(delete_consumers_sql, {queue_name});
+        auto consumer_result = QueryResult(conn->exec_params(delete_consumers_sql, {queue_name}));
+        if (!consumer_result.is_success()) {
+            conn->rollback_transaction();
+            spdlog::error("Failed to delete consumer state for queue {}", queue_name);
+            return false;
+        }
         
         // Delete the queue (cascading deletes will handle partitions, messages, etc.)
         std::string sql = "DELETE FROM queen.queues WHERE name = $1 RETURNING id";
         auto result = QueryResult(conn->exec_params(sql, {queue_name}));
         
         if (result.is_success() && result.num_rows() > 0) {
+            conn->commit_transaction();
             spdlog::info("Deleted queue and consumer state: {}", queue_name);
             return true;
         }
         
+        conn->rollback_transaction();
         return false;
     } catch (const std::exception& e) {
         spdlog::error("Failed to delete queue {}: {}", queue_name, e.what());

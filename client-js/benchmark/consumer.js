@@ -49,9 +49,9 @@ async function consumer(consumerId, partition) {
   try {
     for await (const messages of q.takeBatch(target, { //`namespace:benchmark`, 
       wait: true,
-      timeout: 15000,
+      timeout: 150000000,
       batch: BATCH_SIZE,
-      idleTimeout: 5000
+      idleTimeout: 50000000
     })) {
       if (!metrics.firstMessageTime) {
         metrics.firstMessageTime = Date.now();
