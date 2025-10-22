@@ -28,6 +28,7 @@ public:
         const std::string& buffer_dir = "/var/lib/queen/buffers",
         int flush_interval_ms = 100,
         size_t max_batch_size = 100,
+        size_t max_events_per_file = 10000,
         bool do_startup_recovery = true  // Only worker 0 should do recovery
     );
     
@@ -67,11 +68,13 @@ private:
     void process_failover_events();
     
     // File operations
-    void rotate_file(const std::string& active_file, int& fd, const std::string& processing_file);
+    void create_new_buffer_file(const std::string& type);  // Create new .tmp file
+    void finalize_buffer_file(const std::string& tmp_file);  // Rename .tmp → .buf
     bool flush_batched_to_db(const std::vector<nlohmann::json>& events);
     bool flush_single_to_db(const nlohmann::json& event);
     void move_to_failed(const std::string& file, const std::string& type);
     void retry_failed_files();
+    void cleanup_incomplete_tmp_files();  // Clean up .tmp files on startup
     
     // Helper to read events from file
     std::vector<nlohmann::json> read_events_from_file(const std::string& file_path, size_t max_count = 0);
@@ -79,11 +82,19 @@ private:
     std::shared_ptr<QueueManager> queue_manager_;
     std::string buffer_dir_;
     
-    // Separate files for QoS 0 vs failover
-    std::string qos0_file_;
-    std::string failover_file_;
-    int qos0_fd_;
-    int failover_fd_;
+    // Current active buffer files (with .tmp extension)
+    std::string current_qos0_file_;
+    std::string current_failover_file_;
+    int current_qos0_fd_;
+    int current_failover_fd_;
+    std::atomic<size_t> current_qos0_count_{0};
+    std::atomic<size_t> current_failover_count_{0};
+    std::atomic<uint64_t> last_qos0_write_time_{0};
+    std::atomic<uint64_t> last_failover_write_time_{0};
+    
+    // Mutexes for file creation/rotation
+    std::mutex qos0_file_mutex_;
+    std::mutex failover_file_mutex_;
     
     // Thread control
     std::atomic<bool> running_{true};
@@ -93,14 +104,12 @@ private:
     // Configuration
     int flush_interval_ms_;
     size_t max_batch_size_;
+    size_t max_events_per_file_;
     
     // Stats
     std::atomic<size_t> pending_count_{0};
     std::atomic<size_t> failed_count_{0};
     std::atomic<bool> db_healthy_{true};
-    
-    // Mutex for file rotation (rare operation)
-    std::mutex rotation_mutex_;
 };
 
 } // namespace queen

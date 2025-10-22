@@ -404,6 +404,7 @@ struct FileBufferConfig {
     
     int flush_interval_ms = 100;
     size_t max_batch_size = 100;
+    size_t max_events_per_file = 10000;  // Create new buffer file after N events
     
     static FileBufferConfig from_env() {
         FileBufferConfig config;
@@ -417,6 +418,7 @@ struct FileBufferConfig {
         
         config.flush_interval_ms = get_env_int("FILE_BUFFER_FLUSH_MS", 100);
         config.max_batch_size = get_env_int("FILE_BUFFER_MAX_BATCH", 100);
+        config.max_events_per_file = get_env_int("FILE_BUFFER_EVENTS_PER_FILE", 10000);
         
         return config;
     }

@@ -15,25 +15,20 @@
 
 namespace queen {
 
-// Helper to generate UUID (simple version)
-static std::string generate_uuid() {
-    auto now = std::chrono::system_clock::now();
-    auto ns = std::chrono::duration_cast<std::chrono::nanoseconds>(now.time_since_epoch()).count();
-    return std::to_string(ns);
-}
-
 FileBufferManager::FileBufferManager(
     std::shared_ptr<QueueManager> qm,
     const std::string& buffer_dir,
     int flush_interval_ms,
     size_t max_batch_size,
+    size_t max_events_per_file,
     bool do_startup_recovery
 )  : queue_manager_(qm),
     buffer_dir_(buffer_dir),
-    qos0_fd_(-1),
-    failover_fd_(-1),
+    current_qos0_fd_(-1),
+    current_failover_fd_(-1),
     flush_interval_ms_(flush_interval_ms),
-    max_batch_size_(max_batch_size) {
+    max_batch_size_(max_batch_size),
+    max_events_per_file_(max_events_per_file) {
     
     spdlog::info("FileBufferManager initializing: dir={}, recovery={}", buffer_dir_, do_startup_recovery);
     
@@ -79,27 +74,24 @@ FileBufferManager::FileBufferManager(
         throw;
     }
     
-    // Open buffer files
-    qos0_file_ = buffer_dir_ + "/qos0.buf";
-    failover_file_ = buffer_dir_ + "/failover.buf";
-    
-    qos0_fd_ = open(qos0_file_.c_str(), O_WRONLY | O_APPEND | O_CREAT, 0644);
-    failover_fd_ = open(failover_file_.c_str(), O_WRONLY | O_APPEND | O_CREAT, 0644);
-    
-    if (qos0_fd_ < 0 || failover_fd_ < 0) {
-        spdlog::error("Failed to open buffer files: qos0_fd={}, failover_fd={}", qos0_fd_, failover_fd_);
-        throw std::runtime_error("Failed to open buffer files");
-    }
-    
-    spdlog::info("Buffer files opened successfully");
-    
     // BLOCKING: Startup recovery before accepting requests (only for worker 0)
     if (do_startup_recovery) {
         spdlog::info("Starting recovery of buffered events...");
+        cleanup_incomplete_tmp_files();  // Clean up any .tmp files from crash
         startup_recovery();
         spdlog::info("Recovery complete");
     } else {
         spdlog::info("Skipping startup recovery (will be done by Worker 0)");
+    }
+    
+    // Create initial buffer files
+    try {
+        create_new_buffer_file("qos0");
+        create_new_buffer_file("failover");
+        spdlog::info("Buffer files initialized successfully");
+    } catch (const std::exception& e) {
+        spdlog::error("Failed to create initial buffer files: {}", e.what());
+        throw;
     }
     
     // Start background processor thread
@@ -120,29 +112,60 @@ FileBufferManager::~FileBufferManager() {
         std::this_thread::sleep_for(std::chrono::milliseconds(10));
     }
     
-    // Close file descriptors
-    if (qos0_fd_ >= 0) {
-        close(qos0_fd_);
+    // Close file descriptors and finalize current files
+    if (current_qos0_fd_ >= 0) {
+        close(current_qos0_fd_);
+        if (!current_qos0_file_.empty()) {
+            finalize_buffer_file(current_qos0_file_);
+        }
     }
-    if (failover_fd_ >= 0) {
-        close(failover_fd_);
+    if (current_failover_fd_ >= 0) {
+        close(current_failover_fd_);
+        if (!current_failover_file_.empty()) {
+            finalize_buffer_file(current_failover_file_);
+        }
     }
     
     spdlog::info("FileBufferManager stopped");
 }
 
 bool FileBufferManager::write_event(const nlohmann::json& event) {
-    std::string event_str = event.dump();
-    uint32_t len = static_cast<uint32_t>(event_str.size());
-    
-    // Determine which file to write to
+    // Determine which file type to write to
     bool is_failover = event.value("failover", false);
     
-    // CRITICAL: Lock to prevent race with rotation
-    // If rotation happens mid-write, fd becomes invalid
-    std::lock_guard<std::mutex> lock(rotation_mutex_);
+    // Select appropriate mutex and file tracking variables
+    std::mutex& file_mutex = is_failover ? failover_file_mutex_ : qos0_file_mutex_;
+    std::lock_guard<std::mutex> lock(file_mutex);
     
-    int fd = is_failover ? failover_fd_ : qos0_fd_;
+    int& current_fd = is_failover ? current_failover_fd_ : current_qos0_fd_;
+    std::string& current_file = is_failover ? current_failover_file_ : current_qos0_file_;
+    std::atomic<size_t>& current_count = is_failover ? current_failover_count_ : current_qos0_count_;
+    
+    // Check if we need to rotate to a new file
+    if (current_count >= max_events_per_file_) {
+        spdlog::debug("Rotating {} buffer file (reached {} events)", 
+                     is_failover ? "failover" : "qos0", current_count.load());
+        
+        // Close and finalize current file
+        if (current_fd >= 0) {
+            close(current_fd);
+            finalize_buffer_file(current_file);
+        }
+        
+        // Create new buffer file
+        create_new_buffer_file(is_failover ? "failover" : "qos0");
+        current_count = 0;
+    }
+    
+    // Ensure we have an open file
+    if (current_fd < 0) {
+        spdlog::error("No valid file descriptor for {} buffer", is_failover ? "failover" : "qos0");
+        return false;
+    }
+    
+    // Serialize event
+    std::string event_str = event.dump();
+    uint32_t len = static_cast<uint32_t>(event_str.size());
     
     // Write length + data atomically using writev (O_APPEND ensures atomicity)
     struct iovec iov[2];
@@ -151,10 +174,10 @@ bool FileBufferManager::write_event(const nlohmann::json& event) {
     iov[1].iov_base = (void*)event_str.c_str();
     iov[1].iov_len = len;
     
-    ssize_t written = writev(fd, iov, 2);
+    ssize_t written = writev(current_fd, iov, 2);
     
     if (written < 0) {
-        spdlog::error("Failed to write to buffer file: {} (fd={})", strerror(errno), fd);
+        spdlog::error("Failed to write to buffer file: {} (fd={})", strerror(errno), current_fd);
         return false;
     }
     
@@ -163,7 +186,20 @@ bool FileBufferManager::write_event(const nlohmann::json& event) {
         return false;
     }
     
+    current_count++;
     pending_count_++;
+    
+    // Record last write time (milliseconds since epoch)
+    auto now_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::system_clock::now().time_since_epoch()
+    ).count();
+    
+    if (is_failover) {
+        last_failover_write_time_ = now_ms;
+    } else {
+        last_qos0_write_time_ = now_ms;
+    }
+    
     return true;
 }
 
@@ -219,26 +255,24 @@ size_t FileBufferManager::recover_failover_files() {
     if (std::filesystem::exists(failed_dir)) {
         for (const auto& entry : std::filesystem::directory_iterator(failed_dir)) {
             std::string filename = entry.path().filename().string();
-            if (filename.find("failover_") == 0) {
+            if (filename.find("failover_") == 0 && filename.find(".buf") != std::string::npos) {
                 files_to_process.push_back(entry.path().string());
             }
         }
-        std::sort(files_to_process.begin(), files_to_process.end());
     }
     
-    // 2. Processing file
-    std::string processing_file = buffer_dir_ + "/failover_processing.buf";
-    if (std::filesystem::exists(processing_file)) {
-        files_to_process.push_back(processing_file);
-    }
-    
-    // 3. Active file
-    if (std::filesystem::exists(failover_file_)) {
-        struct stat st;
-        if (stat(failover_file_.c_str(), &st) == 0 && st.st_size > 0) {
-            files_to_process.push_back(failover_file_);
+    // 2. All complete .buf files in main directory (not .tmp)
+    for (const auto& entry : std::filesystem::directory_iterator(buffer_dir_)) {
+        std::string filename = entry.path().filename().string();
+        if (filename.find("failover_") == 0 && 
+            filename.find(".buf") != std::string::npos &&
+            filename.find(".buf.tmp") == std::string::npos) {
+            files_to_process.push_back(entry.path().string());
         }
     }
+    
+    // Sort by filename (UUIDv7 is time-sortable)
+    std::sort(files_to_process.begin(), files_to_process.end());
     
     // Process each file ONE BY ONE (preserve FIFO)
     for (const auto& file_path : files_to_process) {
@@ -305,30 +339,29 @@ size_t FileBufferManager::recover_qos0_files() {
     
     std::vector<std::string> files_to_process;
     
-    // Failed files
+    // 1. Failed files
     std::string failed_dir = buffer_dir_ + "/failed";
     if (std::filesystem::exists(failed_dir)) {
         for (const auto& entry : std::filesystem::directory_iterator(failed_dir)) {
             std::string filename = entry.path().filename().string();
-            if (filename.find("qos0_") == 0) {
+            if (filename.find("qos0_") == 0 && filename.find(".buf") != std::string::npos) {
                 files_to_process.push_back(entry.path().string());
             }
         }
     }
     
-    // Processing file
-    std::string processing_file = buffer_dir_ + "/qos0_processing.buf";
-    if (std::filesystem::exists(processing_file)) {
-        files_to_process.push_back(processing_file);
-    }
-    
-    // Active file
-    if (std::filesystem::exists(qos0_file_)) {
-        struct stat st;
-        if (stat(qos0_file_.c_str(), &st) == 0 && st.st_size > 0) {
-            files_to_process.push_back(qos0_file_);
+    // 2. All complete .buf files in main directory (not .tmp)
+    for (const auto& entry : std::filesystem::directory_iterator(buffer_dir_)) {
+        std::string filename = entry.path().filename().string();
+        if (filename.find("qos0_") == 0 && 
+            filename.find(".buf") != std::string::npos &&
+            filename.find(".buf.tmp") == std::string::npos) {
+            files_to_process.push_back(entry.path().string());
         }
     }
+    
+    // Sort by filename (UUIDv7 is time-sortable)
+    std::sort(files_to_process.begin(), files_to_process.end());
     
     // Process each file (batched)
     for (const auto& file_path : files_to_process) {
@@ -378,6 +411,78 @@ void FileBufferManager::background_processor() {
         retry_counter++;
         
         try {
+            // Check if current .tmp files should be finalized
+            // Finalize if: (1) reached max events, OR (2) has events and is older than 2x flush interval
+            
+            // Get current time
+            auto now_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+                std::chrono::system_clock::now().time_since_epoch()
+            ).count();
+            
+            // QoS 0 file - check for finalization
+            if (current_qos0_fd_ >= 0 && !current_qos0_file_.empty()) {
+                bool should_finalize = false;
+                size_t count = current_qos0_count_.load();
+                
+                // Reason 1: Reached max events
+                if (count >= max_events_per_file_) {
+                    should_finalize = true;
+                }
+                // Reason 2: Has events and no writes for 2x flush interval (200ms default)
+                else if (count > 0) {
+                    uint64_t last_write = last_qos0_write_time_.load();
+                    uint64_t time_since_write = now_ms - last_write;
+                    
+                    if (time_since_write > static_cast<uint64_t>(flush_interval_ms_ * 2)) {
+                        should_finalize = true;
+                        spdlog::debug("QoS 0: Time-based finalization ({} events, {}ms since last write)", 
+                                     count, time_since_write);
+                    }
+                }
+                
+                if (should_finalize) {
+                    std::lock_guard<std::mutex> lock(qos0_file_mutex_);
+                    if (current_qos0_fd_ >= 0) {  // Double check
+                        spdlog::debug("QoS 0: Finalizing buffer file ({} events)", current_qos0_count_.load());
+                        close(current_qos0_fd_);
+                        finalize_buffer_file(current_qos0_file_);
+                        create_new_buffer_file("qos0");
+                        current_qos0_count_ = 0;
+                    }
+                }
+            }
+            
+            // Failover file - check for finalization
+            if (current_failover_fd_ >= 0 && !current_failover_file_.empty()) {
+                bool should_finalize = false;
+                size_t count = current_failover_count_.load();
+                
+                if (count >= max_events_per_file_) {
+                    should_finalize = true;
+                }
+                else if (count > 0) {
+                    uint64_t last_write = last_failover_write_time_.load();
+                    uint64_t time_since_write = now_ms - last_write;
+                    
+                    if (time_since_write > static_cast<uint64_t>(flush_interval_ms_ * 2)) {
+                        should_finalize = true;
+                        spdlog::debug("Failover: Time-based finalization ({} events, {}ms since last write)", 
+                                     count, time_since_write);
+                    }
+                }
+                
+                if (should_finalize) {
+                    std::lock_guard<std::mutex> lock(failover_file_mutex_);
+                    if (current_failover_fd_ >= 0) {  // Double check
+                        spdlog::debug("Failover: Finalizing buffer file ({} events)", current_failover_count_.load());
+                        close(current_failover_fd_);
+                        finalize_buffer_file(current_failover_file_);
+                        create_new_buffer_file("failover");
+                        current_failover_count_ = 0;
+                    }
+                }
+            }
+            
             // Always try to process failover events (to detect DB recovery)
             process_failover_events();
             
@@ -405,24 +510,46 @@ void FileBufferManager::background_processor() {
 }
 
 void FileBufferManager::process_failover_events() {
-    // Rotate file
-    std::string processing_file = buffer_dir_ + "/failover_processing.buf";
-    rotate_file(failover_file_, failover_fd_, processing_file);
+    // Find all complete .buf files (not .tmp)
+    std::vector<std::string> files_to_process;
     
-    if (!std::filesystem::exists(processing_file)) {
-        // No processing file - nothing to do
-        // (retry_failed_files() is called periodically by background_processor)
+    try {
+        for (const auto& entry : std::filesystem::directory_iterator(buffer_dir_)) {
+            std::string filename = entry.path().filename().string();
+            if (filename.find("failover_") == 0 && 
+                filename.find(".buf") != std::string::npos &&
+                filename.find(".buf.tmp") == std::string::npos) {
+                files_to_process.push_back(entry.path().string());
+            }
+        }
+    } catch (const std::exception& e) {
+        spdlog::error("Error scanning for failover files: {}", e.what());
         return;
     }
     
-    auto events = read_events_from_file(processing_file);
+    if (files_to_process.empty()) {
+        return;  // No files to process
+    }
+    
+    // Sort by filename (UUIDv7 ensures time ordering)
+    std::sort(files_to_process.begin(), files_to_process.end());
+    
+    // Process oldest file first (FIFO order)
+    std::string file_path = files_to_process[0];
+    
+    auto events = read_events_from_file(file_path);
     if (events.empty()) {
-        std::filesystem::remove(processing_file);
+        spdlog::warn("Empty failover file, removing: {}", file_path);
+        std::filesystem::remove(file_path);
         return;
     }
     
-    spdlog::info("Processing {} failover events from {} (db_healthy={})", 
-                 events.size(), processing_file, db_healthy_.load());
+    size_t num_batches = (events.size() + max_batch_size_ - 1) / max_batch_size_;
+    spdlog::info("Failover: Processing {} events from {} in {} batches (db_healthy={}, duplicate key errors are normal during recovery)", 
+                 events.size(), std::filesystem::path(file_path).filename().string(), 
+                 num_batches, db_healthy_.load());
+    
+    auto start_time = std::chrono::steady_clock::now();
     
     // Group by queue+partition for batching
     // FIFO is preserved WITHIN each partition (which is what matters)
@@ -462,9 +589,9 @@ void FileBufferManager::process_failover_events() {
                     std::this_thread::sleep_for(std::chrono::milliseconds(10));
                 }
                 
-                // Log progress every 10k events
-                if (total_processed % 10000 < batch_size) {
-                    spdlog::info("Progress: {}/{} events ({:.1f}%)", 
+                // Log progress every 1000 events
+                if (total_processed % 1000 == 0 || total_processed == events.size()) {
+                    spdlog::info("Failover: Progress {}/{} events ({:.1f}%)", 
                                total_processed, events.size(), 
                                (total_processed * 100.0) / events.size());
                 }
@@ -473,7 +600,7 @@ void FileBufferManager::process_failover_events() {
                 spdlog::warn("Failed to flush batch at event {}/{}, DB appears down", total_processed, events.size());
                 
                 // Move remaining events to failed
-                move_to_failed(processing_file, "failover");
+                move_to_failed(file_path, "failover");
                 failed_count_ += (events.size() - total_processed);
                 return;
             }
@@ -481,30 +608,71 @@ void FileBufferManager::process_failover_events() {
     }
     
     if (db_healthy_ && total_processed == events.size()) {
-        std::filesystem::remove(processing_file);
-        spdlog::info("Successfully processed all {} failover events", total_processed);
+        auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::steady_clock::now() - start_time
+        ).count();
+        
+        std::filesystem::remove(file_path);
+        spdlog::info("Failover: Completed {} events in {}ms ({:.0f} events/sec) - file removed", 
+                     total_processed, duration,
+                     duration > 0 ? (total_processed * 1000.0 / duration) : 0.0);
+    } else {
+        // Move to failed directory
+        move_to_failed(file_path, "failover");
+        failed_count_ += (events.size() - total_processed);
     }
 }
 
 void FileBufferManager::process_qos0_events() {
-    // Rotate file
-    std::string processing_file = buffer_dir_ + "/qos0_processing.buf";
-    rotate_file(qos0_file_, qos0_fd_, processing_file);
+    // Find all complete .buf files (not .tmp)
+    std::vector<std::string> files_to_process;
     
-    if (!std::filesystem::exists(processing_file)) {
+    try {
+        for (const auto& entry : std::filesystem::directory_iterator(buffer_dir_)) {
+            std::string filename = entry.path().filename().string();
+            if (filename.find("qos0_") == 0 && 
+                filename.find(".buf") != std::string::npos &&
+                filename.find(".buf.tmp") == std::string::npos) {
+                files_to_process.push_back(entry.path().string());
+            }
+        }
+    } catch (const std::exception& e) {
+        spdlog::error("Error scanning for qos0 files: {}", e.what());
         return;
     }
     
-    auto events = read_events_from_file(processing_file);
+    if (files_to_process.empty()) {
+        return;  // No files to process
+    }
+    
+    // Sort by filename (UUIDv7 ensures time ordering)
+    std::sort(files_to_process.begin(), files_to_process.end());
+    
+    // Process oldest file first
+    std::string file_path = files_to_process[0];
+    
+    auto events = read_events_from_file(file_path);
     if (events.empty()) {
-        std::filesystem::remove(processing_file);
+        spdlog::warn("Empty QoS 0 file, removing: {}", file_path);
+        std::filesystem::remove(file_path);
         return;
     }
+    
+    size_t num_batches = (events.size() + max_batch_size_ - 1) / max_batch_size_;
+    spdlog::info("QoS 0: Processing {} events from {} in {} batches", 
+                 events.size(), std::filesystem::path(file_path).filename().string(), num_batches);
+    
+    auto start_time = std::chrono::steady_clock::now();
     
     // Process in batches
     size_t total_processed = 0;
     for (size_t i = 0; i < events.size(); i += max_batch_size_) {
-        if (!db_healthy_) break;
+        // Always try first batch (to detect DB recovery), skip others if DB is known to be down
+        if (!db_healthy_ && i > 0) {
+            spdlog::warn("QoS 0: DB marked unhealthy, stopping batch processing at {}/{}", 
+                        total_processed, events.size());
+            break;
+        }
         
         size_t batch_size = std::min(max_batch_size_, events.size() - i);
         std::vector<nlohmann::json> batch(
@@ -512,48 +680,49 @@ void FileBufferManager::process_qos0_events() {
             events.begin() + i + batch_size
         );
         
+        size_t batch_num = (i / max_batch_size_) + 1;
+        auto batch_start = std::chrono::steady_clock::now();
+        
+        if (!db_healthy_ && i == 0) {
+            spdlog::info("QoS 0: DB marked unhealthy, attempting first batch to check for recovery...");
+        }
+        
+        spdlog::debug("QoS 0: Attempting to flush batch {}/{} ({} events)...", 
+                     batch_num, num_batches, batch_size);
+        
         if (flush_batched_to_db(batch)) {
             total_processed += batch.size();
             pending_count_ -= batch.size();
+            
+            auto batch_duration = std::chrono::duration_cast<std::chrono::milliseconds>(
+                std::chrono::steady_clock::now() - batch_start
+            ).count();
+            
+            spdlog::debug("QoS 0: Flushed batch {}/{} ({} events, {}ms)", 
+                         batch_num, num_batches, batch_size, batch_duration);
         } else {
+            spdlog::warn("QoS 0: Batch {}/{} flush failed, DB still unhealthy", batch_num, num_batches);
             db_healthy_ = false;
             break;
         }
     }
     
     if (db_healthy_ && total_processed == events.size()) {
-        std::filesystem::remove(processing_file);
-        spdlog::debug("Processed {} QoS 0 events in {} batches", 
-                     total_processed, (total_processed + max_batch_size_ - 1) / max_batch_size_);
+        auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::steady_clock::now() - start_time
+        ).count();
+        
+        std::filesystem::remove(file_path);
+        spdlog::info("QoS 0: Completed {} events in {}ms ({} batches, {:.0f} events/sec) - file removed", 
+                     total_processed, duration, num_batches,
+                     duration > 0 ? (total_processed * 1000.0 / duration) : 0.0);
     } else {
         // Move to failed directory
-        move_to_failed(processing_file, "qos0");
+        move_to_failed(file_path, "qos0");
         failed_count_ += (events.size() - total_processed);
     }
 }
 
-void FileBufferManager::rotate_file(const std::string& active_file, int& fd, const std::string& processing_file) {
-    std::lock_guard<std::mutex> lock(rotation_mutex_);
-    
-    // Check if active file has data
-    struct stat st;
-    if (stat(active_file.c_str(), &st) != 0 || st.st_size == 0) {
-        return;
-    }
-    
-    // Close current fd
-    close(fd);
-    
-    // Rename active → processing
-    std::filesystem::rename(active_file, processing_file);
-    
-    // Open new active file
-    fd = open(active_file.c_str(), O_WRONLY | O_APPEND | O_CREAT, 0644);
-    
-    if (fd < 0) {
-        spdlog::error("Failed to reopen buffer file: {}", active_file);
-    }
-}
 
 bool FileBufferManager::flush_batched_to_db(const std::vector<nlohmann::json>& events) {
     try {
@@ -562,16 +731,23 @@ bool FileBufferManager::flush_batched_to_db(const std::vector<nlohmann::json>& e
         items.reserve(events.size());
         
         for (const auto& event : events) {
+            // CRITICAL: Transaction ID must be preserved from buffer file
+            // Never generate new IDs - that causes duplicates on retry!
+            if (!event.contains("transactionId") || event["transactionId"].is_null() || 
+                !event["transactionId"].is_string() || event["transactionId"].get<std::string>().empty()) {
+                spdlog::error("Buffered event missing transactionId, skipping (corrupted buffer file?)");
+                continue;  // Skip this event
+            }
+            
             PushItem item;
             item.queue = event["queue"];
             item.partition = event.value("partition", "Default");
             item.payload = event["payload"];
+            item.transaction_id = event["transactionId"].get<std::string>();
             
-            if (event.contains("transactionId") && !event["transactionId"].empty()) {
-                item.transaction_id = event["transactionId"];
-            }
-            if (event.contains("traceId") && !event["traceId"].empty()) {
-                item.trace_id = event["traceId"];
+            if (event.contains("traceId") && !event["traceId"].is_null() && 
+                event["traceId"].is_string() && !event["traceId"].get<std::string>().empty()) {
+                item.trace_id = event["traceId"].get<std::string>();
             }
             
             items.push_back(std::move(item));
@@ -597,26 +773,48 @@ bool FileBufferManager::flush_batched_to_db(const std::vector<nlohmann::json>& e
     } catch (const std::exception& e) {
         std::string error_msg = e.what();
         
+        // Check if queue doesn't exist (stale buffered data for deleted queue)
+        if (error_msg.find("does not exist") != std::string::npos) {
+            spdlog::warn("Recovery: Queue no longer exists (likely deleted), skipping {} stale messages", events.size());
+            
+            // DB is healthy - queue was just deleted
+            if (!db_healthy_.load()) {
+                spdlog::info("PostgreSQL recovered! Database is healthy again");
+                db_healthy_ = true;
+            }
+            
+            // Return true to indicate file can be deleted (stale data)
+            return true;
+        }
+        
         // Check if this is a duplicate key error (messages already in DB)
         if (error_msg.find("duplicate key value violates unique constraint") != std::string::npos ||
             error_msg.find("messages_transaction_id_key") != std::string::npos) {
             
-            spdlog::warn("Duplicate key detected in batch, retrying individual messages to skip duplicates");
+            spdlog::info("Recovery: Duplicate keys detected (messages already in DB), retrying individually to skip duplicates...");
             
-            // Retry each message individually to skip duplicates
+            // Retry each message individually to skip duplicates and non-existent queues
             size_t succeeded = 0;
             size_t duplicates = 0;
+            size_t deleted_queues = 0;
             
             for (const auto& event : events) {
+                // CRITICAL: Must preserve transaction ID from buffer file
+                if (!event.contains("transactionId") || event["transactionId"].is_null() || 
+                    !event["transactionId"].is_string() || event["transactionId"].get<std::string>().empty()) {
+                    spdlog::error("Buffered event missing transactionId in individual retry, skipping");
+                    continue;
+                }
+                
                 try {
                     queue_manager_->push_single_message(
-                        event["queue"],
+                        event["queue"].get<std::string>(),
                         event.value("partition", "Default"),
                         event["payload"],
                         event.value("namespace", ""),
                         event.value("task", ""),
-                        event.value("transactionId", ""),
-                        event.value("traceId", "")
+                        event["transactionId"].get<std::string>(),  // Use actual transaction ID!
+                        event.contains("traceId") && event["traceId"].is_string() ? event["traceId"].get<std::string>() : ""
                     );
                     succeeded++;
                 } catch (const std::exception& single_error) {
@@ -624,6 +822,9 @@ bool FileBufferManager::flush_batched_to_db(const std::vector<nlohmann::json>& e
                     if (single_msg.find("duplicate key") != std::string::npos) {
                         // This message was already inserted - skip it
                         duplicates++;
+                    } else if (single_msg.find("does not exist") != std::string::npos) {
+                        // Queue was deleted - skip this message
+                        deleted_queues++;
                     } else {
                         // Real error - rethrow
                         throw;
@@ -631,7 +832,8 @@ bool FileBufferManager::flush_batched_to_db(const std::vector<nlohmann::json>& e
                 }
             }
             
-            spdlog::info("Batch recovery: {} succeeded, {} duplicates skipped", succeeded, duplicates);
+            spdlog::info("Recovery complete: {} new, {} duplicates, {} deleted queues", 
+                        succeeded, duplicates, deleted_queues);
             
             // If we successfully processed or skipped all messages, consider it success
             // DB is actually healthy if we got duplicate key errors
@@ -642,7 +844,7 @@ bool FileBufferManager::flush_batched_to_db(const std::vector<nlohmann::json>& e
             return true;
         }
         
-        // Not a duplicate key error - treat as DB failure
+        // Not a duplicate key or deleted queue error - treat as DB failure
         spdlog::error("Failed to flush batch to DB: {}", error_msg);
         if (db_healthy_.load()) {
             spdlog::warn("PostgreSQL appears to be down");
@@ -653,15 +855,22 @@ bool FileBufferManager::flush_batched_to_db(const std::vector<nlohmann::json>& e
 }
 
 bool FileBufferManager::flush_single_to_db(const nlohmann::json& event) {
+    // CRITICAL: Must preserve transaction ID from buffer file
+    if (!event.contains("transactionId") || event["transactionId"].is_null() || 
+        !event["transactionId"].is_string() || event["transactionId"].get<std::string>().empty()) {
+        spdlog::error("Buffered event missing transactionId in flush_single_to_db, skipping");
+        return false;
+    }
+    
     try {
         queue_manager_->push_single_message(
-            event["queue"],
+            event["queue"].get<std::string>(),
             event.value("partition", "Default"),
             event["payload"],
             event.value("namespace", ""),
             event.value("task", ""),
-            event.value("transactionId", ""),
-            event.value("traceId", "")
+            event["transactionId"].get<std::string>(),  // Use actual transaction ID!
+            event.contains("traceId") && event["traceId"].is_string() ? event["traceId"].get<std::string>() : ""
         );
         
         // DB is healthy again!
@@ -724,30 +933,31 @@ void FileBufferManager::retry_failed_files() {
     // If it succeeds, it will mark db_healthy_ = true
     // No separate health check needed - the actual retry IS the health check
     
-    // Try to retry one failed file
+    // Collect all failed files
+    std::vector<std::string> failed_files;
     for (const auto& entry : std::filesystem::directory_iterator(failed_dir)) {
-        if (!entry.is_regular_file()) continue;
-        
-        std::string filename = entry.path().filename().string();
-        std::string processing_file;
-        
-        if (filename.find("failover_") == 0) {
-            processing_file = buffer_dir_ + "/failover_processing.buf";
-        } else if (filename.find("qos0_") == 0) {
-            processing_file = buffer_dir_ + "/qos0_processing.buf";
-        } else {
-            continue;
+        if (entry.is_regular_file()) {
+            failed_files.push_back(entry.path().string());
         }
-        
-        // Only retry if processing file doesn't exist
-        if (std::filesystem::exists(processing_file)) {
-            continue;
-        }
-        
-        std::string failed_file_path = entry.path().string();
-        std::filesystem::rename(entry.path(), processing_file);
-        spdlog::info("Retrying failed buffer: {} (will process on next cycle)", failed_file_path);
-        break;  // Only retry one at a time
+    }
+    
+    if (failed_files.empty()) {
+        return;
+    }
+    
+    // Sort by filename (oldest first)
+    std::sort(failed_files.begin(), failed_files.end());
+    
+    // Move oldest failed file back to main directory for retry
+    std::string failed_file = failed_files[0];
+    std::string filename = std::filesystem::path(failed_file).filename().string();
+    std::string retry_file = buffer_dir_ + "/" + filename;
+    
+    try {
+        std::filesystem::rename(failed_file, retry_file);
+        spdlog::info("Retrying failed buffer: {} (moved back to main directory)", filename);
+    } catch (const std::exception& e) {
+        spdlog::error("Failed to move file for retry: {}", e.what());
     }
 }
 
@@ -784,6 +994,77 @@ std::vector<nlohmann::json> FileBufferManager::read_events_from_file(const std::
     
     file.close();
     return events;
+}
+
+void FileBufferManager::create_new_buffer_file(const std::string& type) {
+    // Generate UUID for filename
+    std::string uuid = queue_manager_->generate_uuid();
+    std::string filename = buffer_dir_ + "/" + type + "_" + uuid + ".buf.tmp";
+    
+    // Open new file
+    int fd = open(filename.c_str(), O_WRONLY | O_APPEND | O_CREAT, 0644);
+    
+    if (fd < 0) {
+        spdlog::error("Failed to create new {} buffer file: {} ({})", type, filename, strerror(errno));
+        throw std::runtime_error("Failed to create buffer file");
+    }
+    
+    // Update tracking variables based on type
+    if (type == "qos0") {
+        current_qos0_file_ = filename;
+        current_qos0_fd_ = fd;
+        current_qos0_count_ = 0;
+    } else if (type == "failover") {
+        current_failover_file_ = filename;
+        current_failover_fd_ = fd;
+        current_failover_count_ = 0;
+    }
+    
+    spdlog::debug("Created new {} buffer file: {}", type, filename);
+}
+
+void FileBufferManager::finalize_buffer_file(const std::string& tmp_file) {
+    if (tmp_file.empty() || tmp_file.find(".tmp") == std::string::npos) {
+        return;  // Not a .tmp file
+    }
+    
+    // Remove .tmp extension
+    std::string final_file = tmp_file.substr(0, tmp_file.length() - 4);
+    
+    try {
+        // Atomic rename
+        std::filesystem::rename(tmp_file, final_file);
+        spdlog::debug("Finalized buffer file: {} → {}", tmp_file, final_file);
+    } catch (const std::exception& e) {
+        spdlog::error("Failed to finalize buffer file {}: {}", tmp_file, e.what());
+    }
+}
+
+void FileBufferManager::cleanup_incomplete_tmp_files() {
+    try {
+        for (const auto& entry : std::filesystem::directory_iterator(buffer_dir_)) {
+            std::string filename = entry.path().filename().string();
+            
+            // Check if it's a .tmp file
+            if (filename.find(".buf.tmp") != std::string::npos) {
+                size_t file_size = std::filesystem::file_size(entry.path());
+                
+                // If file is small (< 1KB), it's incomplete - delete it
+                if (file_size < 1024) {
+                    spdlog::info("Deleting incomplete buffer file: {} (only {} bytes)", 
+                               filename, file_size);
+                    std::filesystem::remove(entry.path());
+                } else {
+                    // File has substantial data - finalize it for recovery
+                    spdlog::info("Finalizing incomplete buffer file from crash: {} ({} bytes)", 
+                               filename, file_size);
+                    finalize_buffer_file(entry.path().string());
+                }
+            }
+        }
+    } catch (const std::exception& e) {
+        spdlog::error("Error during .tmp file cleanup: {}", e.what());
+    }
 }
 
 } // namespace queen

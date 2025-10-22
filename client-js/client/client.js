@@ -1,6 +1,7 @@
 import { createHttpClient, createLoadBalancedHttpClient } from './utils/http.js';
 import { withRetry } from './utils/retry.js';
 import { createLoadBalancer, LoadBalancingStrategy } from './utils/loadBalancer.js';
+import { generateUUID } from '../utils/uuid.js';
 
 /**
  * Minimalist Queen Message Queue Client
@@ -167,7 +168,7 @@ export class Queen {
           queue,
           partition,
           payload: item._payload || item,
-          transactionId: item._transactionId || item.transactionId
+          transactionId: item._transactionId || item.transactionId || generateUUID()  // Always generate if missing
         };
         
         // Include traceId if provided and valid UUID
@@ -184,7 +185,9 @@ export class Queen {
         queue,
         partition,
         payload: item,
-        transactionId: options.transactionId || (item && typeof item === 'object' ? item.transactionId : undefined)
+        transactionId: options.transactionId || 
+                      (item && typeof item === 'object' ? item.transactionId : undefined) ||
+                      generateUUID()  // Always generate if missing
       };
       
       // Include traceId if provided and valid UUID
@@ -199,10 +202,14 @@ export class Queen {
     // Build request body
     const requestBody = { items: formattedItems };
     
-    // Add buffer options if specified (QoS 0)
+    // Add server-side buffering flag if specified
+    if (options.buffer === true || options.qos0 === true) {
+      requestBody.qos0 = true;  // Server still uses 'qos0' internally
+    }
+    
+    // Legacy support: bufferMs/bufferMax are aliases for buffer
     if (options.bufferMs !== undefined || options.bufferMax !== undefined) {
-      requestBody.bufferMs = options.bufferMs !== undefined ? options.bufferMs : 100;
-      requestBody.bufferMax = options.bufferMax !== undefined ? options.bufferMax : 100;
+      requestBody.qos0 = true;
     }
     
     const result = await withRetry(

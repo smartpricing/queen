@@ -210,30 +210,67 @@ This document lists all environment variables supported by the Queen C++ server.
 | `LOG_FORMAT` | string | json | Log format (json, text) |
 | `LOG_TIMESTAMP` | bool | true | Include timestamps in logs |
 
-## File Buffer Configuration (QoS 0)
+## File Buffer Configuration (QoS 0 & Failover)
 
 | Variable | Type | Default | Description |
 |----------|------|---------|-------------|
 | `FILE_BUFFER_DIR` | string | Platform-specific* | Directory for file buffers |
-| `FILE_BUFFER_FLUSH_MS` | int | 100 | Process buffered events every N milliseconds |
-| `FILE_BUFFER_MAX_BATCH` | int | 100 | Maximum events per batch write to database |
+| `FILE_BUFFER_FLUSH_MS` | int | 100 | How often to scan for complete buffer files (milliseconds) |
+| `FILE_BUFFER_MAX_BATCH` | int | 100 | Maximum events per database transaction |
+| `FILE_BUFFER_EVENTS_PER_FILE` | int | 10000 | Create new buffer file after N events |
 
 **Platform-specific defaults:**
 - **macOS**: `/tmp/queen`
 - **Linux**: `/var/lib/queen/buffers`
 
 The file buffer serves dual purposes:
-1. **QoS 0 batching** - Batch events for 10-100x performance improvement
-2. **PostgreSQL failover** - Buffer messages when database is unavailable (zero message loss)
+1. **QoS 0 batching** - Batch events for 10-100x performance improvement (client: `{ buffer: true }`)
+2. **PostgreSQL failover** - Buffer messages when database is unavailable (automatic, zero message loss)
+
+### How It Works
+
+**Buffer File Lifecycle:**
+```
+1. Client pushes with { buffer: true }
+2. Event written to: qos0_<uuid>.buf.tmp (active file)
+3. File finalized when EITHER:
+   - Reaches 10,000 events (high throughput), OR
+   - 200ms passes with no new writes (low throughput/end of burst)
+4. Atomic rename: .tmp → .buf
+5. Background processor picks up .buf files every 100ms
+6. Processes in batches of 100 events per DB transaction
+7. Deletes file when complete
+```
+
+**Benefits:**
+- ✅ **No rotation conflicts** - Each file is independent
+- ✅ **Crash-safe** - .tmp files cleaned up on startup
+- ✅ **Scalable** - Handles millions of events (100 files of 10,000 each)
+- ✅ **Low-latency** - Time-based finalization ensures fast processing for small bursts
+- ✅ **Clear progress** - Can see pending files in directory
 
 **Example:**
 ```bash
 # Use custom directory
 FILE_BUFFER_DIR=/data/queen/buffers ./bin/queen-server
 
-# Tune flush interval and batch size
-FILE_BUFFER_FLUSH_MS=50 FILE_BUFFER_MAX_BATCH=200 ./bin/queen-server
+# High-throughput configuration
+FILE_BUFFER_FLUSH_MS=50          # Scan more frequently
+FILE_BUFFER_MAX_BATCH=1000       # Larger DB batches
+FILE_BUFFER_EVENTS_PER_FILE=50000  # Larger buffer files
+
+# Low-latency configuration
+FILE_BUFFER_FLUSH_MS=10          # Very fast scanning
+FILE_BUFFER_MAX_BATCH=50         # Smaller batches for lower latency
+FILE_BUFFER_EVENTS_PER_FILE=1000   # Smaller files, faster rotation
 ```
+
+### File Naming
+
+Buffer files use UUIDv7 (time-sortable) for guaranteed ordering:
+- `qos0_019a0b66-3920-7000-b252.buf.tmp` - Being written
+- `qos0_019a0b66-3920-7000-b252.buf` - Complete, ready to process
+- `failover_019a0b66-3921-7001-c123.buf` - Failover file (DB was down)
 
 ## Usage Examples
 

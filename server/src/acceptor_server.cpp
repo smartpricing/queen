@@ -494,15 +494,24 @@ static void setup_worker_routes(uWS::App* app,
                         return;
                     }
                     
-                    // Check if QoS 0 (explicit buffering requested)
-                    bool qos0_buffering = body.contains("bufferMs") || body.contains("bufferMax");
+                    // Check if QoS 0 (server-side buffering requested)
+                    // Accept both new 'qos0' flag and legacy 'bufferMs/bufferMax'
+                    bool qos0_buffering = body.contains("qos0") && body["qos0"].is_boolean() && body["qos0"].get<bool>();
+                    if (!qos0_buffering) {
+                        // Legacy: bufferMs/bufferMax implies qos0
+                        qos0_buffering = body.contains("bufferMs") || body.contains("bufferMax");
+                    }
                     
-                    spdlog::info("[Worker {}] >>> PUSH: {} items, qos0={}, dbHealthy={}", 
+                    spdlog::info("[Worker {}] >>> PUSH: {} items, qos0={}, has_file_buffer={}, dbHealthy={}", 
                                worker_id, body["items"].size(), qos0_buffering, 
+                               (file_buffer != nullptr),
                                file_buffer ? file_buffer->is_db_healthy() : true);
                     
                     if (qos0_buffering && file_buffer) {
                         // QoS 0: Use file buffer for batching (only available on Worker 0)
+                        spdlog::info("[Worker {}] QoS 0 BUFFERING ACTIVE: Writing {} events to file buffer", 
+                                   worker_id, body["items"].size());
+                        
                         for (const auto& item_json : body["items"]) {
                             nlohmann::json buffered_event = {
                                 {"queue", item_json["queue"]},
@@ -530,6 +539,8 @@ static void setup_worker_routes(uWS::App* app,
                         
                     } else {
                         // Normal push: Use original push_messages() for batch efficiency
+                        spdlog::info("[Worker {}] NORMAL PUSH: qos0_buffering={}, file_buffer={} - using direct DB write",
+                                   worker_id, qos0_buffering, (file_buffer != nullptr));
                         
                         // Quick health check first - if DB is known to be down, skip directly to failover
                         // (only applicable if file_buffer exists - Worker 0)
@@ -598,9 +609,17 @@ static void setup_worker_routes(uWS::App* app,
                                         break;
                                     }
                                     
-                                    // If "does not exist" but we're not sure if it's due to DB being down
-                                    // Check pool stats - if pool is empty/exhausted, it's likely DB down
+                                    // If "does not exist" - check if DB is actually down
                                     if (result.error->find("does not exist") != std::string::npos) {
+                                        // If file_buffer already marked DB as unhealthy, treat as DB failure
+                                        if (file_buffer && !file_buffer->is_db_healthy()) {
+                                            spdlog::warn("[Worker {}] Queue check failed and DB marked unhealthy - using failover",
+                                                       worker_id);
+                                            db_failure = true;
+                                            break;
+                                        }
+                                        
+                                        // Otherwise check pool stats
                                         auto pool_stats = queue_manager->get_pool_stats();
                                         if (pool_stats.available == 0 || pool_stats.total < pool_stats.in_use) {
                                             // Pool exhausted - likely DB is down, not that queue doesn't exist
@@ -1727,6 +1746,7 @@ static void worker_thread(const Config& config, int worker_id, int num_workers,
                 config.file_buffer.buffer_dir,
                 config.file_buffer.flush_interval_ms,
                 config.file_buffer.max_batch_size,
+                config.file_buffer.max_events_per_file,
                 true  // Do startup recovery
             );
             
@@ -1741,12 +1761,14 @@ static void worker_thread(const Config& config, int worker_id, int num_workers,
                          new_file_buffer->is_db_healthy() ? "healthy" : "down");
             
             // Share with other workers
+            spdlog::info("[Worker 0] Sharing file buffer with other workers...");
             {
                 std::lock_guard<std::mutex> lock(file_buffer_mutex);
                 shared_file_buffer = new_file_buffer;
                 file_buffer = new_file_buffer;
             }
             file_buffer_ready.notify_all();
+            spdlog::info("[Worker 0] File buffer shared successfully");
             
         } else {
             // Wait for Worker 0 to create the shared file buffer
@@ -1762,10 +1784,13 @@ static void worker_thread(const Config& config, int worker_id, int num_workers,
         }
         
         // Create worker App
+        spdlog::info("[Worker {}] Creating uWS::App...", worker_id);
         auto worker_app = new uWS::App();
         
         // Setup routes
+        spdlog::info("[Worker {}] Setting up routes...", worker_id);
         setup_worker_routes(worker_app, queue_manager, analytics_manager, file_buffer, config, worker_id);
+        spdlog::info("[Worker {}] Routes configured", worker_id);
         
         // Register this worker app with the acceptor (thread-safe)
         {

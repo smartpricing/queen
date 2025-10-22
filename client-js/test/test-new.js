@@ -111,6 +111,15 @@ import {
   runAdvancedClientTests
 } from './advanced-client-tests.js';
 
+import {
+  testQoS0Buffering,
+  testAutoAck,
+  testConsumerGroupAutoAck,
+  testFIFOOrdering,
+  testMixedOperations,
+  testBatchedPayload
+} from './qos0-tests.js';
+
 // Helper to run a test with error handling and delay
 async function runTest(testFn) {
   try {
@@ -134,12 +143,14 @@ if (testFilter === 'help' || testFilter === '--help' || testFilter === '-h') {
   console.log('  enterprise - Enterprise features (encryption, retention, eviction)');
   console.log('  bus        - Bus mode features (consumer groups, mixed mode)');
   console.log('  edge       - Edge cases (null payloads, large payloads, SQL injection, etc.)');
+  console.log('  qos0       - QoS 0 features (buffering, auto-ack, FIFO ordering)');
   console.log('  advanced   - Advanced patterns (pipeline, fan-out, DLQ, circuit breaker)');
   console.log('\nExamples:');
   console.log('  node src/test/test-new.js              # Run all tests');
   console.log('  node src/test/test-new.js core         # Run only core tests');
   console.log('  node src/test/test-new.js bus          # Run only bus mode tests');
   console.log('  node src/test/test-new.js edge         # Run only edge case tests');
+  console.log('  node src/test/test-new.js qos0         # Run only QoS 0 tests');
   process.exit(0);
 }
 
@@ -263,6 +274,21 @@ async function runTests() {
       await runTest(() => testLeaseExpiration(client));
       await runTest(() => testSQLInjectionPrevention(client));
       await runTest(() => testXSSPrevention(client));
+    }
+    
+    // ============================================
+    // QOS 0 FEATURE TESTS
+    // ============================================
+    if (!testFilter || testFilter === 'qos0') {
+      console.log('\n⚡ QOS 0 FEATURES');
+      console.log('-'.repeat(40));
+      
+      await runTest(() => testQoS0Buffering(client));
+      await runTest(() => testAutoAck(client));
+      await runTest(() => testConsumerGroupAutoAck(client));
+      await runTest(() => testFIFOOrdering(client));
+      await runTest(() => testMixedOperations(client));
+      await runTest(() => testBatchedPayload(client));
     }
     
     // ============================================
