@@ -502,15 +502,14 @@ static void setup_worker_routes(uWS::App* app,
                         qos0_buffering = body.contains("bufferMs") || body.contains("bufferMax");
                     }
                     
-                    spdlog::info("[Worker {}] >>> PUSH: {} items, qos0={}, has_file_buffer={}, dbHealthy={}", 
-                               worker_id, body["items"].size(), qos0_buffering, 
-                               (file_buffer != nullptr),
-                               file_buffer ? file_buffer->is_db_healthy() : true);
-                    
                     if (qos0_buffering && file_buffer) {
                         // QoS 0: Use file buffer for batching (only available on Worker 0)
-                        spdlog::info("[Worker {}] QoS 0 BUFFERING ACTIVE: Writing {} events to file buffer", 
-                                   worker_id, body["items"].size());
+                        auto pool_stats = queue_manager->get_pool_stats();
+                        std::string first_queue = body["items"][0]["queue"].get<std::string>();
+                        std::string first_partition = body["items"][0].value("partition", "Default");
+                        spdlog::info("[Worker {}] BPUSH: {} items to [{}/{}] | Pool: {}/{} conn ({} in use)", 
+                                   worker_id, body["items"].size(), first_queue, first_partition,
+                                   pool_stats.available, pool_stats.total, pool_stats.in_use);
                         
                         for (const auto& item_json : body["items"]) {
                             nlohmann::json buffered_event = {
@@ -539,8 +538,12 @@ static void setup_worker_routes(uWS::App* app,
                         
                     } else {
                         // Normal push: Use original push_messages() for batch efficiency
-                        spdlog::info("[Worker {}] NORMAL PUSH: qos0_buffering={}, file_buffer={} - using direct DB write",
-                                   worker_id, qos0_buffering, (file_buffer != nullptr));
+                        auto pool_stats = queue_manager->get_pool_stats();
+                        std::string first_queue = body["items"][0]["queue"].get<std::string>();
+                        std::string first_partition = body["items"][0].value("partition", "Default");
+                        spdlog::info("[Worker {}] PUSH: {} items to [{}/{}] | Pool: {}/{} conn ({} in use)", 
+                                   worker_id, body["items"].size(), first_queue, first_partition,
+                                   pool_stats.available, pool_stats.total, pool_stats.in_use);
                         
                         // Quick health check first - if DB is known to be down, skip directly to failover
                         // (only applicable if file_buffer exists - Worker 0)
@@ -769,8 +772,8 @@ static void setup_worker_routes(uWS::App* app,
             int batch = get_query_param_int(req, "batch", config.queue.default_batch_size);
             
             auto pool_stats = queue_manager->get_pool_stats();
-            spdlog::info("[Worker {}] >>> POP START: {}/{}, batch={}, wait={}, timeout={}ms | Pool: {}/{} conn ({} in use)", 
-                        worker_id, queue_name, partition_name, batch, wait, timeout_ms,
+            spdlog::info("[Worker {}] SPOP: [{}/{}] batch={}, wait={} | Pool: {}/{} conn ({} in use)", 
+                        worker_id, queue_name, partition_name, batch, wait,
                         pool_stats.available, pool_stats.total, pool_stats.in_use);
             
             auto start_time = std::chrono::steady_clock::now();
@@ -799,7 +802,7 @@ static void setup_worker_routes(uWS::App* app,
                 auto duration_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
                     std::chrono::steady_clock::now() - start_time).count();
                 auto pool_stats_end = queue_manager->get_pool_stats();
-                spdlog::info("[Worker {}] <<< POP END (immediate): {}/{}, got {} msgs, took {}ms | Pool: {}/{} conn ({} in use)", 
+                spdlog::info("[Worker {}] EPOP: [{}/{}] {} msgs, {}ms | Pool: {}/{} conn ({} in use)", 
                             worker_id, queue_name, partition_name, result.messages.size(), duration_ms,
                             pool_stats_end.available, pool_stats_end.total, pool_stats_end.in_use);
                 
@@ -840,7 +843,7 @@ static void setup_worker_routes(uWS::App* app,
             if (!wait) {
                 // Not waiting, return empty immediately
                 auto pool_stats_end = queue_manager->get_pool_stats();
-                spdlog::info("[Worker {}] <<< POP END (no-wait): {}/{}, got 0 msgs | Pool: {}/{} conn ({} in use)", 
+                spdlog::info("[Worker {}] EPOP: [{}/{}] 0 msgs | Pool: {}/{} conn ({} in use)", 
                             worker_id, queue_name, partition_name,
                             pool_stats_end.available, pool_stats_end.total, pool_stats_end.in_use);
                 
@@ -853,9 +856,6 @@ static void setup_worker_routes(uWS::App* app,
             }
             
             // Start async polling (non-blocking!)
-            spdlog::debug("[Worker {}] POP starting async polling for {}/{}", 
-                         worker_id, queue_name, partition_name);
-            
             auto* state = new AsyncPopState{
                 res,
                 queue_manager,
@@ -926,14 +926,12 @@ static void setup_worker_routes(uWS::App* app,
                         ack_items.push_back(ack);
                     }
                     
-                    spdlog::info("[Worker {}] >>> ACK START: {} items", worker_id, ack_items.size());
-                    
                     auto ack_start = std::chrono::steady_clock::now();
                     auto results = queue_manager->acknowledge_messages(ack_items, consumer_group);
                     auto ack_end = std::chrono::steady_clock::now();
                     auto ack_duration_ms = std::chrono::duration_cast<std::chrono::milliseconds>(ack_end - ack_start).count();
                     
-                    spdlog::info("[Worker {}] <<< ACK END: {} items processed, took {}ms", 
+                    spdlog::info("[Worker {}] ACK: {} items, {}ms", 
                                 worker_id, results.size(), ack_duration_ms);
                     
                     nlohmann::json response = {
@@ -994,8 +992,8 @@ static void setup_worker_routes(uWS::App* app,
             int batch = get_query_param_int(req, "batch", config.queue.default_batch_size);
             
             auto pool_stats = queue_manager->get_pool_stats();
-            spdlog::info("[Worker {}] >>> POP START (any partition): queue={}, batch={}, wait={}, timeout={}ms | Pool: {}/{} conn ({} in use)", 
-                        worker_id, queue_name, batch, wait, timeout_ms,
+            spdlog::info("[Worker {}] SPOP: [{}/*] batch={}, wait={} | Pool: {}/{} conn ({} in use)", 
+                        worker_id, queue_name, batch, wait,
                         pool_stats.available, pool_stats.total, pool_stats.in_use);
             
             auto start_time = std::chrono::steady_clock::now();
@@ -1024,7 +1022,7 @@ static void setup_worker_routes(uWS::App* app,
                 auto duration_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
                     std::chrono::steady_clock::now() - start_time).count();
                 auto pool_stats_end = queue_manager->get_pool_stats();
-                spdlog::info("[Worker {}] <<< POP END (immediate, any partition): queue={}, got {} msgs, took {}ms | Pool: {}/{} conn ({} in use)", 
+                spdlog::info("[Worker {}] EPOP: [{}/*] {} msgs, {}ms | Pool: {}/{} conn ({} in use)", 
                             worker_id, queue_name, result.messages.size(), duration_ms,
                             pool_stats_end.available, pool_stats_end.total, pool_stats_end.in_use);
                 
@@ -1065,7 +1063,7 @@ static void setup_worker_routes(uWS::App* app,
             if (!wait) {
                 // Not waiting, return empty immediately
                 auto pool_stats_end = queue_manager->get_pool_stats();
-                spdlog::info("[Worker {}] <<< POP END (no-wait, any partition): queue={}, got 0 msgs | Pool: {}/{} conn ({} in use)", 
+                spdlog::info("[Worker {}] EPOP: [{}/*] 0 msgs | Pool: {}/{} conn ({} in use)", 
                             worker_id, queue_name,
                             pool_stats_end.available, pool_stats_end.total, pool_stats_end.in_use);
                 
@@ -1078,9 +1076,6 @@ static void setup_worker_routes(uWS::App* app,
             }
             
             // Start async polling (non-blocking!)
-            spdlog::debug("[Worker {}] POP starting async polling for queue={} (any partition)", 
-                         worker_id, queue_name);
-            
             auto* state = new AsyncPopState{
                 res,
                 queue_manager,
@@ -1145,14 +1140,12 @@ static void setup_worker_routes(uWS::App* app,
                         lease_id = body["leaseId"];
                     }
                     
-                    spdlog::debug("[Worker {}] >>> ACK START (single): {}", worker_id, transaction_id);
-                    
                     auto ack_start = std::chrono::steady_clock::now();
                     auto ack_result = queue_manager->acknowledge_message(transaction_id, status, error, consumer_group, lease_id);
                     auto ack_end = std::chrono::steady_clock::now();
                     auto ack_duration_ms = std::chrono::duration_cast<std::chrono::milliseconds>(ack_end - ack_start).count();
                     
-                    spdlog::debug("[Worker {}] <<< ACK END (single): {}, took {}ms", worker_id, transaction_id, ack_duration_ms);
+                    spdlog::debug("[Worker {}] ACK: 1 item, {}ms", worker_id, ack_duration_ms);
                     
                     if (ack_result.success) {
                         auto now = std::chrono::system_clock::now();
