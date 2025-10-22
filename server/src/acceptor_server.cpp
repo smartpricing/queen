@@ -1873,12 +1873,16 @@ bool start_acceptor_server(const Config& config) {
         
         std::this_thread::sleep_for(std::chrono::milliseconds(50));
         
-        // Timeout after 30 seconds
+        // Timeout after 3600 seconds (matches MAX_STARTUP_RECOVERY_SECONDS in file_buffer.cpp)
+        // TODO: Make this configurable and improve recovery to be non-blocking
+        // See README.md "Known Issues & Roadmap" section for details
         auto elapsed = std::chrono::duration_cast<std::chrono::seconds>(
             std::chrono::steady_clock::now() - start_wait
         ).count();
-        if (elapsed > 30) {
-            spdlog::error("Timeout waiting for workers to initialize");
+        if (elapsed > 3600) {
+            spdlog::error("Timeout waiting for workers to initialize (3600s)");
+            spdlog::error("This may indicate file buffer recovery is taking too long");
+            spdlog::error("Check pending event count and database connectivity");
             break;
         }
     }

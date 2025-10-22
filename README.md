@@ -239,7 +239,23 @@ You can use Queen directly from HTTP without the JS client.
 
 [Here the complete list of API endpoints](API.md)
 
+## ⚠️ Known Issues & Roadmap
 
+### Server Startup Timing (Critical)
+**Issue:** Worker initialization timeout (30s → 3600s) now matches file buffer recovery timeout. This is a temporary fix.
+
+**Problem:** During startup, if the file buffer has many events to recover (e.g., after a long PostgreSQL outage), Worker 0 performs blocking recovery that can take up to 1 hour. The acceptor waits for all workers to initialize before starting to accept connections.
+
+**Current Fix:** Worker initialization timeout increased to 3600s to prevent premature timeout.
+
+**Better Solution Needed:**
+- Make recovery non-blocking while preserving FIFO ordering guarantees
+- Implement progressive readiness with memory-buffered queue during recovery
+- Add configurable recovery timeout with graceful degradation
+- See: `server/src/services/file_buffer.cpp:212` (MAX_STARTUP_RECOVERY_SECONDS)
+- See: `server/src/acceptor_server.cpp:1876` (worker initialization timeout)
+
+### Other TODO Items
 - retention jobs
 - reconsume
 - fix frontend

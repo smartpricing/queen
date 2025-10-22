@@ -7,6 +7,7 @@ Complete guide for building, configuring, and tuning the Queen C++ message queue
 - [Building the Server](#building-the-server)
 - [Performance Tuning](#performance-tuning)
 - [Database Configuration](#database-configuration)
+- [PostgreSQL Failover](#postgresql-failover)
 - [Queue Optimization](#queue-optimization)
 - [Monitoring & Debugging](#monitoring--debugging)
 
@@ -280,6 +281,205 @@ After changes:
 ```bash
 sudo systemctl restart postgresql
 ```
+
+---
+
+## PostgreSQL Failover
+
+Queen provides **zero-message-loss failover** using a file-based buffer system. When PostgreSQL becomes unavailable, messages are automatically buffered to disk and replayed when the database recovers.
+
+### How Failover Works
+
+#### 1. Normal Operation
+```
+Client → Server → PostgreSQL (direct write) → Success
+```
+
+#### 2. PostgreSQL Goes Down
+
+**First Request (Detection):**
+```
+Client → Server → PostgreSQL → Timeout (2-30s) → File Buffer → Success
+                                  ↓
+                            Mark DB unhealthy
+```
+
+**Subsequent Requests (Fast Path):**
+```
+Client → Server → Check db_healthy_ → File Buffer → Success (instant!)
+                       ↓ (false)
+                  Skip DB attempt
+```
+
+#### 3. PostgreSQL Recovers
+
+```
+Background Processor (every 100ms):
+  ↓
+Try to flush buffer → Success!
+  ↓
+Mark DB healthy → Resume normal operation
+```
+
+### File Buffer Architecture
+
+**Buffer Files:** UUIDv7-based for guaranteed ordering
+```
+/var/lib/queen/buffers/
+├── failover_019a0c11-7fe8.buf.tmp   ← Being written (active)
+├── failover_019a0c11-8021.buf       ← Complete, ready to process
+├── failover_019a0c11-8054.buf       ← Queued
+└── failed/
+    └── failover_019a0c11-7abc.buf   ← Failed, will retry in 5s
+```
+
+**File Lifecycle:**
+1. **Write**: Events written to `.buf.tmp` file
+2. **Finalize**: When file reaches 10,000 events OR 200ms idle → rename to `.buf` (atomic)
+3. **Process**: Background processor picks up `.buf` files, flushes to DB
+4. **Delete**: File removed after successful flush
+5. **Retry**: Failed files moved to `failed/`, retried every 5 seconds
+
+**Benefits:**
+- ✅ **Zero message loss** - Even if server crashes, messages on disk
+- ✅ **No rotation conflicts** - Each file is independent
+- ✅ **Automatic recovery** - Replays on startup
+- ✅ **Transaction ID preservation** - Duplicates detected and skipped
+- ✅ **FIFO ordering** - Messages processed in order (within partitions)
+
+### Configuration
+
+```bash
+# Buffer directory
+FILE_BUFFER_DIR=/var/lib/queen/buffers   # Linux (default)
+FILE_BUFFER_DIR=/tmp/queen                # macOS (default)
+
+# Processing intervals
+FILE_BUFFER_FLUSH_MS=100                  # Scan for complete files every 100ms
+FILE_BUFFER_MAX_BATCH=100                 # Events per DB transaction
+FILE_BUFFER_EVENTS_PER_FILE=10000         # Create new file after N events
+
+# Fast failover detection
+DB_STATEMENT_TIMEOUT=2000                 # Detect DB down in 2s (default: 30s)
+DB_POOL_ACQUISITION_TIMEOUT=10000         # Pool timeout
+```
+
+### Failover Scenarios
+
+#### Scenario 1: DB Down During Push
+```
+[Worker 0] PUSH: 1000 items to [orders/Default] | Pool: 5/5 conn (0 in use)
+... 2 seconds timeout ...
+[Worker 0] DB connection failed, using file buffer for failover
+[Worker 0] DB known to be down, using file buffer immediately
+```
+
+**Result:** Messages buffered, client gets `{pushed: true, dbHealthy: false, failover: true}`
+
+#### Scenario 2: DB Recovers
+```
+[Background] Failover: Processing 10000 events from failover_019a0c11.buf
+[Background] PostgreSQL recovered! Database is healthy again
+[Background] Failover: Completed 10000 events in 850ms (11765 events/sec) - file removed
+```
+
+**Result:** All buffered messages flushed to DB, normal operation resumes
+
+#### Scenario 3: Duplicate Detection
+```
+[Background] Failover: Processing 10000 events...
+[ERROR] Batch push failed: duplicate key constraint
+[INFO] Recovery: Duplicate keys detected, retrying individually...
+[INFO] Recovery complete: 1000 new, 9000 duplicates, 0 deleted queues
+```
+
+**Result:** Only new messages inserted, duplicates safely skipped
+
+### Monitoring Failover
+
+**Check buffer status:**
+```bash
+curl http://localhost:6632/api/v1/status/buffers
+```
+
+**Response:**
+```json
+{
+  "qos0": {
+    "pending": 0,
+    "failed": 0
+  },
+  "failover": {
+    "pending": 50000,
+    "failed": 0
+  },
+  "dbHealthy": false
+}
+```
+
+**Check buffer files:**
+```bash
+ls -lh /var/lib/queen/buffers/
+```
+
+### Best Practices
+
+**1. Fast Failover Detection**
+```bash
+# Recommended for production
+DB_STATEMENT_TIMEOUT=2000     # 2 second timeout
+DB_CONNECTION_TIMEOUT=1000    # 1 second connection attempt
+```
+
+**2. Sufficient Disk Space**
+```bash
+# Calculate required space:
+# 1M messages/hour × 170 bytes/message = ~170 MB/hour buffer
+df -h /var/lib/queen/buffers
+```
+
+**3. Monitor Buffer Growth**
+```bash
+# Alert if buffer > 100 MB (indicates DB is down)
+watch -n 5 'du -sh /var/lib/queen/buffers'
+```
+
+**4. Transaction ID Generation**
+The client **always generates UUIDv7 transaction IDs** before sending to server. This ensures:
+- IDs are stable across retries
+- Duplicate detection works correctly
+- Exactly-once semantics guaranteed
+
+### Tuning for High Throughput
+
+```bash
+# Process buffer files faster
+FILE_BUFFER_FLUSH_MS=50                  # Scan every 50ms
+FILE_BUFFER_MAX_BATCH=1000               # Larger DB batches
+FILE_BUFFER_EVENTS_PER_FILE=50000        # Larger buffer files
+
+# High-throughput failover configuration
+DB_POOL_SIZE=300                         # More connections for recovery
+DB_STATEMENT_TIMEOUT=2000                # Fast detection
+```
+
+### Troubleshooting
+
+**Problem:** "Buffered event missing transactionId"
+- **Cause:** Corrupted buffer file or old client version
+- **Fix:** Update client to latest version (auto-generates transaction IDs)
+
+**Problem:** Duplicate messages after failover
+- **Cause:** Transaction IDs regenerated on retry (old versions)
+- **Fix:** Ensure client generates transaction IDs (v0.2.9+)
+
+**Problem:** Buffer files not being processed
+- **Cause:** DB still down or files in `.tmp` state
+- **Fix:** Check DB health, files should auto-finalize after 200ms idle
+
+**Problem:** Recovery taking too long
+- **Cause:** Large buffer files (> 100,000 events)
+- **Fix:** Increase `FILE_BUFFER_MAX_BATCH` and `DB_POOL_SIZE`
 
 ---
 
