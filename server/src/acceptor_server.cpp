@@ -484,8 +484,141 @@ static void setup_worker_routes(uWS::App* app,
         );
     });
     
-    // Push messages
+    // EXPERIMENTAL: Async Push Route using std::thread + Loop::defer with thread tracking
+    // Static variables to track active database threads per worker
+    static std::atomic<int> active_db_threads{0};
+    static const int MAX_DB_THREADS = 5; // Limit concurrent database operations
+    static std::mutex wait_mutex;
+    static std::condition_variable wait_cv;
+    
     app->post("/api/v1/push", [queue_manager, file_buffer, worker_id](auto* res, auto* req) {
+        read_json_body(res,
+            [res, queue_manager, file_buffer, worker_id](const nlohmann::json& body) {
+                try {
+                    if (!body.contains("items") || !body["items"].is_array()) {
+                        send_error_response(res, "items array is required", 400);
+                        return;
+                    }
+                    
+                    // Get the current uWebSockets loop
+                    uWS::Loop* current_loop = uWS::Loop::get();
+                    
+                    // CRITICAL: Always launch thread immediately - let the THREAD handle waiting!
+                    // Never block the uWebSockets thread!
+                    spdlog::info("[Worker {}] ASYNC EXPERIMENT: Launching thread (current active: {}/{})", 
+                               worker_id, active_db_threads.load(), MAX_DB_THREADS);
+                    
+                    std::thread async_worker([res, queue_manager, file_buffer, worker_id, current_loop, body]() {
+                        // WAIT FOR SLOT INSIDE THE SEPARATE THREAD (not in uWebSockets thread!)
+                        {
+                            std::unique_lock<std::mutex> lock(wait_mutex);
+                            
+                            // Check if we need to wait
+                            int current_active = active_db_threads.load();
+                            if (current_active >= MAX_DB_THREADS) {
+                                spdlog::warn("[Worker {}] ASYNC EXPERIMENT: DB thread waiting for slot (active: {}/{})", 
+                                           worker_id, current_active, MAX_DB_THREADS);
+                                
+                                wait_cv.wait(lock, []() { 
+                                    int active = active_db_threads.load();
+                                    return active < MAX_DB_THREADS; 
+                                });
+                                
+                                spdlog::info("[Worker {}] ASYNC EXPERIMENT: DB thread got slot after waiting", worker_id);
+                            }
+                            
+                            // Increment counter while holding lock
+                            active_db_threads.fetch_add(1);
+                        }
+                        
+                        spdlog::info("[Worker {}] ASYNC EXPERIMENT: DB thread starting work (active: {}/{})", 
+                                   worker_id, active_db_threads.load(), MAX_DB_THREADS);
+                        
+                        try {
+                            // Parse items (same as original logic)
+                            std::vector<PushItem> items;
+                            for (const auto& item_json : body["items"]) {
+                                PushItem item;
+                                item.queue = item_json["queue"];
+                                item.partition = item_json.value("partition", "Default");
+                                item.payload = item_json.value("payload", nlohmann::json{});
+                                if (item_json.contains("transactionId")) {
+                                    item.transaction_id = item_json["transactionId"];
+                                }
+                                if (item_json.contains("traceId")) {
+                                    item.trace_id = item_json["traceId"];
+                                }
+                                items.push_back(std::move(item));
+                            }
+                            
+                            // This blocks, but we're in a separate thread now!
+                            spdlog::info("[Worker {}] ASYNC EXPERIMENT: Calling push_messages (blocking call)", worker_id);
+                            auto results = queue_manager->push_messages(items);
+                            spdlog::info("[Worker {}] ASYNC EXPERIMENT: push_messages completed, using Loop::defer", worker_id);
+                            
+                            // Use Loop::defer to safely send response back to uWebSockets thread
+                            current_loop->defer([res, results, worker_id]() {
+                                spdlog::info("[Worker {}] ASYNC EXPERIMENT: Inside Loop::defer - sending response", worker_id);
+                                
+                                // Convert PushResult vector to JSON manually
+                                nlohmann::json json_results = nlohmann::json::array();
+                                for (const auto& result : results) {
+                                    nlohmann::json json_result;
+                                    json_result["transaction_id"] = result.transaction_id;
+                                    json_result["status"] = result.status;
+                                    if (result.message_id.has_value()) {
+                                        json_result["message_id"] = result.message_id.value();
+                                    }
+                                    if (result.trace_id.has_value()) {
+                                        json_result["trace_id"] = result.trace_id.value();
+                                    }
+                                    if (result.error.has_value()) {
+                                        json_result["error"] = result.error.value();
+                                    }
+                                    json_results.push_back(json_result);
+                                }
+                                
+                                send_json_response(res, json_results, 201);
+                                
+                                // CRITICAL: Decrement counter and notify waiting threads
+                                active_db_threads.fetch_sub(1);
+                                wait_cv.notify_one();
+                                spdlog::info("[Worker {}] ASYNC EXPERIMENT: DB thread completed (active: {}/{})", 
+                                           worker_id, active_db_threads.load(), MAX_DB_THREADS);
+                            });
+                            
+                        } catch (const std::exception& e) {
+                            // Error handling - also use Loop::defer
+                            current_loop->defer([res, error = std::string(e.what()), worker_id]() {
+                                spdlog::error("[Worker {}] ASYNC EXPERIMENT: Error via Loop::defer: {}", worker_id, error);
+                                send_error_response(res, error, 500);
+                                
+                                // CRITICAL: Decrement counter and notify waiting threads even on error
+                                active_db_threads.fetch_sub(1);
+                                wait_cv.notify_one();
+                                spdlog::info("[Worker {}] ASYNC EXPERIMENT: DB thread completed with error (active: {}/{})", 
+                                           worker_id, active_db_threads.load(), MAX_DB_THREADS);
+                            });
+                        }
+                    });
+                    
+                    // Detach the thread so it runs independently
+                    async_worker.detach();
+                    
+                    spdlog::info("[Worker {}] ASYNC EXPERIMENT: Main uWebSockets thread continues immediately!", worker_id);
+                    
+                } catch (const std::exception& e) {
+                    send_error_response(res, e.what(), 500);
+                }
+            },
+            [res](const std::string& error) {
+                send_error_response(res, error, 400);
+            }
+        );
+    });
+    
+    // Push messages
+    app->post("/api/v1/push___old_sync", [queue_manager, file_buffer, worker_id](auto* res, auto* req) {
         read_json_body(res,
             [res, queue_manager, file_buffer, worker_id](const nlohmann::json& body) {
                 try {

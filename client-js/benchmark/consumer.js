@@ -2,7 +2,7 @@ import { Queen } from '../client/client.js';
 import fs from 'fs';
 
 const QUEUE_NAME = 'benchmark-queue-001';
-const NUMBER_OF_CONSUMERS = 10;
+const NUMBER_OF_CONSUMERS = 20;
 const BATCH_SIZE = 10000;
 const CONSUME_MODE = 'partition';
 
