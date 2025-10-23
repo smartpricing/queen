@@ -110,14 +110,17 @@ DatabasePool::DatabasePool(const std::string& connection_string,
                          int statement_timeout_ms,
                          int lock_timeout_ms,
                          int idle_in_transaction_timeout_ms)
-    : available_connections_(), mutex_(), condition_(), 
-      connection_string_(connection_string), 
-      pool_size_(pool_size), 
-      current_size_(0), 
-      acquisition_timeout_ms_(acquisition_timeout_ms),
-      statement_timeout_ms_(statement_timeout_ms),
-      lock_timeout_ms_(lock_timeout_ms),
-      idle_in_transaction_timeout_ms_(idle_in_transaction_timeout_ms) {
+    : available_connections_()
+    , waiting_callbacks_()
+    , mutex_()
+    , condition_()
+    , connection_string_(connection_string)
+    , pool_size_(pool_size)
+    , current_size_(0)
+    , acquisition_timeout_ms_(acquisition_timeout_ms)
+    , statement_timeout_ms_(statement_timeout_ms)
+    , lock_timeout_ms_(lock_timeout_ms)
+    , idle_in_transaction_timeout_ms_(idle_in_transaction_timeout_ms) {
     
     // Pre-populate the pool
     for (size_t i = 0; i < pool_size_; ++i) {
@@ -155,6 +158,73 @@ std::unique_ptr<DatabaseConnection> DatabasePool::create_connection() {
                                                 statement_timeout_ms_,
                                                 lock_timeout_ms_,
                                                 idle_in_transaction_timeout_ms_);
+}
+
+std::unique_ptr<DatabaseConnection> DatabasePool::try_get_connection() {
+    std::unique_lock<std::mutex> lock(mutex_);
+    
+    // Try to get a connection WITHOUT blocking
+    if (available_connections_.empty()) {
+        return nullptr;  // No connection available
+    }
+    
+    auto conn = std::move(available_connections_.front());
+    available_connections_.pop();
+    
+    // Verify connection is still valid
+    if (!conn->is_valid()) {
+        spdlog::warn("Invalid connection found in pool (non-blocking get), discarding");
+        --current_size_;
+        return nullptr;
+    }
+    
+    conn->set_in_use(true);
+    return conn;
+}
+
+void DatabasePool::get_connection_async(ConnectionCallback callback) {
+    std::unique_ptr<DatabaseConnection> conn_to_return;
+    
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        
+        spdlog::debug("[Pool] get_connection_async: available={}, waiting={}", 
+                      available_connections_.size(), waiting_callbacks_.size());
+        
+        // Try to get an available connection
+        if (!available_connections_.empty()) {
+            conn_to_return = std::move(available_connections_.front());
+            available_connections_.pop();
+            
+            // Verify it's valid
+            if (conn_to_return && conn_to_return->is_valid()) {
+                conn_to_return->set_in_use(true);
+                spdlog::debug("[Pool] Connection available immediately");
+                // Will call callback after releasing lock
+            } else {
+                // Invalid connection, discard it
+                if (conn_to_return) {
+                    spdlog::warn("[Pool] Invalid connection found, discarding");
+                    --current_size_;
+                }
+                conn_to_return.reset();
+                // Fall through to queue callback
+            }
+        }
+        
+        // No connection available - queue the callback
+        if (!conn_to_return) {
+            waiting_callbacks_.push(std::move(callback));
+            spdlog::debug("[Pool] No connection available, queued callback ({} waiting)", 
+                          waiting_callbacks_.size());
+            return;
+        }
+    }  // Release lock here
+    
+    // Call callback outside of lock
+    if (conn_to_return) {
+        callback(std::move(conn_to_return));
+    }
 }
 
 std::unique_ptr<DatabaseConnection> DatabasePool::get_connection() {
@@ -224,14 +294,42 @@ void DatabasePool::return_connection(std::unique_ptr<DatabaseConnection> conn) {
     
     conn->set_in_use(false);
     
-    std::lock_guard<std::mutex> lock(mutex_);
-    if (conn->is_valid()) {
-        available_connections_.push(std::move(conn));
-        condition_.notify_one();
+    ConnectionCallback callback_to_call;
+    bool has_waiter = false;
+    
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
         
-        // POOL REFILL: If pool is below target size, try to create more connections
-        // This helps recovery when PostgreSQL comes back after being down
-        if (current_size_ < pool_size_) {
+        // PRIORITY: Check if anyone is waiting for a connection (async requests)
+        if (!waiting_callbacks_.empty() && conn->is_valid()) {
+            callback_to_call = std::move(waiting_callbacks_.front());
+            waiting_callbacks_.pop();
+            has_waiter = true;
+            
+            spdlog::debug("[Pool] Connection returned, giving directly to waiting callback ({} still waiting)", 
+                          waiting_callbacks_.size());
+            
+            conn->set_in_use(true);  // Mark as in use again
+        }
+    }  // Release lock
+    
+    // Call callback outside of lock (if we have a waiter)
+    if (has_waiter) {
+        callback_to_call(std::move(conn));
+        return;
+    }
+    
+    // No one waiting, return to available pool
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        
+        if (conn->is_valid()) {
+            available_connections_.push(std::move(conn));
+            condition_.notify_one();
+            
+            // POOL REFILL: If pool is below target size, try to create more connections
+            // This helps recovery when PostgreSQL comes back after being down
+            if (current_size_ < pool_size_) {
             size_t to_create = pool_size_ - current_size_;
             spdlog::info("Pool below target ({}/{}), attempting to create {} connections", 
                         current_size_, pool_size_, to_create);
@@ -252,31 +350,32 @@ void DatabasePool::return_connection(std::unique_ptr<DatabaseConnection> conn) {
                     spdlog::debug("Failed to refill pool: {}", e.what());
                     break;
                 }
+                }
+                condition_.notify_all();
             }
-            condition_.notify_all();
-        }
-    } else {
-        spdlog::warn("Returned invalid connection to pool, attempting to create replacement");
-        --current_size_;
-        
-        // Try to create a replacement connection in the background
-        // We do this asynchronously to avoid blocking the caller
-        try {
-            auto new_conn = create_connection();
-            if (new_conn && new_conn->is_valid()) {
-                available_connections_.push(std::move(new_conn));
-                ++current_size_;
-                condition_.notify_one();
-                spdlog::info("Successfully replaced invalid connection, pool at {}/{}", current_size_, pool_size_);
-            } else {
-                spdlog::error("Failed to create replacement connection, pool size reduced to {}/{}", current_size_, pool_size_);
+        } else {
+            spdlog::warn("Returned invalid connection to pool, attempting to create replacement");
+            --current_size_;
+            
+            // Try to create a replacement connection in the background
+            // We do this asynchronously to avoid blocking the caller
+            try {
+                auto new_conn = create_connection();
+                if (new_conn && new_conn->is_valid()) {
+                    available_connections_.push(std::move(new_conn));
+                    ++current_size_;
+                    condition_.notify_one();
+                    spdlog::info("Successfully replaced invalid connection, pool at {}/{}", current_size_, pool_size_);
+                } else {
+                    spdlog::error("Failed to create replacement connection, pool size reduced to {}/{}", current_size_, pool_size_);
+                    condition_.notify_one(); // Still notify in case threads are waiting
+                }
+            } catch (const std::exception& e) {
+                spdlog::error("Exception creating replacement connection: {} - pool size now {}/{}", e.what(), current_size_, pool_size_);
                 condition_.notify_one(); // Still notify in case threads are waiting
             }
-        } catch (const std::exception& e) {
-            spdlog::error("Exception creating replacement connection: {} - pool size now {}/{}", e.what(), current_size_, pool_size_);
-            condition_.notify_one(); // Still notify in case threads are waiting
         }
-    }
+    }  // End of lock scope
 }
 
 PGresult* DatabasePool::query(const std::string& sql) {

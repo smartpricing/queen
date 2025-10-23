@@ -8,6 +8,7 @@
 #include <mutex>
 #include <condition_variable>
 #include <future>
+#include <functional>
 #include <json.hpp>
 
 namespace queen {
@@ -34,6 +35,9 @@ public:
     bool is_in_use() const { return in_use_; }
     void set_in_use(bool in_use) { in_use_ = in_use; }
     
+    // Get raw connection (for async operations)
+    PGconn* get_raw_connection() { return conn_; }
+    
     PGresult* exec(const std::string& query);
     PGresult* exec_params(const std::string& query, const std::vector<std::string>& params);
     
@@ -44,8 +48,12 @@ public:
 };
 
 class DatabasePool {
+public:
+    using ConnectionCallback = std::function<void(std::unique_ptr<DatabaseConnection>)>;
+    
 private:
     std::queue<std::unique_ptr<DatabaseConnection>> available_connections_;
+    std::queue<ConnectionCallback> waiting_callbacks_;  // NEW: Callback queue
     std::mutex mutex_;
     std::condition_variable condition_;
     std::string connection_string_;
@@ -68,6 +76,8 @@ public:
     ~DatabasePool();
     
     std::unique_ptr<DatabaseConnection> get_connection();
+    std::unique_ptr<DatabaseConnection> try_get_connection();  // Non-blocking version
+    void get_connection_async(ConnectionCallback callback);     // Async callback version
     void return_connection(std::unique_ptr<DatabaseConnection> conn);
     
     // Convenience methods

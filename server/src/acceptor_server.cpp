@@ -4,6 +4,7 @@
 #include "queen/config.hpp"
 #include "queen/encryption.hpp"
 #include "queen/file_buffer.hpp"
+#include "queen/async_database.hpp"
 #include <App.h>
 #include <json.hpp>
 #include <spdlog/spdlog.h>
@@ -360,6 +361,7 @@ static void setup_worker_routes(uWS::App* app,
                                 std::shared_ptr<QueueManager> queue_manager,
                                 std::shared_ptr<AnalyticsManager> analytics_manager,
                                 std::shared_ptr<FileBufferManager> file_buffer,
+                                std::shared_ptr<AsyncDatabaseManager> async_db,
                                 const Config& config,
                                 int worker_id) {
     
@@ -485,9 +487,9 @@ static void setup_worker_routes(uWS::App* app,
     });
     
     // Push messages
-    app->post("/api/v1/push", [queue_manager, file_buffer, worker_id](auto* res, auto* req) {
+    app->post("/api/v1/push", [queue_manager, file_buffer, async_db, worker_id](auto* res, auto* req) {
         read_json_body(res,
-            [res, queue_manager, file_buffer, worker_id](const nlohmann::json& body) {
+            [res, queue_manager, file_buffer, async_db, worker_id](const nlohmann::json& body) {
                 try {
                     if (!body.contains("items") || !body["items"].is_array()) {
                         send_error_response(res, "items array is required", 400);
@@ -575,6 +577,10 @@ static void setup_worker_routes(uWS::App* app,
                             return;
                         }
                         
+                        // Setup abort tracking for async operation
+                        auto aborted = std::make_shared<bool>(false);
+                        res->onAborted([aborted]() { *aborted = true; });
+                        
                         try {
                             std::vector<PushItem> items;
                             for (const auto& item_json : body["items"]) {
@@ -591,122 +597,145 @@ static void setup_worker_routes(uWS::App* app,
                                 items.push_back(std::move(item));
                             }
                             
-                            auto results = queue_manager->push_messages(items);
+                            // Extract queue and partition for async operation
+                            std::string queue_name = items[0].queue;
+                            std::string partition_name = items[0].partition;
                             
-                            // Check if push failed - distinguish between DB down vs real errors
-                            bool db_failure = false;
-                            bool has_real_error = false;
-                            std::string real_error_msg;
+                            spdlog::debug("[Worker {}] Starting ASYNC push for {}/{} ({} items)", 
+                                         worker_id, queue_name, partition_name, items.size());
                             
-                            for (const auto& result : results) {
-                                if (result.status == "failed" && result.error) {
-                                    // Check for DB connection errors FIRST
-                                    if (result.error->find("pool timeout") != std::string::npos ||
-                                        result.error->find("Connection refused") != std::string::npos ||
-                                        result.error->find("Failed to connect") != std::string::npos ||
-                                        result.error->find("connection pool") != std::string::npos ||
-                                        result.error->find("Failed to commit") != std::string::npos ||
-                                        result.error->find("server closed") != std::string::npos ||
-                                        result.error->find("terminating connection") != std::string::npos) {
-                                        db_failure = true;
-                                        break;
+                            // ASYNC PUSH - non-blocking!
+                            async_db->push_messages_async(
+                                items,
+                                queue_name,
+                                partition_name,
+                                uWS::Loop::get(),
+                                [res, aborted, file_buffer, queue_manager, worker_id, body](std::vector<PushResult> results) {
+                                    // Check if connection was aborted
+                                    if (*aborted) {
+                                        spdlog::debug("[Worker {}] Push completed but connection aborted", worker_id);
+                                        return;
                                     }
                                     
-                                    // If "does not exist" - check if DB is actually down
-                                    if (result.error->find("does not exist") != std::string::npos) {
-                                        // If file_buffer already marked DB as unhealthy, treat as DB failure
-                                        if (file_buffer && !file_buffer->is_db_healthy()) {
-                                            spdlog::warn("[Worker {}] Queue check failed and DB marked unhealthy - using failover",
-                                                       worker_id);
-                                            db_failure = true;
-                                            break;
-                                        }
-                                        
-                                        // Otherwise check pool stats
-                                        auto pool_stats = queue_manager->get_pool_stats();
-                                        if (pool_stats.available == 0 || pool_stats.total < pool_stats.in_use) {
-                                            // Pool exhausted - likely DB is down, not that queue doesn't exist
-                                            spdlog::warn("[Worker {}] Queue check failed but pool exhausted ({}/{} available) - assuming DB down",
-                                                       worker_id, pool_stats.available, pool_stats.total);
-                                            db_failure = true;
-                                            break;
-                                        } else {
-                                            // Pool has connections - queue genuinely doesn't exist
+                                    spdlog::debug("[Worker {}] ASYNC push completed ({} results)", worker_id, results.size());
+                            
+                                    // Check if push failed - distinguish between DB down vs real errors
+                                    bool db_failure = false;
+                                    bool has_real_error = false;
+                                    std::string real_error_msg;
+                                    
+                                    for (const auto& result : results) {
+                                        if (result.status == "failed" && result.error) {
+                                            // Check for DB connection errors FIRST
+                                            if (result.error->find("pool timeout") != std::string::npos ||
+                                                result.error->find("Connection refused") != std::string::npos ||
+                                                result.error->find("Failed to connect") != std::string::npos ||
+                                                result.error->find("connection pool") != std::string::npos ||
+                                                result.error->find("Failed to commit") != std::string::npos ||
+                                                result.error->find("server closed") != std::string::npos ||
+                                                result.error->find("terminating connection") != std::string::npos) {
+                                                db_failure = true;
+                                                break;
+                                            }
+                                            
+                                            // If "does not exist" - check if DB is actually down
+                                            if (result.error->find("does not exist") != std::string::npos) {
+                                                // If file_buffer already marked DB as unhealthy, treat as DB failure
+                                                if (file_buffer && !file_buffer->is_db_healthy()) {
+                                                    spdlog::warn("[Worker {}] Queue check failed and DB marked unhealthy - using failover",
+                                                               worker_id);
+                                                    db_failure = true;
+                                                    break;
+                                                }
+                                                
+                                                // Otherwise check pool stats
+                                                auto pool_stats = queue_manager->get_pool_stats();
+                                                if (pool_stats.available == 0 || pool_stats.total < pool_stats.in_use) {
+                                                    // Pool exhausted - likely DB is down, not that queue doesn't exist
+                                                    spdlog::warn("[Worker {}] Queue check failed but pool exhausted ({}/{} available) - assuming DB down",
+                                                               worker_id, pool_stats.available, pool_stats.total);
+                                                    db_failure = true;
+                                                    break;
+                                                } else {
+                                                    // Pool has connections - queue genuinely doesn't exist
+                                                    has_real_error = true;
+                                                    real_error_msg = *result.error;
+                                                    break;
+                                                }
+                                            }
+                                            
+                                            // Other errors
                                             has_real_error = true;
                                             real_error_msg = *result.error;
                                             break;
                                         }
                                     }
                                     
-                                    // Other errors
-                                    has_real_error = true;
-                                    real_error_msg = *result.error;
-                                    break;
-                                }
-                            }
-                            
-                            // Handle real errors (not DB failure)
-                            if (has_real_error && !db_failure) {
-                                send_error_response(res, real_error_msg, 400);
-                                return;
-                            }
-                            
-                            // If DB failure detected, use file buffer failover (if available)
-                            if (db_failure) {
-                                if (file_buffer) {
-                                    spdlog::warn("[Worker {}] DB connection failed, using file buffer for failover", worker_id);
-                                    file_buffer->mark_db_unhealthy();
-                                    
-                                    for (const auto& item_json : body["items"]) {
-                                        nlohmann::json buffered_event = {
-                                            {"queue", item_json["queue"]},
-                                            {"partition", item_json.value("partition", "Default")},
-                                            {"payload", item_json.value("payload", nlohmann::json{})},
-                                            {"namespace", item_json.value("namespace", "")},
-                                            {"task", item_json.value("task", "")},
-                                            {"traceId", item_json.value("traceId", "")},
-                                            {"transactionId", item_json.value("transactionId", queue_manager->generate_uuid())},
-                                            {"failover", true}
-                                        };
-                                        
-                                        file_buffer->write_event(buffered_event);
+                                    // Handle real errors (not DB failure)
+                                    if (has_real_error && !db_failure) {
+                                        send_error_response(res, real_error_msg, 400);
+                                        return;
                                     }
                                     
-                                    nlohmann::json response = {
-                                        {"pushed", true},
-                                        {"qos0", false},
-                                        {"dbHealthy", false},
-                                        {"failover", true}
-                                    };
+                                    // If DB failure detected, use file buffer failover (if available)
+                                    if (db_failure) {
+                                        if (file_buffer) {
+                                            spdlog::warn("[Worker {}] DB connection failed, using file buffer for failover", worker_id);
+                                            file_buffer->mark_db_unhealthy();
+                                            
+                                            for (const auto& item_json : body["items"]) {
+                                                nlohmann::json buffered_event = {
+                                                    {"queue", item_json["queue"]},
+                                                    {"partition", item_json.value("partition", "Default")},
+                                                    {"payload", item_json.value("payload", nlohmann::json{})},
+                                                    {"namespace", item_json.value("namespace", "")},
+                                                    {"task", item_json.value("task", "")},
+                                                    {"traceId", item_json.value("traceId", "")},
+                                                    {"transactionId", item_json.value("transactionId", queue_manager->generate_uuid())},
+                                                    {"failover", true}
+                                                };
+                                                
+                                                file_buffer->write_event(buffered_event);
+                                            }
+                                            
+                                            nlohmann::json response = {
+                                                {"pushed", true},
+                                                {"qos0", false},
+                                                {"dbHealthy", false},
+                                                {"failover", true}
+                                            };
+                                            send_json_response(res, response, 201);
+                                            return;
+                                        } else {
+                                            // No file buffer available (non-zero worker) - return error
+                                            spdlog::error("[Worker {}] DB connection failed and no file buffer available", worker_id);
+                                            send_error_response(res, "Database unavailable and failover not available on this worker", 503);
+                                            return;
+                                        }
+                                    }
+                                    
+                                    // Success - send results
+                                    nlohmann::json response = {{"messages", nlohmann::json::array()}};
+                                    for (const auto& result : results) {
+                                        nlohmann::json msg_result = {
+                                            {"id", result.message_id.value_or("")},
+                                            {"transactionId", result.transaction_id},
+                                            {"traceId", result.trace_id.has_value() ? nlohmann::json(*result.trace_id) : nlohmann::json(nullptr)},
+                                            {"status", result.status}
+                                        };
+                                        if (result.error) {
+                                            msg_result["error"] = *result.error;
+                                        }
+                                        response["messages"].push_back(msg_result);
+                                    }
+                                    
+                                    response["pushed"] = true;
+                                    response["qos0"] = false;
+                                    response["dbHealthy"] = file_buffer ? file_buffer->is_db_healthy() : true;
+                                    
                                     send_json_response(res, response, 201);
-                                    return;
-                                } else {
-                                    // No file buffer available (non-zero worker) - return error
-                                    spdlog::error("[Worker {}] DB connection failed and no file buffer available", worker_id);
-                                    send_error_response(res, "Database unavailable and failover not available on this worker", 503);
-                                    return;
                                 }
-                            }
-                            
-                            nlohmann::json response = {{"messages", nlohmann::json::array()}};
-                            for (const auto& result : results) {
-                                nlohmann::json msg_result = {
-                                    {"id", result.message_id.value_or("")},
-                                    {"transactionId", result.transaction_id},
-                                    {"traceId", result.trace_id.has_value() ? nlohmann::json(*result.trace_id) : nlohmann::json(nullptr)},
-                                    {"status", result.status}
-                                };
-                                if (result.error) {
-                                    msg_result["error"] = *result.error;
-                                }
-                                response["messages"].push_back(msg_result);
-                            }
-                            
-                            response["pushed"] = true;
-                            response["qos0"] = false;
-                            response["dbHealthy"] = file_buffer ? file_buffer->is_db_healthy() : true;  // Assume healthy if no buffer
-                            
-                            send_json_response(res, response, 201);
+                            );  // End of async callback
                             
                         } catch (const std::exception& db_error) {
                             // PostgreSQL is down - fallback to file buffer for all items (if available)
@@ -1705,6 +1734,9 @@ static void worker_thread(const Config& config, int worker_id, int num_workers,
         // Thread-local analytics manager
         auto analytics_manager = std::make_shared<AnalyticsManager>(db_pool);
         
+        // Thread-local async database manager
+        auto async_db = std::make_shared<AsyncDatabaseManager>(db_pool.get());
+        
         // Test database connection and log pool stats
         // FAILOVER: Don't fail at startup if DB is down - use file buffer instead
         bool db_available = queue_manager->health_check();
@@ -1782,7 +1814,7 @@ static void worker_thread(const Config& config, int worker_id, int num_workers,
         
         // Setup routes
         spdlog::info("[Worker {}] Setting up routes...", worker_id);
-        setup_worker_routes(worker_app, queue_manager, analytics_manager, file_buffer, config, worker_id);
+        setup_worker_routes(worker_app, queue_manager, analytics_manager, file_buffer, async_db, config, worker_id);
         spdlog::info("[Worker {}] Routes configured", worker_id);
         
         // Register this worker app with the acceptor (thread-safe)
