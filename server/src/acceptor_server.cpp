@@ -4,6 +4,7 @@
 #include "queen/config.hpp"
 #include "queen/encryption.hpp"
 #include "queen/file_buffer.hpp"
+#include "threadpool.hpp"
 #include <App.h>
 #include <json.hpp>
 #include <spdlog/spdlog.h>
@@ -361,7 +362,8 @@ static void setup_worker_routes(uWS::App* app,
                                 std::shared_ptr<AnalyticsManager> analytics_manager,
                                 std::shared_ptr<FileBufferManager> file_buffer,
                                 const Config& config,
-                                int worker_id) {
+                                int worker_id,
+                                std::shared_ptr<astp::ThreadPool> db_thread_pool) {
     
     // CORS preflight
     app->options("/*", [](auto* res, auto* req) {
@@ -484,16 +486,11 @@ static void setup_worker_routes(uWS::App* app,
         );
     });
     
-    // EXPERIMENTAL: Async Push Route using std::thread + Loop::defer with thread tracking
-    // Static variables to track active database threads per worker
-    static std::atomic<int> active_db_threads{0};
-    static const int MAX_DB_THREADS = 5; // Limit concurrent database operations
-    static std::mutex wait_mutex;
-    static std::condition_variable wait_cv;
+    // ASYNC: Push Route using per-worker ThreadPool + Loop::defer
     
-    app->post("/api/v1/push", [queue_manager, file_buffer, worker_id](auto* res, auto* req) {
+    app->post("/api/v1/push", [queue_manager, file_buffer, worker_id, db_thread_pool](auto* res, auto* req) {
         read_json_body(res,
-            [res, queue_manager, file_buffer, worker_id](const nlohmann::json& body) {
+            [res, queue_manager, file_buffer, worker_id, db_thread_pool](const nlohmann::json& body) {
                 try {
                     if (!body.contains("items") || !body["items"].is_array()) {
                         send_error_response(res, "items array is required", 400);
@@ -503,36 +500,11 @@ static void setup_worker_routes(uWS::App* app,
                     // Get the current uWebSockets loop
                     uWS::Loop* current_loop = uWS::Loop::get();
                     
-                    // CRITICAL: Always launch thread immediately - let the THREAD handle waiting!
-                    // Never block the uWebSockets thread!
-                    spdlog::info("[Worker {}] ASYNC EXPERIMENT: Launching thread (current active: {}/{})", 
-                               worker_id, active_db_threads.load(), MAX_DB_THREADS);
+                    spdlog::info("[Worker {}] ASYNC: Submitting work to per-worker ThreadPool", worker_id);
                     
-                    std::thread async_worker([res, queue_manager, file_buffer, worker_id, current_loop, body]() {
-                        // WAIT FOR SLOT INSIDE THE SEPARATE THREAD (not in uWebSockets thread!)
-                        {
-                            std::unique_lock<std::mutex> lock(wait_mutex);
-                            
-                            // Check if we need to wait
-                            int current_active = active_db_threads.load();
-                            if (current_active >= MAX_DB_THREADS) {
-                                spdlog::warn("[Worker {}] ASYNC EXPERIMENT: DB thread waiting for slot (active: {}/{})", 
-                                           worker_id, current_active, MAX_DB_THREADS);
-                                
-                                wait_cv.wait(lock, []() { 
-                                    int active = active_db_threads.load();
-                                    return active < MAX_DB_THREADS; 
-                                });
-                                
-                                spdlog::info("[Worker {}] ASYNC EXPERIMENT: DB thread got slot after waiting", worker_id);
-                            }
-                            
-                            // Increment counter while holding lock
-                            active_db_threads.fetch_add(1);
-                        }
-                        
-                        spdlog::info("[Worker {}] ASYNC EXPERIMENT: DB thread starting work (active: {}/{})", 
-                                   worker_id, active_db_threads.load(), MAX_DB_THREADS);
+                    // Push work to per-worker ThreadPool (much simpler!)
+                    db_thread_pool->push([res, queue_manager, file_buffer, worker_id, current_loop, body]() {
+                        spdlog::info("[Worker {}] ASYNC: ThreadPool worker executing database operation", worker_id);
                         
                         try {
                             // Parse items (same as original logic)
@@ -551,14 +523,14 @@ static void setup_worker_routes(uWS::App* app,
                                 items.push_back(std::move(item));
                             }
                             
-                            // This blocks, but we're in a separate thread now!
-                            spdlog::info("[Worker {}] ASYNC EXPERIMENT: Calling push_messages (blocking call)", worker_id);
+                            // Execute database operation (blocks in ThreadPool worker, not uWebSockets thread)
+                            spdlog::info("[Worker {}] ASYNC: Calling push_messages in ThreadPool", worker_id);
                             auto results = queue_manager->push_messages(items);
-                            spdlog::info("[Worker {}] ASYNC EXPERIMENT: push_messages completed, using Loop::defer", worker_id);
+                            spdlog::info("[Worker {}] ASYNC: push_messages completed, using Loop::defer", worker_id);
                             
                             // Use Loop::defer to safely send response back to uWebSockets thread
                             current_loop->defer([res, results, worker_id]() {
-                                spdlog::info("[Worker {}] ASYNC EXPERIMENT: Inside Loop::defer - sending response", worker_id);
+                                spdlog::info("[Worker {}] ASYNC: Sending response via Loop::defer", worker_id);
                                 
                                 // Convert PushResult vector to JSON manually
                                 nlohmann::json json_results = nlohmann::json::array();
@@ -579,33 +551,18 @@ static void setup_worker_routes(uWS::App* app,
                                 }
                                 
                                 send_json_response(res, json_results, 201);
-                                
-                                // CRITICAL: Decrement counter and notify waiting threads
-                                active_db_threads.fetch_sub(1);
-                                wait_cv.notify_one();
-                                spdlog::info("[Worker {}] ASYNC EXPERIMENT: DB thread completed (active: {}/{})", 
-                                           worker_id, active_db_threads.load(), MAX_DB_THREADS);
                             });
                             
                         } catch (const std::exception& e) {
                             // Error handling - also use Loop::defer
                             current_loop->defer([res, error = std::string(e.what()), worker_id]() {
-                                spdlog::error("[Worker {}] ASYNC EXPERIMENT: Error via Loop::defer: {}", worker_id, error);
+                                spdlog::error("[Worker {}] ASYNC: Error via Loop::defer: {}", worker_id, error);
                                 send_error_response(res, error, 500);
-                                
-                                // CRITICAL: Decrement counter and notify waiting threads even on error
-                                active_db_threads.fetch_sub(1);
-                                wait_cv.notify_one();
-                                spdlog::info("[Worker {}] ASYNC EXPERIMENT: DB thread completed with error (active: {}/{})", 
-                                           worker_id, active_db_threads.load(), MAX_DB_THREADS);
                             });
                         }
                     });
                     
-                    // Detach the thread so it runs independently
-                    async_worker.detach();
-                    
-                    spdlog::info("[Worker {}] ASYNC EXPERIMENT: Main uWebSockets thread continues immediately!", worker_id);
+                    spdlog::info("[Worker {}] ASYNC: Work submitted to ThreadPool, uWebSockets thread continues!", worker_id);
                     
                 } catch (const std::exception& e) {
                     send_error_response(res, e.what(), 500);
@@ -1820,7 +1777,7 @@ static void worker_thread(const Config& config, int worker_id, int num_workers,
     
     try {
         // Thread-local database pool
-        int pool_per_thread = std::max(5, config.database.pool_size / num_workers);
+        int pool_per_thread = config.database.pool_size / num_workers; // Round down for safety
         spdlog::debug("[Worker {}] Creating pool: size={}, acquisition_timeout={}", 
                      worker_id, pool_per_thread, config.database.pool_acquisition_timeout);
         auto db_pool = std::make_shared<DatabasePool>(
@@ -1837,6 +1794,13 @@ static void worker_thread(const Config& config, int worker_id, int num_workers,
         
         // Thread-local analytics manager
         auto analytics_manager = std::make_shared<AnalyticsManager>(db_pool);
+        
+        // Thread-local ThreadPool for async database operations
+        // Match ThreadPool size with available database connections for optimal resource usage
+        int thread_pool_size = pool_per_thread; // Use same number as database connections for 1:1 ratio
+        auto db_thread_pool = std::make_shared<astp::ThreadPool>(thread_pool_size);
+        spdlog::info("[Worker {}] Created dedicated ThreadPool with {} database threads (matching {} DB connections)", 
+                   worker_id, thread_pool_size, pool_per_thread);
         
         // Test database connection and log pool stats
         // FAILOVER: Don't fail at startup if DB is down - use file buffer instead
@@ -1915,7 +1879,7 @@ static void worker_thread(const Config& config, int worker_id, int num_workers,
         
         // Setup routes
         spdlog::info("[Worker {}] Setting up routes...", worker_id);
-        setup_worker_routes(worker_app, queue_manager, analytics_manager, file_buffer, config, worker_id);
+        setup_worker_routes(worker_app, queue_manager, analytics_manager, file_buffer, config, worker_id, db_thread_pool);
         spdlog::info("[Worker {}] Routes configured", worker_id);
         
         // Register this worker app with the acceptor (thread-safe)
