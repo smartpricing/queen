@@ -90,8 +90,8 @@ static std::string generate_uuid_v7() {
     return oss.str();
 }
 
-// Timer callback - called periodically to check if PostgreSQL socket is ready
-static void async_timer_callback(us_timer_t* timer) {
+// Timer callback for AsyncPushOperation - called periodically to check if PostgreSQL socket is ready
+static void async_push_timer_callback(us_timer_t* timer) {
     AsyncPushOperation* op = *(AsyncPushOperation**)us_timer_ext(timer);
     
     if (!op) {
@@ -194,7 +194,7 @@ void AsyncPushOperation::start() {
     transition_to_next_state();
     
     // Start timer to check socket every 1ms
-    us_timer_set(timer_, async_timer_callback, 1, 1);
+    us_timer_set(timer_, async_push_timer_callback, 1, 1);
 }
 
 void AsyncPushOperation::check_socket_ready() {
