@@ -1,4 +1,5 @@
 #include "queen/analytics_manager.hpp"
+#include "queen/encryption.hpp"
 #include <spdlog/spdlog.h>
 #include <sstream>
 #include <iomanip>
@@ -548,6 +549,7 @@ nlohmann::json AnalyticsManager::get_message(const std::string& transaction_id) 
                 m.payload,
                 m.created_at,
                 m.trace_id,
+                m.is_encrypted,
                 q.name as queue_name,
                 p.name as partition_name,
                 q.namespace,
@@ -614,10 +616,39 @@ nlohmann::json AnalyticsManager::get_message(const std::string& transaction_id) 
             }}
         };
         
-        // Parse payload as JSON
+        // Parse payload as JSON - decrypt if encrypted
         try {
-            response["payload"] = nlohmann::json::parse(result.get_value(0, "payload"));
-        } catch (...) {
+            std::string payload_str = result.get_value(0, "payload");
+            std::string is_encrypted_str = result.get_value(0, "is_encrypted");
+            bool is_encrypted = (is_encrypted_str == "t" || is_encrypted_str == "true");
+            
+            if (is_encrypted) {
+                // Decrypt the payload
+                auto encrypted_json = nlohmann::json::parse(payload_str);
+                
+                EncryptionService::EncryptedData encrypted_data;
+                encrypted_data.encrypted = encrypted_json["encrypted"];
+                encrypted_data.iv = encrypted_json["iv"];
+                encrypted_data.auth_tag = encrypted_json["authTag"];
+                
+                auto enc_service = get_encryption_service();
+                if (enc_service && enc_service->is_enabled()) {
+                    auto decrypted = enc_service->decrypt_payload(encrypted_data);
+                    if (decrypted.has_value()) {
+                        response["payload"] = nlohmann::json::parse(*decrypted);
+                    } else {
+                        spdlog::error("Failed to decrypt message payload for transaction_id: {}", transaction_id);
+                        response["payload"] = payload_str;  // Return encrypted data as fallback
+                    }
+                } else {
+                    spdlog::warn("Message is encrypted but encryption service not available");
+                    response["payload"] = payload_str;
+                }
+            } else {
+                response["payload"] = nlohmann::json::parse(payload_str);
+            }
+        } catch (const std::exception& e) {
+            spdlog::warn("Failed to parse payload for transaction_id {}: {}", transaction_id, e.what());
             response["payload"] = result.get_value(0, "payload");
         }
         
