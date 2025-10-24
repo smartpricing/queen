@@ -43,6 +43,23 @@ public:
     void push(const std::string& request_id, const nlohmann::json& data, 
               bool is_error = false, int status_code = 200) {
         std::lock_guard<std::mutex> lock(mutex_);
+        
+        // Check response size before queuing (optional size check)
+        try {
+            // Quick size estimation without full serialization
+            std::string sample = data.dump(0, ' ', false, nlohmann::json::error_handler_t::ignore);
+            if (sample.length() > 100 * 1024 * 1024) { // 100MB threshold for queue rejection
+                spdlog::error("Response too large to queue: ~{} bytes for request {}", sample.length(), request_id);
+                // Don't queue extremely large responses
+                return;
+            } else if (sample.length() > 5 * 1024 * 1024) { // 5MB warning threshold
+                spdlog::warn("Large response queued: ~{} bytes for request {}", sample.length(), request_id);
+            }
+        } catch (const std::exception& e) {
+            spdlog::debug("Could not estimate response size for {}: {}", request_id, e.what());
+            // Continue anyway - the actual serialization will handle errors
+        }
+        
         queue_.emplace(request_id, data, is_error, status_code);
     }
     

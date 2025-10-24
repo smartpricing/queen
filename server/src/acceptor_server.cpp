@@ -571,9 +571,37 @@ static void setup_worker_routes(uWS::App* app,
                                 json_results.push_back(json_result);
                             }
                             
-                            // SAFE: Push to response queue
-                            global_response_queue->push(request_id, json_results, false, 201);
-                            spdlog::info("[Worker {}] PUSH: Queued response for {} ({} items)", worker_id, request_id, results.size());
+                            // Check if any items failed (for proper error handling)
+                            bool has_failures = false;
+                            for (const auto& result : results) {
+                                if (result.status == "failed") {
+                                    has_failures = true;
+                                    break;
+                                }
+                            }
+                            
+                            if (has_failures) {
+                                // Find the first error message to use as the main error
+                                std::string main_error = "One or more items failed";
+                                for (const auto& result : results) {
+                                    if (result.status == "failed" && result.error.has_value()) {
+                                        main_error = result.error.value();
+                                        break;
+                                    }
+                                }
+                                
+                                // If any items failed, send as error response so client can throw
+                                nlohmann::json error_response = {
+                                    {"error", main_error},
+                                    {"results", json_results}
+                                };
+                                global_response_queue->push(request_id, error_response, true, 400);
+                                spdlog::warn("[Worker {}] PUSH: Queued error response for {} ({})", worker_id, request_id, main_error);
+                            } else {
+                                // All items succeeded
+                                global_response_queue->push(request_id, json_results, false, 201);
+                                spdlog::info("[Worker {}] PUSH: Queued success response for {} ({} items)", worker_id, request_id, results.size());
+                            }
                             
                         } catch (const std::exception& e) {
                             // Error handling - push error to response queue

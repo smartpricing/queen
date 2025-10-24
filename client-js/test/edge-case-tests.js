@@ -105,10 +105,11 @@ export async function testVeryLargePayloads(client) {
     
     // Take and verify
     let received = null;
-    for await (const msg of client.take(queue, { limit: 1 })) {
+    for await (const msg of client.take(queue, { limit: 1, timeout: 20000 })) {
       received = msg.data;
       await client.ack(msg);
     }
+
     
     if (!received || !received.array || received.array.length !== 10000) {
       throw new Error('Large payload corrupted');
