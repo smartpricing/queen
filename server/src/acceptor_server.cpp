@@ -728,8 +728,6 @@ static void setup_worker_routes(uWS::App* app,
                         }
                     });
                     
-                    spdlog::info("[Worker {}] PUSH: Work submitted to ThreadPool, uWebSockets thread continues!", worker_id);
-                    
                 } catch (const std::exception& e) {
                     send_error_response(res, e.what(), 500);
                 }
@@ -837,8 +835,6 @@ static void setup_worker_routes(uWS::App* app,
                 }
             });
             
-            spdlog::info("[Worker {}] SPOP: Work submitted to ThreadPool, uWebSockets thread continues!", worker_id);
-            
         } catch (const std::exception& e) {
             send_error_response(res, e.what(), 500);
         }
@@ -927,7 +923,6 @@ static void setup_worker_routes(uWS::App* app,
                         }
                     });
                     
-                    spdlog::info("[Worker {}] ACK BATCH: Work submitted to ThreadPool, uWebSockets thread continues!", worker_id);
                 } catch (const std::exception& e) {
                     send_error_response(res, e.what(), 500);
                 }
@@ -1054,8 +1049,6 @@ static void setup_worker_routes(uWS::App* app,
                 }
             });
             
-            spdlog::info("[Worker {}] QPOP: Work submitted to ThreadPool, uWebSockets thread continues!", worker_id);
-            
         } catch (const std::exception& e) {
             send_error_response(res, e.what(), 500);
         }
@@ -1144,8 +1137,6 @@ static void setup_worker_routes(uWS::App* app,
                             spdlog::error("[Worker {}] ACK: Error for {}: {}", worker_id, request_id, e.what());
                         }
                     });
-                    
-                    spdlog::info("[Worker {}] ACK: Work submitted to ThreadPool, uWebSockets thread continues!", worker_id);
                     
                 } catch (const std::exception& e) {
                     send_error_response(res, e.what(), 500);
@@ -1236,8 +1227,6 @@ static void setup_worker_routes(uWS::App* app,
                     spdlog::error("[Worker {}] POP: Error for {}: {}", worker_id, request_id, e.what());
                 }
             });
-            
-            spdlog::info("[Worker {}] POP: Work submitted to ThreadPool, uWebSockets thread continues!", worker_id);
             
         } catch (const std::exception& e) {
             send_error_response(res, e.what(), 500);
@@ -1348,8 +1337,6 @@ static void setup_worker_routes(uWS::App* app,
                             spdlog::error("[Worker {}] TRANSACTION: Error for {}: {}", worker_id, request_id, e.what());
                         }
                     });
-                    
-                    spdlog::info("[Worker {}] TRANSACTION: Work submitted to ThreadPool, uWebSockets thread continues!", worker_id);
                     
                 } catch (const std::exception& e) {
                     send_error_response(res, e.what(), 500);
