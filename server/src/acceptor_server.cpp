@@ -512,7 +512,6 @@ static void setup_worker_routes(uWS::App* app,
         );
     });
     
-    // ASYNC: Push Route using per-worker ThreadPool + Loop::defer
     
     // ASYNC PUSH - NEW RESPONSE QUEUE ARCHITECTURE
     app->post("/api/v1/push", [queue_manager, file_buffer, worker_id, db_thread_pool](auto* res, auto* req) {
@@ -596,11 +595,8 @@ static void setup_worker_routes(uWS::App* app,
         );
     });
     
-    // POP from queue/partition (ASYNC - non-blocking!)
-    app->get("/api/v1/pop/queue/:queue/partition/:partition", [queue_manager, config, worker_id](auto* res, auto* req) {
-        auto aborted = std::make_shared<bool>(false);
-        res->onAborted([aborted]() { *aborted = true; });
-        
+    // SPECIFIC POP from queue/partition - NEW RESPONSE QUEUE ARCHITECTURE
+    app->get("/api/v1/pop/queue/:queue/partition/:partition", [queue_manager, config, worker_id, db_thread_pool](auto* res, auto* req) {
         try {
             std::string queue_name = std::string(req->getParameter(0));
             std::string partition_name = std::string(req->getParameter(1));
@@ -615,12 +611,9 @@ static void setup_worker_routes(uWS::App* app,
                         worker_id, queue_name, partition_name, batch, wait,
                         pool_stats.available, pool_stats.total, pool_stats.in_use);
             
-            auto start_time = std::chrono::steady_clock::now();
-            
-            // Try once immediately (non-blocking)
             PopOptions options;
-            options.wait = false;
-            options.timeout = 0;
+            options.wait = wait;
+            options.timeout = timeout_ms;
             options.batch = batch;
             options.auto_ack = get_query_param_bool(req, "autoAck", false);
             
@@ -634,95 +627,75 @@ static void setup_worker_routes(uWS::App* app,
                 options.subscription_from = sub_from;
             }
             
-            auto result = queue_manager->pop_messages(queue_name, partition_name, consumer_group, options);
+            // Register response in uWebSockets thread - SAFE
+            std::string request_id = global_response_registry->register_response(res);
             
-            if (!result.messages.empty()) {
-                // Found messages immediately!
-                auto duration_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
-                    std::chrono::steady_clock::now() - start_time).count();
-                auto pool_stats_end = queue_manager->get_pool_stats();
-                spdlog::info("[Worker {}] EPOP: [{}/{}] {} msgs, {}ms | Pool: {}/{} conn ({} in use)", 
-                            worker_id, queue_name, partition_name, result.messages.size(), duration_ms,
-                            pool_stats_end.available, pool_stats_end.total, pool_stats_end.in_use);
+            spdlog::info("[Worker {}] SPOP: Registered response {}, submitting to ThreadPool", worker_id, request_id);
+            
+            // Execute SPOP operation in ThreadPool
+            db_thread_pool->push([request_id, queue_manager, worker_id, queue_name, partition_name, consumer_group, options]() {
+                spdlog::info("[Worker {}] SPOP: ThreadPool executing specific pop operation for {}", worker_id, request_id);
                 
-                if (*aborted) return;
-                
-                nlohmann::json response = {{"messages", nlohmann::json::array()}};
-                
-                for (const auto& msg : result.messages) {
-                    auto time_t = std::chrono::system_clock::to_time_t(msg.created_at);
-                    auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(
-                        msg.created_at.time_since_epoch()) % 1000;
+                try {
+                    auto start_time = std::chrono::steady_clock::now();
+                    auto result = queue_manager->pop_messages(queue_name, partition_name, consumer_group, options);
+                    auto duration_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+                        std::chrono::steady_clock::now() - start_time).count();
                     
-                    std::stringstream created_at_ss;
-                    created_at_ss << std::put_time(std::gmtime(&time_t), "%Y-%m-%dT%H:%M:%S");
-                    created_at_ss << '.' << std::setfill('0') << std::setw(3) << ms.count() << 'Z';
+                    if (result.messages.empty()) {
+                        // No messages - send 204 No Content
+                        nlohmann::json empty_response;
+                        global_response_queue->push(request_id, empty_response, false, 204);
+                        spdlog::info("[Worker {}] SPOP: No messages for {} [{}/{}], {}ms", 
+                                   worker_id, request_id, queue_name, partition_name, duration_ms);
+                        return;
+                    }
                     
-                    nlohmann::json msg_json = {
-                        {"id", msg.id},
-                        {"transactionId", msg.transaction_id},
-                        {"traceId", msg.trace_id.empty() ? nlohmann::json(nullptr) : nlohmann::json(msg.trace_id)},
-                        {"queue", msg.queue_name},
-                        {"partition", msg.partition_name},
-                        {"data", msg.payload},
-                        {"retryCount", msg.retry_count},
-                        {"priority", msg.priority},
-                        {"createdAt", created_at_ss.str()},
-                        {"consumerGroup", nlohmann::json(nullptr)},
-                        {"leaseId", result.lease_id.has_value() ? nlohmann::json(*result.lease_id) : nlohmann::json(nullptr)}
-                    };
-                    response["messages"].push_back(msg_json);
+                    // Build response JSON
+                    nlohmann::json response = {{"messages", nlohmann::json::array()}};
+                    
+                    for (const auto& msg : result.messages) {
+                        auto time_t = std::chrono::system_clock::to_time_t(msg.created_at);
+                        auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+                            msg.created_at.time_since_epoch()) % 1000;
+                        
+                        std::stringstream created_at_ss;
+                        created_at_ss << std::put_time(std::gmtime(&time_t), "%Y-%m-%dT%H:%M:%S");
+                        created_at_ss << '.' << std::setfill('0') << std::setw(3) << ms.count() << 'Z';
+                        
+                        nlohmann::json msg_json = {
+                            {"id", msg.id},
+                            {"transactionId", msg.transaction_id},
+                            {"traceId", msg.trace_id.empty() ? nlohmann::json(nullptr) : nlohmann::json(msg.trace_id)},
+                            {"queue", msg.queue_name},
+                            {"partition", msg.partition_name},
+                            {"data", msg.payload},
+                            {"retryCount", msg.retry_count},
+                            {"priority", msg.priority},
+                            {"createdAt", created_at_ss.str()},
+                            {"consumerGroup", nlohmann::json(nullptr)},
+                            {"leaseId", result.lease_id.has_value() ? nlohmann::json(*result.lease_id) : nlohmann::json(nullptr)}
+                        };
+                        response["messages"].push_back(msg_json);
+                    }
+                    
+                    // SAFE: Push to response queue
+                    global_response_queue->push(request_id, response, false, 200);
+                    spdlog::info("[Worker {}] SPOP: Queued response for {} [{}/{}] ({} messages, {}ms)", 
+                               worker_id, request_id, queue_name, partition_name, result.messages.size(), duration_ms);
+                    
+                } catch (const std::exception& e) {
+                    // Error handling - push error to response queue
+                    nlohmann::json error_response = {{"error", e.what()}};
+                    global_response_queue->push(request_id, error_response, true, 500);
+                    spdlog::error("[Worker {}] SPOP: Error for {} [{}/{}]: {}", worker_id, request_id, queue_name, partition_name, e.what());
                 }
-                
-                send_json_response(res, response);
-                return;
-            }
+            });
             
-            // No messages found
-            if (!wait) {
-                // Not waiting, return empty immediately
-                auto pool_stats_end = queue_manager->get_pool_stats();
-                spdlog::info("[Worker {}] EPOP: [{}/{}] 0 msgs | Pool: {}/{} conn ({} in use)", 
-                            worker_id, queue_name, partition_name,
-                            pool_stats_end.available, pool_stats_end.total, pool_stats_end.in_use);
-                
-                if (!*aborted) {
-                    setup_cors_headers(res);
-                    res->writeStatus("204");
-                    res->end();
-                }
-                return;
-            }
-            
-            // Start async polling (non-blocking!)
-            auto* state = new AsyncPopState{
-                res,
-                queue_manager,
-                queue_name,
-                partition_name,
-                consumer_group,
-                batch,
-                worker_id,
-                start_time + std::chrono::milliseconds(timeout_ms),  // deadline
-                start_time,
-                aborted,
-                uWS::Loop::get(),
-                nullptr,
-                0,   // retry_count
-                100  // current_interval_ms - start with 100ms
-            };
-            
-            // Create timer with exponential backoff (100ms -> 200ms -> 400ms -> ... -> 2000ms max)
-            state->timer = us_create_timer((struct us_loop_t*)uWS::Loop::get(), 0, sizeof(AsyncPopState*));
-            *(AsyncPopState**)us_timer_ext(state->timer) = state;
-            
-            // Set initial timer to fire at 100ms
-            us_timer_set(state->timer, pop_retry_timer, 100, 100);
+            spdlog::info("[Worker {}] SPOP: Work submitted to ThreadPool, uWebSockets thread continues!", worker_id);
             
         } catch (const std::exception& e) {
-            if (!*aborted) {
-                send_error_response(res, e.what(), 500);
-            }
+            send_error_response(res, e.what(), 500);
         }
     });
     
@@ -840,11 +813,8 @@ static void setup_worker_routes(uWS::App* app,
         }
     });
     
-    // POP from queue (any partition)
-    app->get("/api/v1/pop/queue/:queue", [queue_manager, config, worker_id](auto* res, auto* req) {
-        auto aborted = std::make_shared<bool>(false);
-        res->onAborted([aborted]() { *aborted = true; });
-        
+    // POP from queue (any partition) - NEW RESPONSE QUEUE ARCHITECTURE
+    app->get("/api/v1/pop/queue/:queue", [queue_manager, config, worker_id, db_thread_pool](auto* res, auto* req) {
         try {
             std::string queue_name = std::string(req->getParameter(0));
             std::string consumer_group = get_query_param(req, "consumerGroup", "__QUEUE_MODE__");
@@ -854,16 +824,13 @@ static void setup_worker_routes(uWS::App* app,
             int batch = get_query_param_int(req, "batch", config.queue.default_batch_size);
             
             auto pool_stats = queue_manager->get_pool_stats();
-            spdlog::info("[Worker {}] SPOP: [{}/*] batch={}, wait={} | Pool: {}/{} conn ({} in use)", 
+            spdlog::info("[Worker {}] QPOP: [{}/*] batch={}, wait={} | Pool: {}/{} conn ({} in use)", 
                         worker_id, queue_name, batch, wait,
                         pool_stats.available, pool_stats.total, pool_stats.in_use);
             
-            auto start_time = std::chrono::steady_clock::now();
-            
-            // Try once immediately (non-blocking)
             PopOptions options;
-            options.wait = false;
-            options.timeout = 0;
+            options.wait = wait;
+            options.timeout = timeout_ms;
             options.batch = batch;
             options.auto_ack = get_query_param_bool(req, "autoAck", false);
             
@@ -877,95 +844,75 @@ static void setup_worker_routes(uWS::App* app,
                 options.subscription_from = sub_from;
             }
             
-            auto result = queue_manager->pop_messages(queue_name, std::nullopt, consumer_group, options);
+            // Register response in uWebSockets thread - SAFE
+            std::string request_id = global_response_registry->register_response(res);
             
-            if (!result.messages.empty()) {
-                // Found messages immediately!
-                auto duration_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
-                    std::chrono::steady_clock::now() - start_time).count();
-                auto pool_stats_end = queue_manager->get_pool_stats();
-                spdlog::info("[Worker {}] EPOP: [{}/*] {} msgs, {}ms | Pool: {}/{} conn ({} in use)", 
-                            worker_id, queue_name, result.messages.size(), duration_ms,
-                            pool_stats_end.available, pool_stats_end.total, pool_stats_end.in_use);
+            spdlog::info("[Worker {}] QPOP: Registered response {}, submitting to ThreadPool", worker_id, request_id);
+            
+            // Execute QPOP operation in ThreadPool
+            db_thread_pool->push([request_id, queue_manager, worker_id, queue_name, consumer_group, options]() {
+                spdlog::info("[Worker {}] QPOP: ThreadPool executing queue pop operation for {}", worker_id, request_id);
                 
-                if (*aborted) return;
-                
-                nlohmann::json response = {{"messages", nlohmann::json::array()}};
-                
-                for (const auto& msg : result.messages) {
-                    auto time_t = std::chrono::system_clock::to_time_t(msg.created_at);
-                    auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(
-                        msg.created_at.time_since_epoch()) % 1000;
+                try {
+                    auto start_time = std::chrono::steady_clock::now();
+                    auto result = queue_manager->pop_messages(queue_name, std::nullopt, consumer_group, options);
+                    auto duration_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+                        std::chrono::steady_clock::now() - start_time).count();
                     
-                    std::stringstream created_at_ss;
-                    created_at_ss << std::put_time(std::gmtime(&time_t), "%Y-%m-%dT%H:%M:%S");
-                    created_at_ss << '.' << std::setfill('0') << std::setw(3) << ms.count() << 'Z';
+                    if (result.messages.empty()) {
+                        // No messages - send 204 No Content
+                        nlohmann::json empty_response;
+                        global_response_queue->push(request_id, empty_response, false, 204);
+                        spdlog::info("[Worker {}] QPOP: No messages for {} [{}/*], {}ms", 
+                                   worker_id, request_id, queue_name, duration_ms);
+                        return;
+                    }
                     
-                    nlohmann::json msg_json = {
-                        {"id", msg.id},
-                        {"transactionId", msg.transaction_id},
-                        {"traceId", msg.trace_id.empty() ? nlohmann::json(nullptr) : nlohmann::json(msg.trace_id)},
-                        {"queue", msg.queue_name},
-                        {"partition", msg.partition_name},
-                        {"data", msg.payload},
-                        {"retryCount", msg.retry_count},
-                        {"priority", msg.priority},
-                        {"createdAt", created_at_ss.str()},
-                        {"consumerGroup", nlohmann::json(nullptr)},
-                        {"leaseId", result.lease_id.has_value() ? nlohmann::json(*result.lease_id) : nlohmann::json(nullptr)}
-                    };
-                    response["messages"].push_back(msg_json);
+                    // Build response JSON
+                    nlohmann::json response = {{"messages", nlohmann::json::array()}};
+                    
+                    for (const auto& msg : result.messages) {
+                        auto time_t = std::chrono::system_clock::to_time_t(msg.created_at);
+                        auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+                            msg.created_at.time_since_epoch()) % 1000;
+                        
+                        std::stringstream created_at_ss;
+                        created_at_ss << std::put_time(std::gmtime(&time_t), "%Y-%m-%dT%H:%M:%S");
+                        created_at_ss << '.' << std::setfill('0') << std::setw(3) << ms.count() << 'Z';
+                        
+                        nlohmann::json msg_json = {
+                            {"id", msg.id},
+                            {"transactionId", msg.transaction_id},
+                            {"traceId", msg.trace_id.empty() ? nlohmann::json(nullptr) : nlohmann::json(msg.trace_id)},
+                            {"queue", msg.queue_name},
+                            {"partition", msg.partition_name},
+                            {"data", msg.payload},
+                            {"retryCount", msg.retry_count},
+                            {"priority", msg.priority},
+                            {"createdAt", created_at_ss.str()},
+                            {"consumerGroup", nlohmann::json(nullptr)},
+                            {"leaseId", result.lease_id.has_value() ? nlohmann::json(*result.lease_id) : nlohmann::json(nullptr)}
+                        };
+                        response["messages"].push_back(msg_json);
+                    }
+                    
+                    // SAFE: Push to response queue
+                    global_response_queue->push(request_id, response, false, 200);
+                    spdlog::info("[Worker {}] QPOP: Queued response for {} [{}/*] ({} messages, {}ms)", 
+                               worker_id, request_id, queue_name, result.messages.size(), duration_ms);
+                    
+                } catch (const std::exception& e) {
+                    // Error handling - push error to response queue
+                    nlohmann::json error_response = {{"error", e.what()}};
+                    global_response_queue->push(request_id, error_response, true, 500);
+                    spdlog::error("[Worker {}] QPOP: Error for {} [{}/*]: {}", worker_id, request_id, queue_name, e.what());
                 }
-                
-                send_json_response(res, response);
-                return;
-            }
+            });
             
-            // No messages found
-            if (!wait) {
-                // Not waiting, return empty immediately
-                auto pool_stats_end = queue_manager->get_pool_stats();
-                spdlog::info("[Worker {}] EPOP: [{}/*] 0 msgs | Pool: {}/{} conn ({} in use)", 
-                            worker_id, queue_name,
-                            pool_stats_end.available, pool_stats_end.total, pool_stats_end.in_use);
-                
-                if (!*aborted) {
-                    setup_cors_headers(res);
-                    res->writeStatus("204");
-                    res->end();
-                }
-                return;
-            }
-            
-            // Start async polling (non-blocking!)
-            auto* state = new AsyncPopState{
-                res,
-                queue_manager,
-                queue_name,
-                "",  // Empty partition name means "any partition"
-                consumer_group,
-                batch,
-                worker_id,
-                start_time + std::chrono::milliseconds(timeout_ms),  // deadline
-                start_time,
-                aborted,
-                uWS::Loop::get(),
-                nullptr,
-                0,   // retry_count
-                100  // current_interval_ms - start with 100ms
-            };
-            
-            // Create timer with exponential backoff (100ms -> 200ms -> 400ms -> ... -> 2000ms max)
-            state->timer = us_create_timer((struct us_loop_t*)uWS::Loop::get(), 0, sizeof(AsyncPopState*));
-            *(AsyncPopState**)us_timer_ext(state->timer) = state;
-            
-            // Set initial timer to fire at 100ms
-            us_timer_set(state->timer, pop_retry_timer, 100, 100);
+            spdlog::info("[Worker {}] QPOP: Work submitted to ThreadPool, uWebSockets thread continues!", worker_id);
             
         } catch (const std::exception& e) {
-            if (!*aborted) {
-                send_error_response(res, e.what(), 500);
-            }
+            send_error_response(res, e.what(), 500);
         }
     });
     
