@@ -513,7 +513,7 @@ static void setup_worker_routes(uWS::App* app,
     });
     
     
-    // ASYNC PUSH - NEW RESPONSE QUEUE ARCHITECTURE
+    // ASYNC PUSH - NEW RESPONSE QUEUE ARCHITECTURE WITH FAILOVER
     app->post("/api/v1/push", [queue_manager, file_buffer, worker_id, db_thread_pool](auto* res, auto* req) {
         read_json_body(res,
             [res, queue_manager, file_buffer, worker_id, db_thread_pool](const nlohmann::json& body) {
@@ -532,8 +532,42 @@ static void setup_worker_routes(uWS::App* app,
                     db_thread_pool->push([request_id, queue_manager, file_buffer, worker_id, body]() {
                         spdlog::info("[Worker {}] PUSH: ThreadPool executing push operation for {}", worker_id, request_id);
                         
+                        // FAILOVER: Quick health check first - if DB is known to be down, skip directly to failover
+                        if (file_buffer && !file_buffer->is_db_healthy()) {
+                            spdlog::warn("[Worker {}] PUSH: DB known to be down, using file buffer immediately for {}", worker_id, request_id);
+                            
+                            // Write all items to file buffer with failover flag
+                            for (const auto& item_json : body["items"]) {
+                                nlohmann::json buffered_event = {
+                                    {"queue", item_json["queue"]},
+                                    {"partition", item_json.value("partition", "Default")},
+                                    {"payload", item_json.value("payload", nlohmann::json{})},
+                                    {"namespace", item_json.value("namespace", "")},
+                                    {"task", item_json.value("task", "")},
+                                    {"traceId", item_json.value("traceId", "")},
+                                    {"transactionId", item_json.value("transactionId", queue_manager->generate_uuid())},
+                                    {"failover", true}
+                                };
+                                file_buffer->write_event(buffered_event);
+                            }
+                            
+                            // Build success response with failover metadata
+                            nlohmann::json json_results = nlohmann::json::array();
+                            for (const auto& item_json : body["items"]) {
+                                nlohmann::json json_result;
+                                json_result["transaction_id"] = item_json.value("transactionId", queue_manager->generate_uuid());
+                                json_result["status"] = "queued";
+                                json_result["failover"] = true;
+                                json_results.push_back(json_result);
+                            }
+                            
+                            global_response_queue->push(request_id, json_results, false, 201);
+                            spdlog::info("[Worker {}] PUSH: Queued failover response for {} ({} items buffered)", worker_id, request_id, body["items"].size());
+                            return;
+                        }
+                        
                         try {
-                            // Parse items (same as original logic)
+                            // Parse items
                             std::vector<PushItem> items;
                             for (const auto& item_json : body["items"]) {
                                 PushItem item;
@@ -553,7 +587,80 @@ static void setup_worker_routes(uWS::App* app,
                             spdlog::info("[Worker {}] PUSH: Calling push_messages in ThreadPool for {}", worker_id, request_id);
                             auto results = queue_manager->push_messages(items);
                             
-                            // Convert PushResult vector to JSON
+                            // FAILOVER: Check if push failed
+                            bool has_error = false;
+                            std::string error_msg;
+                            
+                            for (const auto& result : results) {
+                                if (result.status == "failed" && result.error) {
+                                    has_error = true;
+                                    error_msg = *result.error;
+                                    break;
+                                }
+                            }
+                            
+                            // If ANY error occurred, do a health check to determine if DB is down
+                            bool db_failure = false;
+                            if (has_error) {
+                                // Do a quick health check
+                                bool db_is_healthy = queue_manager->health_check();
+                                if (!db_is_healthy) {
+                                    // DB is down - use failover
+                                    spdlog::warn("[Worker {}] PUSH: Error '{}' detected and health check failed - DB is down, using failover", worker_id, error_msg);
+                                    db_failure = true;
+                                } else {
+                                    // DB is healthy - this is a real application error
+                                    spdlog::warn("[Worker {}] PUSH: Error '{}' detected but DB is healthy - returning error to client", worker_id, error_msg);
+                                    nlohmann::json error_response = {{"error", error_msg}};
+                                    global_response_queue->push(request_id, error_response, true, 400);
+                                    return;
+                                }
+                            }
+                            
+                            // FAILOVER: If DB failure detected, use file buffer (if available)
+                            if (db_failure) {
+                                if (file_buffer) {
+                                    spdlog::warn("[Worker {}] PUSH: DB connection failed, using file buffer for failover for {}", worker_id, request_id);
+                                    file_buffer->mark_db_unhealthy();
+                                    
+                                    // Write all items to file buffer
+                                    for (const auto& item_json : body["items"]) {
+                                        nlohmann::json buffered_event = {
+                                            {"queue", item_json["queue"]},
+                                            {"partition", item_json.value("partition", "Default")},
+                                            {"payload", item_json.value("payload", nlohmann::json{})},
+                                            {"namespace", item_json.value("namespace", "")},
+                                            {"task", item_json.value("task", "")},
+                                            {"traceId", item_json.value("traceId", "")},
+                                            {"transactionId", item_json.value("transactionId", queue_manager->generate_uuid())},
+                                            {"failover", true}
+                                        };
+                                        file_buffer->write_event(buffered_event);
+                                    }
+                                    
+                                    // Build success response with failover metadata
+                                    nlohmann::json json_results = nlohmann::json::array();
+                                    for (const auto& item_json : body["items"]) {
+                                        nlohmann::json json_result;
+                                        json_result["transaction_id"] = item_json.value("transactionId", queue_manager->generate_uuid());
+                                        json_result["status"] = "queued";
+                                        json_result["failover"] = true;
+                                        json_results.push_back(json_result);
+                                    }
+                                    
+                                    global_response_queue->push(request_id, json_results, false, 201);
+                                    spdlog::info("[Worker {}] PUSH: Queued failover response for {} ({} items buffered)", worker_id, request_id, body["items"].size());
+                                    return;
+                                } else {
+                                    // No file buffer available (non-zero worker) - return error
+                                    spdlog::error("[Worker {}] PUSH: DB connection failed and no file buffer available for {}", worker_id, request_id);
+                                    nlohmann::json error_response = {{"error", "Database unavailable and failover not available on this worker"}};
+                                    global_response_queue->push(request_id, error_response, true, 503);
+                                    return;
+                                }
+                            }
+                            
+                            // Convert PushResult vector to JSON (normal success case)
                             nlohmann::json json_results = nlohmann::json::array();
                             for (const auto& result : results) {
                                 nlohmann::json json_result;
@@ -571,43 +678,53 @@ static void setup_worker_routes(uWS::App* app,
                                 json_results.push_back(json_result);
                             }
                             
-                            // Check if any items failed (for proper error handling)
-                            bool has_failures = false;
-                            for (const auto& result : results) {
-                                if (result.status == "failed") {
-                                    has_failures = true;
-                                    break;
-                                }
-                            }
+                            // All items succeeded
+                            global_response_queue->push(request_id, json_results, false, 201);
+                            spdlog::info("[Worker {}] PUSH: Queued success response for {} ({} items)", worker_id, request_id, results.size());
                             
-                            if (has_failures) {
-                                // Find the first error message to use as the main error
-                                std::string main_error = "One or more items failed";
-                                for (const auto& result : results) {
-                                    if (result.status == "failed" && result.error.has_value()) {
-                                        main_error = result.error.value();
-                                        break;
-                                    }
+                        } catch (const std::exception& db_error) {
+                            // FAILOVER: PostgreSQL exception - fallback to file buffer for all items (if available)
+                            if (file_buffer) {
+                                spdlog::warn("[Worker {}] PUSH: PostgreSQL unavailable for {}, using file buffer for failover: {}", 
+                                           worker_id, request_id, db_error.what());
+                                
+                                // Mark DB as unhealthy so subsequent pushes skip DB attempt
+                                file_buffer->mark_db_unhealthy();
+                                
+                                // Write all items to file buffer
+                                for (const auto& item_json : body["items"]) {
+                                    nlohmann::json buffered_event = {
+                                        {"queue", item_json["queue"]},
+                                        {"partition", item_json.value("partition", "Default")},
+                                        {"payload", item_json.value("payload", nlohmann::json{})},
+                                        {"namespace", item_json.value("namespace", "")},
+                                        {"task", item_json.value("task", "")},
+                                        {"traceId", item_json.value("traceId", "")},
+                                        {"transactionId", item_json.value("transactionId", queue_manager->generate_uuid())},
+                                        {"failover", true}
+                                    };
+                                    file_buffer->write_event(buffered_event);
                                 }
                                 
-                                // If any items failed, send as error response so client can throw
-                                nlohmann::json error_response = {
-                                    {"error", main_error},
-                                    {"results", json_results}
-                                };
-                                global_response_queue->push(request_id, error_response, true, 400);
-                                spdlog::warn("[Worker {}] PUSH: Queued error response for {} ({})", worker_id, request_id, main_error);
-                            } else {
-                                // All items succeeded
+                                // Build success response with failover metadata
+                                nlohmann::json json_results = nlohmann::json::array();
+                                for (const auto& item_json : body["items"]) {
+                                    nlohmann::json json_result;
+                                    json_result["transaction_id"] = item_json.value("transactionId", queue_manager->generate_uuid());
+                                    json_result["status"] = "queued";
+                                    json_result["failover"] = true;
+                                    json_results.push_back(json_result);
+                                }
+                                
                                 global_response_queue->push(request_id, json_results, false, 201);
-                                spdlog::info("[Worker {}] PUSH: Queued success response for {} ({} items)", worker_id, request_id, results.size());
+                                spdlog::info("[Worker {}] PUSH: Queued failover response for {} ({} items buffered)", worker_id, request_id, body["items"].size());
+                            } else {
+                                // No file buffer available (non-zero worker) - return error
+                                spdlog::error("[Worker {}] PUSH: PostgreSQL unavailable and no file buffer available for {}: {}", 
+                                            worker_id, request_id, db_error.what());
+                                nlohmann::json error_response = {{"error", "Database unavailable and failover not available on this worker"}};
+                                global_response_queue->push(request_id, error_response, true, 503);
                             }
-                            
-                        } catch (const std::exception& e) {
-                            // Error handling - push error to response queue
-                            nlohmann::json error_response = {{"error", e.what()}};
-                            global_response_queue->push(request_id, error_response, true, 500);
-                            spdlog::error("[Worker {}] PUSH: Error for {}: {}", worker_id, request_id, e.what());
                         }
                     });
                     

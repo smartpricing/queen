@@ -547,7 +547,7 @@ std::vector<PushResult> QueueManager::push_messages_batch(const std::vector<Push
     results.reserve(items.size());
     
     // Split into smaller chunks to avoid memory issues and SQL size limits
-    const size_t CHUNK_SIZE = 100;  // Process 100 messages at a time
+    const size_t CHUNK_SIZE = 1000;  // Process 100 messages at a time
     
     for (size_t chunk_start = 0; chunk_start < items.size(); chunk_start += CHUNK_SIZE) {
         size_t chunk_end = std::min(chunk_start + CHUNK_SIZE, items.size());

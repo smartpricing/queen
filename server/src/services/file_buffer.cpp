@@ -773,18 +773,31 @@ bool FileBufferManager::flush_batched_to_db(const std::vector<nlohmann::json>& e
     } catch (const std::exception& e) {
         std::string error_msg = e.what();
         
-        // Check if queue doesn't exist (stale buffered data for deleted queue)
+        // Check if queue doesn't exist - but is DB down or was queue deleted?
         if (error_msg.find("does not exist") != std::string::npos) {
-            spdlog::warn("Recovery: Queue no longer exists (likely deleted), skipping {} stale messages", events.size());
+            // Do a health check to determine if DB is down or queue was genuinely deleted
+            bool db_is_healthy = queue_manager_->health_check();
             
-            // DB is healthy - queue was just deleted
-            if (!db_healthy_.load()) {
-                spdlog::info("PostgreSQL recovered! Database is healthy again");
-                db_healthy_ = true;
+            if (!db_is_healthy) {
+                // DB is still down - treat as DB failure, don't skip messages
+                spdlog::error("Recovery: Got 'does not exist' but DB health check failed - DB still down");
+                if (db_healthy_.load()) {
+                    spdlog::warn("PostgreSQL appears to be down");
+                    db_healthy_ = false;
+                }
+                return false;
+            } else {
+                // DB is healthy - queue was genuinely deleted
+                spdlog::warn("Recovery: Queue no longer exists (deleted), skipping {} stale messages", events.size());
+                
+                if (!db_healthy_.load()) {
+                    spdlog::info("PostgreSQL recovered! Database is healthy again");
+                    db_healthy_ = true;
+                }
+                
+                // Return true to indicate file can be deleted (stale data)
+                return true;
             }
-            
-            // Return true to indicate file can be deleted (stale data)
-            return true;
         }
         
         // Check if this is a duplicate key error (messages already in DB)
@@ -823,8 +836,15 @@ bool FileBufferManager::flush_batched_to_db(const std::vector<nlohmann::json>& e
                         // This message was already inserted - skip it
                         duplicates++;
                     } else if (single_msg.find("does not exist") != std::string::npos) {
-                        // Queue was deleted - skip this message
-                        deleted_queues++;
+                        // Check if DB is down or queue was genuinely deleted
+                        bool db_is_healthy = queue_manager_->health_check();
+                        if (!db_is_healthy) {
+                            // DB is down - rethrow to fail the batch
+                            throw;
+                        } else {
+                            // Queue was deleted - skip this message
+                            deleted_queues++;
+                        }
                     } else {
                         // Real error - rethrow
                         throw;
