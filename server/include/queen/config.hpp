@@ -143,6 +143,12 @@ struct QueueConfig {
     // Partition selection for filtered pops
     int max_partition_candidates = 100;  // Number of candidate partitions to fetch
     
+    // Response queue timer settings
+    int response_timer_interval_ms = 25; // Response timer polling interval in ms
+    
+    // Batch push settings
+    int batch_push_chunk_size = 1000;    // Process messages in chunks during batch push
+    
     // Queue defaults
     int default_lease_time = 300;        // 5 minutes
     int default_retry_limit = 3;
@@ -180,6 +186,9 @@ struct QueueConfig {
         config.backoff_multiplier = get_env_double("QUEUE_BACKOFF_MULTIPLIER", 2.0);
         
         config.max_partition_candidates = get_env_int("MAX_PARTITION_CANDIDATES", 100);
+        
+        config.response_timer_interval_ms = get_env_int("RESPONSE_TIMER_INTERVAL_MS", 25);
+        config.batch_push_chunk_size = get_env_int("BATCH_PUSH_CHUNK_SIZE", 1000);
         
         config.default_lease_time = get_env_int("DEFAULT_LEASE_TIME", 300);
         config.default_retry_limit = get_env_int("DEFAULT_RETRY_LIMIT", 3);

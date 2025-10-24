@@ -1867,9 +1867,10 @@ static void worker_thread(const Config& config, int worker_id, int num_workers,
         us_timer_t* response_timer = us_create_timer((us_loop_t*)uWS::Loop::get(), 0, sizeof(queen::ResponseQueue*));
         *(queen::ResponseQueue**)us_timer_ext(response_timer) = global_response_queue.get();
         
-        // Poll every 50ms for good balance between latency and CPU usage
-        us_timer_set(response_timer, response_timer_callback, 50, 50);
-        spdlog::info("[Worker {}] Response timer configured (50ms interval)", worker_id);
+        // Poll using configured interval for good balance between latency and CPU usage
+        int timer_interval = config.queue.response_timer_interval_ms;
+        us_timer_set(response_timer, response_timer_callback, timer_interval, timer_interval);
+        spdlog::info("[Worker {}] Response timer configured ({}ms interval)", worker_id, timer_interval);
         
         // Setup routes
         spdlog::info("[Worker {}] Setting up routes...", worker_id);

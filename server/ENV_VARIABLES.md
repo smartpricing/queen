@@ -66,6 +66,12 @@ This document lists all environment variables supported by the Queen C++ server.
 |----------|------|---------|-------------|
 | `MAX_PARTITION_CANDIDATES` | int | 100 | Number of candidate partitions for lease acquisition |
 
+### Response Queue & Batch Processing
+| Variable | Type | Default | Description |
+|----------|------|---------|-------------|
+| `RESPONSE_TIMER_INTERVAL_MS` | int | 25 | Response queue timer polling interval (ms). Controls how frequently the response queue is checked for ready messages. Lower values reduce latency but increase CPU usage. |
+| `BATCH_PUSH_CHUNK_SIZE` | int | 1000 | Chunk size for batch push operations. Large batch pushes are split into chunks of this size to avoid memory issues and SQL size limits. |
+
 ### Queue Defaults
 | Variable | Type | Default | Description |
 |----------|------|---------|-------------|

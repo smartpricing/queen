@@ -2,9 +2,9 @@ import { Queen } from '../client/client.js';
 import fs from 'fs';
 
 const QUEUE_NAME = 'benchmark-queue-001';
-const NUMBER_OF_CONSUMERS = 20;
+const NUMBER_OF_CONSUMERS = 10;
 const STARTING_PARTITION = parseInt(process.argv[2]) || 0;
-const BATCH_SIZE = 1;
+const BATCH_SIZE = 1000;
 const CONSUME_MODE = 'partition';
 
 // Global metrics tracking
@@ -127,7 +127,8 @@ metrics.startTime = Date.now();
 
 // Launch all consumers
 const consumerPromises = [];
-for (let i = STARTING_PARTITION; i < NUMBER_OF_CONSUMERS + STARTING_PARTITION; i++) {
+//
+for (let i = 0; i < NUMBER_OF_CONSUMERS; i++) {
   consumerPromises.push(consumer(i, i ));
 }
 
