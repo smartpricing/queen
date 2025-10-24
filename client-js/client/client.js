@@ -17,6 +17,7 @@ export class Queen {
   #http;
   #loadBalancer;
   #connected = false;
+  #bufferManager;
   
   constructor(config = {}) {
     this.#config = {
@@ -28,6 +29,7 @@ export class Queen {
       retryDelay: 1000,
       ...config
     };
+    this.#bufferManager = new BufferManager(this);
   }
   
   /**
@@ -147,7 +149,7 @@ export class Queen {
    * Push messages to a queue
    * @param {string} address - Queue address (e.g., "myqueue" or "myqueue/partition")
    * @param {Object|Array} payload - Single message or array of messages
-   * @param {Object} options - Optional message properties { transactionId, traceId }
+   * @param {Object} options - Optional message properties { transactionId, traceId, buffer }
    */
   async push(address, payload, options = {}) {
     await this.#ensureConnected();
@@ -199,7 +201,12 @@ export class Queen {
       return result;
     });
     
-    // Build request body
+    // Check if client-side buffering is enabled
+    if (options.buffer && typeof options.buffer === 'object') {
+      return this.#pushBuffered(address, formattedItems, options.buffer);
+    }
+    
+    // Build request body for immediate push
     const requestBody = { items: formattedItems };
     
     // Add server-side buffering flag if specified
@@ -223,6 +230,25 @@ export class Queen {
     }
     
     return result;
+  }
+  
+  /**
+   * Push messages using client-side buffering
+   * @private
+   */
+  #pushBuffered(address, formattedItems, bufferOptions) {
+    // Validate buffer options
+    if (!bufferOptions.size || !bufferOptions.time) {
+      throw new Error('Buffer options must include both size and time');
+    }
+    
+    // Add each formatted message to the buffer
+    for (const item of formattedItems) {
+      this.#bufferManager.addMessage(address, item, bufferOptions);
+    }
+    
+    // Return immediately (non-blocking)
+    return { buffered: true, count: formattedItems.length };
   }
   
   /**
@@ -686,9 +712,44 @@ export class Queen {
   }
   
   /**
+   * Manually flush a specific buffer
+   * @param {string} address - Queue address to flush
+   * @returns {Promise<void>}
+   */
+  async flushBuffer(address) {
+    return this.#bufferManager.flushBuffer(address);
+  }
+  
+  /**
+   * Manually flush all buffers
+   * @returns {Promise<void>}
+   */
+  async flushAllBuffers() {
+    return this.#bufferManager.flushAllBuffers();
+  }
+  
+  /**
+   * Get buffer statistics
+   * @returns {Object} Buffer statistics
+   */
+  getBufferStats() {
+    return this.#bufferManager.getStats();
+  }
+  
+  /**
    * Close the client connection
    */
   async close() {
+    // Flush all buffers before closing
+    try {
+      await this.#bufferManager.flushAllBuffers();
+    } catch (error) {
+      console.warn('Error flushing buffers during close:', error);
+    }
+    
+    // Cleanup buffer manager
+    this.#bufferManager.cleanup();
+    
     this.#connected = false;
     this.#http = null;
     this.#loadBalancer = null;
@@ -718,6 +779,194 @@ export class Queen {
   
   get _http() {
     return this.#http;
+  }
+  
+  get _config() {
+    return this.#config;
+  }
+}
+
+/**
+ * Message Buffer for client-side buffering
+ */
+class MessageBuffer {
+  constructor(address, options, flushCallback) {
+    this.address = address;
+    this.messages = [];
+    this.options = options;
+    this.flushCallback = flushCallback;
+    this.timer = null;
+    this.firstMessageTime = null;
+    this.flushing = false;
+  }
+  
+  add(formattedMessage) {
+    // Set first message time if this is the first message
+    if (this.messages.length === 0) {
+      this.firstMessageTime = Date.now();
+      this.#startTimer();
+    }
+    
+    this.messages.push(formattedMessage);
+    
+    // Check if we should flush based on size
+    if (this.messages.length >= this.options.size) {
+      this.#triggerFlush();
+    }
+  }
+  
+  #startTimer() {
+    if (this.timer) return; // Timer already running
+    
+    this.timer = setTimeout(() => {
+      this.#triggerFlush();
+    }, this.options.time);
+  }
+  
+  #triggerFlush() {
+    if (this.flushing || this.messages.length === 0) return;
+    
+    // Clear timer
+    if (this.timer) {
+      clearTimeout(this.timer);
+      this.timer = null;
+    }
+    
+    // Trigger flush via callback
+    this.flushCallback(this.address);
+  }
+  
+  extractMessages() {
+    const messages = [...this.messages];
+    this.messages = [];
+    this.firstMessageTime = null;
+    this.flushing = false;
+    
+    if (this.timer) {
+      clearTimeout(this.timer);
+      this.timer = null;
+    }
+    
+    return messages;
+  }
+  
+  cleanup() {
+    if (this.timer) {
+      clearTimeout(this.timer);
+      this.timer = null;
+    }
+    this.messages = [];
+    this.firstMessageTime = null;
+    this.flushing = false;
+  }
+}
+
+/**
+ * Buffer Manager for client-side message buffering
+ */
+class BufferManager {
+  constructor(client) {
+    this.client = client;
+    this.buffers = new Map(); // address -> MessageBuffer
+    this.flushCount = 0;
+  }
+  
+  addMessage(address, formattedMessage, bufferOptions) {
+    const bufferKey = address;
+    
+    if (!this.buffers.has(bufferKey)) {
+      this.buffers.set(bufferKey, new MessageBuffer(
+        address, 
+        bufferOptions, 
+        (addr) => this.#flushBuffer(addr)
+      ));
+    }
+    
+    const buffer = this.buffers.get(bufferKey);
+    buffer.add(formattedMessage);
+  }
+  
+  async #flushBuffer(address) {
+    const buffer = this.buffers.get(address);
+    if (!buffer || buffer.flushing || buffer.messages.length === 0) {
+      return;
+    }
+    
+    buffer.flushing = true;
+    
+    try {
+      const messages = buffer.extractMessages();
+      
+      if (messages.length === 0) return;
+      
+      // Call the original push logic with the buffered messages
+      const requestBody = { items: messages };
+      
+      await withRetry(
+        () => this.client._http.post('/api/v1/push', requestBody),
+        this.client._config.retryAttempts,
+        this.client._config.retryDelay
+      );
+      
+      this.flushCount++;
+      
+      // Call onFlush callback if provided
+      if (buffer.options.onFlush) {
+        buffer.options.onFlush(address, messages.length);
+      }
+      
+      // Remove empty buffer
+      this.buffers.delete(address);
+      
+    } catch (error) {
+      buffer.flushing = false;
+      
+      // Call onError callback if provided
+      if (buffer.options.onError) {
+        buffer.options.onError(address, error);
+      }
+      
+      throw error;
+    }
+  }
+  
+  async flushBuffer(address) {
+    return this.#flushBuffer(address);
+  }
+  
+  async flushAllBuffers() {
+    const flushPromises = [];
+    for (const address of this.buffers.keys()) {
+      flushPromises.push(this.#flushBuffer(address));
+    }
+    await Promise.all(flushPromises);
+  }
+  
+  getStats() {
+    let totalBufferedMessages = 0;
+    let oldestBufferAge = 0;
+    
+    for (const buffer of this.buffers.values()) {
+      totalBufferedMessages += buffer.messages.length;
+      if (buffer.firstMessageTime) {
+        const age = Date.now() - buffer.firstMessageTime;
+        oldestBufferAge = Math.max(oldestBufferAge, age);
+      }
+    }
+    
+    return {
+      activeBuffers: this.buffers.size,
+      totalBufferedMessages,
+      oldestBufferAge,
+      flushesPerformed: this.flushCount
+    };
+  }
+  
+  cleanup() {
+    for (const buffer of this.buffers.values()) {
+      buffer.cleanup();
+    }
+    this.buffers.clear();
   }
 }
 

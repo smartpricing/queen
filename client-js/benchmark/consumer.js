@@ -3,7 +3,8 @@ import fs from 'fs';
 
 const QUEUE_NAME = 'benchmark-queue-001';
 const NUMBER_OF_CONSUMERS = 20;
-const BATCH_SIZE = 10000;
+const STARTING_PARTITION = parseInt(process.argv[2]) || 0;
+const BATCH_SIZE = 1;
 const CONSUME_MODE = 'partition';
 
 // Global metrics tracking
@@ -49,9 +50,9 @@ async function consumer(consumerId, partition) {
   try {
     for await (const messages of q.takeBatch(target, { //`namespace:benchmark`, 
       wait: true,
-      timeout: 150000000,
+      timeout: 15000,
       batch: BATCH_SIZE,
-      idleTimeout: 50000000
+      idleTimeout: 5000
     })) {
       if (!metrics.firstMessageTime) {
         metrics.firstMessageTime = Date.now();
@@ -126,8 +127,8 @@ metrics.startTime = Date.now();
 
 // Launch all consumers
 const consumerPromises = [];
-for (let i = 0; i < NUMBER_OF_CONSUMERS; i++) {
-  consumerPromises.push(consumer(i, i));
+for (let i = STARTING_PARTITION; i < NUMBER_OF_CONSUMERS + STARTING_PARTITION; i++) {
+  consumerPromises.push(consumer(i, i ));
 }
 
 // Wait for all consumers to complete

@@ -1,0 +1,144 @@
+[2025-10-24 08:57:55.652] [info] Queen C++ Message Queue Server (Acceptor/Worker Pattern)
+[2025-10-24 08:57:55.652] [info] Configuration:
+[2025-10-24 08:57:55.652] [info]   - Host: 0.0.0.0
+[2025-10-24 08:57:55.652] [info]   - Port: 6632
+[2025-10-24 08:57:55.652] [info]   - Database: localhost:5432/postgres
+[2025-10-24 08:57:55.652] [info]   - Pattern: Acceptor distributes to workers (cross-platform)
+[2025-10-24 08:57:55.652] [info] Encryption service initialized (AES-256-GCM)
+[2025-10-24 08:57:55.652] [info] Encryption: enabled
+[2025-10-24 08:57:55.652] [info] Starting acceptor/worker pattern with 6 workers (hardware cores: 10)
+[2025-10-24 08:57:55.652] [info] [Worker 0] Starting...
+[2025-10-24 08:57:55.652] [info] [Worker 2] Starting...
+[2025-10-24 08:57:55.652] [info] Initializing GLOBAL shared resources:
+[2025-10-24 08:57:55.652] [info]   - Total DB connections: 95 (95% of 100)
+[2025-10-24 08:57:55.652] [info]   - Total ThreadPool threads: 95
+[2025-10-24 08:57:55.652] [info] [Worker 3] Starting...
+[2025-10-24 08:57:55.652] [info] Waiting for workers to initialize...
+[2025-10-24 08:57:55.652] [info] [Worker 1] Starting...
+[2025-10-24 08:57:55.652] [info] [Worker 5] Starting...
+[2025-10-24 08:57:55.652] [info] [Worker 4] Starting...
+[2025-10-24 08:57:56.046] [info] Database pool initialized with 95/95 connections (acquisition timeout: 10000ms, statement timeout: 2000ms)
+[2025-10-24 08:57:56.047] [info] Global shared resources initialized successfully
+[2025-10-24 08:57:56.047] [info] [Worker 0] Using GLOBAL shared ThreadPool and DatabasePool
+[2025-10-24 08:57:56.047] [info] [Worker 3] Using GLOBAL shared ThreadPool and DatabasePool
+[2025-10-24 08:57:56.047] [info] [Worker 1] Using GLOBAL shared ThreadPool and DatabasePool
+[2025-10-24 08:57:56.047] [info] [Worker 4] Using GLOBAL shared ThreadPool and DatabasePool
+[2025-10-24 08:57:56.047] [info] [Worker 2] Using GLOBAL shared ThreadPool and DatabasePool
+[2025-10-24 08:57:56.047] [info] [Worker 5] Using GLOBAL shared ThreadPool and DatabasePool
+[2025-10-24 08:57:56.048] [info] [Worker 2] Database connection: OK | Pool: 91/95 conn available
+[2025-10-24 08:57:56.048] [info] [Worker 2] Waiting for shared file buffer from Worker 0...
+[2025-10-24 08:57:56.048] [info] [Worker 4] Database connection: OK | Pool: 95/95 conn available
+[2025-10-24 08:57:56.048] [info] [Worker 4] Waiting for shared file buffer from Worker 0...
+[2025-10-24 08:57:56.048] [info] [Worker 3] Database connection: OK | Pool: 93/95 conn available
+[2025-10-24 08:57:56.048] [info] [Worker 3] Waiting for shared file buffer from Worker 0...
+[2025-10-24 08:57:56.048] [info] [Worker 5] Database connection: OK | Pool: 91/95 conn available
+[2025-10-24 08:57:56.048] [info] [Worker 5] Waiting for shared file buffer from Worker 0...
+[2025-10-24 08:57:56.048] [info] [Worker 1] Database connection: OK | Pool: 94/95 conn available
+[2025-10-24 08:57:56.048] [info] [Worker 1] Waiting for shared file buffer from Worker 0...
+[2025-10-24 08:57:56.048] [info] [Worker 0] Database connection: OK | Pool: 92/95 conn available
+[2025-10-24 08:57:56.048] [info] [Worker 0] Initializing database schema...
+NOTICE:  schema "queen" already exists, skipping
+NOTICE:  relation "queues" already exists, skipping
+NOTICE:  relation "partitions" already exists, skipping
+NOTICE:  relation "messages" already exists, skipping
+NOTICE:  relation "partition_consumers" already exists, skipping
+NOTICE:  relation "messages_consumed" already exists, skipping
+NOTICE:  relation "dead_letter_queue" already exists, skipping
+NOTICE:  relation "retention_history" already exists, skipping
+NOTICE:  relation "idx_queues_name" already exists, skipping
+NOTICE:  relation "idx_queues_priority" already exists, skipping
+NOTICE:  relation "idx_queues_namespace" already exists, skipping
+NOTICE:  relation "idx_queues_task" already exists, skipping
+NOTICE:  relation "idx_queues_namespace_task" already exists, skipping
+NOTICE:  relation "idx_queues_retention_enabled" already exists, skipping
+NOTICE:  relation "idx_partitions_queue_name" already exists, skipping
+NOTICE:  relation "idx_partitions_last_activity" already exists, skipping
+NOTICE:  relation "idx_messages_partition_created_id" already exists, skipping
+NOTICE:  relation "idx_messages_transaction_id" already exists, skipping
+NOTICE:  relation "idx_messages_trace_id" already exists, skipping
+NOTICE:  relation "idx_messages_created_at" already exists, skipping
+NOTICE:  relation "idx_partition_consumers_lookup" already exists, skipping
+NOTICE:  relation "idx_partition_consumers_active_leases" already exists, skipping
+NOTICE:  relation "idx_partition_consumers_expired_leases" already exists, skipping
+NOTICE:  relation "idx_partition_consumers_progress" already exists, skipping
+NOTICE:  relation "idx_partition_consumers_idle" already exists, skipping
+NOTICE:  relation "idx_partition_consumers_consumer_group" already exists, skipping
+NOTICE:  relation "idx_messages_consumed_acked_at" already exists, skipping
+NOTICE:  relation "idx_messages_consumed_partition_acked" already exists, skipping
+NOTICE:  relation "idx_messages_consumed_consumer_acked" already exists, skipping
+NOTICE:  relation "idx_messages_consumed_partition_id" already exists, skipping
+NOTICE:  relation "idx_dlq_partition" already exists, skipping
+NOTICE:  relation "idx_dlq_consumer_group" already exists, skipping
+NOTICE:  relation "idx_dlq_failed_at" already exists, skipping
+NOTICE:  relation "idx_dlq_message_consumer" already exists, skipping
+NOTICE:  relation "idx_retention_history_partition" already exists, skipping
+NOTICE:  relation "idx_retention_history_executed" already exists, skipping
+[2025-10-24 08:57:56.052] [info] Database indexes created successfully
+[2025-10-24 08:57:56.058] [info] Database triggers created successfully
+[2025-10-24 08:57:56.058] [info] Database schema V3 initialized successfully (tables, indexes, triggers)
+[2025-10-24 08:57:56.058] [info] [Worker 0] Creating SHARED file buffer manager (dir=/tmp/queen)...
+[2025-10-24 08:57:56.058] [info] FileBufferManager initializing: dir=/tmp/queen, recovery=true
+[2025-10-24 08:57:56.058] [info] Buffer directories ready: /tmp/queen
+[2025-10-24 08:57:56.058] [info] Starting recovery of buffered events...
+[2025-10-24 08:57:56.059] [info] Deleting incomplete buffer file: failover_019a14f6-6bb8-7000-bb5e-10249c0bc3c2.buf.tmp (only 0 bytes)
+[2025-10-24 08:57:56.059] [info] Deleting incomplete buffer file: qos0_019a14f6-6bb7-7000-b6fd-d1a993bea0cb.buf.tmp (only 0 bytes)
+[2025-10-24 08:57:56.059] [info] Starting recovery (max 3600s to avoid blocking server startup)...
+[2025-10-24 08:57:56.059] [info] Phase 1: Recovering failover events (FIFO order)...
+[2025-10-24 08:57:56.059] [info] Phase 2: Recovering QoS 0 events (batched)...
+[2025-10-24 08:57:56.059] [info] Startup recovery completed in 0ms: failover=0, qos0=0
+[2025-10-24 08:57:56.059] [info] Recovery complete
+[2025-10-24 08:57:56.059] [info] Buffer files initialized successfully
+[2025-10-24 08:57:56.059] [info] FileBufferManager ready
+[2025-10-24 08:57:56.059] [info] [Worker 0] File buffer ready - Pending: 0, Failed: 0, DB: healthy
+[2025-10-24 08:57:56.059] [info] [Worker 0] Sharing file buffer with other workers...
+[2025-10-24 08:57:56.059] [info] Background processor thread started
+[2025-10-24 08:57:56.059] [info] [Worker 2] Using shared file buffer from Worker 0
+[2025-10-24 08:57:56.059] [info] [Worker 2] Creating uWS::App...
+[2025-10-24 08:57:56.059] [info] [Worker 0] File buffer shared successfully
+[2025-10-24 08:57:56.059] [info] [Worker 0] Creating uWS::App...
+[2025-10-24 08:57:56.059] [info] [Worker 1] Using shared file buffer from Worker 0
+[2025-10-24 08:57:56.059] [info] [Worker 1] Creating uWS::App...
+[2025-10-24 08:57:56.059] [info] [Worker 5] Using shared file buffer from Worker 0
+[2025-10-24 08:57:56.059] [info] [Worker 5] Creating uWS::App...
+[2025-10-24 08:57:56.059] [info] [Worker 3] Using shared file buffer from Worker 0
+[2025-10-24 08:57:56.059] [info] [Worker 3] Creating uWS::App...
+[2025-10-24 08:57:56.059] [info] [Worker 4] Using shared file buffer from Worker 0
+[2025-10-24 08:57:56.059] [info] [Worker 4] Creating uWS::App...
+[2025-10-24 08:57:56.059] [info] [Worker 0] Setting up routes...
+[2025-10-24 08:57:56.059] [info] [Worker 4] Setting up routes...
+[2025-10-24 08:57:56.059] [info] [Worker 5] Setting up routes...
+[2025-10-24 08:57:56.059] [info] [Worker 1] Setting up routes...
+[2025-10-24 08:57:56.059] [info] [Worker 3] Setting up routes...
+[2025-10-24 08:57:56.059] [info] [Worker 2] Setting up routes...
+[2025-10-24 08:57:56.059] [info] [Worker 5] Static file serving enabled from: /Users/alice/Work/queen/server/../webapp/dist
+[2025-10-24 08:57:56.059] [info] [Worker 1] Static file serving enabled from: /Users/alice/Work/queen/server/../webapp/dist
+[2025-10-24 08:57:56.059] [info] [Worker 5] Routes configured
+[2025-10-24 08:57:56.059] [info] [Worker 4] Static file serving enabled from: /Users/alice/Work/queen/server/../webapp/dist
+[2025-10-24 08:57:56.059] [info] [Worker 0] Static file serving enabled from: /Users/alice/Work/queen/server/../webapp/dist
+[2025-10-24 08:57:56.059] [info] [Worker 1] Routes configured
+[2025-10-24 08:57:56.059] [info] [Worker 4] Routes configured
+[2025-10-24 08:57:56.059] [info] [Worker 5] Registered with acceptor
+[2025-10-24 08:57:56.059] [info] [Worker 2] Static file serving enabled from: /Users/alice/Work/queen/server/../webapp/dist
+[2025-10-24 08:57:56.059] [info] [Worker 1] Registered with acceptor
+[2025-10-24 08:57:56.059] [info] [Worker 2] Routes configured
+[2025-10-24 08:57:56.059] [info] [Worker 2] Registered with acceptor
+[2025-10-24 08:57:56.059] [info] [Worker 3] Static file serving enabled from: /Users/alice/Work/queen/server/../webapp/dist
+[2025-10-24 08:57:56.059] [info] [Worker 0] Routes configured
+[2025-10-24 08:57:56.059] [info] [Worker 5] Event loop ready to receive adopted sockets from acceptor
+[2025-10-24 08:57:56.059] [info] [Worker 1] Event loop ready to receive adopted sockets from acceptor
+[2025-10-24 08:57:56.059] [info] [Worker 2] Event loop ready to receive adopted sockets from acceptor
+[2025-10-24 08:57:56.059] [info] [Worker 4] Registered with acceptor
+[2025-10-24 08:57:56.059] [info] [Worker 3] Routes configured
+[2025-10-24 08:57:56.059] [info] [Worker 0] Registered with acceptor
+[2025-10-24 08:57:56.060] [info] [Worker 4] Event loop ready to receive adopted sockets from acceptor
+[2025-10-24 08:57:56.060] [info] [Worker 3] Registered with acceptor
+[2025-10-24 08:57:56.060] [info] [Worker 0] Event loop ready to receive adopted sockets from acceptor
+[2025-10-24 08:57:56.060] [info] [Worker 3] Event loop ready to receive adopted sockets from acceptor
+[2025-10-24 08:57:56.073] [info] All 6 workers initialized in 420ms
+[2025-10-24 08:57:56.073] [info] Creating acceptor app...
+[2025-10-24 08:57:56.073] [info] Registered 6 worker apps with acceptor
+[2025-10-24 08:57:56.073] [info] Acceptor listening on 0.0.0.0:6632
+[2025-10-24 08:57:56.073] [info] Round-robin load balancing across 6 workers
+[2025-10-24 08:57:56.073] [info] Starting acceptor event loop...
+[2025-10-24 08:59:18.093] [info] Received signal 15, shutting down...
+[2025-10-24 08:59:18.093] [info] Exiting (worker threads will be terminated by OS)

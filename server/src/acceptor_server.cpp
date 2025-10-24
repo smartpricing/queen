@@ -16,6 +16,98 @@
 #include <sstream>
 #include <iomanip>
 #include <chrono>
+#include <optional>
+#include <memory>
+
+namespace queen {
+
+// Safe Response Context to prevent segfaults on client disconnect
+class SafeResponseContext {
+private:
+    uWS::HttpResponse<false>* response_ptr_;
+    std::atomic<bool> valid_;
+    std::mutex response_mutex_;
+    
+public:
+    SafeResponseContext(uWS::HttpResponse<false>* res) 
+        : response_ptr_(res), valid_(true) {
+        
+        // Set up abort detection - clears pointer when client disconnects
+        res->onAborted([this]() {
+            std::lock_guard<std::mutex> lock(response_mutex_);
+            valid_.store(false);
+            response_ptr_ = nullptr; // CRITICAL: Clear pointer to prevent access
+            spdlog::warn("SafeResponseContext: Client disconnected, response invalidated");
+        });
+    }
+    
+    bool is_valid() const { 
+        std::lock_guard<std::mutex> lock(const_cast<std::mutex&>(response_mutex_));
+        return valid_.load() && response_ptr_ != nullptr; 
+    }
+    
+    void safe_send_json(const nlohmann::json& data, int status_code = 200) {
+        std::lock_guard<std::mutex> lock(response_mutex_);
+        if (valid_.load() && response_ptr_) {
+            response_ptr_->writeHeader("Content-Type", "application/json");
+            response_ptr_->writeStatus(std::to_string(status_code));
+            response_ptr_->end(data.dump());
+            response_ptr_ = nullptr; // Clear after use to prevent double-send
+            valid_.store(false);
+        }
+    }
+    
+    // ATOMIC: Check validity and execute Loop::defer only if safe
+    template<typename Callback>
+    void safe_defer(uWS::Loop* loop, Callback&& callback) {
+        std::lock_guard<std::mutex> lock(response_mutex_);
+        if (valid_.load() && response_ptr_) {
+            // Only call Loop::defer if response is still valid
+            loop->defer(std::forward<Callback>(callback));
+        } else {
+            spdlog::warn("SafeResponseContext: Client disconnected, skipping Loop::defer");
+        }
+    }
+    
+    void safe_send_error(const std::string& error, int status_code = 500) {
+        std::lock_guard<std::mutex> lock(response_mutex_);
+        if (valid_.load() && response_ptr_) {
+            nlohmann::json error_json = {{"error", error}};
+            response_ptr_->writeHeader("Content-Type", "application/json");
+            response_ptr_->writeStatus(std::to_string(status_code));
+            response_ptr_->end(error_json.dump());
+            response_ptr_ = nullptr; // Clear after use
+            valid_.store(false);
+        }
+    }
+    
+    void safe_send_empty(int status_code = 204) {
+        std::lock_guard<std::mutex> lock(response_mutex_);
+        if (valid_.load() && response_ptr_) {
+            // Add CORS headers manually since setup_cors_headers is defined later
+            response_ptr_->writeHeader("Access-Control-Allow-Origin", "*");
+            response_ptr_->writeHeader("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS");
+            response_ptr_->writeHeader("Access-Control-Allow-Headers", "Content-Type, Authorization");
+            response_ptr_->writeStatus(std::to_string(status_code));
+            response_ptr_->end();
+            response_ptr_ = nullptr; // Clear after use
+            valid_.store(false);
+        }
+    }
+};
+
+} // namespace queen
+
+#include <json.hpp>
+#include <spdlog/spdlog.h>
+#include <thread>
+#include <vector>
+#include <atomic>
+#include <mutex>
+#include <condition_variable>
+#include <sstream>
+#include <iomanip>
+#include <chrono>
 #include <fstream>
 #include <filesystem>
 #include <regex>
@@ -489,8 +581,15 @@ static void setup_worker_routes(uWS::App* app,
     // ASYNC: Push Route using per-worker ThreadPool + Loop::defer
     
     app->post("/api/v1/push", [queue_manager, file_buffer, worker_id, db_thread_pool](auto* res, auto* req) {
+        // CRITICAL: Add abort detection to prevent segfaults
+        auto aborted = std::make_shared<std::atomic<bool>>(false);
+        res->onAborted([aborted]() {
+            aborted->store(true);
+            spdlog::warn("PUSH request aborted by client");
+        });
+        
         read_json_body(res,
-            [res, queue_manager, file_buffer, worker_id, db_thread_pool](const nlohmann::json& body) {
+            [res, queue_manager, file_buffer, worker_id, db_thread_pool, aborted](const nlohmann::json& body) {
                 try {
                     if (!body.contains("items") || !body["items"].is_array()) {
                         send_error_response(res, "items array is required", 400);
@@ -500,10 +599,10 @@ static void setup_worker_routes(uWS::App* app,
                     // Get the current uWebSockets loop
                     uWS::Loop* current_loop = uWS::Loop::get();
                     
-                    spdlog::info("[Worker {}] ASYNC: Submitting work to per-worker ThreadPool", worker_id);
+                    spdlog::info("[Worker {}] ASYNC: Submitting work to ThreadPool", worker_id);
                     
-                    // Push work to per-worker ThreadPool (much simpler!)
-                    db_thread_pool->push([res, queue_manager, file_buffer, worker_id, current_loop, body]() {
+                    // Push work to ThreadPool with abort detection
+                    db_thread_pool->push([res, queue_manager, file_buffer, worker_id, current_loop, body, aborted]() {
                         spdlog::info("[Worker {}] ASYNC: ThreadPool worker executing database operation", worker_id);
                         
                         try {
@@ -529,7 +628,13 @@ static void setup_worker_routes(uWS::App* app,
                             spdlog::info("[Worker {}] ASYNC: push_messages completed, using Loop::defer", worker_id);
                             
                             // Use Loop::defer to safely send response back to uWebSockets thread
-                            current_loop->defer([res, results, worker_id]() {
+                            current_loop->defer([res, results, worker_id, aborted]() {
+                                // CRITICAL: Check if response was aborted before accessing it
+                                if (aborted->load()) {
+                                    spdlog::warn("[Worker {}] ASYNC: Response aborted, skipping response", worker_id);
+                                    return;
+                                }
+                                
                                 spdlog::info("[Worker {}] ASYNC: Sending response via Loop::defer", worker_id);
                                 
                                 // Convert PushResult vector to JSON manually
@@ -554,8 +659,14 @@ static void setup_worker_routes(uWS::App* app,
                             });
                             
                         } catch (const std::exception& e) {
-                            // Error handling - also use Loop::defer
-                            current_loop->defer([res, error = std::string(e.what()), worker_id]() {
+                            // Error handling - also use Loop::defer with abort check
+                            current_loop->defer([res, error = std::string(e.what()), worker_id, aborted]() {
+                                // CRITICAL: Check if response was aborted before accessing it
+                                if (aborted->load()) {
+                                    spdlog::warn("[Worker {}] ASYNC: Response aborted during error handling, skipping", worker_id);
+                                    return;
+                                }
+                                
                                 spdlog::error("[Worker {}] ASYNC: Error via Loop::defer: {}", worker_id, error);
                                 send_error_response(res, error, 500);
                             });
@@ -564,279 +675,6 @@ static void setup_worker_routes(uWS::App* app,
                     
                     spdlog::info("[Worker {}] ASYNC: Work submitted to ThreadPool, uWebSockets thread continues!", worker_id);
                     
-                } catch (const std::exception& e) {
-                    send_error_response(res, e.what(), 500);
-                }
-            },
-            [res](const std::string& error) {
-                send_error_response(res, error, 400);
-            }
-        );
-    });
-    
-    // Push messages
-    app->post("/api/v1/push___old_sync", [queue_manager, file_buffer, worker_id](auto* res, auto* req) {
-        read_json_body(res,
-            [res, queue_manager, file_buffer, worker_id](const nlohmann::json& body) {
-                try {
-                    if (!body.contains("items") || !body["items"].is_array()) {
-                        send_error_response(res, "items array is required", 400);
-                        return;
-                    }
-                    
-                    // Check if QoS 0 (server-side buffering requested)
-                    // Accept both new 'qos0' flag and legacy 'bufferMs/bufferMax'
-                    bool qos0_buffering = body.contains("qos0") && body["qos0"].is_boolean() && body["qos0"].get<bool>();
-                    if (!qos0_buffering) {
-                        // Legacy: bufferMs/bufferMax implies qos0
-                        qos0_buffering = body.contains("bufferMs") || body.contains("bufferMax");
-                    }
-                    
-                    if (qos0_buffering && file_buffer) {
-                        // QoS 0: Use file buffer for batching (only available on Worker 0)
-                        auto pool_stats = queue_manager->get_pool_stats();
-                        std::string first_queue = body["items"][0]["queue"].get<std::string>();
-                        std::string first_partition = body["items"][0].value("partition", "Default");
-                        spdlog::info("[Worker {}] BPUSH: {} items to [{}/{}] | Pool: {}/{} conn ({} in use)", 
-                                   worker_id, body["items"].size(), first_queue, first_partition,
-                                   pool_stats.available, pool_stats.total, pool_stats.in_use);
-                        
-                        for (const auto& item_json : body["items"]) {
-                            nlohmann::json buffered_event = {
-                                {"queue", item_json["queue"]},
-                                {"partition", item_json.value("partition", "Default")},
-                                {"payload", item_json.value("payload", nlohmann::json{})},
-                                {"namespace", item_json.value("namespace", "")},
-                                {"task", item_json.value("task", "")},
-                                {"traceId", item_json.value("traceId", "")},
-                                {"transactionId", item_json.value("transactionId", queue_manager->generate_uuid())}
-                            };
-                            
-                            bool success = file_buffer->write_event(buffered_event);
-                            if (!success) {
-                                send_error_response(res, "Buffer write failed (disk full?)", 500);
-                                return;
-                            }
-                        }
-                        
-                        nlohmann::json response = {
-                            {"pushed", true},
-                            {"qos0", true},
-                            {"dbHealthy", file_buffer->is_db_healthy()}
-                        };
-                        send_json_response(res, response, 201);
-                        
-                    } else {
-                        // Normal push: Use original push_messages() for batch efficiency
-                        auto pool_stats = queue_manager->get_pool_stats();
-                        std::string first_queue = body["items"][0]["queue"].get<std::string>();
-                        std::string first_partition = body["items"][0].value("partition", "Default");
-                        spdlog::info("[Worker {}] PUSH: {} items to [{}/{}] | Pool: {}/{} conn ({} in use)", 
-                                   worker_id, body["items"].size(), first_queue, first_partition,
-                                   pool_stats.available, pool_stats.total, pool_stats.in_use);
-                        
-                        // Quick health check first - if DB is known to be down, skip directly to failover
-                        // (only applicable if file_buffer exists - Worker 0)
-                        if (file_buffer && !file_buffer->is_db_healthy()) {
-                            spdlog::warn("[Worker {}] DB known to be down, using file buffer immediately", worker_id);
-                            
-                            for (const auto& item_json : body["items"]) {
-                                nlohmann::json buffered_event = {
-                                    {"queue", item_json["queue"]},
-                                    {"partition", item_json.value("partition", "Default")},
-                                    {"payload", item_json.value("payload", nlohmann::json{})},
-                                    {"namespace", item_json.value("namespace", "")},
-                                    {"task", item_json.value("task", "")},
-                                    {"traceId", item_json.value("traceId", "")},
-                                    {"transactionId", item_json.value("transactionId", queue_manager->generate_uuid())},
-                                    {"failover", true}
-                                };
-                                
-                                file_buffer->write_event(buffered_event);
-                            }
-                            
-                            nlohmann::json response = {
-                                {"pushed", true},
-                                {"qos0", false},
-                                {"dbHealthy", false},
-                                {"failover", true}
-                            };
-                            send_json_response(res, response, 201);
-                            return;
-                        }
-                        
-                        try {
-                            std::vector<PushItem> items;
-                            for (const auto& item_json : body["items"]) {
-                                PushItem item;
-                                item.queue = item_json["queue"];
-                                item.partition = item_json.value("partition", "Default");
-                                item.payload = item_json.value("payload", nlohmann::json{});
-                                if (item_json.contains("transactionId")) {
-                                    item.transaction_id = item_json["transactionId"];
-                                }
-                                if (item_json.contains("traceId")) {
-                                    item.trace_id = item_json["traceId"];
-                                }
-                                items.push_back(std::move(item));
-                            }
-                            
-                            auto results = queue_manager->push_messages(items);
-                            
-                            // Check if push failed - distinguish between DB down vs real errors
-                            bool db_failure = false;
-                            bool has_real_error = false;
-                            std::string real_error_msg;
-                            
-                            for (const auto& result : results) {
-                                if (result.status == "failed" && result.error) {
-                                    // Check for DB connection errors FIRST
-                                    if (result.error->find("pool timeout") != std::string::npos ||
-                                        result.error->find("Connection refused") != std::string::npos ||
-                                        result.error->find("Failed to connect") != std::string::npos ||
-                                        result.error->find("connection pool") != std::string::npos ||
-                                        result.error->find("Failed to commit") != std::string::npos ||
-                                        result.error->find("server closed") != std::string::npos ||
-                                        result.error->find("terminating connection") != std::string::npos) {
-                                        db_failure = true;
-                                        break;
-                                    }
-                                    
-                                    // If "does not exist" - check if DB is actually down
-                                    if (result.error->find("does not exist") != std::string::npos) {
-                                        // If file_buffer already marked DB as unhealthy, treat as DB failure
-                                        if (file_buffer && !file_buffer->is_db_healthy()) {
-                                            spdlog::warn("[Worker {}] Queue check failed and DB marked unhealthy - using failover",
-                                                       worker_id);
-                                            db_failure = true;
-                                            break;
-                                        }
-                                        
-                                        // Otherwise check pool stats
-                                        auto pool_stats = queue_manager->get_pool_stats();
-                                        if (pool_stats.available == 0 || pool_stats.total < pool_stats.in_use) {
-                                            // Pool exhausted - likely DB is down, not that queue doesn't exist
-                                            spdlog::warn("[Worker {}] Queue check failed but pool exhausted ({}/{} available) - assuming DB down",
-                                                       worker_id, pool_stats.available, pool_stats.total);
-                                            db_failure = true;
-                                            break;
-                                        } else {
-                                            // Pool has connections - queue genuinely doesn't exist
-                                            has_real_error = true;
-                                            real_error_msg = *result.error;
-                                            break;
-                                        }
-                                    }
-                                    
-                                    // Other errors
-                                    has_real_error = true;
-                                    real_error_msg = *result.error;
-                                    break;
-                                }
-                            }
-                            
-                            // Handle real errors (not DB failure)
-                            if (has_real_error && !db_failure) {
-                                send_error_response(res, real_error_msg, 400);
-                                return;
-                            }
-                            
-                            // If DB failure detected, use file buffer failover (if available)
-                            if (db_failure) {
-                                if (file_buffer) {
-                                    spdlog::warn("[Worker {}] DB connection failed, using file buffer for failover", worker_id);
-                                    file_buffer->mark_db_unhealthy();
-                                    
-                                    for (const auto& item_json : body["items"]) {
-                                        nlohmann::json buffered_event = {
-                                            {"queue", item_json["queue"]},
-                                            {"partition", item_json.value("partition", "Default")},
-                                            {"payload", item_json.value("payload", nlohmann::json{})},
-                                            {"namespace", item_json.value("namespace", "")},
-                                            {"task", item_json.value("task", "")},
-                                            {"traceId", item_json.value("traceId", "")},
-                                            {"transactionId", item_json.value("transactionId", queue_manager->generate_uuid())},
-                                            {"failover", true}
-                                        };
-                                        
-                                        file_buffer->write_event(buffered_event);
-                                    }
-                                    
-                                    nlohmann::json response = {
-                                        {"pushed", true},
-                                        {"qos0", false},
-                                        {"dbHealthy", false},
-                                        {"failover", true}
-                                    };
-                                    send_json_response(res, response, 201);
-                                    return;
-                                } else {
-                                    // No file buffer available (non-zero worker) - return error
-                                    spdlog::error("[Worker {}] DB connection failed and no file buffer available", worker_id);
-                                    send_error_response(res, "Database unavailable and failover not available on this worker", 503);
-                                    return;
-                                }
-                            }
-                            
-                            nlohmann::json response = {{"messages", nlohmann::json::array()}};
-                            for (const auto& result : results) {
-                                nlohmann::json msg_result = {
-                                    {"id", result.message_id.value_or("")},
-                                    {"transactionId", result.transaction_id},
-                                    {"traceId", result.trace_id.has_value() ? nlohmann::json(*result.trace_id) : nlohmann::json(nullptr)},
-                                    {"status", result.status}
-                                };
-                                if (result.error) {
-                                    msg_result["error"] = *result.error;
-                                }
-                                response["messages"].push_back(msg_result);
-                            }
-                            
-                            response["pushed"] = true;
-                            response["qos0"] = false;
-                            response["dbHealthy"] = file_buffer ? file_buffer->is_db_healthy() : true;  // Assume healthy if no buffer
-                            
-                            send_json_response(res, response, 201);
-                            
-                        } catch (const std::exception& db_error) {
-                            // PostgreSQL is down - fallback to file buffer for all items (if available)
-                            if (file_buffer) {
-                                spdlog::warn("[Worker {}] PostgreSQL unavailable, using file buffer for failover: {}", 
-                                           worker_id, db_error.what());
-                                
-                                // Mark DB as unhealthy so subsequent pushes skip DB attempt
-                                file_buffer->mark_db_unhealthy();
-                                
-                                for (const auto& item_json : body["items"]) {
-                                    nlohmann::json buffered_event = {
-                                        {"queue", item_json["queue"]},
-                                        {"partition", item_json.value("partition", "Default")},
-                                        {"payload", item_json.value("payload", nlohmann::json{})},
-                                        {"namespace", item_json.value("namespace", "")},
-                                        {"task", item_json.value("task", "")},
-                                        {"traceId", item_json.value("traceId", "")},
-                                        {"transactionId", item_json.value("transactionId", queue_manager->generate_uuid())},
-                                        {"failover", true}
-                                    };
-                                    
-                                    file_buffer->write_event(buffered_event);
-                                }
-                                
-                                nlohmann::json response = {
-                                    {"pushed", true},
-                                    {"qos0", false},
-                                    {"dbHealthy", false},
-                                    {"failover", true}
-                                };
-                                send_json_response(res, response, 201);
-                            } else {
-                                // No file buffer available (non-zero worker) - return error
-                                spdlog::error("[Worker {}] PostgreSQL unavailable and no file buffer available: {}", 
-                                            worker_id, db_error.what());
-                                send_error_response(res, "Database unavailable and failover not available on this worker", 503);
-                            }
-                        }
-                    }
                 } catch (const std::exception& e) {
                     send_error_response(res, e.what(), 500);
                 }
@@ -977,13 +815,16 @@ static void setup_worker_routes(uWS::App* app,
         }
     });
     
-    // ACK batch
-    app->post("/api/v1/ack/batch", [queue_manager, worker_id](auto* res, auto* req) {
+    // ASYNC ACK batch
+    app->post("/api/v1/ack/batch", [queue_manager, worker_id, db_thread_pool](auto* res, auto* req) {
+        // CRITICAL: Create safe response context to prevent segfaults
+        auto safe_response = std::make_shared<SafeResponseContext>(res);
+        
         read_json_body(res,
-            [res, queue_manager, worker_id](const nlohmann::json& body) {
+            [safe_response, queue_manager, worker_id, db_thread_pool](const nlohmann::json& body) {
                 try {
                     if (!body.contains("acknowledgments") || !body["acknowledgments"].is_array()) {
-                        send_error_response(res, "acknowledgments array is required", 400);
+                        safe_response->safe_send_error("acknowledgments array is required", 400);
                         return;
                     }
                     
@@ -999,7 +840,7 @@ static void setup_worker_routes(uWS::App* app,
                         QueueManager::AckItem ack;
                         
                         if (!ack_json.contains("transactionId") || ack_json["transactionId"].is_null() || !ack_json["transactionId"].is_string()) {
-                            send_error_response(res, "Each acknowledgment must have a valid transactionId string", 400);
+                            safe_response->safe_send_error("Each acknowledgment must have a valid transactionId string", 400);
                             return;
                         }
                         ack.transaction_id = ack_json["transactionId"];
@@ -1016,34 +857,60 @@ static void setup_worker_routes(uWS::App* app,
                         ack_items.push_back(ack);
                     }
                     
-                    auto ack_start = std::chrono::steady_clock::now();
-                    auto results = queue_manager->acknowledge_messages(ack_items, consumer_group);
-                    auto ack_end = std::chrono::steady_clock::now();
-                    auto ack_duration_ms = std::chrono::duration_cast<std::chrono::milliseconds>(ack_end - ack_start).count();
+                    // Get uWebSockets loop for response handling
+                    uWS::Loop* current_loop = uWS::Loop::get();
                     
-                    spdlog::info("[Worker {}] ACK: {} items, {}ms", 
-                                worker_id, results.size(), ack_duration_ms);
+                    spdlog::info("[Worker {}] ASYNC ACK BATCH: Submitting work to ThreadPool", worker_id);
                     
-                    nlohmann::json response = {
-                        {"processed", results.size()},
-                        {"results", nlohmann::json::array()}
-                    };
+                    // Execute batch ACK operation in ThreadPool with safe response
+                    db_thread_pool->push([safe_response, queue_manager, worker_id, current_loop, ack_items, consumer_group]() {
+                        spdlog::info("[Worker {}] ASYNC ACK BATCH: ThreadPool worker executing batch ACK operation", worker_id);
+                        
+                        try {
+                            auto ack_start = std::chrono::steady_clock::now();
+                            auto results = queue_manager->acknowledge_messages(ack_items, consumer_group);
+                            auto ack_end = std::chrono::steady_clock::now();
+                            auto ack_duration_ms = std::chrono::duration_cast<std::chrono::milliseconds>(ack_end - ack_start).count();
+                            
+                            spdlog::info("[Worker {}] ASYNC ACK BATCH: {} items, {}ms", 
+                                        worker_id, results.size(), ack_duration_ms);
+                            
+                            // Use safe_defer to atomically check validity and call Loop::defer
+                            safe_response->safe_defer(current_loop, [safe_response, results, worker_id]() {
+                                spdlog::info("[Worker {}] ASYNC ACK BATCH: Sending response via safe Loop::defer", worker_id);
+                                
+                                nlohmann::json response = {
+                                    {"processed", results.size()},
+                                    {"results", nlohmann::json::array()}
+                                };
+                                
+                                for (const auto& ack_result : results) {
+                                    nlohmann::json result_item = {
+                                        {"transactionId", ack_result.transaction_id},
+                                        {"status", ack_result.status}
+                                    };
+                                    response["results"].push_back(result_item);
+                                }
+                                
+                                safe_response->safe_send_json(response, 200);
+                            });
+                            
+                        } catch (const std::exception& e) {
+                            // Error handling via safe_defer
+                            safe_response->safe_defer(current_loop, [safe_response, error = std::string(e.what()), worker_id]() {
+                                spdlog::error("[Worker {}] ASYNC ACK BATCH: Error via safe Loop::defer: {}", worker_id, error);
+                                safe_response->safe_send_error(error, 500);
+                            });
+                        }
+                    });
                     
-                    for (const auto& ack_result : results) {
-                        nlohmann::json result_item = {
-                            {"transactionId", ack_result.transaction_id},
-                            {"status", ack_result.status}
-                        };
-                        response["results"].push_back(result_item);
-                    }
-                    
-                    send_json_response(res, response);
+                    spdlog::info("[Worker {}] ASYNC ACK BATCH: Work submitted to ThreadPool, uWebSockets thread continues!", worker_id);
                 } catch (const std::exception& e) {
-                    send_error_response(res, e.what(), 500);
+                    safe_response->safe_send_error(e.what(), 500);
                 }
             },
-            [res](const std::string& error) {
-                send_error_response(res, error, 400);
+            [safe_response](const std::string& error) {
+                safe_response->safe_send_error(error, 400);
             }
         );
     });
@@ -1197,10 +1064,17 @@ static void setup_worker_routes(uWS::App* app,
         }
     });
     
-    // Single ACK
-    app->post("/api/v1/ack", [queue_manager, worker_id](auto* res, auto* req) {
+    // ASYNC Single ACK
+    app->post("/api/v1/ack", [queue_manager, worker_id, db_thread_pool](auto* res, auto* req) {
+        // CRITICAL: Add abort detection to prevent segfaults
+        auto aborted = std::make_shared<std::atomic<bool>>(false);
+        res->onAborted([aborted]() {
+            aborted->store(true);
+            spdlog::warn("ACK request aborted by client");
+        });
+        
         read_json_body(res,
-            [res, queue_manager, worker_id](const nlohmann::json& body) {
+            [res, queue_manager, worker_id, db_thread_pool, aborted](const nlohmann::json& body) {
                 try {
                     std::string transaction_id = "";
                     if (body.contains("transactionId") && !body["transactionId"].is_null() && body["transactionId"].is_string()) {
@@ -1230,33 +1104,71 @@ static void setup_worker_routes(uWS::App* app,
                         lease_id = body["leaseId"];
                     }
                     
-                    auto ack_start = std::chrono::steady_clock::now();
-                    auto ack_result = queue_manager->acknowledge_message(transaction_id, status, error, consumer_group, lease_id);
-                    auto ack_end = std::chrono::steady_clock::now();
-                    auto ack_duration_ms = std::chrono::duration_cast<std::chrono::milliseconds>(ack_end - ack_start).count();
+                    // Get uWebSockets loop for response handling
+                    uWS::Loop* current_loop = uWS::Loop::get();
                     
-                    spdlog::debug("[Worker {}] ACK: 1 item, {}ms", worker_id, ack_duration_ms);
+                    spdlog::info("[Worker {}] ASYNC ACK: Submitting work to ThreadPool", worker_id);
                     
-                    if (ack_result.success) {
-                        auto now = std::chrono::system_clock::now();
-                        auto time_t = std::chrono::system_clock::to_time_t(now);
-                        auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(
-                            now.time_since_epoch()) % 1000;
+                    // Execute ACK operation in ThreadPool with abort detection
+                    db_thread_pool->push([res, queue_manager, worker_id, current_loop, transaction_id, status, error, consumer_group, lease_id, aborted]() {
+                        spdlog::info("[Worker {}] ASYNC ACK: ThreadPool worker executing ACK operation", worker_id);
                         
-                        std::stringstream ss;
-                        ss << std::put_time(std::gmtime(&time_t), "%Y-%m-%dT%H:%M:%S");
-                        ss << '.' << std::setfill('0') << std::setw(3) << ms.count() << 'Z';
-                        
-                        nlohmann::json response = {
-                            {"transactionId", transaction_id},
-                            {"status", ack_result.status},
-                            {"consumerGroup", consumer_group == "__QUEUE_MODE__" ? nlohmann::json(nullptr) : nlohmann::json(consumer_group)},
-                            {"acknowledgedAt", ss.str()}
-                        };
-                        send_json_response(res, response);
-                    } else {
-                        send_error_response(res, "Failed to acknowledge message: " + ack_result.status, 500);
-                    }
+                        try {
+                            auto ack_start = std::chrono::steady_clock::now();
+                            auto ack_result = queue_manager->acknowledge_message(transaction_id, status, error, consumer_group, lease_id);
+                            auto ack_end = std::chrono::steady_clock::now();
+                            auto ack_duration_ms = std::chrono::duration_cast<std::chrono::milliseconds>(ack_end - ack_start).count();
+                            
+                            spdlog::debug("[Worker {}] ASYNC ACK: 1 item, {}ms", worker_id, ack_duration_ms);
+                            
+                            // Use Loop::defer to safely send response back to uWebSockets thread
+                            current_loop->defer([res, ack_result, transaction_id, consumer_group, worker_id, aborted]() {
+                                // CRITICAL: Check if response was aborted before accessing it
+                                if (aborted->load()) {
+                                    spdlog::warn("[Worker {}] ASYNC ACK: Response aborted, skipping response", worker_id);
+                                    return;
+                                }
+                                
+                                spdlog::info("[Worker {}] ASYNC ACK: Sending response via Loop::defer", worker_id);
+                                
+                                if (ack_result.success) {
+                                    auto now = std::chrono::system_clock::now();
+                                    auto time_t = std::chrono::system_clock::to_time_t(now);
+                                    auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+                                        now.time_since_epoch()) % 1000;
+                                    
+                                    std::stringstream ss;
+                                    ss << std::put_time(std::gmtime(&time_t), "%Y-%m-%dT%H:%M:%S");
+                                    ss << '.' << std::setfill('0') << std::setw(3) << ms.count() << 'Z';
+                                    
+                                    nlohmann::json response = {
+                                        {"transactionId", transaction_id},
+                                        {"status", ack_result.status},
+                                        {"consumerGroup", consumer_group == "__QUEUE_MODE__" ? nlohmann::json(nullptr) : nlohmann::json(consumer_group)},
+                                        {"acknowledgedAt", ss.str()}
+                                    };
+                                    send_json_response(res, response);
+                                } else {
+                                    send_error_response(res, "Failed to acknowledge message: " + ack_result.status, 500);
+                                }
+                            });
+                            
+                        } catch (const std::exception& e) {
+                            // Error handling via Loop::defer with abort check
+                            current_loop->defer([res, error = std::string(e.what()), worker_id, aborted]() {
+                                // CRITICAL: Check if response was aborted before accessing it
+                                if (aborted->load()) {
+                                    spdlog::warn("[Worker {}] ASYNC ACK: Response aborted during error handling, skipping", worker_id);
+                                    return;
+                                }
+                                
+                                spdlog::error("[Worker {}] ASYNC ACK: Error via Loop::defer: {}", worker_id, error);
+                                send_error_response(res, error, 500);
+                            });
+                        }
+                    });
+                    
+                    spdlog::info("[Worker {}] ASYNC ACK: Work submitted to ThreadPool, uWebSockets thread continues!", worker_id);
                     
                 } catch (const std::exception& e) {
                     send_error_response(res, e.what(), 500);
@@ -1268,8 +1180,11 @@ static void setup_worker_routes(uWS::App* app,
         );
     });
     
-    // POP with namespace/task filtering (no specific queue)
-    app->get("/api/v1/pop", [queue_manager, config, worker_id](auto* res, auto* req) {
+    // ASYNC POP with namespace/task filtering (no specific queue)
+    app->get("/api/v1/pop", [queue_manager, config, worker_id, db_thread_pool](auto* res, auto* req) {
+        // CRITICAL: Create safe response context to prevent segfaults
+        auto safe_response = std::make_shared<SafeResponseContext>(res);
+        
         try {
             std::string consumer_group = get_query_param(req, "consumerGroup", "__QUEUE_MODE__");
             std::string namespace_param = get_query_param(req, "namespace", "");
@@ -1289,52 +1204,83 @@ static void setup_worker_routes(uWS::App* app,
             std::string sub_from = get_query_param(req, "subscriptionFrom", "");
             if (!sub_from.empty()) options.subscription_from = sub_from;
             
-            auto result = queue_manager->pop_with_namespace_task(namespace_name, task_name, consumer_group, options);
+            // Get uWebSockets loop for response handling
+            uWS::Loop* current_loop = uWS::Loop::get();
             
-            if (result.messages.empty()) {
-                setup_cors_headers(res);
-                res->writeStatus("204");
-                res->end();
-                return;
-            }
+            spdlog::info("[Worker {}] ASYNC POP: Submitting work to ThreadPool", worker_id);
             
-            nlohmann::json response = {{"messages", nlohmann::json::array()}};
-            for (const auto& msg : result.messages) {
-                auto time_t = std::chrono::system_clock::to_time_t(msg.created_at);
-                auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(
-                    msg.created_at.time_since_epoch()) % 1000;
+            // Execute POP operation in ThreadPool with safe response
+            db_thread_pool->push([safe_response, queue_manager, worker_id, current_loop, namespace_name, task_name, consumer_group, options]() {
+                spdlog::info("[Worker {}] ASYNC POP: ThreadPool worker executing pop operation", worker_id);
                 
-                std::stringstream created_at_ss;
-                created_at_ss << std::put_time(std::gmtime(&time_t), "%Y-%m-%dT%H:%M:%S");
-                created_at_ss << '.' << std::setfill('0') << std::setw(3) << ms.count() << 'Z';
-                
-                nlohmann::json msg_json = {
-                    {"id", msg.id},
-                    {"transactionId", msg.transaction_id},
-                    {"traceId", msg.trace_id.empty() ? nlohmann::json(nullptr) : nlohmann::json(msg.trace_id)},
-                    {"queue", msg.queue_name},
-                    {"partition", msg.partition_name},
-                    {"data", msg.payload},
-                    {"retryCount", msg.retry_count},
-                    {"priority", msg.priority},
-                    {"createdAt", created_at_ss.str()},
-                    {"consumerGroup", nlohmann::json(nullptr)},
-                    {"leaseId", result.lease_id.has_value() ? nlohmann::json(*result.lease_id) : nlohmann::json(nullptr)}
-                };
-                response["messages"].push_back(msg_json);
-            }
+                try {
+                    auto result = queue_manager->pop_with_namespace_task(namespace_name, task_name, consumer_group, options);
+                    
+                    // Use safe_defer to atomically check validity and call Loop::defer
+                    safe_response->safe_defer(current_loop, [safe_response, result, worker_id]() {
+                        spdlog::info("[Worker {}] ASYNC POP: Sending response via safe Loop::defer", worker_id);
+                        
+                        if (result.messages.empty()) {
+                            safe_response->safe_send_empty(204);
+                            return;
+                        }
+                        
+                        nlohmann::json response = {{"messages", nlohmann::json::array()}};
+                        for (const auto& msg : result.messages) {
+                            auto time_t = std::chrono::system_clock::to_time_t(msg.created_at);
+                            auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+                                msg.created_at.time_since_epoch()) % 1000;
+                            
+                            std::stringstream created_at_ss;
+                            created_at_ss << std::put_time(std::gmtime(&time_t), "%Y-%m-%dT%H:%M:%S");
+                            created_at_ss << '.' << std::setfill('0') << std::setw(3) << ms.count() << 'Z';
+                            
+                            nlohmann::json msg_json = {
+                                {"id", msg.id},
+                                {"transactionId", msg.transaction_id},
+                                {"traceId", msg.trace_id.empty() ? nlohmann::json(nullptr) : nlohmann::json(msg.trace_id)},
+                                {"queue", msg.queue_name},
+                                {"partition", msg.partition_name},
+                                {"data", msg.payload},
+                                {"retryCount", msg.retry_count},
+                                {"priority", msg.priority},
+                                {"createdAt", created_at_ss.str()},
+                                {"consumerGroup", nlohmann::json(nullptr)},
+                                {"leaseId", result.lease_id.has_value() ? nlohmann::json(*result.lease_id) : nlohmann::json(nullptr)}
+                            };
+                            response["messages"].push_back(msg_json);
+                        }
+                        
+                        safe_response->safe_send_json(response, 200);
+                    });
+                    
+                } catch (const std::exception& e) {
+                    // Error handling via safe_defer
+                    safe_response->safe_defer(current_loop, [safe_response, error = std::string(e.what()), worker_id]() {
+                        spdlog::error("[Worker {}] ASYNC POP: Error via safe Loop::defer: {}", worker_id, error);
+                        safe_response->safe_send_error(error, 500);
+                    });
+                }
+            });
             
-            send_json_response(res, response);
+            spdlog::info("[Worker {}] ASYNC POP: Work submitted to ThreadPool, uWebSockets thread continues!", worker_id);
             
         } catch (const std::exception& e) {
             send_error_response(res, e.what(), 500);
         }
     });
     
-    // Transaction API (atomic operations)
-    app->post("/api/v1/transaction", [queue_manager, worker_id](auto* res, auto* req) {
+    // ASYNC Transaction API (atomic operations)
+    app->post("/api/v1/transaction", [queue_manager, worker_id, db_thread_pool](auto* res, auto* req) {
+        // CRITICAL: Add abort detection to prevent segfaults
+        auto aborted = std::make_shared<std::atomic<bool>>(false);
+        res->onAborted([aborted]() {
+            aborted->store(true);
+            spdlog::warn("TRANSACTION request aborted by client");
+        });
+        
         read_json_body(res,
-            [res, queue_manager, worker_id](const nlohmann::json& body) {
+            [res, queue_manager, worker_id, db_thread_pool, aborted](const nlohmann::json& body) {
                 try {
                     if (!body.contains("operations") || !body["operations"].is_array()) {
                         send_error_response(res, "operations array required", 400);
@@ -1347,14 +1293,32 @@ static void setup_worker_routes(uWS::App* app,
                         return;
                     }
                     
-                    // Execute operations sequentially
-                    nlohmann::json results = nlohmann::json::array();
+                    // Get uWebSockets loop for response handling
+                    uWS::Loop* current_loop = uWS::Loop::get();
                     
-                    for (const auto& op : operations) {
-                        if (!op.contains("type")) {
-                            send_error_response(res, "operation type required", 400);
-                            return;
-                        }
+                    spdlog::info("[Worker {}] ASYNC TRANSACTION: Submitting work to ThreadPool", worker_id);
+                    
+                    // Execute entire transaction in ThreadPool with abort detection
+                    db_thread_pool->push([res, queue_manager, worker_id, current_loop, operations, aborted]() {
+                        spdlog::info("[Worker {}] ASYNC TRANSACTION: ThreadPool worker executing transaction operations", worker_id);
+                        
+                        try {
+                            // Execute operations sequentially
+                            nlohmann::json results = nlohmann::json::array();
+                    
+                            for (const auto& op : operations) {
+                                if (!op.contains("type")) {
+                                    // Handle missing type via Loop::defer with abort check
+                                    current_loop->defer([res, worker_id, aborted]() {
+                                        if (aborted->load()) {
+                                            spdlog::warn("[Worker {}] ASYNC TRANSACTION: Response aborted during validation, skipping", worker_id);
+                                            return;
+                                        }
+                                        spdlog::error("[Worker {}] ASYNC TRANSACTION: Missing operation type", worker_id);
+                                        send_error_response(res, "operation type required", 400);
+                                    });
+                                    return;
+                                }
                         
                         std::string op_type = op["type"];
                         
@@ -1397,21 +1361,57 @@ static void setup_worker_routes(uWS::App* app,
                             results.push_back(ack_result_json);
                             
                         } else {
-                            send_error_response(res, "Unknown operation type: " + op_type, 400);
+                            // Handle unknown operation type via Loop::defer with abort check
+                            current_loop->defer([res, op_type, worker_id, aborted]() {
+                                if (aborted->load()) {
+                                    spdlog::warn("[Worker {}] ASYNC TRANSACTION: Response aborted during validation, skipping", worker_id);
+                                    return;
+                                }
+                                spdlog::error("[Worker {}] ASYNC TRANSACTION: Unknown operation type: {}", worker_id, op_type);
+                                send_error_response(res, "Unknown operation type: " + op_type, 400);
+                            });
                             return;
                         }
                     }
                     
-                    nlohmann::json response = {
-                        {"success", true},
-                        {"results", results},
-                        {"transactionId", queue_manager->generate_uuid()}
-                    };
-                    
-                    send_json_response(res, response);
+                    // Use Loop::defer to safely send response back to uWebSockets thread
+                    current_loop->defer([res, results, queue_manager, worker_id, aborted]() {
+                        // CRITICAL: Check if response was aborted before accessing it
+                        if (aborted->load()) {
+                            spdlog::warn("[Worker {}] ASYNC TRANSACTION: Response aborted, skipping response", worker_id);
+                            return;
+                        }
+                        
+                        spdlog::info("[Worker {}] ASYNC TRANSACTION: Sending response via Loop::defer", worker_id);
+                        
+                        nlohmann::json response = {
+                            {"success", true},
+                            {"results", results},
+                            {"transactionId", queue_manager->generate_uuid()}
+                        };
+                        
+                        send_json_response(res, response);
+                    });
                     
                 } catch (const std::exception& e) {
-                    send_error_response(res, e.what(), 400);
+                    // Error handling via Loop::defer with abort check
+                    current_loop->defer([res, error = std::string(e.what()), worker_id, aborted]() {
+                        // CRITICAL: Check if response was aborted before accessing it
+                        if (aborted->load()) {
+                            spdlog::warn("[Worker {}] ASYNC TRANSACTION: Response aborted during error handling, skipping", worker_id);
+                            return;
+                        }
+                        
+                        spdlog::error("[Worker {}] ASYNC TRANSACTION: Error via Loop::defer: {}", worker_id, error);
+                        send_error_response(res, error, 500);
+                    });
+                }
+            });
+            
+            spdlog::info("[Worker {}] ASYNC TRANSACTION: Work submitted to ThreadPool, uWebSockets thread continues!", worker_id);
+                    
+                } catch (const std::exception& e) {
+                    send_error_response(res, e.what(), 500);
                 }
             },
             [res](const std::string& error) {
@@ -1766,6 +1766,11 @@ static void setup_worker_routes(uWS::App* app,
     }
 }
 
+// Global shared resources for all workers
+static std::shared_ptr<astp::ThreadPool> global_db_thread_pool;
+static std::shared_ptr<DatabasePool> global_db_pool;
+static std::once_flag global_pool_init_flag;
+
 // Worker thread function
 static void worker_thread(const Config& config, int worker_id, int num_workers,
                          std::mutex& init_mutex,
@@ -1776,31 +1781,43 @@ static void worker_thread(const Config& config, int worker_id, int num_workers,
     spdlog::info("[Worker {}] Starting...", worker_id);
     
     try {
-        // Thread-local database pool
-        int pool_per_thread = config.database.pool_size / num_workers; // Round down for safety
-        spdlog::debug("[Worker {}] Creating pool: size={}, acquisition_timeout={}", 
-                     worker_id, pool_per_thread, config.database.pool_acquisition_timeout);
-        auto db_pool = std::make_shared<DatabasePool>(
-            config.database.connection_string(),
-            pool_per_thread,
-            config.database.pool_acquisition_timeout,
-            config.database.statement_timeout,
-            config.database.lock_timeout,
-            config.database.idle_timeout
-        );
+        // Initialize global shared resources (only once)
+        std::call_once(global_pool_init_flag, [&config]() {
+            // Calculate global pool sizes with 5% safety buffer
+            int total_connections = static_cast<int>(config.database.pool_size * 0.95); // 95% of total
+            int total_threads = total_connections; // 1:1 ratio
+            
+            spdlog::info("Initializing GLOBAL shared resources:");
+            spdlog::info("  - Total DB connections: {} (95% of {})", total_connections, config.database.pool_size);
+            spdlog::info("  - Total ThreadPool threads: {}", total_threads);
+            
+            // Create global connection pool
+            global_db_pool = std::make_shared<DatabasePool>(
+                config.database.connection_string(),
+                total_connections,
+                config.database.pool_acquisition_timeout,
+                config.database.statement_timeout,
+                config.database.lock_timeout,
+                config.database.idle_timeout
+            );
+            
+            // Create global ThreadPool
+            global_db_thread_pool = std::make_shared<astp::ThreadPool>(total_threads);
+            
+            spdlog::info("Global shared resources initialized successfully");
+        });
         
-        // Thread-local queue manager
+        // Use global shared resources
+        auto db_pool = global_db_pool;
+        auto db_thread_pool = global_db_thread_pool;
+        
+        // Thread-local queue manager (uses shared pool)
         auto queue_manager = std::make_shared<QueueManager>(db_pool, config.queue);
         
-        // Thread-local analytics manager
+        // Thread-local analytics manager (uses shared pool)
         auto analytics_manager = std::make_shared<AnalyticsManager>(db_pool);
         
-        // Thread-local ThreadPool for async database operations
-        // Match ThreadPool size with available database connections for optimal resource usage
-        int thread_pool_size = pool_per_thread; // Use same number as database connections for 1:1 ratio
-        auto db_thread_pool = std::make_shared<astp::ThreadPool>(thread_pool_size);
-        spdlog::info("[Worker {}] Created dedicated ThreadPool with {} database threads (matching {} DB connections)", 
-                   worker_id, thread_pool_size, pool_per_thread);
+        spdlog::info("[Worker {}] Using GLOBAL shared ThreadPool and DatabasePool", worker_id);
         
         // Test database connection and log pool stats
         // FAILOVER: Don't fail at startup if DB is down - use file buffer instead

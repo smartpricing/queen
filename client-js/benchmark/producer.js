@@ -1,10 +1,10 @@
 import { Queen } from '../client/client.js'; 
 import fs from 'fs';
 
-const TOTAL_MESSAGES = 10000;
-const PARTITIONS = 10; 
-const MAX_BATCH_SIZE = 1;  // Reduced from 10000
-const PUSH_PARALLEL = 100;      // Reduced from 10 to avoid lock contention
+const TOTAL_MESSAGES = 50000;
+const PARTITIONS = 100; 
+const MAX_BATCH_SIZE = 100;  // Reduced from 10000
+const PUSH_PARALLEL = 10;      // Reduced from 10 to avoid lock contention
 const QUEUE_NAME = 'benchmark-queue-001';
 
 const q = new Queen({
