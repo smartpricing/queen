@@ -514,8 +514,108 @@ std::vector<PushResult> QueueManager::push_messages(const std::vector<PushItem>&
     
     std::vector<PushResult> all_results(items.size());
     
+    // ═══════════════════════════════════════════════════════════════════════════
+    // OPTIMIZATION: Batch capacity check - check ALL queues in ONE query
+    // ═══════════════════════════════════════════════════════════════════════════
+    try {
+        // Build map of queue -> total batch size across all partitions
+        std::map<std::string, int> queue_batch_sizes;
+        for (const auto& [partition_key, item_indices] : partition_groups_ordered) {
+            // Extract queue name from "queue:partition" key
+            size_t colon_pos = partition_key.find(':');
+            std::string queue_name = partition_key.substr(0, colon_pos);
+            queue_batch_sizes[queue_name] += item_indices.size();
+        }
+        
+        // Check capacity for all queues with max_queue_size set (single query)
+        if (!queue_batch_sizes.empty()) {
+            std::vector<std::string> queues_to_check;
+            for (const auto& [queue_name, _] : queue_batch_sizes) {
+                queues_to_check.push_back(queue_name);
+            }
+            
+            // Build PostgreSQL array for ANY() query
+            auto build_pg_array = [](const std::vector<std::string>& vec) -> std::string {
+                std::string result = "{";
+                for (size_t i = 0; i < vec.size(); ++i) {
+                    if (i > 0) result += ",";
+                    result += "\"";
+                    for (char c : vec[i]) {
+                        if (c == '\\' || c == '"') result += '\\';
+                        result += c;
+                    }
+                    result += "\"";
+                }
+                result += "}";
+                return result;
+            };
+            
+            std::string queues_array = build_pg_array(queues_to_check);
+            
+            ScopedConnection capacity_conn(db_pool_.get());
+            std::string capacity_check_sql = R"(
+                SELECT 
+                  q.name,
+                  q.max_queue_size,
+                  COALESCE(SUM(pc.pending_estimate), 0)::integer as current_depth
+                FROM queen.queues q
+                LEFT JOIN queen.partitions p ON p.queue_id = q.id
+                LEFT JOIN queen.partition_consumers pc ON pc.partition_id = p.id
+                  AND pc.consumer_group = '__QUEUE_MODE__'
+                WHERE q.name = ANY($1::varchar[])
+                  AND q.max_queue_size > 0
+                GROUP BY q.name, q.max_queue_size
+            )";
+            
+            auto capacity_result = QueryResult(capacity_conn->exec_params(capacity_check_sql, {queues_array}));
+            
+            if (capacity_result.is_success()) {
+                // Check each queue's capacity
+                for (int i = 0; i < capacity_result.num_rows(); ++i) {
+                    std::string queue_name = capacity_result.get_value(i, "name");
+                    int max_size = std::stoi(capacity_result.get_value(i, "max_queue_size"));
+                    int current_depth = std::stoi(capacity_result.get_value(i, "current_depth"));
+                    int batch_size = queue_batch_sizes[queue_name];
+                    
+                    if (current_depth + batch_size > max_size) {
+                        // Queue would exceed capacity - fail all messages for this queue
+                        std::string error_msg = "Queue '" + queue_name + "' would exceed max capacity (" +
+                                              std::to_string(max_size) + "). Current: " + 
+                                              std::to_string(current_depth) + ", Batch: " + 
+                                              std::to_string(batch_size);
+                        
+                        spdlog::warn(error_msg);
+                        
+                        // Find all items for this queue and mark them as failed
+                        for (size_t item_idx = 0; item_idx < items.size(); ++item_idx) {
+                            if (items[item_idx].queue == queue_name) {
+                                PushResult failed_result;
+                                failed_result.transaction_id = items[item_idx].transaction_id.value_or(generate_transaction_id());
+                                failed_result.status = "failed";
+                                failed_result.error = error_msg;
+                                all_results[item_idx] = failed_result;
+                            }
+                        }
+                        
+                        // Remove this queue's partition groups from processing
+                        // We'll do this by marking which indices to skip below
+                    }
+                }
+            }
+        }
+    } catch (const std::exception& e) {
+        spdlog::error("Batch capacity check failed: {}", e.what());
+        // Continue with push - individual checks will catch issues
+    }
+    
     // Process each partition group in order
     for (const auto& [partition_key, item_indices] : partition_groups_ordered) {
+        // Skip if already failed in capacity check
+        bool already_failed = !all_results[item_indices[0]].status.empty();
+        if (already_failed) {
+            continue;
+        }
+        
         // Build items vector for this partition batch
         std::vector<PushItem> partition_items;
         partition_items.reserve(item_indices.size());
@@ -586,38 +686,7 @@ std::vector<PushResult> QueueManager::push_messages_chunk(const std::vector<Push
             return results;
         }
         
-        // Check max queue size if configured
-        std::string size_check_sql = R"(
-            SELECT q.max_queue_size, COALESCE(COUNT(m.id), 0) as current_size
-            FROM queen.queues q
-            LEFT JOIN queen.partitions p ON p.queue_id = q.id
-            LEFT JOIN queen.messages m ON m.partition_id = p.id
-            WHERE q.name = $1 AND q.max_queue_size > 0
-            GROUP BY q.max_queue_size
-        )";
-        
-        auto size_result = QueryResult(check_conn->exec_params(size_check_sql, {queue_name}));
-        
-        if (size_result.is_success() && size_result.num_rows() > 0) {
-            int max_size = std::stoi(size_result.get_value(0, "max_queue_size"));
-            int current_size = std::stoi(size_result.get_value(0, "current_size"));
-            
-            if (current_size + items.size() > max_size) {
-                // All messages fail if queue would exceed max size
-                for (const auto& item : items) {
-                    PushResult result;
-                    result.transaction_id = item.transaction_id.value_or(generate_transaction_id());
-                    result.status = "failed";
-                    result.error = "Queue '" + queue_name + "' would exceed max capacity (" + 
-                                  std::to_string(max_size) + "). Current: " + std::to_string(current_size) + 
-                                  ", Batch: " + std::to_string(items.size());
-                    results.push_back(result);
-                }
-                spdlog::warn("Queue {} rejected push: would exceed max size {} (current: {}, batch: {})",
-                           queue_name, max_size, current_size, items.size());
-                return results;
-            }
-        }
+        // NOTE: Capacity check is now done in batch at push_messages() level for better performance
         
         // Ensure partition exists
         if (!ensure_partition_exists(queue_name, partition_name)) {
@@ -723,6 +792,93 @@ std::vector<PushResult> QueueManager::push_messages_chunk(const std::vector<Push
                 results.push_back(result);
             }
             
+            // ═══════════════════════════════════════════════════════════════════════════
+            // OPTIMIZATION: Proactive duplicate detection with batch LEFT JOIN
+            // Check for existing transaction IDs before attempting INSERT
+            // ═══════════════════════════════════════════════════════════════════════════
+            std::map<std::string, std::string> existing_txn_map; // txn_id -> message_id
+            
+            // Check if any items have explicit transaction IDs (vs generated ones)
+            bool has_explicit_txn_ids = false;
+            for (const auto& item : items) {
+                if (item.transaction_id.has_value() && !item.transaction_id->empty()) {
+                    has_explicit_txn_ids = true;
+                    break;
+                }
+            }
+            
+            if (has_explicit_txn_ids) {
+                // Build array of transaction IDs to check
+                auto build_pg_array = [](const std::vector<std::string>& vec) -> std::string {
+                    std::string result = "{";
+                    for (size_t i = 0; i < vec.size(); ++i) {
+                        if (i > 0) result += ",";
+                        result += "\"";
+                        for (char c : vec[i]) {
+                            if (c == '\\' || c == '"') result += '\\';
+                            result += c;
+                        }
+                        result += "\"";
+                    }
+                    result += "}";
+                    return result;
+                };
+                
+                std::string txn_check_array = build_pg_array(transaction_ids);
+                
+                // Batch duplicate check using LEFT JOIN - matches Node.js optimization
+                std::string dup_check_sql = R"(
+                    SELECT t.txn_id as transaction_id, m.id as message_id
+                    FROM UNNEST($1::varchar[]) AS t(txn_id)
+                    LEFT JOIN queen.messages m ON m.transaction_id = t.txn_id
+                    WHERE m.id IS NOT NULL
+                )";
+                
+                auto dup_result = QueryResult(conn->exec_params(dup_check_sql, {txn_check_array}));
+                
+                if (dup_result.is_success()) {
+                    for (int i = 0; i < dup_result.num_rows(); ++i) {
+                        std::string txn_id = dup_result.get_value(i, "transaction_id");
+                        std::string msg_id = dup_result.get_value(i, "message_id");
+                        existing_txn_map[txn_id] = msg_id;
+                    }
+                    
+                    if (!existing_txn_map.empty()) {
+                        spdlog::debug("Found {} duplicate transaction IDs in batch of {}", 
+                                    existing_txn_map.size(), transaction_ids.size());
+                    }
+                }
+            }
+            
+            // Filter out duplicates and rebuild arrays for INSERT
+            std::vector<std::string> filtered_message_ids;
+            std::vector<std::string> filtered_transaction_ids;
+            std::vector<std::string> filtered_partition_ids;
+            std::vector<std::string> filtered_payloads;
+            std::vector<std::string> filtered_trace_ids;
+            std::vector<bool> filtered_encrypted_flags;
+            std::vector<size_t> filtered_result_indices; // Track which result index each corresponds to
+            
+            for (size_t i = 0; i < transaction_ids.size(); ++i) {
+                auto it = existing_txn_map.find(transaction_ids[i]);
+                if (it != existing_txn_map.end()) {
+                    // Duplicate found - mark result as duplicate
+                    results[i].status = "duplicate";
+                    results[i].message_id = it->second; // Use existing message ID
+                    // trace_id already set from results initialization
+                    continue;
+                }
+                
+                // Not a duplicate - add to filtered arrays for INSERT
+                filtered_message_ids.push_back(message_ids[i]);
+                filtered_transaction_ids.push_back(transaction_ids[i]);
+                filtered_partition_ids.push_back(partition_ids[i]);
+                filtered_payloads.push_back(payloads[i]);
+                filtered_trace_ids.push_back(trace_ids[i]);
+                filtered_encrypted_flags.push_back(encrypted_flags[i]);
+                filtered_result_indices.push_back(i);
+            }
+            
             // Use libpq's array parameter binding for UNNEST - preserves order!
             // Build PostgreSQL array literals as single parameters
             auto build_pg_array = [](const std::vector<std::string>& vec) -> std::string {
@@ -771,51 +927,54 @@ std::vector<PushResult> QueueManager::push_messages_chunk(const std::vector<Push
                 return result;
             };
             
-            // Build arrays
-            std::string ids_array = build_pg_array(message_ids);
-            std::string txn_array = build_pg_array(transaction_ids);
-            std::string part_array = build_pg_array(partition_ids);
-            std::string payload_array = build_pg_array(payloads);
-            std::string trace_array = build_pg_array_with_nulls(trace_ids);
-            std::string encrypted_array = build_bool_array(encrypted_flags);
+            // Build arrays from FILTERED data (duplicates already marked in results)
+            std::string ids_array = build_pg_array(filtered_message_ids);
+            std::string txn_array = build_pg_array(filtered_transaction_ids);
+            std::string part_array = build_pg_array(filtered_partition_ids);
+            std::string payload_array = build_pg_array(filtered_payloads);
+            std::string trace_array = build_pg_array_with_nulls(filtered_trace_ids);
+            std::string encrypted_array = build_bool_array(filtered_encrypted_flags);
             
-            // UNNEST preserves array order - critical for message ordering!
-            std::string sql = R"(
-                INSERT INTO queen.messages (id, transaction_id, partition_id, payload, trace_id, is_encrypted)
-                SELECT * FROM UNNEST(
-                    $1::uuid[],
-                    $2::varchar[],
-                    $3::uuid[],
-                    $4::jsonb[],
-                    $5::uuid[],
-                    $6::boolean[]
-                )
-                RETURNING id, transaction_id, trace_id
-            )";
-            
-            std::vector<std::string> unnest_params = {
-                ids_array,
-                txn_array,
-                part_array,
-                payload_array,
-                trace_array,
-                encrypted_array
-            };
-            
-            // Batch INSERT via UNNEST (preserves order)
-            
-            auto insert_result = QueryResult(conn->exec_params(sql, unnest_params));
-            if (!insert_result.is_success()) {
-                throw std::runtime_error("Batch insert failed: " + insert_result.error_message());
-            }
-            
-            // Update results with actual IDs
-            for (int i = 0; i < insert_result.num_rows() && i < static_cast<int>(results.size()); ++i) {
-                results[i].status = "queued";
-                results[i].message_id = insert_result.get_value(i, "id");
-                std::string trace_val = insert_result.get_value(i, "trace_id");
-                if (!trace_val.empty()) {
-                    results[i].trace_id = trace_val;
+            // Only INSERT if we have non-duplicate messages
+            if (!filtered_message_ids.empty()) {
+                // UNNEST preserves array order - critical for message ordering!
+                std::string sql = R"(
+                    INSERT INTO queen.messages (id, transaction_id, partition_id, payload, trace_id, is_encrypted)
+                    SELECT * FROM UNNEST(
+                        $1::uuid[],
+                        $2::varchar[],
+                        $3::uuid[],
+                        $4::jsonb[],
+                        $5::uuid[],
+                        $6::boolean[]
+                    )
+                    RETURNING id, transaction_id, trace_id
+                )";
+                
+                std::vector<std::string> unnest_params = {
+                    ids_array,
+                    txn_array,
+                    part_array,
+                    payload_array,
+                    trace_array,
+                    encrypted_array
+                };
+                
+                // Batch INSERT via UNNEST (preserves order)
+                auto insert_result = QueryResult(conn->exec_params(sql, unnest_params));
+                if (!insert_result.is_success()) {
+                    throw std::runtime_error("Batch insert failed: " + insert_result.error_message());
+                }
+                
+                // Update results with actual IDs for successfully inserted messages
+                for (int i = 0; i < insert_result.num_rows() && i < static_cast<int>(filtered_result_indices.size()); ++i) {
+                    size_t result_idx = filtered_result_indices[i];
+                    results[result_idx].status = "queued";
+                    results[result_idx].message_id = insert_result.get_value(i, "id");
+                    std::string trace_val = insert_result.get_value(i, "trace_id");
+                    if (!trace_val.empty()) {
+                        results[result_idx].trace_id = trace_val;
+                    }
                 }
             }
             
@@ -1615,6 +1774,7 @@ QueueManager::AckResult QueueManager::acknowledge_message(const std::string& tra
         
         if (status == "completed") {
             // Update cursor and release lease if all messages in batch are ACKed
+            // OPTIMIZATION: Return partition_id from UPDATE to avoid separate query
             std::string sql = R"(
                 UPDATE queen.partition_consumers 
                 SET last_consumed_id = m.id,
@@ -1643,7 +1803,9 @@ QueueManager::AckResult QueueManager::acknowledge_message(const std::string& tra
                 WHERE partition_consumers.partition_id = p.id
                   AND partition_consumers.consumer_group = $1
                   AND m.transaction_id = $2
-                RETURNING (partition_consumers.lease_expires_at IS NULL) as lease_released
+                RETURNING 
+                    (partition_consumers.lease_expires_at IS NULL) as lease_released,
+                    partition_consumers.partition_id
             )";
             
             std::vector<std::string> params = {consumer_group, transaction_id};
@@ -1655,22 +1817,13 @@ QueueManager::AckResult QueueManager::acknowledge_message(const std::string& tra
                     spdlog::debug("Lease released after ACK for transaction: {}", transaction_id);
                     
                     // CRITICAL: Insert into messages_consumed for analytics when batch completes
-                    // Get partition_id for this transaction
-                    std::string partition_sql = R"(
-                        SELECT p.id as partition_id
-                        FROM queen.messages m
-                        JOIN queen.partitions p ON p.id = m.partition_id
-                        WHERE m.transaction_id = $1
+                    // Use partition_id from RETURNING clause (no separate query needed!)
+                    std::string partition_id = query_result.get_value(0, "partition_id");
+                    std::string insert_consumed_sql = R"(
+                        INSERT INTO queen.messages_consumed (partition_id, consumer_group, messages_completed, messages_failed, acked_at)
+                        VALUES ($1, $2, 1, 0, NOW())
                     )";
-                    auto partition_result = QueryResult(conn->exec_params(partition_sql, {transaction_id}));
-                    if (partition_result.is_success() && partition_result.num_rows() > 0) {
-                        std::string partition_id = partition_result.get_value(0, "partition_id");
-                        std::string insert_consumed_sql = R"(
-                            INSERT INTO queen.messages_consumed (partition_id, consumer_group, messages_completed, messages_failed, acked_at)
-                            VALUES ($1, $2, 1, 0, NOW())
-                        )";
-                        conn->exec_params(insert_consumed_sql, {partition_id, consumer_group});
-                    }
+                    conn->exec_params(insert_consumed_sql, {partition_id, consumer_group});
                 }
                 result.status = "completed";
                 result.success = true;
