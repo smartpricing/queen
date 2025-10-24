@@ -255,6 +255,30 @@ You can use Queen directly from HTTP without the JS client.
 - See: `server/src/services/file_buffer.cpp:212` (MAX_STARTUP_RECOVERY_SECONDS)
 - See: `server/src/acceptor_server.cpp:1876` (worker initialization timeout)
 
+### Long-Polling Timeout Cleanup Bug (Fixed)
+**Issue:** Long-polling requests with `timeout >= 30s` would hang and never receive a response, even when the server correctly completed the operation.
+
+**Root Cause:** Response registry cleanup timer was set to 30 seconds, causing registered responses to be deleted before long-polling operations could complete and send them back to clients.
+
+**Timeline of Bug:**
+1. Client sends request with `wait=true&timeout=30000`
+2. Server registers response in registry
+3. After 30s, cleanup timer **deletes** the response (thinking it's orphaned)
+4. Thread pool completes wait operation, pushes result to response queue
+5. Response timer tries to send but can't find the response (already deleted)
+6. Client times out after 35s (30s + 5s buffer) with no response
+
+**Fix Applied (v0.2.12):**
+- Response registry cleanup timeout increased from 30s → 120s
+- Allows long-polling requests up to 60s with safe buffer
+- See: `server/src/acceptor_server.cpp:1721` (cleanup timeout)
+- See: `server/include/queen/response_queue.hpp:113` (default max_age)
+
+**Client-Side Recommendation:**
+- **Set maximum client timeout to 60 seconds** to stay within server cleanup window
+- For longer waits, use shorter timeouts with continuous retry loops
+- Example: Use `timeout: 30000` (30s) instead of 60s+ for reliable operation
+
 ### Other TODO Items
 - retention jobs
 - reconsume

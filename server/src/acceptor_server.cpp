@@ -1714,10 +1714,11 @@ static void response_timer_callback(us_timer_t* timer) {
         processed++;
     }
     
-    // Cleanup expired responses every 200 timer ticks (~10 seconds at 50ms intervals)
+    // Cleanup expired responses every 200 timer ticks (~5 seconds at 25ms intervals)
+    // Use 120s timeout to allow for long-polling requests up to 60s + buffer
     static int cleanup_counter = 0;
     if (++cleanup_counter >= 200) {
-        global_response_registry->cleanup_expired(std::chrono::seconds(30));
+        global_response_registry->cleanup_expired(std::chrono::seconds(120));
         cleanup_counter = 0;
     }
 }

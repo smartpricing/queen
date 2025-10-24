@@ -110,7 +110,7 @@ public:
     bool send_response(const std::string& request_id, const nlohmann::json& data, 
                       bool is_error = false, int status_code = 200);
     
-    void cleanup_expired(std::chrono::milliseconds max_age = std::chrono::seconds(30));
+    void cleanup_expired(std::chrono::milliseconds max_age = std::chrono::seconds(60));
     
     size_t size() const {
         std::lock_guard<std::mutex> lock(registry_mutex_);
