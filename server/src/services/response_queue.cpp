@@ -79,7 +79,6 @@ bool ResponseRegistry::send_response(const std::string& request_id, const nlohma
     // Lock the entry to ensure it's still valid before we start sending.
     // The lock is released when 'lock' goes out of scope.
     std::lock_guard<std::mutex> lock(entry->mutex);
-
     if (!entry->valid || !entry->response) {
         spdlog::debug("Response {} was already aborted or invalid before sending", request_id);
         return false;
@@ -117,14 +116,14 @@ bool ResponseRegistry::send_response(const std::string& request_id, const nlohma
             return true;
         }
 
-        // --- CORRECTED LARGE PAYLOAD STREAMING LOGIC ---
+        // --- RE-CORRECTED LARGE PAYLOAD STREAMING LOGIC ---
 
         // 1. Create shared state for the asynchronous operation.
+        // We move the payload into this state to keep it alive.
         struct ResponseData {
             std::string payload;
             size_t offset = 0;
-            // Keep a reference to the entry to ensure its mutex and flags are accessible
-            // and to prevent it from being prematurely destroyed.
+            // Keep a reference to the entry to manage its state
             std::shared_ptr<ResponseEntry> entry_ref;
         };
         auto responseData = std::make_shared<ResponseData>();
@@ -133,21 +132,23 @@ bool ResponseRegistry::send_response(const std::string& request_id, const nlohma
 
         const size_t totalSize = responseData->payload.length();
 
-        // 2. Define the writer logic in a single, reusable lambda.
-        // This lambda will be used for both the initial write and subsequent onWritable calls.
+        // 2. Define the onWritable (backpressure) handler.
+        // This lambda will ONLY be called by the event loop when the socket
+        // transitions from non-writable to writable.
         auto writer = [responseData, totalSize](uWS::HttpResponse<false>* res, int last_offset) mutable -> bool {
-            // Check if the response was aborted
+            // Check if the response was aborted while we were waiting
             if (!responseData->entry_ref->valid) {
-                return false; // Stop streaming if aborted.
+                return false; // Unregister
             }
 
-            responseData->offset = last_offset;
+            responseData->offset = last_offset; // Sync offset from where we left off
             bool finished = false;
 
+            // We are in onWritable, so cork() is SAFE.
             res->cork([&]() {
                 const size_t chunkSize = 64 * 1024;
-
-                // Loop and send chunks until we are done or hit backpressure.
+                
+                // Write in a loop until we hit backpressure *again*
                 while (responseData->offset < totalSize) {
                     size_t remaining = totalSize - responseData->offset;
                     size_t currentChunkSize = std::min(chunkSize, remaining);
@@ -157,41 +158,72 @@ bool ResponseRegistry::send_response(const std::string& request_id, const nlohma
 
                     if (done) {
                         finished = true;
-                        // The stream is complete, invalidate the entry.
                         responseData->entry_ref->response = nullptr;
                         responseData->entry_ref->valid = false;
                         return; // Exit cork lambda
                     }
 
                     if (!ok) {
-                        // Backpressure was applied. We must stop and wait for onWritable.
+                        // Hit backpressure again. Stop and wait for the *next* onWritable.
                         return; // Exit cork lambda
                     }
-                    
-                    // If ok, the chunk was sent. Update our offset and continue the loop.
-                    responseData->offset += currentChunkSize;
+
+                    // Chunk sent, update offset and continue the loop
+                    responseData->offset += currentChunkSize; 
                 }
             });
 
-            return !finished; // Return true to stay registered, false to unregister.
+            return !finished; // Keep handler registered if not finished
         };
 
-        // 3. Register the writer as the onWritable handler.
+        // 3. Register the onWritable handler *before* the first write attempt.
         entry->response->onWritable([writer, res = entry->response](int offset) mutable {
             return writer(res, offset);
         });
 
-        // 4. Kick off the streaming process by calling the writer immediately.
-        // This handles the initial write and the loop for subsequent writes until
-        // backpressure is hit for the first time.
-        bool still_writing = writer(entry->response, 0);
+        // 4. Perform the *initial* write loop.
+        // We do NOT cork here. We write chunks until we either finish
+        // or hit backpressure.
+        const size_t chunkSize = 64 * 1024;
 
-        if (!still_writing) {
-            spdlog::debug("Successfully sent large response for ID {} in a single go", request_id);
-        } else {
-            spdlog::debug("Started streaming large response for ID {}", request_id);
+        while (responseData->offset < totalSize) {
+            // Check for abort *before* writing
+            if (!entry->valid) {
+                return false; // Aborted during initial write loop
+            }
+
+            size_t remaining = totalSize - responseData->offset;
+            size_t currentChunkSize = std::min(chunkSize, remaining);
+            std::string_view chunk(responseData->payload.data() + responseData->offset, currentChunkSize);
+
+            auto [ok, done] = entry->response->tryEnd(chunk, totalSize);
+
+            if (done) {
+                // Success! The entire response was sent in the initial loop.
+                spdlog::debug("Successfully sent large response for ID {} in initial write loop", request_id);
+                entry->response = nullptr;
+                entry->valid = false;
+                // The onWritable handler will just be discarded, never called.
+                return true; // We are finished.
+            }
+
+            if (!ok) {
+                // Hit backpressure. Stop the loop.
+                // The onWritable handler we registered in step 3 will now
+                // automatically take over when the socket is ready.
+                spdlog::debug("Started streaming large response for ID {} (hit backpressure)", request_id);
+                return true; // The stream is now managed by the event loop.
+            }
+
+            // Chunk was sent successfully (ok=true), update offset and continue the loop
+            responseData->offset += currentChunkSize;
         }
 
+        // We should only exit the loop via 'done' or 'ok=false' (backpressure)
+        // This code path should ideally not be reachable.
+        spdlog::debug("Large response for ID {} finished initial loop (unexpected exit)", request_id);
+        entry->response = nullptr;
+        entry->valid = false;
         return true;
 
     } catch (const std::exception& e) {

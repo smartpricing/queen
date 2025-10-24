@@ -3,7 +3,7 @@ import fs from 'fs';
 
 const TOTAL_MESSAGES = 1000000;
 const PARTITIONS = 100; 
-const MAX_BATCH_SIZE = 100;  // Reduced from 10000
+const MAX_BATCH_SIZE = 1000;  // Reduced from 10000
 const PUSH_PARALLEL = 10;      // Reduced from 10 to avoid lock contention
 const QUEUE_NAME = 'benchmark-queue-001';
 
