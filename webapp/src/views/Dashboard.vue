@@ -100,30 +100,43 @@
             </div>
           </div>
 
-          <!-- Stats Row - Flat -->
-          <div class="grid grid-cols-1 lg:grid-cols-2 gap-2">
-            <div class="info-flat">
-              <div class="flex items-center gap-2 mb-2">
-                <div class="w-7 h-7 rounded-lg bg-purple-500/10 dark:bg-purple-500/20 flex items-center justify-center">
-                  <svg class="w-4 h-4 text-purple-600 dark:text-purple-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z" />
+          <!-- Resource Usage Chart - Flat -->
+          <div class="chart-flat">
+            <div class="flex items-center justify-between mb-4">
+              <div class="flex items-center gap-2">
+                <div class="w-8 h-8 rounded-lg bg-rose-500/10 dark:bg-rose-500/20 flex items-center justify-center">
+                  <svg class="w-5 h-5 text-rose-600 dark:text-rose-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 3v2m6-2v2M9 19v2m6-2v2M5 9H3m2 6H3m18-6h-2m2 6h-2M7 19h10a2 2 0 002-2V7a2 2 0 00-2-2H7a2 2 0 00-2 2v10a2 2 0 002 2zM9 9h6v6H9V9z" />
                   </svg>
                 </div>
-                <h3 class="text-sm font-semibold">Message Status</h3>
+                <h3 class="text-sm font-semibold text-gray-900 dark:text-gray-100">Resource Usage</h3>
               </div>
-              <MessageStatusCard :data="overview?.messages" :calculated-pending="calculatedPending" />
+              <span class="text-xs text-gray-500 dark:text-gray-400 px-2.5 py-1 bg-gray-100 dark:bg-slate-700 rounded-full">
+                Last Hour
+              </span>
             </div>
+            <div class="chart-area">
+              <ResourceUsageChart :data="systemMetrics" />
+            </div>
+          </div>
 
-            <div class="info-flat">
-              <div class="flex items-center gap-2 mb-2">
-                <div class="w-7 h-7 rounded-lg bg-blue-500/10 dark:bg-blue-500/20 flex items-center justify-center">
-                  <svg class="w-4 h-4 text-blue-600 dark:text-blue-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z" />
+          <!-- Queue Metrics Chart - Flat -->
+          <div class="chart-flat">
+            <div class="flex items-center justify-between mb-4">
+              <div class="flex items-center gap-2">
+                <div class="w-8 h-8 rounded-lg bg-blue-500/10 dark:bg-blue-500/20 flex items-center justify-center">
+                  <svg class="w-5 h-5 text-blue-600 dark:text-blue-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 7v10c0 2.21 3.582 4 8 4s8-1.79 8-4V7M4 7c0 2.21 3.582 4 8 4s8-1.79 8-4M4 7c0-2.21 3.582-4 8-4s8 1.79 8 4m0 5c0 2.21-3.582 4-8 4s-8-1.79-8-4" />
                   </svg>
                 </div>
-                <h3 class="text-sm font-semibold">System Performance</h3>
+                <h3 class="text-sm font-semibold text-gray-900 dark:text-gray-100">Queue & Connection Metrics</h3>
               </div>
-              <PerformanceCard :data="metrics" />
+              <span class="text-xs text-gray-500 dark:text-gray-400 px-2.5 py-1 bg-gray-100 dark:bg-slate-700 rounded-full">
+                Last Hour
+              </span>
+            </div>
+            <div class="chart-area">
+              <QueueMetricsChart :data="systemMetrics" />
             </div>
           </div>
 
@@ -147,24 +160,23 @@
 
 <script setup>
 import { ref, computed, onMounted, onUnmounted } from 'vue';
-import { healthApi } from '../api/health';
 import { resourcesApi } from '../api/resources';
 import { analyticsApi } from '../api/analytics';
 import { queuesApi } from '../api/queues';
+import { systemMetricsApi } from '../api/system-metrics';
 import { formatNumber } from '../utils/formatters';
 
 import LoadingSpinner from '../components/common/LoadingSpinner.vue';
 import ThroughputChart from '../components/dashboard/ThroughputChart.vue';
-import MessageStatusCard from '../components/dashboard/MessageStatusCard.vue';
-import PerformanceCard from '../components/dashboard/PerformanceCard.vue';
+import ResourceUsageChart from '../components/dashboard/ResourceUsageChart.vue';
+import QueueMetricsChart from '../components/dashboard/QueueMetricsChart.vue';
 import TopQueuesTable from '../components/dashboard/TopQueuesTable.vue';
 
 const loading = ref(false);
 const error = ref(null);
 const overview = ref(null);
-const health = ref(null);
-const metrics = ref(null);
 const status = ref(null);
+const systemMetrics = ref(null);
 const topQueues = ref([]);
 
 // Calculate pending as: total - completed - failed - deadLetter
@@ -188,18 +200,16 @@ async function loadData() {
   error.value = null;
 
   try {
-    const [overviewRes, healthRes, metricsRes, statusRes, queuesRes] = await Promise.all([
+    const [overviewRes, statusRes, queuesRes, systemMetricsRes] = await Promise.all([
       resourcesApi.getOverview(),
-      healthApi.getHealth(),
-      healthApi.getMetrics(),
       analyticsApi.getStatus(),
       queuesApi.getQueues(),
+      systemMetricsApi.getSystemMetrics(), // Fetch last hour of system metrics
     ]);
 
     overview.value = overviewRes.data;
-    health.value = healthRes.data;
-    metrics.value = metricsRes.data;
     status.value = statusRes.data;
+    systemMetrics.value = systemMetricsRes.data;
     
     // Get top 5 queues by total messages
     topQueues.value = queuesRes.data.queues

@@ -31,6 +31,11 @@ const routes = [
     name: 'Analytics',
     component: () => import('../views/Analytics.vue'),
   },
+  {
+    path: '/system-metrics',
+    name: 'SystemMetrics',
+    component: () => import('../views/SystemMetrics.vue'),
+  },
 ];
 
 const router = createRouter({

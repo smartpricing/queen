@@ -5,6 +5,7 @@
 #include "queen/encryption.hpp"
 #include "queen/file_buffer.hpp"
 #include "queen/response_queue.hpp"
+#include "queen/metrics_collector.hpp"
 #include "threadpool.hpp"
 #include <App.h>
 #include <json.hpp>
@@ -19,14 +20,46 @@
 #include <chrono>
 #include <optional>
 #include <memory>
+#include <unistd.h>
 
 // Global shared resources for all workers (declared early for use in handlers)
 static std::shared_ptr<astp::ThreadPool> global_db_thread_pool;
+static std::shared_ptr<astp::ThreadPool> global_system_thread_pool;
 static std::shared_ptr<queen::DatabasePool> global_db_pool;
 static std::shared_ptr<queen::ResponseQueue> global_response_queue;
 static std::shared_ptr<queen::ResponseRegistry> global_response_registry;
+static std::shared_ptr<queen::MetricsCollector> global_metrics_collector;
 static us_timer_t* global_response_timer = nullptr;
 static std::once_flag global_pool_init_flag;
+
+// System information for metrics
+struct SystemInfo {
+    std::string hostname;
+    int port;
+    int process_id;
+    
+    static SystemInfo get_current() {
+        SystemInfo info;
+        
+        // Get hostname
+        char hostname_buf[256];
+        if (gethostname(hostname_buf, sizeof(hostname_buf)) == 0) {
+            info.hostname = hostname_buf;
+        } else {
+            info.hostname = "unknown";
+        }
+        
+        // Get process ID
+        info.process_id = getpid();
+        
+        // Port will be set from config
+        info.port = 0;
+        
+        return info;
+    }
+};
+
+static SystemInfo global_system_info;
 
 namespace queen {
 
@@ -1571,6 +1604,22 @@ static void setup_worker_routes(uWS::App* app,
         }
     });
     
+    // GET /api/v1/analytics/system-metrics - System metrics time series
+    app->get("/api/v1/analytics/system-metrics", [analytics_manager](auto* res, auto* req) {
+        try {
+            AnalyticsManager::SystemMetricsFilters filters;
+            filters.from = get_query_param(req, "from");
+            filters.to = get_query_param(req, "to");
+            filters.hostname = get_query_param(req, "hostname");
+            filters.worker_id = get_query_param(req, "workerId");
+            
+            auto response = analytics_manager->get_system_metrics(filters);
+            send_json_response(res, response);
+        } catch (const std::exception& e) {
+            send_error_response(res, e.what(), 500);
+        }
+    });
+    
     // GET /api/v1/status/buffers - File buffer stats
     app->get("/api/v1/status/buffers", [file_buffer, worker_id](auto* res, auto* req) {
         try {
@@ -1737,11 +1786,13 @@ static void worker_thread(const Config& config, int worker_id, int num_workers,
         std::call_once(global_pool_init_flag, [&config]() {
             // Calculate global pool sizes with 5% safety buffer
             int total_connections = static_cast<int>(config.database.pool_size * 0.95); // 95% of total
-            int total_threads = total_connections; // 1:1 ratio
+            int total_db_threads = total_connections; // 1:1 ratio
+            int system_threads = 4; // Small pool for background tasks (metrics, cleanup, etc.)
             
             spdlog::info("Initializing GLOBAL shared resources:");
             spdlog::info("  - Total DB connections: {} (95% of {})", total_connections, config.database.pool_size);
-            spdlog::info("  - Total ThreadPool threads: {}", total_threads);
+            spdlog::info("  - DB ThreadPool threads: {}", total_db_threads);
+            spdlog::info("  - System ThreadPool threads: {}", system_threads);
             
             // Create global connection pool
             global_db_pool = std::make_shared<DatabasePool>(
@@ -1753,13 +1804,24 @@ static void worker_thread(const Config& config, int worker_id, int num_workers,
                 config.database.idle_timeout
             );
             
-            // Create global ThreadPool
-            global_db_thread_pool = std::make_shared<astp::ThreadPool>(total_threads);
+            // Create global DB operations ThreadPool
+            global_db_thread_pool = std::make_shared<astp::ThreadPool>(total_db_threads);
+            
+            // Create global System operations ThreadPool (for metrics, cleanup, etc.)
+            global_system_thread_pool = std::make_shared<astp::ThreadPool>(system_threads);
             
             // Create global response queue and registry
             global_response_queue = std::make_shared<queen::ResponseQueue>();
             global_response_registry = std::make_shared<queen::ResponseRegistry>();
             
+            // Get system info for metrics
+            global_system_info = SystemInfo::get_current();
+            global_system_info.port = config.server.port;
+            
+            spdlog::info("System info: hostname={}, port={}, pid={}", 
+                         global_system_info.hostname, 
+                         global_system_info.port, 
+                         global_system_info.process_id);
             spdlog::info("Global shared resources initialized successfully");
         });
         
@@ -1789,6 +1851,21 @@ static void worker_thread(const Config& config, int worker_id, int num_workers,
             if (worker_id == 0) {
                 spdlog::info("[Worker 0] Initializing database schema...");
                 queue_manager->initialize_schema();
+                
+                // Start metrics collector (samples every 1s, aggregates every 60s)
+                spdlog::info("[Worker 0] Starting background metrics collector...");
+                global_metrics_collector = std::make_shared<queen::MetricsCollector>(
+                    global_db_pool,
+                    global_db_thread_pool,
+                    global_system_thread_pool,
+                    global_system_info.hostname,
+                    global_system_info.port,
+                    global_system_info.process_id,
+                    config.server.worker_id,
+                    1000,  // Sample every 1 second
+                    60     // Aggregate and save every 60 seconds
+                );
+                global_metrics_collector->start();
             }
         } else {
             spdlog::warn("[Worker {}] Database connection: UNAVAILABLE (Pool: 0/{}) - Will use file buffer for failover", 

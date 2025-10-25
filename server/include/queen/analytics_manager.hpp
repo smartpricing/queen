@@ -63,6 +63,15 @@ public:
     };
     nlohmann::json get_analytics(const AnalyticsFilters& filters);
     
+    // System Metrics
+    struct SystemMetricsFilters {
+        std::string from;
+        std::string to;
+        std::string hostname;
+        std::string worker_id;
+    };
+    nlohmann::json get_system_metrics(const SystemMetricsFilters& filters);
+    
 private:
     // Helper methods
     std::string format_duration(double seconds);

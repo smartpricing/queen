@@ -2438,6 +2438,19 @@ bool QueueManager::initialize_schema() {
                 retention_type VARCHAR(50),
                 executed_at TIMESTAMPTZ DEFAULT NOW()
             );
+            
+            CREATE TABLE IF NOT EXISTS queen.system_metrics (
+                id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+                timestamp TIMESTAMPTZ NOT NULL,
+                hostname TEXT NOT NULL,
+                port INTEGER NOT NULL,
+                process_id INTEGER NOT NULL,
+                worker_id TEXT NOT NULL,
+                sample_count INTEGER NOT NULL DEFAULT 60,
+                metrics JSONB NOT NULL,
+                CONSTRAINT unique_metric_per_replica 
+                    UNIQUE (timestamp, hostname, port, process_id, worker_id)
+            );
         )";
         
         auto result2 = QueryResult(conn->exec(create_tables_sql));
@@ -2476,6 +2489,10 @@ bool QueueManager::initialize_schema() {
             CREATE INDEX IF NOT EXISTS idx_dlq_message_consumer ON queen.dead_letter_queue(message_id, consumer_group);
             CREATE INDEX IF NOT EXISTS idx_retention_history_partition ON queen.retention_history(partition_id);
             CREATE INDEX IF NOT EXISTS idx_retention_history_executed ON queen.retention_history(executed_at);
+            CREATE INDEX IF NOT EXISTS idx_system_metrics_timestamp ON queen.system_metrics(timestamp DESC);
+            CREATE INDEX IF NOT EXISTS idx_system_metrics_replica ON queen.system_metrics(hostname, port, process_id);
+            CREATE INDEX IF NOT EXISTS idx_system_metrics_worker ON queen.system_metrics(worker_id);
+            CREATE INDEX IF NOT EXISTS idx_system_metrics_metrics ON queen.system_metrics USING GIN (metrics);
         )";
         
         auto result3 = QueryResult(conn->exec(create_indexes_sql));

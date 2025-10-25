@@ -1293,5 +1293,81 @@ nlohmann::json AnalyticsManager::get_analytics(const AnalyticsFilters& filters) 
     }
 }
 
+nlohmann::json AnalyticsManager::get_system_metrics(const SystemMetricsFilters& filters) {
+    try {
+        ScopedConnection conn(db_pool_.get());
+        
+        std::string from_iso, to_iso;
+        get_time_range(filters.from, filters.to, from_iso, to_iso, 1);
+        
+        // Build filter clause
+        std::string where_clause = "";
+        std::vector<std::string> params = {from_iso, to_iso};
+        int param_idx = 3;
+        
+        if (!filters.hostname.empty()) {
+            where_clause += " AND hostname = $" + std::to_string(param_idx++);
+            params.push_back(filters.hostname);
+        }
+        
+        if (!filters.worker_id.empty()) {
+            where_clause += " AND worker_id = $" + std::to_string(param_idx++);
+            params.push_back(filters.worker_id);
+        }
+        
+        // Query for system metrics time series
+        std::string query = R"(
+            SELECT 
+                timestamp,
+                hostname,
+                port,
+                process_id,
+                worker_id,
+                sample_count,
+                metrics
+            FROM queen.system_metrics
+            WHERE timestamp >= $1::timestamptz
+                AND timestamp <= $2::timestamptz )" + where_clause + R"(
+            ORDER BY timestamp ASC
+            LIMIT 100
+        )";
+        
+        auto result = QueryResult(conn->exec_params(query, params));
+        
+        nlohmann::json time_series = nlohmann::json::array();
+        
+        for (int i = 0; i < result.num_rows(); i++) {
+            std::string metrics_str = result.get_value(i, "metrics");
+            nlohmann::json metrics = nlohmann::json::parse(metrics_str);
+            
+            nlohmann::json data_point = {
+                {"timestamp", result.get_value(i, "timestamp")},
+                {"hostname", result.get_value(i, "hostname")},
+                {"port", safe_stoi(result.get_value(i, "port"))},
+                {"processId", safe_stoi(result.get_value(i, "process_id"))},
+                {"workerId", result.get_value(i, "worker_id")},
+                {"sampleCount", safe_stoi(result.get_value(i, "sample_count"))},
+                {"metrics", metrics}
+            };
+            
+            time_series.push_back(data_point);
+        }
+        
+        nlohmann::json response = {
+            {"timeRange", {
+                {"from", from_iso},
+                {"to", to_iso}
+            }},
+            {"timeSeries", time_series},
+            {"count", time_series.size()}
+        };
+        
+        return response;
+    } catch (const std::exception& e) {
+        spdlog::error("Error in get_system_metrics: {}", e.what());
+        throw;
+    }
+}
+
 } // namespace queen
 

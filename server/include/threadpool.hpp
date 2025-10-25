@@ -69,7 +69,7 @@
 
 namespace astp 
 {    
-    int
+    inline int
     hwc() {
         return std::thread::hardware_concurrency();
     }
