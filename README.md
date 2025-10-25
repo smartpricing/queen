@@ -279,6 +279,29 @@ You can use Queen directly from HTTP without the JS client.
 - For longer waits, use shorter timeouts with continuous retry loops
 - Example: Use `timeout: 30000` (30s) instead of 60s+ for reliable operation
 
+### Long-Polling Architecture Limitation (Planned Redesign)
+
+**Current Issue:** Each long-polling request blocks a ThreadPool thread for the entire timeout duration (up to 30s), causing resource exhaustion when many clients poll empty queues.
+
+**Impact:**
+- With `DB_POOL_SIZE=20` → only 19 concurrent long-polling requests supported
+- Additional requests queue up, adding latency (can exceed client timeout)
+- Poor resource utilization (threads sleeping while waiting)
+
+**Workarounds:**
+1. Increase `DB_POOL_SIZE` to accommodate concurrent long-polling clients
+2. Use shorter timeouts (5-10s) with continuous retry
+3. Reduce number of concurrent consumers
+
+**Planned Solution:** "Registry of Intentions" pattern
+- Clients register polling intentions (queue, partition, timeout)
+- 1-2 dedicated worker threads service ALL registered intentions
+- No thread blocking per request
+- Can handle 100+ concurrent long-polling clients efficiently
+- See: [LONG_POLLING_REDESIGN.md](LONG_POLLING_REDESIGN.md) for full design
+
+**Status:** Design complete, implementation tracked in GitHub issues
+
 ### Other TODO Items
 - retention jobs
 - reconsume
@@ -286,3 +309,4 @@ You can use Queen directly from HTTP without the JS client.
 - pg async
 - pg reconnect
 - memory leak?
+- Long-polling redesign (registry of intentions pattern)

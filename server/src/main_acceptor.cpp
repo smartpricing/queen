@@ -16,14 +16,27 @@ void signal_handler(int signal) {
 }
 
 int main(int argc, char* argv[]) {
-    // Set up logging
-    spdlog::set_level(spdlog::level::info);
-    spdlog::set_pattern("[%Y-%m-%d %H:%M:%S.%e] [%l] %v");
-    
-    // Load configuration
+    // Load configuration first to get log settings
     queen::Config config = queen::Config::load();
     
-    // Parse command line
+    // Set up logging from config
+    if (config.logging.log_level == "trace") {
+        spdlog::set_level(spdlog::level::trace);
+    } else if (config.logging.log_level == "debug") {
+        spdlog::set_level(spdlog::level::debug);
+    } else if (config.logging.log_level == "info") {
+        spdlog::set_level(spdlog::level::info);
+    } else if (config.logging.log_level == "warn") {
+        spdlog::set_level(spdlog::level::warn);
+    } else if (config.logging.log_level == "error") {
+        spdlog::set_level(spdlog::level::err);
+    } else {
+        spdlog::set_level(spdlog::level::info);  // Default
+    }
+    
+    spdlog::set_pattern("[%Y-%m-%d %H:%M:%S.%e] [%l] %v");
+    
+    // Parse command line (can override config)
     for (int i = 1; i < argc; ++i) {
         std::string arg = argv[i];
         if (arg == "--port" && i + 1 < argc) {
