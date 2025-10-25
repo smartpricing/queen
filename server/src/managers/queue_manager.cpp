@@ -2444,12 +2444,11 @@ bool QueueManager::initialize_schema() {
                 timestamp TIMESTAMPTZ NOT NULL,
                 hostname TEXT NOT NULL,
                 port INTEGER NOT NULL,
-                process_id INTEGER NOT NULL,
                 worker_id TEXT NOT NULL,
                 sample_count INTEGER NOT NULL DEFAULT 60,
                 metrics JSONB NOT NULL,
                 CONSTRAINT unique_metric_per_replica 
-                    UNIQUE (timestamp, hostname, port, process_id, worker_id)
+                    UNIQUE (timestamp, hostname, port, worker_id)
             );
         )";
         
@@ -2490,7 +2489,7 @@ bool QueueManager::initialize_schema() {
             CREATE INDEX IF NOT EXISTS idx_retention_history_partition ON queen.retention_history(partition_id);
             CREATE INDEX IF NOT EXISTS idx_retention_history_executed ON queen.retention_history(executed_at);
             CREATE INDEX IF NOT EXISTS idx_system_metrics_timestamp ON queen.system_metrics(timestamp DESC);
-            CREATE INDEX IF NOT EXISTS idx_system_metrics_replica ON queen.system_metrics(hostname, port, process_id);
+            CREATE INDEX IF NOT EXISTS idx_system_metrics_replica ON queen.system_metrics(hostname, port);
             CREATE INDEX IF NOT EXISTS idx_system_metrics_worker ON queen.system_metrics(worker_id);
             CREATE INDEX IF NOT EXISTS idx_system_metrics_metrics ON queen.system_metrics USING GIN (metrics);
         )";

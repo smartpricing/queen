@@ -1315,42 +1315,61 @@ nlohmann::json AnalyticsManager::get_system_metrics(const SystemMetricsFilters& 
             params.push_back(filters.worker_id);
         }
         
-        // Query for system metrics time series
+        // Query for system metrics - grouped by replica
         std::string query = R"(
             SELECT 
                 timestamp,
                 hostname,
                 port,
-                process_id,
                 worker_id,
                 sample_count,
                 metrics
             FROM queen.system_metrics
             WHERE timestamp >= $1::timestamptz
                 AND timestamp <= $2::timestamptz )" + where_clause + R"(
-            ORDER BY timestamp ASC
-            LIMIT 100
+            ORDER BY hostname, port, timestamp ASC
         )";
         
         auto result = QueryResult(conn->exec_params(query, params));
         
-        nlohmann::json time_series = nlohmann::json::array();
+        // Group data by replica (hostname:port)
+        std::map<std::string, nlohmann::json> replicas;
         
         for (int i = 0; i < result.num_rows(); i++) {
+            std::string hostname = result.get_value(i, "hostname");
+            std::string port = result.get_value(i, "port");
+            std::string worker_id = result.get_value(i, "worker_id");
+            std::string timestamp = result.get_value(i, "timestamp");
+            
+            // Create replica key (hostname:port)
+            std::string replica_key = hostname + ":" + port;
+            
+            // Parse metrics
             std::string metrics_str = result.get_value(i, "metrics");
             nlohmann::json metrics = nlohmann::json::parse(metrics_str);
             
-            nlohmann::json data_point = {
-                {"timestamp", result.get_value(i, "timestamp")},
-                {"hostname", result.get_value(i, "hostname")},
-                {"port", safe_stoi(result.get_value(i, "port"))},
-                {"processId", safe_stoi(result.get_value(i, "process_id"))},
-                {"workerId", result.get_value(i, "worker_id")},
+            // Initialize replica if not exists
+            if (replicas.find(replica_key) == replicas.end()) {
+                replicas[replica_key] = {
+                    {"hostname", hostname},
+                    {"port", safe_stoi(port)},
+                    {"workerId", worker_id},
+                    {"timeSeries", nlohmann::json::array()}
+                };
+            }
+            
+            // Add data point to this replica's time series
+            replicas[replica_key]["timeSeries"].push_back({
+                {"timestamp", timestamp},
                 {"sampleCount", safe_stoi(result.get_value(i, "sample_count"))},
                 {"metrics", metrics}
-            };
-            
-            time_series.push_back(data_point);
+            });
+        }
+        
+        // Convert map to array
+        nlohmann::json replicas_array = nlohmann::json::array();
+        for (const auto& [key, replica_data] : replicas) {
+            replicas_array.push_back(replica_data);
         }
         
         nlohmann::json response = {
@@ -1358,8 +1377,8 @@ nlohmann::json AnalyticsManager::get_system_metrics(const SystemMetricsFilters& 
                 {"from", from_iso},
                 {"to", to_iso}
             }},
-            {"timeSeries", time_series},
-            {"count", time_series.size()}
+            {"replicas", replicas_array},
+            {"replicaCount", replicas_array.size()}
         };
         
         return response;

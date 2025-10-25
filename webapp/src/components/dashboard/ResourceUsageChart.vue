@@ -74,20 +74,47 @@ function getNestedValue(obj, path) {
 }
 
 const chartData = computed(() => {
-  if (!props.data?.timeSeries?.length) return null;
+  if (!props.data?.replicas?.length) return null;
 
-  const timeSeries = props.data.timeSeries;
+  const replicas = props.data.replicas;
   const datasets = [];
 
-  // CPU % dataset
+  // Get all unique timestamps
+  const allTimestamps = new Set();
+  replicas.forEach(replica => {
+    replica.timeSeries?.forEach(point => {
+      allTimestamps.add(point.timestamp);
+    });
+  });
+  const sortedTimestamps = Array.from(allTimestamps).sort();
+
+  // Aggregate data across all replicas for each timestamp
+  const aggregatedData = {};
+  
+  sortedTimestamps.forEach(ts => {
+    aggregatedData[ts] = { cpu: [], memory: [] };
+    
+    replicas.forEach(replica => {
+      const point = replica.timeSeries?.find(p => p.timestamp === ts);
+      if (point) {
+        const cpuValue = getNestedValue(point.metrics, 'cpu.user_us')?.avg;
+        const memValue = getNestedValue(point.metrics, 'memory.rss_bytes')?.avg;
+        
+        if (cpuValue !== undefined && cpuValue !== null) aggregatedData[ts].cpu.push(cpuValue);
+        if (memValue !== undefined && memValue !== null) aggregatedData[ts].memory.push(memValue);
+      }
+    });
+  });
+
+  // CPU % dataset (averaged across replicas)
   if (selectedMetrics.value.cpu) {
     datasets.push({
       label: 'CPU %',
-      data: timeSeries.map(point => {
-        const value = getNestedValue(point.metrics, 'cpu.user_us');
-        const rawValue = value?.avg !== undefined ? value.avg : null;
-        // Backend stores as percentage * 100 (e.g., 1523 = 15.23%)
-        return rawValue !== null ? (rawValue / 100) : null;
+      data: sortedTimestamps.map(ts => {
+        const values = aggregatedData[ts].cpu;
+        if (values.length === 0) return null;
+        const avg = values.reduce((sum, v) => sum + v, 0) / values.length;
+        return avg / 100;
       }),
       borderColor: 'rgba(244, 63, 94, 1)',
       backgroundColor: 'rgba(244, 63, 94, 0.1)',
@@ -101,15 +128,15 @@ const chartData = computed(() => {
     });
   }
 
-  // Memory MB dataset
+  // Memory MB dataset (averaged across replicas)
   if (selectedMetrics.value.memory) {
     datasets.push({
       label: 'Memory (MB)',
-      data: timeSeries.map(point => {
-        const value = getNestedValue(point.metrics, 'memory.rss_bytes');
-        const rawValue = value?.avg !== undefined ? value.avg : null;
-        // Convert bytes to MB
-        return rawValue !== null ? (rawValue / 1024 / 1024) : null;
+      data: sortedTimestamps.map(ts => {
+        const values = aggregatedData[ts].memory;
+        if (values.length === 0) return null;
+        const avg = values.reduce((sum, v) => sum + v, 0) / values.length;
+        return avg / 1024 / 1024;
       }),
       borderColor: 'rgba(168, 85, 247, 1)',
       backgroundColor: 'rgba(168, 85, 247, 0.1)',
@@ -124,8 +151,8 @@ const chartData = computed(() => {
   }
 
   return {
-    labels: timeSeries.map(point => {
-      const date = new Date(point.timestamp);
+    labels: sortedTimestamps.map(ts => {
+      const date = new Date(ts);
       return date.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' });
     }),
     datasets,

@@ -88,69 +88,99 @@ function getNestedValue(obj, path) {
   return path.split('.').reduce((acc, part) => acc?.[part], obj);
 }
 
-const chartData = computed(() => {
-  if (!props.data?.timeSeries?.length) return null;
+// Colors for different replicas
+const replicaColors = [
+  { poolSize: 'rgba(107, 114, 128, 1)', active: 'rgba(59, 130, 246, 1)', idle: 'rgba(34, 197, 94, 1)' },
+  { poolSize: 'rgba(156, 163, 175, 1)', active: 'rgba(147, 197, 253, 1)', idle: 'rgba(134, 239, 172, 1)' },
+  { poolSize: 'rgba(75, 85, 99, 1)', active: 'rgba(96, 165, 250, 1)', idle: 'rgba(74, 222, 128, 1)' },
+];
 
-  const timeSeries = props.data.timeSeries;
+const chartData = computed(() => {
+  if (!props.data?.replicas?.length) return null;
+
+  const replicas = props.data.replicas;
   const datasets = [];
 
-  if (selectedMetrics.value.poolSize) {
-    datasets.push({
-      label: 'Pool Size',
-      data: timeSeries.map(point => {
+  // Get all unique timestamps
+  const allTimestamps = new Set();
+  replicas.forEach(replica => {
+    replica.timeSeries.forEach(point => {
+      allTimestamps.add(point.timestamp);
+    });
+  });
+  const sortedTimestamps = Array.from(allTimestamps).sort();
+
+  replicas.forEach((replica, replicaIndex) => {
+    const colorScheme = replicaColors[replicaIndex % replicaColors.length];
+    const replicaLabel = `${replica.hostname}`;
+
+    if (selectedMetrics.value.poolSize) {
+      const dataMap = new Map();
+      replica.timeSeries.forEach(point => {
         const value = getNestedValue(point.metrics, 'database.pool_size');
-        return value?.[props.aggregation] !== undefined ? value[props.aggregation] : null;
-      }),
-      borderColor: 'rgba(107, 114, 128, 1)',
-      backgroundColor: 'rgba(107, 114, 128, 0.1)',
-      borderWidth: 2,
-      fill: false,
-      tension: 0,
-      pointRadius: 2,
-      pointHoverRadius: 5,
-      pointHoverBackgroundColor: 'rgba(107, 114, 128, 1)',
-    });
-  }
+        dataMap.set(point.timestamp, value?.[props.aggregation] ?? null);
+      });
 
-  if (selectedMetrics.value.poolActive) {
-    datasets.push({
-      label: 'Active',
-      data: timeSeries.map(point => {
+      datasets.push({
+        label: `${replicaLabel} - Pool Size`,
+        data: sortedTimestamps.map(ts => dataMap.get(ts) ?? null),
+        borderColor: colorScheme.poolSize,
+        backgroundColor: 'transparent',
+        borderWidth: 2,
+        fill: false,
+        tension: 0,
+        pointRadius: 2,
+        pointHoverRadius: 5,
+        pointHoverBackgroundColor: colorScheme.poolSize,
+      });
+    }
+
+    if (selectedMetrics.value.poolActive) {
+      const dataMap = new Map();
+      replica.timeSeries.forEach(point => {
         const value = getNestedValue(point.metrics, 'database.pool_active');
-        return value?.[props.aggregation] !== undefined ? value[props.aggregation] : null;
-      }),
-      borderColor: 'rgba(59, 130, 246, 1)',
-      backgroundColor: 'rgba(59, 130, 246, 0.1)',
-      borderWidth: 2,
-      fill: true,
-      tension: 0,
-      pointRadius: 2,
-      pointHoverRadius: 5,
-      pointHoverBackgroundColor: 'rgba(59, 130, 246, 1)',
-    });
-  }
+        dataMap.set(point.timestamp, value?.[props.aggregation] ?? null);
+      });
 
-  if (selectedMetrics.value.poolIdle) {
-    datasets.push({
-      label: 'Idle',
-      data: timeSeries.map(point => {
+      datasets.push({
+        label: `${replicaLabel} - Active`,
+        data: sortedTimestamps.map(ts => dataMap.get(ts) ?? null),
+        borderColor: colorScheme.active,
+        backgroundColor: 'transparent',
+        borderWidth: 2,
+        fill: false,
+        tension: 0,
+        pointRadius: 2,
+        pointHoverRadius: 5,
+        pointHoverBackgroundColor: colorScheme.active,
+      });
+    }
+
+    if (selectedMetrics.value.poolIdle) {
+      const dataMap = new Map();
+      replica.timeSeries.forEach(point => {
         const value = getNestedValue(point.metrics, 'database.pool_idle');
-        return value?.[props.aggregation] !== undefined ? value[props.aggregation] : null;
-      }),
-      borderColor: 'rgba(34, 197, 94, 1)',
-      backgroundColor: 'rgba(34, 197, 94, 0.1)',
-      borderWidth: 2,
-      fill: true,
-      tension: 0,
-      pointRadius: 2,
-      pointHoverRadius: 5,
-      pointHoverBackgroundColor: 'rgba(34, 197, 94, 1)',
-    });
-  }
+        dataMap.set(point.timestamp, value?.[props.aggregation] ?? null);
+      });
+
+      datasets.push({
+        label: `${replicaLabel} - Idle`,
+        data: sortedTimestamps.map(ts => dataMap.get(ts) ?? null),
+        borderColor: colorScheme.idle,
+        backgroundColor: 'transparent',
+        borderWidth: 2,
+        fill: false,
+        tension: 0,
+        pointRadius: 2,
+        pointHoverRadius: 5,
+        pointHoverBackgroundColor: colorScheme.idle,
+      });
+    }
+  });
 
   return {
-    labels: timeSeries.map(point => {
-      const date = new Date(point.timestamp);
+    labels: sortedTimestamps.map(ts => {
+      const date = new Date(ts);
       return date.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' });
     }),
     datasets,
@@ -166,7 +196,18 @@ const chartOptions = {
   },
   plugins: {
     legend: {
-      display: false,
+      display: true,
+      position: 'bottom',
+      labels: {
+        boxWidth: 12,
+        boxHeight: 12,
+        padding: 10,
+        font: {
+          size: 11,
+        },
+        color: '#9ca3af',
+        usePointStyle: true,
+      },
     },
     tooltip: {
       backgroundColor: 'rgba(0, 0, 0, 0.9)',

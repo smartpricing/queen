@@ -77,58 +77,86 @@ function getNestedValue(obj, path) {
   return path.split('.').reduce((acc, part) => acc?.[part], obj);
 }
 
-const chartData = computed(() => {
-  if (!props.data?.timeSeries?.length) return null;
+// Colors for different replicas
+const replicaColors = [
+  { cpu: 'rgba(244, 63, 94, 1)', cpuBg: 'rgba(244, 63, 94, 0.1)', memory: 'rgba(168, 85, 247, 1)', memoryBg: 'rgba(168, 85, 247, 0.1)' },
+  { cpu: 'rgba(59, 130, 246, 1)', cpuBg: 'rgba(59, 130, 246, 0.1)', memory: 'rgba(34, 197, 94, 1)', memoryBg: 'rgba(34, 197, 94, 0.1)' },
+  { cpu: 'rgba(245, 158, 11, 1)', cpuBg: 'rgba(245, 158, 11, 0.1)', memory: 'rgba(236, 72, 153, 1)', memoryBg: 'rgba(236, 72, 153, 0.1)' },
+  { cpu: 'rgba(14, 165, 233, 1)', cpuBg: 'rgba(14, 165, 233, 0.1)', memory: 'rgba(251, 146, 60, 1)', memoryBg: 'rgba(251, 146, 60, 0.1)' },
+];
 
-  const timeSeries = props.data.timeSeries;
+const chartData = computed(() => {
+  if (!props.data?.replicas?.length) return null;
+
+  const replicas = props.data.replicas;
   const datasets = [];
 
-  // CPU % dataset
-  if (selectedMetrics.value.cpu) {
-    datasets.push({
-      label: 'CPU %',
-      data: timeSeries.map(point => {
+  // Get all unique timestamps across all replicas
+  const allTimestamps = new Set();
+  replicas.forEach(replica => {
+    replica.timeSeries.forEach(point => {
+      allTimestamps.add(point.timestamp);
+    });
+  });
+  const sortedTimestamps = Array.from(allTimestamps).sort();
+
+  // Create datasets for each replica
+  replicas.forEach((replica, replicaIndex) => {
+    const colorScheme = replicaColors[replicaIndex % replicaColors.length];
+    const replicaLabel = `${replica.hostname}`;
+
+    // CPU % dataset for this replica
+    if (selectedMetrics.value.cpu) {
+      const dataMap = new Map();
+      replica.timeSeries.forEach(point => {
         const value = getNestedValue(point.metrics, 'cpu.user_us');
         const rawValue = value?.[props.aggregation] !== undefined ? value[props.aggregation] : null;
-        // Backend stores as percentage * 100
-        return rawValue !== null ? (rawValue / 100) : null;
-      }),
-      borderColor: 'rgba(244, 63, 94, 1)',
-      backgroundColor: 'rgba(244, 63, 94, 0.1)',
-      borderWidth: 2,
-      fill: true,
-      tension: 0,
-      pointRadius: 2,
-      pointHoverRadius: 5,
-      pointHoverBackgroundColor: 'rgba(244, 63, 94, 1)',
-      yAxisID: 'y-cpu',
-    });
-  }
+        dataMap.set(point.timestamp, rawValue !== null ? (rawValue / 100) : null);
+      });
 
-  // Memory MB dataset
-  if (selectedMetrics.value.memory) {
-    datasets.push({
-      label: 'Memory (MB)',
-      data: timeSeries.map(point => {
+      datasets.push({
+        label: `${replicaLabel} - CPU %`,
+        data: sortedTimestamps.map(ts => dataMap.get(ts) ?? null),
+        borderColor: colorScheme.cpu,
+        backgroundColor: colorScheme.cpuBg,
+        borderWidth: 2,
+        fill: false,
+        tension: 0,
+        pointRadius: 2,
+        pointHoverRadius: 5,
+        pointHoverBackgroundColor: colorScheme.cpu,
+        yAxisID: 'y-cpu',
+      });
+    }
+
+    // Memory MB dataset for this replica
+    if (selectedMetrics.value.memory) {
+      const dataMap = new Map();
+      replica.timeSeries.forEach(point => {
         const value = getNestedValue(point.metrics, 'memory.rss_bytes');
         const rawValue = value?.[props.aggregation] !== undefined ? value[props.aggregation] : null;
-        return rawValue !== null ? (rawValue / 1024 / 1024) : null;
-      }),
-      borderColor: 'rgba(168, 85, 247, 1)',
-      backgroundColor: 'rgba(168, 85, 247, 0.1)',
-      borderWidth: 2,
-      fill: true,
-      tension: 0,
-      pointRadius: 2,
-      pointHoverRadius: 5,
-      pointHoverBackgroundColor: 'rgba(168, 85, 247, 1)',
-      yAxisID: 'y-memory',
-    });
-  }
+        dataMap.set(point.timestamp, rawValue !== null ? (rawValue / 1024 / 1024) : null);
+      });
+
+      datasets.push({
+        label: `${replicaLabel} - Memory (MB)`,
+        data: sortedTimestamps.map(ts => dataMap.get(ts) ?? null),
+        borderColor: colorScheme.memory,
+        backgroundColor: colorScheme.memoryBg,
+        borderWidth: 2,
+        fill: false,
+        tension: 0,
+        pointRadius: 2,
+        pointHoverRadius: 5,
+        pointHoverBackgroundColor: colorScheme.memory,
+        yAxisID: 'y-memory',
+      });
+    }
+  });
 
   return {
-    labels: timeSeries.map(point => {
-      const date = new Date(point.timestamp);
+    labels: sortedTimestamps.map(ts => {
+      const date = new Date(ts);
       return date.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' });
     }),
     datasets,
@@ -221,11 +249,22 @@ const chartOptions = computed(() => {
       mode: 'index',
       intersect: false,
     },
-    plugins: {
-      legend: {
-        display: false,
+  plugins: {
+    legend: {
+      display: true,
+      position: 'bottom',
+      labels: {
+        boxWidth: 12,
+        boxHeight: 12,
+        padding: 10,
+        font: {
+          size: 11,
+        },
+        color: '#9ca3af',
+        usePointStyle: true,
       },
-      tooltip: {
+    },
+    tooltip: {
         backgroundColor: 'rgba(0, 0, 0, 0.9)',
         padding: 12,
         titleColor: '#fff',

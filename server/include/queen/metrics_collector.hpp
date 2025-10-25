@@ -127,7 +127,6 @@ private:
     // Server identification
     std::string hostname_;
     int port_;
-    int process_id_;
     std::string worker_id_;
     
     // Configuration
@@ -145,7 +144,6 @@ public:
         std::shared_ptr<astp::ThreadPool> system_thread_pool,
         const std::string& hostname,
         int port,
-        int process_id,
         const std::string& worker_id = "worker-0",
         int sample_interval_ms = 1000,
         int aggregation_window_s = 60

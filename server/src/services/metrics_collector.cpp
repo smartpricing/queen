@@ -8,7 +8,6 @@ MetricsCollector::MetricsCollector(
     std::shared_ptr<astp::ThreadPool> system_thread_pool,
     const std::string& hostname,
     int port,
-    int process_id,
     const std::string& worker_id,
     int sample_interval_ms,
     int aggregation_window_s
@@ -18,7 +17,6 @@ MetricsCollector::MetricsCollector(
     start_time_(std::chrono::steady_clock::now()),
     hostname_(hostname),
     port_(port),
-    process_id_(process_id),
     worker_id_(worker_id),
     sample_interval_ms_(sample_interval_ms),
     aggregation_window_s_(aggregation_window_s) {
@@ -41,9 +39,9 @@ void MetricsCollector::start() {
     // Start the collection loop as a recursive task in system threadpool
     schedule_next_collection();
     
-    spdlog::info("MetricsCollector started: hostname={}, port={}, pid={}, worker={}, "
+    spdlog::info("MetricsCollector started: hostname={}, port={}, worker={}, "
                  "sampling every {}ms, aggregating every {}s",
-                 hostname_, port_, process_id_, worker_id_,
+                 hostname_, port_, worker_id_,
                  sample_interval_ms_, aggregation_window_s_);
 }
 
@@ -348,10 +346,10 @@ void MetricsCollector::store_aggregated_metrics(const AggregatedMetrics& agg) {
         
         std::string query = R"(
             INSERT INTO queen.system_metrics (
-                timestamp, hostname, port, process_id, worker_id,
+                timestamp, hostname, port, worker_id,
                 sample_count, metrics
-            ) VALUES ($1, $2, $3, $4, $5, $6, $7)
-            ON CONFLICT (timestamp, hostname, port, process_id, worker_id)
+            ) VALUES ($1, $2, $3, $4, $5, $6)
+            ON CONFLICT (timestamp, hostname, port, worker_id)
             DO UPDATE SET 
                 sample_count = EXCLUDED.sample_count,
                 metrics = EXCLUDED.metrics
@@ -361,7 +359,6 @@ void MetricsCollector::store_aggregated_metrics(const AggregatedMetrics& agg) {
             timestamp_str,
             hostname_,
             std::to_string(port_),
-            std::to_string(process_id_),
             worker_id_,
             std::to_string(agg.sample_count),
             metrics_str

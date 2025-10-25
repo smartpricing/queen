@@ -85,18 +85,48 @@ function getNestedValue(obj, path) {
 }
 
 const chartData = computed(() => {
-  if (!props.data?.timeSeries?.length) return null;
+  if (!props.data?.replicas?.length) return null;
 
-  const timeSeries = props.data.timeSeries;
+  const replicas = props.data.replicas;
   const datasets = [];
 
-  // DB Active Connections
+  // Get all unique timestamps
+  const allTimestamps = new Set();
+  replicas.forEach(replica => {
+    replica.timeSeries?.forEach(point => {
+      allTimestamps.add(point.timestamp);
+    });
+  });
+  const sortedTimestamps = Array.from(allTimestamps).sort();
+
+  // Aggregate data across all replicas for each timestamp
+  const aggregatedData = {};
+  
+  sortedTimestamps.forEach(ts => {
+    aggregatedData[ts] = { dbActive: [], dbQueue: [], systemQueue: [] };
+    
+    replicas.forEach(replica => {
+      const point = replica.timeSeries?.find(p => p.timestamp === ts);
+      if (point) {
+        const dbActiveValue = getNestedValue(point.metrics, 'database.pool_active')?.avg;
+        const dbQueueValue = getNestedValue(point.metrics, 'threadpool.db.queue_size')?.avg;
+        const sysQueueValue = getNestedValue(point.metrics, 'threadpool.system.queue_size')?.avg;
+        
+        if (dbActiveValue !== undefined && dbActiveValue !== null) aggregatedData[ts].dbActive.push(dbActiveValue);
+        if (dbQueueValue !== undefined && dbQueueValue !== null) aggregatedData[ts].dbQueue.push(dbQueueValue);
+        if (sysQueueValue !== undefined && sysQueueValue !== null) aggregatedData[ts].systemQueue.push(sysQueueValue);
+      }
+    });
+  });
+
+  // DB Active (summed across replicas - total active connections)
   if (selectedMetrics.value.dbActive) {
     datasets.push({
       label: 'DB Active',
-      data: timeSeries.map(point => {
-        const value = getNestedValue(point.metrics, 'database.pool_active');
-        return value?.avg !== undefined ? value.avg : null;
+      data: sortedTimestamps.map(ts => {
+        const values = aggregatedData[ts].dbActive;
+        if (values.length === 0) return null;
+        return values.reduce((sum, v) => sum + v, 0); // SUM for total connections
       }),
       borderColor: 'rgba(59, 130, 246, 1)',
       backgroundColor: 'rgba(59, 130, 246, 0.1)',
@@ -109,13 +139,14 @@ const chartData = computed(() => {
     });
   }
 
-  // DB Queue Size
+  // DB Queue (summed across replicas - total queued tasks)
   if (selectedMetrics.value.dbQueue) {
     datasets.push({
       label: 'DB Queue',
-      data: timeSeries.map(point => {
-        const value = getNestedValue(point.metrics, 'threadpool.db.queue_size');
-        return value?.avg !== undefined ? value.avg : null;
+      data: sortedTimestamps.map(ts => {
+        const values = aggregatedData[ts].dbQueue;
+        if (values.length === 0) return null;
+        return values.reduce((sum, v) => sum + v, 0); // SUM for total queued
       }),
       borderColor: 'rgba(245, 158, 11, 1)',
       backgroundColor: 'rgba(245, 158, 11, 0.1)',
@@ -128,13 +159,14 @@ const chartData = computed(() => {
     });
   }
 
-  // System Queue Size
+  // System Queue (summed across replicas)
   if (selectedMetrics.value.systemQueue) {
     datasets.push({
       label: 'System Queue',
-      data: timeSeries.map(point => {
-        const value = getNestedValue(point.metrics, 'threadpool.system.queue_size');
-        return value?.avg !== undefined ? value.avg : null;
+      data: sortedTimestamps.map(ts => {
+        const values = aggregatedData[ts].systemQueue;
+        if (values.length === 0) return null;
+        return values.reduce((sum, v) => sum + v, 0); // SUM for total queued
       }),
       borderColor: 'rgba(34, 197, 94, 1)',
       backgroundColor: 'rgba(34, 197, 94, 0.1)',
@@ -148,8 +180,8 @@ const chartData = computed(() => {
   }
 
   return {
-    labels: timeSeries.map(point => {
-      const date = new Date(point.timestamp);
+    labels: sortedTimestamps.map(ts => {
+      const date = new Date(ts);
       return date.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' });
     }),
     datasets,

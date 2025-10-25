@@ -109,8 +109,8 @@
               <h3 class="text-xs font-semibold text-gray-600 dark:text-gray-400 mb-3">Current Status</h3>
               <div class="space-y-2">
                 <div class="flex justify-between text-sm">
-                  <span class="text-gray-600 dark:text-gray-400">Data Points</span>
-                  <span class="font-semibold font-mono">{{ data?.count || 0 }}</span>
+                  <span class="text-gray-600 dark:text-gray-400">Replicas</span>
+                  <span class="font-semibold font-mono">{{ data?.replicaCount || 0 }}</span>
                 </div>
                 <div class="flex justify-between text-sm">
                   <span class="text-gray-600 dark:text-gray-400">Time Range</span>
@@ -208,8 +208,11 @@ const aggregationTypes = [
 const selectedAggregation = ref('avg');
 
 const lastMetrics = computed(() => {
-  if (!data.value?.timeSeries?.length) return null;
-  return data.value.timeSeries[data.value.timeSeries.length - 1]?.metrics;
+  if (!data.value?.replicas?.length) return null;
+  // Get the last data point from the first replica
+  const firstReplica = data.value.replicas[0];
+  if (!firstReplica?.timeSeries?.length) return null;
+  return firstReplica.timeSeries[firstReplica.timeSeries.length - 1]?.metrics;
 });
 
 function formatTimeRange() {

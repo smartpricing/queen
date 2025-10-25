@@ -36,7 +36,6 @@ static std::once_flag global_pool_init_flag;
 struct SystemInfo {
     std::string hostname;
     int port;
-    int process_id;
     
     static SystemInfo get_current() {
         SystemInfo info;
@@ -48,9 +47,6 @@ struct SystemInfo {
         } else {
             info.hostname = "unknown";
         }
-        
-        // Get process ID
-        info.process_id = getpid();
         
         // Port will be set from config
         info.port = 0;
@@ -1818,10 +1814,9 @@ static void worker_thread(const Config& config, int worker_id, int num_workers,
             global_system_info = SystemInfo::get_current();
             global_system_info.port = config.server.port;
             
-            spdlog::info("System info: hostname={}, port={}, pid={}", 
+            spdlog::info("System info: hostname={}, port={}", 
                          global_system_info.hostname, 
-                         global_system_info.port, 
-                         global_system_info.process_id);
+                         global_system_info.port);
             spdlog::info("Global shared resources initialized successfully");
         });
         
@@ -1860,7 +1855,6 @@ static void worker_thread(const Config& config, int worker_id, int num_workers,
                     global_system_thread_pool,
                     global_system_info.hostname,
                     global_system_info.port,
-                    global_system_info.process_id,
                     config.server.worker_id,
                     1000,  // Sample every 1 second
                     60     // Aggregate and save every 60 seconds
