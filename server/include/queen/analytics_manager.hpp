@@ -33,7 +33,9 @@ public:
         std::string namespace_name;
         std::string task;
         std::string status;
-        int limit = 50;
+        std::string from;
+        std::string to;
+        int limit = 200;
         int offset = 0;
     };
     nlohmann::json list_messages(const MessageFilters& filters);

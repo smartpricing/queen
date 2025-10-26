@@ -23,6 +23,8 @@
           v-model:search="searchQuery"
           v-model:queue="queueFilter"
           v-model:status="statusFilter"
+          v-model:from="fromFilter"
+          v-model:to="toFilter"
           :queues="queues"
           />
         </div>
@@ -142,8 +144,10 @@ const queues = ref([]);
 const searchQuery = ref('');
 const queueFilter = ref('');
 const statusFilter = ref('');
+const fromFilter = ref('');
+const toFilter = ref('');
 const currentPage = ref(1);
-const itemsPerPage = 50;
+const itemsPerPage = 200;
 const totalPages = ref(1);
 const selectedMessage = ref(null);
 const apiNeedsRestart = ref(false);
@@ -184,6 +188,8 @@ async function loadData() {
     
     if (queueFilter.value) params.queue = queueFilter.value;
     if (statusFilter.value) params.status = statusFilter.value;
+    if (fromFilter.value) params.from = fromFilter.value;
+    if (toFilter.value) params.to = toFilter.value;
     
     const messagesRes = await messagesApi.getMessages(params);
     messages.value = messagesRes.data.messages || [];
@@ -209,7 +215,7 @@ async function onActionComplete() {
   await loadData();
 }
 
-watch([searchQuery, queueFilter, statusFilter], () => {
+watch([searchQuery, queueFilter, statusFilter, fromFilter, toFilter], () => {
   currentPage.value = 1;
   loadData();
 });

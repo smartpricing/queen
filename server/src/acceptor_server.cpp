@@ -1566,7 +1566,9 @@ static void setup_worker_routes(uWS::App* app,
             filters.namespace_name = get_query_param(req, "ns");
             filters.task = get_query_param(req, "task");
             filters.status = get_query_param(req, "status");
-            filters.limit = get_query_param_int(req, "limit", 50);
+            filters.from = get_query_param(req, "from");
+            filters.to = get_query_param(req, "to");
+            filters.limit = get_query_param_int(req, "limit", 200);
             filters.offset = get_query_param_int(req, "offset", 0);
             
             auto messages = analytics_manager->list_messages(filters);

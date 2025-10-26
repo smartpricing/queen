@@ -430,11 +430,14 @@ nlohmann::json AnalyticsManager::list_messages(const MessageFilters& filters) {
     try {
         ScopedConnection conn(db_pool_.get());
         
+        // Get time range with default of 1 hour
+        std::string from_iso, to_iso;
+        get_time_range(filters.from, filters.to, from_iso, to_iso, 1);
+        
         std::string query = R"(
             SELECT 
                 m.id,
                 m.transaction_id,
-                m.payload,
                 m.created_at,
                 m.trace_id,
                 q.name as queue_name,
@@ -457,10 +460,12 @@ nlohmann::json AnalyticsManager::list_messages(const MessageFilters& filters) {
             JOIN queen.queues q ON q.id = p.queue_id
             LEFT JOIN queen.partition_consumers pc ON pc.partition_id = p.id AND pc.consumer_group = '__QUEUE_MODE__'
             LEFT JOIN queen.dead_letter_queue dlq ON dlq.message_id = m.id
-            WHERE 1=1
+            WHERE m.created_at >= $1 AND m.created_at <= $2
         )";
         
         std::vector<std::string> params;
+        params.push_back(from_iso);
+        params.push_back(to_iso);
         if (!filters.queue.empty()) {
             query += " AND q.name = $" + std::to_string(params.size() + 1);
             params.push_back(filters.queue);
@@ -519,13 +524,6 @@ nlohmann::json AnalyticsManager::list_messages(const MessageFilters& filters) {
                 {"createdAt", result.get_value(i, "created_at")},
                 {"leaseExpiresAt", lease_val.empty() ? nullptr : nlohmann::json(lease_val)}
             };
-            
-            // Parse payload as JSON
-            try {
-                msg["payload"] = nlohmann::json::parse(result.get_value(i, "payload"));
-            } catch (...) {
-                msg["payload"] = result.get_value(i, "payload");
-            }
             
             messages.push_back(msg);
         }
@@ -1080,7 +1078,7 @@ nlohmann::json AnalyticsManager::get_queue_messages(const std::string& queue_nam
         std::string query = R"(
             SELECT 
                 m.id, m.transaction_id, m.trace_id, m.created_at,
-                m.is_encrypted, m.payload, p.name as partition,
+                p.name as partition,
                 CASE 
                     WHEN EXISTS (SELECT 1 FROM queen.dead_letter_queue dlq WHERE dlq.message_id = m.id) THEN 'failed'
                     WHEN (m.created_at < COALESCE(pc.last_consumed_created_at, '1970-01-01'::timestamptz) 
@@ -1116,17 +1114,8 @@ nlohmann::json AnalyticsManager::get_queue_messages(const std::string& queue_nam
                 {"partition", result.get_value(i, "partition")},
                 {"createdAt", result.get_value(i, "created_at")},
                 {"status", result.get_value(i, "status")},
-                {"retryCount", 0},
-                {"isEncrypted", result.get_value(i, "is_encrypted") == "t"}
+                {"retryCount", 0}
             };
-            
-            if (result.get_value(i, "is_encrypted") != "t") {
-                try {
-                    msg["data"] = nlohmann::json::parse(result.get_value(i, "payload"));
-                } catch (...) {
-                    msg["data"] = result.get_value(i, "payload");
-                }
-            }
             
             std::string status = result.get_value(i, "status");
             if (status == "pending" || status == "processing") {
