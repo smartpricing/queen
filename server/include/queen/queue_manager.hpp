@@ -123,10 +123,6 @@ private:
     bool extend_lease(const std::string& lease_id, int seconds);
     void release_lease(const std::string& lease_id);
     
-    // Long polling support
-    PopResult wait_for_messages(const std::function<PopResult()>& pop_function,
-                              int timeout_ms);
-    
 public:
     explicit QueueManager(std::shared_ptr<DatabasePool> db_pool, 
                          const QueueConfig& config = QueueConfig{});
@@ -178,6 +174,15 @@ public:
                                     const std::optional<std::string>& task_name,
                                     const std::string& consumer_group,
                                     const PopOptions& options);
+    
+    // Long-polling support helpers
+    int count_available_messages(const std::optional<std::string>& queue_name,
+                                  const std::optional<std::string>& partition_name,
+                                  const std::string& consumer_group);
+    
+    int count_available_messages_namespace(const std::optional<std::string>& namespace_name,
+                                           const std::optional<std::string>& task_name,
+                                           const std::string& consumer_group);
     
     // Acknowledgment
     struct AckItem {

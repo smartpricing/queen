@@ -1515,28 +1515,14 @@ PopResult QueueManager::pop_messages(const std::string& queue_name,
                                    const std::string& consumer_group,
                                    const PopOptions& options) {
     
+    // NOTE: options.wait is now always false - long-polling is handled by PollIntentionRegistry
     // If partition is specified, pop from that specific partition
     if (partition_name.has_value()) {
-        if (options.wait) {
-            return wait_for_messages([&]() {
-                return pop_from_queue_partition(queue_name, *partition_name, consumer_group, options);
-            }, options.timeout);
-        } else {
-            return pop_from_queue_partition(queue_name, *partition_name, consumer_group, options);
-        }
+        return pop_from_queue_partition(queue_name, *partition_name, consumer_group, options);
     }
     
     // No partition specified - try to pop from any available partition in the queue
-    // This is needed for the FIFO ordering test which pushes to multiple partitions
-    // and expects to pop from any of them
-    
-    if (options.wait) {
-        return wait_for_messages([&]() {
-            return pop_from_any_partition(queue_name, consumer_group, options);
-        }, options.timeout);
-    } else {
-        return pop_from_any_partition(queue_name, consumer_group, options);
-    }
+    return pop_from_any_partition(queue_name, consumer_group, options);
 }
 
 PopResult QueueManager::pop_from_any_partition(const std::string& queue_name,
@@ -1709,34 +1695,120 @@ PopResult QueueManager::pop_with_namespace_task(const std::optional<std::string>
     return result;
 }
 
-PopResult QueueManager::wait_for_messages(const std::function<PopResult()>& pop_function,
-                                        int timeout_ms) {
-    auto start_time = std::chrono::steady_clock::now();
-    auto timeout_duration = std::chrono::milliseconds(timeout_ms);
-    
-    int poll_interval = config_.poll_interval;
-    
-    while (true) {
-        PopResult result = pop_function();
+// Lightweight check for available messages (no locking, no payload fetch)
+// Used by poll workers to decide if a full pop is needed
+// IMPORTANT: Matches the logic in pop_from_queue_partition - checks for unconsumed messages
+int QueueManager::count_available_messages(const std::optional<std::string>& queue_name,
+                                           const std::optional<std::string>& partition_name,
+                                           const std::string& consumer_group) {
+    try {
+        ScopedConnection conn(db_pool_.get());
         
-        if (!result.messages.empty()) {
-            return result;
+        // Build lightweight COUNT query matching the pop logic
+        // Check if there are messages newer than what this consumer group has consumed
+        std::string sql = R"(
+            SELECT COUNT(*) as message_count
+            FROM queen.messages m
+            JOIN queen.partitions p ON p.id = m.partition_id
+            JOIN queen.queues q ON q.id = p.queue_id
+            LEFT JOIN queen.partition_consumers pc ON pc.partition_id = p.id AND pc.consumer_group = $1
+            WHERE 1=1
+              AND (pc.last_consumed_created_at IS NULL 
+                   OR m.created_at > pc.last_consumed_created_at
+                   OR (m.created_at = pc.last_consumed_created_at AND m.id > pc.last_consumed_id))
+        )";
+        
+        std::vector<std::string> params = {consumer_group};
+        
+        if (queue_name.has_value()) {
+            sql += " AND q.name = $" + std::to_string(params.size() + 1);
+            params.push_back(*queue_name);
         }
         
-        auto elapsed = std::chrono::steady_clock::now() - start_time;
-        if (elapsed >= timeout_duration) {
-            break;
+        if (partition_name.has_value()) {
+            sql += " AND p.name = $" + std::to_string(params.size() + 1);
+            params.push_back(*partition_name);
         }
         
-        // Sleep for poll interval
-        std::this_thread::sleep_for(std::chrono::milliseconds(poll_interval));
+        sql += " LIMIT 1";  // Early exit - we just need to know if > 0
         
-        // Exponential backoff
-        poll_interval = std::min(poll_interval * 2, config_.max_poll_interval);
+        auto result = QueryResult(conn->exec_params(sql, params));
+        
+        if (!result.is_success()) {
+            spdlog::error("count_available_messages query failed!");
+            return 0;
+        }
+        
+        int count = 0;
+        if (result.num_rows() > 0) {
+            std::string count_str = result.get_value(0, "message_count");
+            count = count_str.empty() ? 0 : std::stoi(count_str);
+            spdlog::debug("count_available_messages: queue={} partition={} found {} messages", 
+                         queue_name.value_or("*"), partition_name.value_or("*"), count);
+        }
+        
+        return count;
+        
+    } catch (const std::exception& e) {
+        spdlog::error("Error counting messages: {}", e.what());
     }
     
-    return PopResult{}; // Empty result
+    return 0;
 }
+
+int QueueManager::count_available_messages_namespace(const std::optional<std::string>& namespace_name,
+                                                     const std::optional<std::string>& task_name,
+                                                     const std::string& consumer_group) {
+    try {
+        ScopedConnection conn(db_pool_.get());
+        
+        // Build lightweight COUNT query matching the pop logic
+        // Check if there are messages newer than what this consumer group has consumed
+        std::string sql = R"(
+            SELECT COUNT(*) as message_count
+            FROM queen.messages m
+            JOIN queen.partitions p ON p.id = m.partition_id
+            JOIN queen.queues q ON q.id = p.queue_id
+            LEFT JOIN queen.partition_consumers pc ON pc.partition_id = p.id AND pc.consumer_group = $1
+            WHERE 1=1
+              AND (pc.last_consumed_created_at IS NULL 
+                   OR m.created_at > pc.last_consumed_created_at
+                   OR (m.created_at = pc.last_consumed_created_at AND m.id > pc.last_consumed_id))
+        )";
+        
+        std::vector<std::string> params = {consumer_group};
+        
+        if (namespace_name.has_value()) {
+            sql += " AND q.namespace = $" + std::to_string(params.size() + 1);
+            params.push_back(*namespace_name);
+        }
+        
+        if (task_name.has_value()) {
+            sql += " AND q.task = $" + std::to_string(params.size() + 1);
+            params.push_back(*task_name);
+        }
+        
+        sql += " LIMIT 1";  // Early exit
+        
+        auto result = QueryResult(conn->exec_params(sql, params));
+        
+        if (result.is_success() && result.num_rows() > 0) {
+            std::string count_str = result.get_value(0, "message_count");
+            int count = count_str.empty() ? 0 : std::stoi(count_str);
+            spdlog::debug("count_available_messages_namespace: namespace={} task={} found {} messages", 
+                         namespace_name.value_or("*"), task_name.value_or("*"), count);
+            return count;
+        }
+        
+    } catch (const std::exception& e) {
+        spdlog::error("Error counting messages by namespace/task: {}", e.what());
+    }
+    
+    return 0;
+}
+
+// NOTE: wait_for_messages() has been removed - long-polling is now handled by PollIntentionRegistry
+// See poll_intention_registry.hpp and poll_worker.hpp for the new implementation
 
 QueueManager::AckResult QueueManager::acknowledge_message(const std::string& transaction_id,
                                      const std::string& status,

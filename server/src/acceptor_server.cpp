@@ -6,6 +6,8 @@
 #include "queen/file_buffer.hpp"
 #include "queen/response_queue.hpp"
 #include "queen/metrics_collector.hpp"
+#include "queen/poll_intention_registry.hpp"
+#include "queen/poll_worker.hpp"
 #include "threadpool.hpp"
 #include <App.h>
 #include <json.hpp>
@@ -29,6 +31,7 @@ static std::shared_ptr<queen::DatabasePool> global_db_pool;
 static std::shared_ptr<queen::ResponseQueue> global_response_queue;
 static std::shared_ptr<queen::ResponseRegistry> global_response_registry;
 static std::shared_ptr<queen::MetricsCollector> global_metrics_collector;
+static std::shared_ptr<queen::PollIntentionRegistry> global_poll_intention_registry;
 static us_timer_t* global_response_timer = nullptr;
 static std::once_flag global_pool_init_flag;
 
@@ -767,7 +770,7 @@ static void setup_worker_routes(uWS::App* app,
         );
     });
     
-    // SPECIFIC POP from queue/partition - NEW RESPONSE QUEUE ARCHITECTURE
+    // SPECIFIC POP from queue/partition - NEW RESPONSE QUEUE ARCHITECTURE WITH POLL INTENTION REGISTRY
     app->get("/api/v1/pop/queue/:queue/partition/:partition", [queue_manager, config, worker_id, db_thread_pool](auto* res, auto* req) {
         try {
             std::string queue_name = std::string(req->getParameter(0));
@@ -784,7 +787,7 @@ static void setup_worker_routes(uWS::App* app,
                         pool_stats.available, pool_stats.total, pool_stats.in_use);
             
             PopOptions options;
-            options.wait = wait;
+            options.wait = false;  // Always false - registry handles waiting
             options.timeout = timeout_ms;
             options.batch = batch;
             options.auto_ack = get_query_param_bool(req, "autoAck", false);
@@ -802,9 +805,32 @@ static void setup_worker_routes(uWS::App* app,
             // Register response in uWebSockets thread - SAFE
             std::string request_id = global_response_registry->register_response(res);
             
-            spdlog::info("[Worker {}] SPOP: Registered response {}, submitting to ThreadPool", worker_id, request_id);
+            if (wait) {
+                // Use Poll Intention Registry for long-polling
+                queen::PollIntention intention{
+                    .request_id = request_id,
+                    .queue_name = queue_name,
+                    .partition_name = partition_name,  // Specific partition
+                    .namespace_name = std::nullopt,
+                    .task_name = std::nullopt,
+                    .consumer_group = consumer_group,
+                    .batch_size = batch,
+                    .deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(timeout_ms),
+                    .created_at = std::chrono::steady_clock::now()
+                };
+                
+                global_poll_intention_registry->register_intention(intention);
+                
+                spdlog::info("[Worker {}] SPOP: Registered poll intention {} for queue {}/{} (wait=true)", 
+                            worker_id, request_id, queue_name, partition_name);
+                
+                // Return immediately - poll workers will handle it
+                return;
+            }
             
-            // Execute SPOP operation in ThreadPool
+            // Non-waiting mode: use ThreadPool directly (existing logic)
+            spdlog::info("[Worker {}] SPOP: Registered response {}, submitting to ThreadPool (wait=false)", worker_id, request_id);
+            
             db_thread_pool->push([request_id, queue_manager, worker_id, queue_name, partition_name, consumer_group, options]() {
                 spdlog::info("[Worker {}] SPOP: ThreadPool executing specific pop operation for {}", worker_id, request_id);
                 
@@ -982,7 +1008,7 @@ static void setup_worker_routes(uWS::App* app,
         }
     });
     
-    // POP from queue (any partition) - NEW RESPONSE QUEUE ARCHITECTURE
+    // POP from queue (any partition) - NEW RESPONSE QUEUE ARCHITECTURE WITH POLL INTENTION REGISTRY
     app->get("/api/v1/pop/queue/:queue", [queue_manager, config, worker_id, db_thread_pool](auto* res, auto* req) {
         try {
             std::string queue_name = std::string(req->getParameter(0));
@@ -998,7 +1024,7 @@ static void setup_worker_routes(uWS::App* app,
                         pool_stats.available, pool_stats.total, pool_stats.in_use);
             
             PopOptions options;
-            options.wait = wait;
+            options.wait = false;  // Always false - registry handles waiting
             options.timeout = timeout_ms;
             options.batch = batch;
             options.auto_ack = get_query_param_bool(req, "autoAck", false);
@@ -1016,9 +1042,32 @@ static void setup_worker_routes(uWS::App* app,
             // Register response in uWebSockets thread - SAFE
             std::string request_id = global_response_registry->register_response(res);
             
-            spdlog::info("[Worker {}] QPOP: Registered response {}, submitting to ThreadPool", worker_id, request_id);
+            if (wait) {
+                // Use Poll Intention Registry for long-polling
+                queen::PollIntention intention{
+                    .request_id = request_id,
+                    .queue_name = queue_name,
+                    .partition_name = std::nullopt,  // Any partition
+                    .namespace_name = std::nullopt,
+                    .task_name = std::nullopt,
+                    .consumer_group = consumer_group,
+                    .batch_size = batch,
+                    .deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(timeout_ms),
+                    .created_at = std::chrono::steady_clock::now()
+                };
+                
+                global_poll_intention_registry->register_intention(intention);
+                
+                spdlog::info("[Worker {}] QPOP: Registered poll intention {} for queue {} (wait=true)", 
+                            worker_id, request_id, queue_name);
+                
+                // Return immediately - poll workers will handle it
+                return;
+            }
             
-            // Execute QPOP operation in ThreadPool
+            // Non-waiting mode: use ThreadPool directly (existing logic)
+            spdlog::info("[Worker {}] QPOP: Registered response {}, submitting to ThreadPool (wait=false)", worker_id, request_id);
+            
             db_thread_pool->push([request_id, queue_manager, worker_id, queue_name, consumer_group, options]() {
                 spdlog::info("[Worker {}] QPOP: ThreadPool executing queue pop operation for {}", worker_id, request_id);
                 
@@ -1177,7 +1226,7 @@ static void setup_worker_routes(uWS::App* app,
         );
     });
     
-    // ASYNC POP with namespace/task filtering (no specific queue) - NEW RESPONSE QUEUE ARCHITECTURE
+    // ASYNC POP with namespace/task filtering (no specific queue) - NEW RESPONSE QUEUE ARCHITECTURE WITH POLL INTENTION REGISTRY
     app->get("/api/v1/pop", [queue_manager, config, worker_id, db_thread_pool](auto* res, auto* req) {
         try {
             std::string consumer_group = get_query_param(req, "consumerGroup", "__QUEUE_MODE__");
@@ -1187,10 +1236,14 @@ static void setup_worker_routes(uWS::App* app,
             std::optional<std::string> namespace_name = namespace_param.empty() ? std::nullopt : std::optional<std::string>(namespace_param);
             std::optional<std::string> task_name = task_param.empty() ? std::nullopt : std::optional<std::string>(task_param);
             
+            bool wait = get_query_param_bool(req, "wait", false);
+            int timeout_ms = get_query_param_int(req, "timeout", config.queue.default_timeout);
+            int batch = get_query_param_int(req, "batch", config.queue.default_batch_size);
+            
             PopOptions options;
-            options.wait = get_query_param_bool(req, "wait", false);
-            options.timeout = get_query_param_int(req, "timeout", config.queue.default_timeout);
-            options.batch = get_query_param_int(req, "batch", config.queue.default_batch_size);
+            options.wait = false;  // Always false - registry handles waiting
+            options.timeout = timeout_ms;
+            options.batch = batch;
             options.auto_ack = get_query_param_bool(req, "autoAck", false);
             
             std::string sub_mode = get_query_param(req, "subscriptionMode", "");
@@ -1201,9 +1254,34 @@ static void setup_worker_routes(uWS::App* app,
             // Register response in uWebSockets thread - SAFE
             std::string request_id = global_response_registry->register_response(res);
             
-            spdlog::info("[Worker {}] POP: Registered response {}, submitting to ThreadPool", worker_id, request_id);
+            if (wait) {
+                // Use Poll Intention Registry for long-polling
+                queen::PollIntention intention{
+                    .request_id = request_id,
+                    .queue_name = std::nullopt,
+                    .partition_name = std::nullopt,
+                    .namespace_name = namespace_name,  // Namespace filtering
+                    .task_name = task_name,            // Task filtering
+                    .consumer_group = consumer_group,
+                    .batch_size = batch,
+                    .deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(timeout_ms),
+                    .created_at = std::chrono::steady_clock::now()
+                };
+                
+                global_poll_intention_registry->register_intention(intention);
+                
+                spdlog::info("[Worker {}] POP: Registered poll intention {} for namespace={} task={} (wait=true)", 
+                            worker_id, request_id, 
+                            namespace_name.value_or("*"), 
+                            task_name.value_or("*"));
+                
+                // Return immediately - poll workers will handle it
+                return;
+            }
             
-            // Execute POP operation in ThreadPool
+            // Non-waiting mode: use ThreadPool directly (existing logic)
+            spdlog::info("[Worker {}] POP: Registered response {}, submitting to ThreadPool (wait=false)", worker_id, request_id);
+            
             db_thread_pool->push([request_id, queue_manager, worker_id, namespace_name, task_name, consumer_group, options]() {
                 spdlog::info("[Worker {}] POP: ThreadPool executing pop operation for {}", worker_id, request_id);
                 
@@ -1810,6 +1888,9 @@ static void worker_thread(const Config& config, int worker_id, int num_workers,
             global_response_queue = std::make_shared<queen::ResponseQueue>();
             global_response_registry = std::make_shared<queen::ResponseRegistry>();
             
+            // Create global poll intention registry (shared by all workers)
+            global_poll_intention_registry = std::make_shared<queen::PollIntentionRegistry>();
+            
             // Get system info for metrics
             global_system_info = SystemInfo::get_current();
             global_system_info.port = config.server.port;
@@ -1860,6 +1941,17 @@ static void worker_thread(const Config& config, int worker_id, int num_workers,
                     60     // Aggregate and save every 60 seconds
                 );
                 global_metrics_collector->start();
+                
+                // Initialize long-polling poll workers (Worker 0 only)
+                // Note: global_poll_intention_registry is already created in global init
+                spdlog::info("[Worker 0] Starting long-polling poll workers...");
+                queen::init_long_polling(
+                    global_db_thread_pool,
+                    global_poll_intention_registry,
+                    queue_manager,
+                    global_response_queue,
+                    2  // 2 poll workers
+                );
             }
         } else {
             spdlog::warn("[Worker {}] Database connection: UNAVAILABLE (Pool: 0/{}) - Will use file buffer for failover", 
