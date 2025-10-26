@@ -49,8 +49,8 @@ async function consumer(consumerId, partition) {
   
   try {
     for await (const messages of q.takeBatch(target, { //`namespace:benchmark`, 
-      wait: true,
-      timeout: 150000,
+      wait: false,
+      timeout: 1500,
       batch: BATCH_SIZE,
       idleTimeout: 5000
     })) {
