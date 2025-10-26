@@ -5,7 +5,7 @@ const QUEUE_NAME = 'benchmark-queue-001';
 const NUMBER_OF_CONSUMERS = 10;
 const STARTING_PARTITION = parseInt(process.argv[2]) || 0;
 const BATCH_SIZE = 10000;
-const CONSUME_MODE = 'partition';
+const CONSUME_MODE = null//'partition';
 
 // Global metrics tracking
 const metrics = {
@@ -49,8 +49,8 @@ async function consumer(consumerId, partition) {
   
   try {
     for await (const messages of q.takeBatch(target, { //`namespace:benchmark`, 
-      wait: false,
-      timeout: 1500,
+      wait: true,
+      timeout: 30000,
       batch: BATCH_SIZE,
       idleTimeout: 5000
     })) {

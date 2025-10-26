@@ -4,6 +4,10 @@
 
 namespace queen {
 
+PollIntentionRegistry::PollIntentionRegistry() : running_(true) {
+    spdlog::info("PollIntentionRegistry created, running={}", running_.load());
+}
+
 void PollIntentionRegistry::register_intention(const PollIntention& intention) {
     std::lock_guard<std::mutex> lock(mutex_);
     
@@ -63,6 +67,27 @@ std::vector<std::string> PollIntentionRegistry::cleanup_expired() {
     }
     
     return expired;
+}
+
+bool PollIntentionRegistry::mark_group_in_flight(const std::string& group_key) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    
+    if (in_flight_groups_.count(group_key) > 0) {
+        return false; // Already in-flight
+    }
+    
+    in_flight_groups_.insert(group_key);
+    return true; // Successfully marked
+}
+
+void PollIntentionRegistry::unmark_group_in_flight(const std::string& group_key) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    in_flight_groups_.erase(group_key);
+}
+
+bool PollIntentionRegistry::is_group_in_flight(const std::string& group_key) const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    return in_flight_groups_.count(group_key) > 0;
 }
 
 // Helper function implementations

@@ -1943,22 +1943,23 @@ static void worker_thread(const Config& config, int worker_id, int num_workers,
                     60     // Aggregate and save every 60 seconds
                 );
                 global_metrics_collector->start();
-                
-                // Initialize long-polling poll workers (Worker 0 only)
-                // Note: global_poll_intention_registry is already created in global init
-                spdlog::info("[Worker 0] Starting long-polling poll workers...");
-                queen::init_long_polling(
-                    global_db_thread_pool,
-                    global_poll_intention_registry,
-                    queue_manager,
-                    global_response_queue,
-                    2  // 2 poll workers
-                );
             }
         } else {
             spdlog::warn("[Worker {}] Database connection: UNAVAILABLE (Pool: 0/{}) - Will use file buffer for failover", 
                          worker_id, pool_stats.total);
             spdlog::warn("[Worker {}] Server will operate with file buffer until PostgreSQL becomes available", worker_id);
+        }
+        
+        // Initialize long-polling poll workers (Worker 0 only, regardless of DB status)
+        if (worker_id == 0) {
+            spdlog::info("[Worker 0] Starting long-polling poll workers...");
+            queen::init_long_polling(
+                global_db_thread_pool,
+                global_poll_intention_registry,
+                queue_manager,
+                global_response_queue,
+                2  // 2 poll workers
+            );
         }
         
         // Create or wait for SHARED FileBufferManager

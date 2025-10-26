@@ -4,6 +4,7 @@
 #include <optional>
 #include <vector>
 #include <unordered_map>
+#include <unordered_set>
 #include <map>
 #include <mutex>
 #include <atomic>
@@ -72,11 +73,12 @@ struct PollIntention {
 class PollIntentionRegistry {
 private:
     std::unordered_map<std::string, PollIntention> intentions_;
+    std::unordered_set<std::string> in_flight_groups_;  // Track groups being processed
     mutable std::mutex mutex_;
     std::atomic<bool> running_{true};
     
 public:
-    PollIntentionRegistry() = default;
+    PollIntentionRegistry();
     ~PollIntentionRegistry() = default;
     
     // Disable copy and move
@@ -132,6 +134,22 @@ public:
      * Cleanup expired intentions and return their request IDs
      */
     std::vector<std::string> cleanup_expired();
+    
+    /**
+     * Try to mark a group as in-flight for processing
+     * Returns true if successfully marked, false if already in-flight
+     */
+    bool mark_group_in_flight(const std::string& group_key);
+    
+    /**
+     * Remove a group from in-flight tracking
+     */
+    void unmark_group_in_flight(const std::string& group_key);
+    
+    /**
+     * Check if a group is currently in-flight
+     */
+    bool is_group_in_flight(const std::string& group_key) const;
 };
 
 /**

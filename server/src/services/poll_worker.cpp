@@ -4,6 +4,7 @@
 #include <sstream>
 #include <iomanip>
 #include <thread>
+#include <unordered_set>
 
 namespace queen {
 
@@ -28,15 +29,11 @@ void init_long_polling(
     std::shared_ptr<ResponseQueue> response_queue,
     int worker_count
 ) {
-    spdlog::info("=== INITIALIZING LONG-POLLING WITH {} POLL WORKERS ===", worker_count);
-    spdlog::info("ThreadPool size: {}", thread_pool->pool_size());
-    spdlog::info("Registry running: {}", registry->is_running());
+    spdlog::info("Initializing long-polling with {} poll workers", worker_count);
     
     // Push never-returning jobs to ThreadPool to reserve worker threads
     for (int worker_id = 0; worker_id < worker_count; worker_id++) {
-        spdlog::info("Submitting poll worker {} to ThreadPool...", worker_id);
         thread_pool->push([=]() {
-            spdlog::info("=== POLL WORKER {} LAMBDA EXECUTING ===", worker_id);
             poll_worker_loop(
                 worker_id,
                 worker_count,
@@ -49,7 +46,8 @@ void init_long_polling(
         });
     }
     
-    spdlog::info("=== Long-polling: {} poll workers submitted to ThreadPool ===", worker_count);
+    spdlog::info("Long-polling: {} poll workers reserved from ThreadPool (size: {})", 
+                worker_count, thread_pool->pool_size());
 }
 
 void poll_worker_loop(
@@ -64,10 +62,12 @@ void poll_worker_loop(
     spdlog::info("Poll worker {} started (1 of {})", worker_id, total_workers);
     
     int loop_count = 0;
+    int consecutive_empty_pops = 0;  // Track empty results for backoff
+    
     while (registry->is_running()) {
+        loop_count++;
+        
         try {
-            loop_count++;
-            
             // Get all active intentions
             auto all_intentions = registry->get_active_intentions();
             
@@ -75,6 +75,29 @@ void poll_worker_loop(
             if (loop_count % 100 == 0 || (!all_intentions.empty() && loop_count % 10 == 0)) {
                 spdlog::debug("Poll worker {} loop {}: registry has {} total intentions", 
                            worker_id, loop_count, all_intentions.size());
+            }
+            
+            // CHECK TIMEOUTS FIRST (before processing groups)
+            // This ensures timeouts fire on time even if group processing is slow
+            auto now = std::chrono::steady_clock::now();
+            for (const auto& intention : all_intentions) {
+                if (now >= intention.deadline) {
+                    // Try to mark group as in-flight to get exclusive access for timeout
+                    std::string group_key = intention.grouping_key();
+                    if (!registry->mark_group_in_flight(group_key)) {
+                        // Another worker is handling this group
+                        continue;
+                    }
+                    
+                    // We got exclusive access - send timeout response
+                    nlohmann::json empty_response;
+                    response_queue->push(intention.request_id, empty_response, false, 204);
+                    registry->remove_intention(intention.request_id);
+                    registry->unmark_group_in_flight(group_key);
+                    
+                    spdlog::info("Poll worker {} TIMEOUT: intention {} exceeded deadline (sent 204)", 
+                                 worker_id, intention.request_id);
+                }
             }
             
             if (all_intentions.empty()) {
@@ -107,56 +130,30 @@ void poll_worker_loop(
                     // Determine if this is queue-based or namespace-based
                     bool is_queue_based = batch[0].is_queue_based();
                     
-                    spdlog::debug("Poll worker {} checking group '{}' ({} intentions)", 
+                    spdlog::debug("Poll worker {} processing group '{}' ({} intentions)", 
                                 worker_id, key, batch.size());
                     
-                    // Lightweight check: count available messages
-                    int available = 0;
-                    if (is_queue_based) {
-                        available = queue_manager->count_available_messages(
-                            batch[0].queue_name,
-                            batch[0].partition_name,
-                            batch[0].consumer_group
-                        );
-                        if (available > 0) {
-                            spdlog::info("Poll worker {} found {} available messages for queue={} partition={} consumer_group={}", 
-                                        worker_id, available, 
-                                        batch[0].queue_name.value_or("*"),
-                                        batch[0].partition_name.value_or("*"),
-                                        batch[0].consumer_group);
-                        }
-                    } else {
-                        available = queue_manager->count_available_messages_namespace(
-                            batch[0].namespace_name,
-                            batch[0].task_name,
-                            batch[0].consumer_group
-                        );
-                        if (available > 0) {
-                            spdlog::info("Poll worker {} found {} available messages for namespace={} task={} consumer_group={}", 
-                                        worker_id, available,
-                                        batch[0].namespace_name.value_or("*"),
-                                        batch[0].task_name.value_or("*"),
-                                        batch[0].consumer_group);
-                        }
-                    }
-                    
-                    if (available > 0) {
-                        // Messages available! Submit actual pop to ThreadPool with priority
-                        std::string job_id = "pop_" + generate_unique_id();
+                    // Skip lightweight count - just try the pop directly
+                    // The count was causing false positives (said messages available but pop returned 0)
+                    // This happens because count doesn't account for SKIP LOCKED or active leases
+                    {
+                        // Check if this GROUP is already being processed (shared across all workers)
+                        bool success = registry->mark_group_in_flight(key);
                         
-                        spdlog::info("Poll worker {} submitting pop job for group '{}' with {} intentions",
+                        if (!success) {
+                            spdlog::debug("Poll worker {} skipping group '{}' - already in-flight",
+                                        worker_id, key);
+                            continue; // Skip this group - another worker is processing it
+                        }
+                        
+                        spdlog::debug("Poll worker {} submitting pop job for group '{}' with {} intentions",
                                     worker_id, key, batch.size());
                         
-                        // IMPORTANT: Remove intentions BEFORE submitting job to prevent duplicate processing
-                        // If the pop fails (e.g., another server got the messages), client will timeout and retry
-                        for (const auto& intention : batch) {
-                            registry->remove_intention(intention.request_id);
-                        }
-                        
-                        // Capture batch by value for the lambda
+                        // Capture batch and group key by value for the lambda
                         auto batch_copy = batch;
+                        auto group_key = key;  // Explicit copy
                         
-                        thread_pool->dg_now(job_id, [=]() {
+                        thread_pool->push([=]() {
                             try {
                                 // Calculate total batch size for all waiting clients
                                 int total_batch = 0;
@@ -186,41 +183,35 @@ void poll_worker_loop(
                                     // Distribute messages to waiting clients
                                     auto fulfilled_ids = distribute_to_clients(result, batch_copy, response_queue);
                                     
-                                    spdlog::info("Long-poll fulfilled {} intentions with {} messages for group '{}'",
-                                               fulfilled_ids.size(), result.messages.size(), key);
-                                } else {
-                                    // No messages (e.g., race condition - consumed between check and pop)
-                                    // Send empty 204 response to all waiting clients
-                                    spdlog::debug("Pop returned no messages for group '{}' - sending 204 to {} clients (race condition)",
-                                                key, batch_copy.size());
-                                    
-                                    nlohmann::json empty_response;
-                                    for (const auto& intention : batch_copy) {
-                                        response_queue->push(intention.request_id, empty_response, false, 204);
+                                    // Remove fulfilled intentions from registry AFTER responses queued
+                                    for (const auto& request_id : fulfilled_ids) {
+                                        registry->remove_intention(request_id);
                                     }
+                                    
+                                    spdlog::info("Long-poll fulfilled {} intentions with {} messages for group '{}'",
+                                               fulfilled_ids.size(), result.messages.size(), group_key);
+                                } else {
+                                    // No messages yet - keep intentions in registry
+                                    // Poll worker will try again on next cycle (100ms later)
+                                    // Timeout handler will send 204 when deadline is reached
+                                    spdlog::debug("Pop returned no messages for group '{}' - keeping {} intentions in registry",
+                                                group_key, batch_copy.size());
                                 }
+                                
+                                // Remove group from in-flight tracking
+                                registry->unmark_group_in_flight(group_key);
+                                
                             } catch (const std::exception& e) {
-                                spdlog::error("Poll worker {} pop job error: {}", worker_id, e.what());
+                                spdlog::error("Pop job error for group '{}': {}", group_key, e.what());
+                                
+                                // Remove group from in-flight even on error
+                                registry->unmark_group_in_flight(group_key);
                             }
                         });
                     }
                     
                 } catch (const std::exception& e) {
                     spdlog::error("Poll worker {} group processing error: {}", worker_id, e.what());
-                }
-            }
-            
-            // Check for expired intentions (timeouts)
-            auto now = std::chrono::steady_clock::now();
-            for (const auto& intention : my_intentions) {
-                if (now >= intention.deadline) {
-                    // Timeout - send empty response (204 No Content)
-                    nlohmann::json empty_response;
-                    response_queue->push(intention.request_id, empty_response, false, 204);
-                    registry->remove_intention(intention.request_id);
-                    
-                    spdlog::debug("Poll worker {} timed out intention {}", 
-                                 worker_id, intention.request_id);
                 }
             }
             
