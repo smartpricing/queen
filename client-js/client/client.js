@@ -542,14 +542,16 @@ export class Queen {
       if (hasIndividualStatus) {
         // Option B: Each message has its own status
         acknowledgments = message.map(msg => {
-          // Extract transaction ID and lease ID
+          // Extract transaction ID, partition ID, and lease ID
           let transactionId;
+          let partitionId = null;
           let leaseId = null;
           
           if (typeof msg === 'string') {
             transactionId = msg;
           } else if (typeof msg === 'object' && msg !== null) {
             transactionId = msg.transactionId || msg.id;
+            partitionId = msg.partitionId || null;
             leaseId = msg.leaseId || null;
             if (!transactionId) {
               throw new Error('Message object must have transactionId or id property');
@@ -573,6 +575,11 @@ export class Queen {
             error: msg._error || context.error || null
           };
           
+          // Include partition ID if available
+          if (partitionId) {
+            ack.partitionId = partitionId;
+          }
+          
           // Include lease ID if available
           if (leaseId) {
             ack.leaseId = leaseId;
@@ -587,14 +594,16 @@ export class Queen {
           : status;
         
         acknowledgments = message.map(msg => {
-          // Extract transaction ID and lease ID
+          // Extract transaction ID, partition ID, and lease ID
           let transactionId;
+          let partitionId = null;
           let leaseId = null;
           
           if (typeof msg === 'string') {
             transactionId = msg;
           } else if (typeof msg === 'object' && msg !== null) {
             transactionId = msg.transactionId || msg.id;
+            partitionId = msg.partitionId || null;
             leaseId = msg.leaseId || null;
             if (!transactionId) {
               throw new Error('Message object must have transactionId or id property');
@@ -608,6 +617,11 @@ export class Queen {
             status: statusStr,
             error: context.error || null
           };
+          
+          // Include partition ID if available
+          if (partitionId) {
+            ack.partitionId = partitionId;
+          }
           
           // Include lease ID if available
           if (leaseId) {
@@ -636,14 +650,16 @@ export class Queen {
     }
     
     // Handle single message acknowledgment
-    // Extract transaction ID and lease ID
+    // Extract transaction ID, partition ID, and lease ID
     let transactionId;
+    let partitionId = null;
     let leaseId = null;
     
     if (typeof message === 'string') {
       transactionId = message;
     } else if (typeof message === 'object' && message !== null) {
       transactionId = message.transactionId || message.id;
+      partitionId = message.partitionId || null;  // Extract partition ID for partition-scoped ACK
       leaseId = message.leaseId || null;  // Extract lease ID if present
       if (!transactionId) {
         throw new Error('Message object must have transactionId or id property');
@@ -667,6 +683,11 @@ export class Queen {
       error: context.error || null,
       consumerGroup: context.group || null
     };
+    
+    // Include partition ID if available for partition-scoped operations
+    if (partitionId) {
+      body.partitionId = partitionId;
+    }
     
     // Include lease ID if available for lease validation
     if (leaseId) {

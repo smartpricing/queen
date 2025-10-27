@@ -933,6 +933,10 @@ static void setup_worker_routes(uWS::App* app,
                             ack.error = ack_json["error"];
                         }
                         
+                        if (ack_json.contains("partitionId") && !ack_json["partitionId"].is_null() && ack_json["partitionId"].is_string()) {
+                            ack.partition_id = ack_json["partitionId"];
+                        }
+                        
                         ack_items.push_back(ack);
                     }
                     
@@ -1166,18 +1170,23 @@ static void setup_worker_routes(uWS::App* app,
                         lease_id = body["leaseId"];
                     }
                     
+                    std::optional<std::string> partition_id;
+                    if (body.contains("partitionId") && !body["partitionId"].is_null() && body["partitionId"].is_string()) {
+                        partition_id = body["partitionId"];
+                    }
+                    
                     // Register response in uWebSockets thread - SAFE
                     std::string request_id = global_response_registry->register_response(res);
                     
                     spdlog::info("[Worker {}] ACK: Registered response {}, submitting to ThreadPool", worker_id, request_id);
                     
                     // Execute ACK operation in ThreadPool
-                    db_thread_pool->push([request_id, queue_manager, worker_id, transaction_id, status, error, consumer_group, lease_id]() {
+                    db_thread_pool->push([request_id, queue_manager, worker_id, transaction_id, status, error, consumer_group, lease_id, partition_id]() {
                         spdlog::info("[Worker {}] ACK: ThreadPool executing ACK operation for {}", worker_id, request_id);
                         
                         try {
                             auto ack_start = std::chrono::steady_clock::now();
-                            auto ack_result = queue_manager->acknowledge_message(transaction_id, status, error, consumer_group, lease_id);
+                            auto ack_result = queue_manager->acknowledge_message(transaction_id, status, error, consumer_group, lease_id, partition_id);
                             auto ack_end = std::chrono::steady_clock::now();
                             auto ack_duration_ms = std::chrono::duration_cast<std::chrono::milliseconds>(ack_end - ack_start).count();
                             

@@ -32,7 +32,7 @@ const produce = async () => {
     }
 }
 
-//produce()
+produce()
 
 client
 .pipeline(`${queueTranslations}`)

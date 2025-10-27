@@ -190,6 +190,7 @@ public:
         std::string transaction_id;
         std::string status; // "completed" or "failed"
         std::optional<std::string> error;
+        std::optional<std::string> partition_id;  // Optional partition_id for efficiency
     };
     
     struct AckResult {
@@ -202,7 +203,8 @@ public:
                            const std::string& status,
                            const std::optional<std::string>& error = std::nullopt,
                            const std::string& consumer_group = "__QUEUE_MODE__",
-                           const std::optional<std::string>& lease_id = std::nullopt);
+                           const std::optional<std::string>& lease_id = std::nullopt,
+                           const std::optional<std::string>& partition_id = std::nullopt);
     
     std::vector<AckResult> acknowledge_messages(const std::vector<AckItem>& acks,
                                          const std::string& consumer_group = "__QUEUE_MODE__");

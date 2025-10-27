@@ -1816,7 +1816,8 @@ QueueManager::AckResult QueueManager::acknowledge_message(const std::string& tra
                                      const std::string& status,
                                      const std::optional<std::string>& error,
                                      const std::string& consumer_group,
-                                     const std::optional<std::string>& lease_id) {
+                                     const std::optional<std::string>& lease_id,
+                                     const std::optional<std::string>& partition_id_param) {
     QueueManager::AckResult result;
     result.transaction_id = transaction_id;
     result.status = "not_found";
@@ -1825,28 +1826,36 @@ QueueManager::AckResult QueueManager::acknowledge_message(const std::string& tra
     try {
         ScopedConnection conn(db_pool_.get());
         
-        // CRITICAL: First, get the partition_id for this transaction_id
-        // Must scope to the consumer_group's active partition to handle duplicate transaction_ids across partitions
-        std::string get_partition_sql = R"(
-            SELECT m.partition_id
-            FROM queen.messages m
-            JOIN queen.partition_consumers pc ON pc.partition_id = m.partition_id
-            WHERE m.transaction_id = $1 
-              AND pc.consumer_group = $2
-              AND pc.lease_expires_at > NOW()
-            LIMIT 1
-        )";
+        std::string partition_id;
         
-        auto partition_result = QueryResult(conn->exec_params(get_partition_sql, {transaction_id, consumer_group}));
-        
-        if (!partition_result.is_success() || partition_result.num_rows() == 0) {
-            spdlog::warn("Message not found or no active lease for transaction {} in consumer_group {}", transaction_id, consumer_group);
-            result.status = "not_found";
-            return result;
+        // If partition_id provided directly, use it (more efficient)
+        if (partition_id_param.has_value() && !partition_id_param->empty()) {
+            partition_id = *partition_id_param;
+            spdlog::debug("Using provided partition_id {} for transaction {}", partition_id, transaction_id);
+        } else {
+            // FALLBACK: Get the partition_id for this transaction_id from active lease
+            // Must scope to the consumer_group's active partition to handle duplicate transaction_ids across partitions
+            std::string get_partition_sql = R"(
+                SELECT m.partition_id
+                FROM queen.messages m
+                JOIN queen.partition_consumers pc ON pc.partition_id = m.partition_id
+                WHERE m.transaction_id = $1 
+                  AND pc.consumer_group = $2
+                  AND pc.lease_expires_at > NOW()
+                LIMIT 1
+            )";
+            
+            auto partition_result = QueryResult(conn->exec_params(get_partition_sql, {transaction_id, consumer_group}));
+            
+            if (!partition_result.is_success() || partition_result.num_rows() == 0) {
+                spdlog::warn("Message not found or no active lease for transaction {} in consumer_group {}", transaction_id, consumer_group);
+                result.status = "not_found";
+                return result;
+            }
+            
+            partition_id = partition_result.get_value(0, "partition_id");
+            spdlog::debug("Looked up partition_id {} for transaction {}", partition_id, transaction_id);
         }
-        
-        std::string partition_id = partition_result.get_value(0, "partition_id");
-        spdlog::debug("Found message {} in partition {}", transaction_id, partition_id);
         
         // If lease ID provided, validate it
         if (lease_id.has_value()) {
@@ -2067,18 +2076,7 @@ std::vector<QueueManager::AckResult> QueueManager::acknowledge_messages(const st
                 all_txn_ids.push_back(ack.transaction_id);
             }
             
-            // Get batch size info to determine if this is a total batch failure
-            // CRITICAL: Ensure all messages are from the same partition with active lease
-            std::string batch_size_sql = R"(
-                SELECT pc.batch_size, pc.partition_id
-                FROM queen.messages m
-                JOIN queen.partition_consumers pc ON pc.partition_id = m.partition_id 
-                  AND pc.consumer_group = $2
-                  AND pc.lease_expires_at > NOW()
-                WHERE m.transaction_id = ANY($1::varchar[])
-                LIMIT 1
-            )";
-            
+            // Helper to build PostgreSQL array from vector
             auto build_txn_array = [](const std::vector<std::string>& vec) -> std::string {
                 std::string result = "{";
                 for (size_t i = 0; i < vec.size(); ++i) {
@@ -2090,14 +2088,52 @@ std::vector<QueueManager::AckResult> QueueManager::acknowledge_messages(const st
             };
             
             std::string txn_array = build_txn_array(all_txn_ids);
-            auto batch_info_result = QueryResult(conn->exec_params(batch_size_sql, {txn_array, actual_consumer_group}));
+            std::string partition_id;
             
-            if (!batch_info_result.is_success() || batch_info_result.num_rows() == 0) {
-                throw std::runtime_error("Cannot find leased batch size for acknowledgment");
+            // If first ack has partition_id, use it directly (more efficient)
+            if (acks[0].partition_id.has_value() && !acks[0].partition_id->empty()) {
+                partition_id = *acks[0].partition_id;
+                spdlog::debug("Using provided partition_id {} for batch ACK", partition_id);
+            } else {
+                // FALLBACK: Get partition_id from database
+                // Get batch size info to determine if this is a total batch failure
+                // CRITICAL: Ensure all messages are from the same partition with active lease
+                std::string batch_size_sql = R"(
+                    SELECT pc.batch_size, pc.partition_id
+                    FROM queen.messages m
+                    JOIN queen.partition_consumers pc ON pc.partition_id = m.partition_id 
+                      AND pc.consumer_group = $2
+                      AND pc.lease_expires_at > NOW()
+                    WHERE m.transaction_id = ANY($1::varchar[])
+                    LIMIT 1
+                )";
+                
+                auto batch_info_result = QueryResult(conn->exec_params(batch_size_sql, {txn_array, actual_consumer_group}));
+                
+                if (!batch_info_result.is_success() || batch_info_result.num_rows() == 0) {
+                    throw std::runtime_error("Cannot find leased batch size for acknowledgment");
+                }
+                
+                partition_id = batch_info_result.get_value(0, "partition_id");
+                spdlog::debug("Looked up partition_id {} for batch ACK", partition_id);
             }
             
-            int leased_batch_size = std::stoi(batch_info_result.get_value(0, "batch_size"));
-            std::string partition_id = batch_info_result.get_value(0, "partition_id");
+            // Get batch size for the partition
+            std::string batch_size_sql = R"(
+                SELECT pc.batch_size
+                FROM queen.partition_consumers pc
+                WHERE pc.partition_id = $1::uuid
+                  AND pc.consumer_group = $2
+                LIMIT 1
+            )";
+            
+            auto batch_size_result = QueryResult(conn->exec_params(batch_size_sql, {partition_id, actual_consumer_group}));
+            
+            if (!batch_size_result.is_success() || batch_size_result.num_rows() == 0) {
+                throw std::runtime_error("Cannot find batch size for partition");
+            }
+            
+            int leased_batch_size = std::stoi(batch_size_result.get_value(0, "batch_size"));
             
             // Total batch failure: all failed AND complete batch
             bool is_total_batch_failure = (failed_count == total_messages) && (total_messages == leased_batch_size);
