@@ -406,20 +406,19 @@ await queen
 await queen
 .queue('events')
 .group('analytics')
-.subscriptionMode('earliest')  // 'earliest', 'latest', or 'timestamp'
+.subscriptionMode('all')  // 'all' (from beginning), 'new' (only new messages)
 .consume(async (msg) => {
   // Process all events from the beginning
 })
 
-// Subscription from timestamp
+// Subscription from specific time
 await queen
 .queue('events')
 .group('reprocessing')
-.subscriptionMode('timestamp')
-.subscriptionFrom('2024-01-01T00:00:00Z')
+.subscriptionFrom('now')  // 'now' for latest, or a specific timestamp
 .limit(10000)  // Process 10k messages then stop
 .consume(async (msg) => {
-  // Reprocess events from Jan 1st
+  // Process events from now onwards
 })
 
 // Manual transactions (outside consume context)
@@ -570,9 +569,10 @@ await queen.queue('tasks').consume(async msg => { /* worker 2 */ })
  *   controller.abort()  // Stop gracefully
  * 
  * ✅ SUBSCRIPTION MODE (Bus Mode)
- * - .subscriptionMode('earliest').consume(...)       // Replay from beginning
- * - .subscriptionMode('latest').consume(...)         // Only new messages
- * - .subscriptionMode('timestamp').subscriptionFrom(date).consume(...)  // From timestamp
+ * - .subscriptionMode('all').consume(...)            // Replay from beginning
+ * - .subscriptionMode('new').consume(...)            // Only new messages
+ * - .subscriptionFrom('now').consume(...)            // From now onwards
+ * - .subscriptionFrom(timestamp).consume(...)        // From specific timestamp
  * 
  * ✅ TRANSACTIONS
  * - .consume(...).onSuccess(async (msg) => {         // Transaction in consume
