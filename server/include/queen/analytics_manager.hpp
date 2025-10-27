@@ -39,7 +39,8 @@ public:
         int offset = 0;
     };
     nlohmann::json list_messages(const MessageFilters& filters);
-    nlohmann::json get_message(const std::string& transaction_id);
+    nlohmann::json get_message(const std::string& partition_id, const std::string& transaction_id);
+    bool delete_message(const std::string& partition_id, const std::string& transaction_id);
     
     // Status & Dashboard
     struct StatusFilters {

@@ -81,6 +81,13 @@ import {
 } from './edge-case-tests.js';
 
 import {
+  testDuplicateTransactionIdsAcrossPartitions,
+  testBatchAckWithDuplicateTransactionIds,
+  testDLQWithDuplicateTransactionIds,
+  testAnalyticsAPIWithDuplicateTransactionIds
+} from './partition-transaction-tests.js';
+
+import {
   testMultiStagePipeline,
   testFanOutFanIn,
   testComplexPriorityScenarios,
@@ -274,6 +281,12 @@ async function runTests() {
       await runTest(() => testLeaseExpiration(client));
       await runTest(() => testSQLInjectionPrevention(client));
       await runTest(() => testXSSPrevention(client));
+      
+      // Partition-scoped transaction_id tests
+      await runTest(() => testDuplicateTransactionIdsAcrossPartitions(client));
+      await runTest(() => testBatchAckWithDuplicateTransactionIds(client));
+      await runTest(() => testDLQWithDuplicateTransactionIds(client));
+      await runTest(() => testAnalyticsAPIWithDuplicateTransactionIds(client));
     }
     
     // ============================================

@@ -145,6 +145,13 @@ public:
         return result_ ? PQresultErrorMessage(result_) : "No result";
     }
     
+    // Get number of rows affected by INSERT/UPDATE/DELETE
+    std::string affected_rows() const {
+        if (!result_) return "0";
+        const char* tuples = PQcmdTuples(result_);
+        return tuples ? std::string(tuples) : "0";
+    }
+    
     // Convert row to JSON
     nlohmann::json row_to_json(int row) const;
     

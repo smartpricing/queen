@@ -368,6 +368,7 @@ std::vector<std::string> distribute_to_clients(
             nlohmann::json msg_json = {
                 {"id", msg.id},
                 {"transactionId", msg.transaction_id},
+                {"partitionId", msg.partition_id},
                 {"traceId", msg.trace_id.empty() ? nlohmann::json(nullptr) : nlohmann::json(msg.trace_id)},
                 {"queue", msg.queue_name},
                 {"partition", msg.partition_name},

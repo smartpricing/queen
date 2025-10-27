@@ -259,6 +259,7 @@ static void pop_retry_timer(us_timer_t* timer) {
                     nlohmann::json msg_json = {
                         {"id", msg.id},
                         {"transactionId", msg.transaction_id},
+                        {"partitionId", msg.partition_id},
                         {"traceId", msg.trace_id.empty() ? nlohmann::json(nullptr) : nlohmann::json(msg.trace_id)},
                         {"queue", msg.queue_name},
                         {"partition", msg.partition_name},
@@ -1578,11 +1579,12 @@ static void setup_worker_routes(uWS::App* app,
         }
     });
     
-    // GET /api/v1/messages/:transactionId - Get single message detail
-    app->get("/api/v1/messages/:transactionId", [analytics_manager](auto* res, auto* req) {
+    // GET /api/v1/messages/:partitionId/:transactionId - Get single message detail
+    app->get("/api/v1/messages/:partitionId/:transactionId", [analytics_manager](auto* res, auto* req) {
         try {
-            std::string transaction_id = std::string(req->getParameter(0));
-            auto message = analytics_manager->get_message(transaction_id);
+            std::string partition_id = std::string(req->getParameter(0));
+            std::string transaction_id = std::string(req->getParameter(1));
+            auto message = analytics_manager->get_message(partition_id, transaction_id);
             send_json_response(res, message);
         } catch (const std::exception& e) {
             if (std::string(e.what()).find("not found") != std::string::npos) {
@@ -1590,6 +1592,30 @@ static void setup_worker_routes(uWS::App* app,
             } else {
                 send_error_response(res, e.what(), 500);
             }
+        }
+    });
+    
+    // DELETE /api/v1/messages/:partitionId/:transactionId - Delete a message
+    app->del("/api/v1/messages/:partitionId/:transactionId", [analytics_manager](auto* res, auto* req) {
+        try {
+            std::string partition_id = std::string(req->getParameter(0));
+            std::string transaction_id = std::string(req->getParameter(1));
+            
+            bool deleted = analytics_manager->delete_message(partition_id, transaction_id);
+            
+            if (deleted) {
+                nlohmann::json response = {
+                    {"success", true},
+                    {"message", "Message deleted successfully"},
+                    {"partitionId", partition_id},
+                    {"transactionId", transaction_id}
+                };
+                send_json_response(res, response);
+            } else {
+                send_error_response(res, "Message not found", 404);
+            }
+        } catch (const std::exception& e) {
+            send_error_response(res, e.what(), 500);
         }
     });
     

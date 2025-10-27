@@ -438,6 +438,7 @@ nlohmann::json AnalyticsManager::list_messages(const MessageFilters& filters) {
             SELECT 
                 m.id,
                 m.transaction_id,
+                m.partition_id,
                 m.created_at,
                 m.trace_id,
                 q.name as queue_name,
@@ -513,6 +514,7 @@ nlohmann::json AnalyticsManager::list_messages(const MessageFilters& filters) {
             nlohmann::json msg = {
                 {"id", result.get_value(i, "id")},
                 {"transactionId", result.get_value(i, "transaction_id")},
+                {"partitionId", result.get_value(i, "partition_id")},
                 {"queuePath", queue_path},
                 {"queue", result.get_value(i, "queue_name")},
                 {"partition", result.get_value(i, "partition_name")},
@@ -535,7 +537,7 @@ nlohmann::json AnalyticsManager::list_messages(const MessageFilters& filters) {
     }
 }
 
-nlohmann::json AnalyticsManager::get_message(const std::string& transaction_id) {
+nlohmann::json AnalyticsManager::get_message(const std::string& partition_id, const std::string& transaction_id) {
     try {
         ScopedConnection conn(db_pool_.get());
         
@@ -576,10 +578,10 @@ nlohmann::json AnalyticsManager::get_message(const std::string& transaction_id) 
             JOIN queen.queues q ON q.id = p.queue_id
             LEFT JOIN queen.partition_consumers pc ON pc.partition_id = p.id AND pc.consumer_group = '__QUEUE_MODE__'
             LEFT JOIN queen.dead_letter_queue dlq ON dlq.message_id = m.id
-            WHERE m.transaction_id = $1
+            WHERE m.partition_id = $1::uuid AND m.transaction_id = $2
         )";
         
-        auto result = QueryResult(conn->exec_params(query, {transaction_id}));
+        auto result = QueryResult(conn->exec_params(query, {partition_id, transaction_id}));
         
         if (result.num_rows() == 0) {
             throw std::runtime_error("Message not found");
@@ -594,6 +596,7 @@ nlohmann::json AnalyticsManager::get_message(const std::string& transaction_id) 
         nlohmann::json response = {
             {"id", result.get_value(0, "id")},
             {"transactionId", result.get_value(0, "transaction_id")},
+            {"partitionId", result.get_value(0, "partition_id")},
             {"queuePath", queue_path},
             {"queue", result.get_value(0, "queue_name")},
             {"partition", result.get_value(0, "partition_name")},
@@ -653,6 +656,43 @@ nlohmann::json AnalyticsManager::get_message(const std::string& transaction_id) 
         return response;
     } catch (const std::exception& e) {
         spdlog::error("Error in get_message: {}", e.what());
+        throw;
+    }
+}
+
+bool AnalyticsManager::delete_message(const std::string& partition_id, const std::string& transaction_id) {
+    try {
+        ScopedConnection conn(db_pool_.get());
+        
+        // Delete the message - cascading deletes will handle DLQ entries
+        std::string delete_sql = R"(
+            DELETE FROM queen.messages
+            WHERE partition_id = $1::uuid AND transaction_id = $2
+        )";
+        
+        auto result = QueryResult(conn->exec_params(delete_sql, {partition_id, transaction_id}));
+        
+        if (!result.is_success()) {
+            spdlog::error("Failed to delete message: partition_id={}, transaction_id={}", 
+                         partition_id, transaction_id);
+            return false;
+        }
+        
+        // Check if any rows were deleted
+        std::string affected = result.affected_rows();
+        int rows_deleted = affected.empty() ? 0 : std::stoi(affected);
+        
+        if (rows_deleted == 0) {
+            spdlog::warn("No message found to delete: partition_id={}, transaction_id={}", 
+                        partition_id, transaction_id);
+            return false;
+        }
+        
+        spdlog::info("Deleted message: partition_id={}, transaction_id={}", 
+                    partition_id, transaction_id);
+        return true;
+    } catch (const std::exception& e) {
+        spdlog::error("Error in delete_message: {}", e.what());
         throw;
     }
 }

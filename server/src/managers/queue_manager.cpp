@@ -1276,7 +1276,7 @@ PopResult QueueManager::pop_from_queue_partition(const std::string& queue_name,
         // Get messages from this partition with queue priority and encryption flag
         // CRITICAL: Use FOR UPDATE OF m SKIP LOCKED for row-level locking and concurrency
         std::string sql = R"(
-            SELECT m.id, m.transaction_id, m.payload, m.trace_id, m.created_at, m.is_encrypted,
+            SELECT m.id, m.transaction_id, m.partition_id, m.payload, m.trace_id, m.created_at, m.is_encrypted,
                    q.name as queue_name, p.name as partition_name, q.priority as queue_priority
             FROM queen.messages m
             JOIN queen.partitions p ON p.id = m.partition_id
@@ -1360,6 +1360,7 @@ PopResult QueueManager::pop_from_queue_partition(const std::string& queue_name,
                 Message msg;
                 msg.id = query_result.get_value(i, "id");
                 msg.transaction_id = query_result.get_value(i, "transaction_id");
+                msg.partition_id = query_result.get_value(i, "partition_id");
                 msg.queue_name = query_result.get_value(i, "queue_name");
                 msg.partition_name = query_result.get_value(i, "partition_name");
                 std::string trace_val = query_result.get_value(i, "trace_id");
@@ -1824,21 +1825,43 @@ QueueManager::AckResult QueueManager::acknowledge_message(const std::string& tra
     try {
         ScopedConnection conn(db_pool_.get());
         
-        // If lease ID provided, validate it first
+        // CRITICAL: First, get the partition_id for this transaction_id
+        // Must scope to the consumer_group's active partition to handle duplicate transaction_ids across partitions
+        std::string get_partition_sql = R"(
+            SELECT m.partition_id
+            FROM queen.messages m
+            JOIN queen.partition_consumers pc ON pc.partition_id = m.partition_id
+            WHERE m.transaction_id = $1 
+              AND pc.consumer_group = $2
+              AND pc.lease_expires_at > NOW()
+            LIMIT 1
+        )";
+        
+        auto partition_result = QueryResult(conn->exec_params(get_partition_sql, {transaction_id, consumer_group}));
+        
+        if (!partition_result.is_success() || partition_result.num_rows() == 0) {
+            spdlog::warn("Message not found or no active lease for transaction {} in consumer_group {}", transaction_id, consumer_group);
+            result.status = "not_found";
+            return result;
+        }
+        
+        std::string partition_id = partition_result.get_value(0, "partition_id");
+        spdlog::debug("Found message {} in partition {}", transaction_id, partition_id);
+        
+        // If lease ID provided, validate it
         if (lease_id.has_value()) {
             spdlog::debug("Validating lease {} for transaction {}", *lease_id, transaction_id);
             std::string validate_sql = R"(
                 SELECT 1 FROM queen.partition_consumers pc
-                JOIN queen.messages m ON m.partition_id = pc.partition_id
-                WHERE m.transaction_id = $1 
+                WHERE pc.partition_id = $1::uuid
                   AND pc.worker_id = $2
                   AND pc.lease_expires_at > NOW()
             )";
             
-            auto valid = QueryResult(conn->exec_params(validate_sql, {transaction_id, *lease_id}));
+            auto valid = QueryResult(conn->exec_params(validate_sql, {partition_id, *lease_id}));
             
             if (!valid.is_success() || valid.num_rows() == 0) {
-                spdlog::warn("Invalid lease {} for transaction {} - validation failed", *lease_id, transaction_id);
+                spdlog::warn("Invalid lease {} for partition {} - validation failed", *lease_id, partition_id);
                 result.status = "invalid_lease";
                 return result;
             }
@@ -1847,8 +1870,7 @@ QueueManager::AckResult QueueManager::acknowledge_message(const std::string& tra
         
         if (status == "completed") {
             // Update cursor and release lease if all messages in batch are ACKed
-            // OPTIMIZATION: Return partition_id from UPDATE to avoid separate query
-            // CRITICAL FIX: Reset acked_count to 0 when batch completes, add worker_id reset
+            // CRITICAL: Now scoped by partition_id to handle duplicate transaction_ids across partitions
             std::string sql = R"(
                 UPDATE queen.partition_consumers 
                 SET last_consumed_id = m.id,
@@ -1882,16 +1904,16 @@ QueueManager::AckResult QueueManager::acknowledge_message(const std::string& tra
                         ELSE worker_id 
                     END
                 FROM queen.messages m
-                JOIN queen.partitions p ON p.id = m.partition_id
-                WHERE partition_consumers.partition_id = p.id
-                  AND partition_consumers.consumer_group = $1
-                  AND m.transaction_id = $2
+                WHERE partition_consumers.partition_id = $1::uuid
+                  AND partition_consumers.consumer_group = $2
+                  AND m.partition_id = $1::uuid
+                  AND m.transaction_id = $3
                 RETURNING 
                     (partition_consumers.lease_expires_at IS NULL) as lease_released,
                     partition_consumers.partition_id
             )";
             
-            std::vector<std::string> params = {consumer_group, transaction_id};
+            std::vector<std::string> params = {partition_id, consumer_group, transaction_id};
             auto query_result = QueryResult(conn->exec_params(sql, params));
             
             if (query_result.is_success() && query_result.num_rows() > 0) {
@@ -1916,6 +1938,7 @@ QueueManager::AckResult QueueManager::acknowledge_message(const std::string& tra
             
         } else if (status == "failed") {
             // Insert into Dead Letter Queue for this consumer group
+            // CRITICAL: Now scoped by partition_id to handle duplicate transaction_ids across partitions
             std::string dlq_sql = R"(
                 INSERT INTO queen.dead_letter_queue (
                     message_id, partition_id, consumer_group, error_message, 
@@ -1923,7 +1946,8 @@ QueueManager::AckResult QueueManager::acknowledge_message(const std::string& tra
                 )
                 SELECT m.id, m.partition_id, $1::varchar, $2::text, 0, m.created_at
                 FROM queen.messages m
-                WHERE m.transaction_id = $3
+                WHERE m.partition_id = $3::uuid
+                  AND m.transaction_id = $4
                   AND NOT EXISTS (
                       SELECT 1 FROM queen.dead_letter_queue dlq
                       WHERE dlq.message_id = m.id AND dlq.consumer_group = $1::varchar
@@ -1933,6 +1957,7 @@ QueueManager::AckResult QueueManager::acknowledge_message(const std::string& tra
             std::vector<std::string> dlq_params = {
                 consumer_group,
                 error.value_or("Message processing failed"),
+                partition_id,
                 transaction_id
             };
             
@@ -1944,7 +1969,7 @@ QueueManager::AckResult QueueManager::acknowledge_message(const std::string& tra
             }
             
             // Still advance cursor for failed messages (they are "consumed")
-            // CRITICAL FIX: Reset acked_count to 0 when batch completes, add worker_id reset
+            // CRITICAL: Now scoped by partition_id to handle duplicate transaction_ids across partitions
             std::string cursor_sql = R"(
                 UPDATE queen.partition_consumers 
                 SET last_consumed_id = m.id,
@@ -1978,13 +2003,13 @@ QueueManager::AckResult QueueManager::acknowledge_message(const std::string& tra
                         ELSE worker_id 
                     END
                 FROM queen.messages m
-                JOIN queen.partitions p ON p.id = m.partition_id
-                WHERE partition_consumers.partition_id = p.id
-                  AND partition_consumers.consumer_group = $1
-                  AND m.transaction_id = $2
+                WHERE partition_consumers.partition_id = $1::uuid
+                  AND partition_consumers.consumer_group = $2
+                  AND m.partition_id = $1::uuid
+                  AND m.transaction_id = $3
             )";
             
-            auto cursor_result = QueryResult(conn->exec_params(cursor_sql, {consumer_group, transaction_id}));
+            auto cursor_result = QueryResult(conn->exec_params(cursor_sql, {partition_id, consumer_group, transaction_id}));
             
             spdlog::warn("Message failed and moved to DLQ: {} - {}", transaction_id, error.value_or("No error message"));
             result.status = "failed_dlq";
@@ -2043,11 +2068,13 @@ std::vector<QueueManager::AckResult> QueueManager::acknowledge_messages(const st
             }
             
             // Get batch size info to determine if this is a total batch failure
+            // CRITICAL: Ensure all messages are from the same partition with active lease
             std::string batch_size_sql = R"(
                 SELECT pc.batch_size, pc.partition_id
                 FROM queen.messages m
                 JOIN queen.partition_consumers pc ON pc.partition_id = m.partition_id 
                   AND pc.consumer_group = $2
+                  AND pc.lease_expires_at > NOW()
                 WHERE m.transaction_id = ANY($1::varchar[])
                 LIMIT 1
             )";
@@ -2077,6 +2104,7 @@ std::vector<QueueManager::AckResult> QueueManager::acknowledge_messages(const st
             
             if (is_total_batch_failure) {
                 // Get retry info
+                // CRITICAL: Scoped by partition_id to ensure correct partition
                 std::string retry_info_sql = R"(
                     SELECT 
                         q.retry_limit,
@@ -2088,11 +2116,12 @@ std::vector<QueueManager::AckResult> QueueManager::acknowledge_messages(const st
                     JOIN queen.queues q ON q.id = p.queue_id
                     JOIN queen.partition_consumers pc ON pc.partition_id = m.partition_id 
                       AND pc.consumer_group = $2
-                    WHERE m.transaction_id = ANY($1::varchar[])
+                    WHERE m.partition_id = $3::uuid
+                      AND m.transaction_id = ANY($1::varchar[])
                     LIMIT 1
                 )";
                 
-                auto retry_info = QueryResult(conn->exec_params(retry_info_sql, {txn_array, actual_consumer_group}));
+                auto retry_info = QueryResult(conn->exec_params(retry_info_sql, {txn_array, actual_consumer_group, partition_id}));
                 
                 if (!retry_info.is_success() || retry_info.num_rows() == 0) {
                     throw std::runtime_error("Cannot find queue retry limit");
@@ -2122,23 +2151,26 @@ std::vector<QueueManager::AckResult> QueueManager::acknowledge_messages(const st
                             e.error_message,
                             m.created_at
                         FROM queen.messages m
-                        CROSS JOIN LATERAL UNNEST($1::varchar[], $3::text[]) AS e(txn_id, error_message)
-                        WHERE m.transaction_id = e.txn_id
+                        CROSS JOIN LATERAL UNNEST($1::varchar[], $4::text[]) AS e(txn_id, error_message)
+                        WHERE m.partition_id = $3::uuid
+                          AND m.transaction_id = e.txn_id
                         ON CONFLICT DO NOTHING
                     )";
                     
-                    conn->exec_params(dlq_sql, {txn_array, actual_consumer_group, error_array});
+                    conn->exec_params(dlq_sql, {txn_array, actual_consumer_group, partition_id, error_array});
                     
                     // Get last message for cursor
+                    // CRITICAL: Scoped by partition_id
                     std::string last_msg_sql = R"(
                         SELECT id, created_at
                         FROM queen.messages m
-                        WHERE m.transaction_id = ANY($1::varchar[])
+                        WHERE m.partition_id = $1::uuid
+                          AND m.transaction_id = ANY($2::varchar[])
                         ORDER BY m.created_at DESC, m.id DESC
                         LIMIT 1
                     )";
                     
-                    auto last_msg = QueryResult(conn->exec_params(last_msg_sql, {txn_array}));
+                    auto last_msg = QueryResult(conn->exec_params(last_msg_sql, {partition_id, txn_array}));
                     std::string last_id = last_msg.get_value(0, "id");
                     std::string last_created = last_msg.get_value(0, "created_at");
                     
@@ -2209,6 +2241,7 @@ std::vector<QueueManager::AckResult> QueueManager::acknowledge_messages(const st
                 // Partial success - advance cursor, DLQ individual failures
                 
                 // Get last message info
+                // CRITICAL: Scoped by partition_id to handle duplicate transaction_ids across partitions
                 std::string batch_info_sql = R"(
                     SELECT 
                         m.id,
@@ -2218,12 +2251,13 @@ std::vector<QueueManager::AckResult> QueueManager::acknowledge_messages(const st
                         p.name as partition_name
                     FROM queen.messages m
                     JOIN queen.partitions p ON p.id = m.partition_id
-                    WHERE m.transaction_id = ANY($1::varchar[])
+                    WHERE m.partition_id = $1::uuid
+                      AND m.transaction_id = ANY($2::varchar[])
                     ORDER BY m.created_at DESC, m.id DESC
                     LIMIT 1
                 )";
                 
-                auto batch_info = QueryResult(conn->exec_params(batch_info_sql, {txn_array}));
+                auto batch_info = QueryResult(conn->exec_params(batch_info_sql, {partition_id, txn_array}));
                 
                 if (!batch_info.is_success() || batch_info.num_rows() == 0) {
                     throw std::runtime_error("No messages found for acknowledgment");
@@ -2231,7 +2265,6 @@ std::vector<QueueManager::AckResult> QueueManager::acknowledge_messages(const st
                 
                 std::string last_id = batch_info.get_value(0, "id");
                 std::string last_created = batch_info.get_value(0, "created_at");
-                std::string partition_id = batch_info.get_value(0, "partition_id");
                 
                 // Advance cursor atomically
                 // CRITICAL FIX: Use subquery to ensure acked_count comparison uses the NEW value
@@ -2303,6 +2336,7 @@ std::vector<QueueManager::AckResult> QueueManager::acknowledge_messages(const st
                     std::string failed_array = build_txn_array(failed_txn_ids);
                     std::string error_array = build_txn_array(failed_errors);
                     
+                    // CRITICAL: Scoped by partition_id to handle duplicate transaction_ids across partitions
                     std::string dlq_sql = R"(
                         INSERT INTO queen.dead_letter_queue (message_id, partition_id, consumer_group, error_message, original_created_at)
                         SELECT 
@@ -2312,12 +2346,13 @@ std::vector<QueueManager::AckResult> QueueManager::acknowledge_messages(const st
                             e.error_message,
                             m.created_at
                         FROM queen.messages m
-                        CROSS JOIN LATERAL UNNEST($1::varchar[], $3::text[]) AS e(txn_id, error_message)
-                        WHERE m.transaction_id = e.txn_id
+                        CROSS JOIN LATERAL UNNEST($1::varchar[], $4::text[]) AS e(txn_id, error_message)
+                        WHERE m.partition_id = $3::uuid
+                          AND m.transaction_id = e.txn_id
                         ON CONFLICT DO NOTHING
                     )";
                     
-                    conn->exec_params(dlq_sql, {failed_array, actual_consumer_group, error_array});
+                    conn->exec_params(dlq_sql, {failed_array, actual_consumer_group, partition_id, error_array});
                     
                     spdlog::info("Moved {} failed messages to DLQ", failed_count);
                 }

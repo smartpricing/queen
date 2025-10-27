@@ -40,7 +40,7 @@ The test suite is organized into focused, modular files:
 - Subscription modes (all vs new messages)
 - Consumer group isolation
 
-#### 5. Edge Cases (`edge-case-tests.js`)
+#### 5. Edge Cases (`edge-case-tests.js` & `partition-transaction-tests.js`)
 - Empty and null payloads
 - Very large payloads
 - Concurrent push/take operations
@@ -48,6 +48,11 @@ The test suite is organized into focused, modular files:
 - Lease expiration and redelivery
 - SQL injection prevention
 - XSS prevention
+- **Partition-scoped transaction_id handling** (`partition-transaction-tests.js`):
+  - Duplicate transaction IDs across partitions with correct ACK targeting
+  - Batch ACK with duplicate transaction IDs
+  - DLQ operations with duplicate transaction IDs
+  - Analytics API with duplicate transaction IDs
 
 #### 6. Advanced Patterns (`advanced-pattern-tests.js`)
 - Multi-stage pipeline workflow
@@ -138,19 +143,35 @@ for await (const msg of client.take('myqueue/partition@group', { limit: 10 })) {
 cd /Users/alice/Work/queen
 
 # Run all tests
-nvm use 22 && node src/test/test-new.js
+nvm use 22 && node client-js/test/test-new.js
 
 # Run specific test category
-node src/test/test-new.js core        # Core features only
-node src/test/test-new.js partition   # Partition locking tests only
-node src/test/test-new.js enterprise  # Enterprise features only
-node src/test/test-new.js bus         # Bus mode tests only
-node src/test/test-new.js edge        # Edge cases only
-node src/test/test-new.js advanced    # Advanced patterns only
+node client-js/test/test-new.js core        # Core features only
+node client-js/test/test-new.js partition   # Partition locking tests only
+node client-js/test/test-new.js enterprise  # Enterprise features only
+node client-js/test/test-new.js bus         # Bus mode tests only
+node client-js/test/test-new.js edge        # Edge cases (includes partition-scoped txn_id tests)
+node client-js/test/test-new.js advanced    # Advanced patterns only
 
 # Show help
-node src/test/test-new.js help
+node client-js/test/test-new.js help
 ```
+
+### Testing Partition-Scoped Transaction ID Fix
+
+The `edge` test category includes critical tests for partition-scoped transaction_id handling:
+
+```bash
+# Run all edge case tests (includes partition transaction_id tests)
+node client-js/test/test-new.js edge
+```
+
+These tests verify that:
+- ✅ The same `transaction_id` can exist in multiple partitions
+- ✅ ACK operations correctly target messages using BOTH `partition_id` AND `transaction_id`
+- ✅ Batch ACK operations scope correctly by partition
+- ✅ DLQ operations only affect the intended partition
+- ✅ Analytics API (`GET /api/v1/messages/:partitionId/:transactionId`) returns the correct message
 
 ### Available Test Categories
 

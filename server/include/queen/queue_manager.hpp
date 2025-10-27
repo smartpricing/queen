@@ -14,6 +14,7 @@ namespace queen {
 struct Message {
     std::string id;
     std::string transaction_id;
+    std::string partition_id;  // Partition UUID for partition-scoped operations
     nlohmann::json payload;
     std::string queue_name;
     std::string partition_name;

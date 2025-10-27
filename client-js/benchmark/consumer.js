@@ -5,7 +5,7 @@ const QUEUE_NAME = 'benchmark-queue-001';
 const NUMBER_OF_CONSUMERS = 10;
 const STARTING_PARTITION = parseInt(process.argv[2]) || 0;
 const BATCH_SIZE = 10000;
-const CONSUME_MODE = null//'partition';
+const CONSUME_MODE = 'partition';
 
 // Global metrics tracking
 const metrics = {

@@ -2,11 +2,11 @@ import apiClient from './client';
 
 export const messagesApi = {
   getMessages: (params) => apiClient.get('/api/v1/messages', { params }),
-  getMessage: (transactionId) => apiClient.get(`/api/v1/messages/${transactionId}`),
-  deleteMessage: (transactionId) => apiClient.delete(`/api/v1/messages/${transactionId}`),
-  retryMessage: (transactionId) => apiClient.post(`/api/v1/messages/${transactionId}/retry`),
-  moveToDLQ: (transactionId) => apiClient.post(`/api/v1/messages/${transactionId}/dlq`),
-  getRelatedMessages: (transactionId) => apiClient.get(`/api/v1/messages/${transactionId}/related`),
+  getMessage: (partitionId, transactionId) => apiClient.get(`/api/v1/messages/${partitionId}/${transactionId}`),
+  deleteMessage: (partitionId, transactionId) => apiClient.delete(`/api/v1/messages/${partitionId}/${transactionId}`),
+  retryMessage: (partitionId, transactionId) => apiClient.post(`/api/v1/messages/${partitionId}/${transactionId}/retry`),
+  moveToDLQ: (partitionId, transactionId) => apiClient.post(`/api/v1/messages/${partitionId}/${transactionId}/dlq`),
+  getRelatedMessages: (partitionId, transactionId) => apiClient.get(`/api/v1/messages/${partitionId}/${transactionId}/related`),
   
   // Push messages
   pushMessages: (data) => apiClient.post('/api/v1/push', data),

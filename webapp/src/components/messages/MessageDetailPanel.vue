@@ -169,13 +169,13 @@ watch(() => props.message, async (newMessage) => {
 });
 
 async function loadMessageDetail() {
-  if (!props.message?.transactionId) return;
+  if (!props.message?.transactionId || !props.message?.partitionId) return;
   
   loading.value = true;
   error.value = null;
   
   try {
-    const response = await messagesApi.getMessage(props.message.transactionId);
+    const response = await messagesApi.getMessage(props.message.partitionId, props.message.transactionId);
     messageDetail.value = response.data;
   } catch (err) {
     error.value = err.response?.data?.error || err.message;
@@ -189,7 +189,7 @@ async function retryMessage() {
   actionError.value = null;
   
   try {
-    await messagesApi.retryMessage(messageDetail.value.transactionId);
+    await messagesApi.retryMessage(messageDetail.value.partitionId, messageDetail.value.transactionId);
     emit('action-complete');
     close();
   } catch (err) {
@@ -204,7 +204,7 @@ async function moveToDLQ() {
   actionError.value = null;
   
   try {
-    await messagesApi.moveToDLQ(messageDetail.value.transactionId);
+    await messagesApi.moveToDLQ(messageDetail.value.partitionId, messageDetail.value.transactionId);
     emit('action-complete');
     close();
   } catch (err) {
@@ -224,7 +224,7 @@ async function deleteMessage() {
   showDeleteConfirm.value = false;
   
   try {
-    await messagesApi.deleteMessage(messageDetail.value.transactionId);
+    await messagesApi.deleteMessage(messageDetail.value.partitionId, messageDetail.value.transactionId);
     emit('action-complete');
     close();
   } catch (err) {

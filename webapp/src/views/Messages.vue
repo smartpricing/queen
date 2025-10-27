@@ -41,9 +41,10 @@
             <table class="table">
               <thead>
                 <tr>
-                  <th>Transaction ID</th>
-                  <th class="hidden md:table-cell">Queue</th>
+                  <th>Queue</th>
+                  <th class="w-80 hidden xl:table-cell">Partition ID</th>
                   <th class="hidden lg:table-cell">Partition</th>
+                  <th class="w-80">Transaction ID</th>
                   <th class="text-right">Created</th>
                   <th class="text-right">Status</th>
                 </tr>
@@ -52,22 +53,29 @@
                 <tr
                   v-for="message in messages"
                   :key="message.id"
-                  class="cursor-pointer"
+                  class="cursor-pointer hover:bg-gray-50 dark:hover:bg-gray-800/50"
                   @click="selectMessage(message)"
                 >
                   <td>
-                    <div class="font-mono text-xs">{{ message.transactionId.substring(0, 20) }}...</div>
-                    <div class="text-xs text-gray-500 dark:text-gray-400 md:hidden">
-                      {{ message.queue }}
+                    <div class="text-sm">{{ message.queue }}</div>
+                    <div class="text-xs text-gray-500 dark:text-gray-400 lg:hidden mt-0.5 font-mono">
+                      {{ message.partition }}
                     </div>
                   </td>
-                  <td class="hidden md:table-cell">
-                    <div class="text-sm">{{ message.queue }}</div>
+                  <td class="hidden xl:table-cell">
+                    <div class="font-mono text-[10px] text-gray-600 dark:text-gray-400 select-all break-all leading-tight">
+                      {{ message.partitionId }}
+                    </div>
                   </td>
                   <td class="hidden lg:table-cell">
-                    <span class="text-xs text-gray-600 dark:text-gray-400">{{ message.partition }}</span>
+                    <span class="text-xs text-gray-600 dark:text-gray-400 font-mono">{{ message.partition }}</span>
                   </td>
-                  <td class="text-right text-xs">{{ formatTime(message.createdAt) }}</td>
+                  <td>
+                    <div class="font-mono text-[10px] select-all break-all leading-tight">
+                      {{ message.transactionId }}
+                    </div>
+                  </td>
+                  <td class="text-right text-xs whitespace-nowrap">{{ formatTime(message.createdAt) }}</td>
                   <td class="text-right">
                     <StatusBadge :status="message.status" :show-dot="false" />
                   </td>
@@ -175,16 +183,8 @@ async function loadData() {
       offset: (currentPage.value - 1) * itemsPerPage,
     };
     
-    if (searchQuery.value) {
-      try {
-        const msgRes = await messagesApi.getMessage(searchQuery.value);
-        messages.value = [msgRes.data];
-        totalPages.value = 1;
-        return;
-      } catch {
-        // Fall through to regular list
-      }
-    }
+    // Note: Direct transaction ID search removed because API now requires partition + transactionId
+    // Users can filter by queue/status/date and click on messages to view details
     
     if (queueFilter.value) params.queue = queueFilter.value;
     if (statusFilter.value) params.status = statusFilter.value;
