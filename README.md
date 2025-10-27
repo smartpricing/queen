@@ -244,10 +244,6 @@ You can use Queen directly from HTTP without the JS client.
 ### Server Startup Timing (Critical)
 **Issue:** Worker initialization timeout (30s → 3600s) now matches file buffer recovery timeout. This is a temporary fix.
 
-**Problem:** During startup, if the file buffer has many events to recover (e.g., after a long PostgreSQL outage), Worker 0 performs blocking recovery that can take up to 1 hour. The acceptor waits for all workers to initialize before starting to accept connections.
-
-**Current Fix:** Worker initialization timeout increased to 3600s to prevent premature timeout.
-
 **Better Solution Needed:**
 - Make recovery non-blocking while preserving FIFO ordering guarantees
 - Implement progressive readiness with memory-buffered queue during recovery
@@ -255,58 +251,10 @@ You can use Queen directly from HTTP without the JS client.
 - See: `server/src/services/file_buffer.cpp:212` (MAX_STARTUP_RECOVERY_SECONDS)
 - See: `server/src/acceptor_server.cpp:1876` (worker initialization timeout)
 
-### Long-Polling Timeout Cleanup Bug (Fixed)
-**Issue:** Long-polling requests with `timeout >= 30s` would hang and never receive a response, even when the server correctly completed the operation.
-
-**Root Cause:** Response registry cleanup timer was set to 30 seconds, causing registered responses to be deleted before long-polling operations could complete and send them back to clients.
-
-**Timeline of Bug:**
-1. Client sends request with `wait=true&timeout=30000`
-2. Server registers response in registry
-3. After 30s, cleanup timer **deletes** the response (thinking it's orphaned)
-4. Thread pool completes wait operation, pushes result to response queue
-5. Response timer tries to send but can't find the response (already deleted)
-6. Client times out after 35s (30s + 5s buffer) with no response
-
-**Fix Applied (v0.2.12):**
-- Response registry cleanup timeout increased from 30s → 120s
-- Allows long-polling requests up to 60s with safe buffer
-- See: `server/src/acceptor_server.cpp:1721` (cleanup timeout)
-- See: `server/include/queen/response_queue.hpp:113` (default max_age)
-
-**Client-Side Recommendation:**
-- **Set maximum client timeout to 60 seconds** to stay within server cleanup window
-- For longer waits, use shorter timeouts with continuous retry loops
-- Example: Use `timeout: 30000` (30s) instead of 60s+ for reliable operation
-
-### Long-Polling Architecture Limitation (Planned Redesign)
-
-**Current Issue:** Each long-polling request blocks a ThreadPool thread for the entire timeout duration (up to 30s), causing resource exhaustion when many clients poll empty queues.
-
-**Impact:**
-- With `DB_POOL_SIZE=20` → only 19 concurrent long-polling requests supported
-- Additional requests queue up, adding latency (can exceed client timeout)
-- Poor resource utilization (threads sleeping while waiting)
-
-**Workarounds:**
-1. Increase `DB_POOL_SIZE` to accommodate concurrent long-polling clients
-2. Use shorter timeouts (5-10s) with continuous retry
-3. Reduce number of concurrent consumers
-
-**Planned Solution:** "Registry of Intentions" pattern
-- Clients register polling intentions (queue, partition, timeout)
-- 1-2 dedicated worker threads service ALL registered intentions
-- No thread blocking per request
-- Can handle 100+ concurrent long-polling clients efficiently
-- See: [LONG_POLLING_REDESIGN.md](LONG_POLLING_REDESIGN.md) for full design
-
-**Status:** Design complete, implementation tracked in GitHub issues
 
 ### Other TODO Items
 - retention jobs
 - reconsume
-- fix frontend
-- pg async
-- pg reconnect
-- memory leak?
-- Long-polling redesign (registry of intentions pattern)
+- new client
+- auth
+- streaming engine

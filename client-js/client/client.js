@@ -1244,7 +1244,11 @@ class PipelineBuilder {
           await tx.commit();
         } else {
           // Default: just ACK the messages
-          await this.#client.ack(messages, true);
+          // Extract consumer group from queue address if present (format: queue@group)
+          const atIndex = this.#queue.lastIndexOf('@');
+          const consumerGroup = atIndex > 0 ? this.#queue.substring(atIndex + 1) : null;
+          const context = consumerGroup ? { group: consumerGroup } : {};
+          await this.#client.ack(messages, true, context);
         }
         
         return {

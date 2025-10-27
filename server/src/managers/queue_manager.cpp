@@ -826,15 +826,16 @@ std::vector<PushResult> QueueManager::push_messages_chunk(const std::vector<Push
                 
                 std::string txn_check_array = build_pg_array(transaction_ids);
                 
-                // Batch duplicate check using LEFT JOIN - matches Node.js optimization
+                // Batch duplicate check using LEFT JOIN - scoped to partition
                 std::string dup_check_sql = R"(
                     SELECT t.txn_id as transaction_id, m.id as message_id
                     FROM UNNEST($1::varchar[]) AS t(txn_id)
-                    LEFT JOIN queen.messages m ON m.transaction_id = t.txn_id
+                    LEFT JOIN queen.messages m ON m.transaction_id = t.txn_id 
+                        AND m.partition_id = $2::uuid
                     WHERE m.id IS NOT NULL
                 )";
                 
-                auto dup_result = QueryResult(conn->exec_params(dup_check_sql, {txn_check_array}));
+                auto dup_result = QueryResult(conn->exec_params(dup_check_sql, {txn_check_array, partition_id}));
                 
                 if (dup_result.is_success()) {
                     for (int i = 0; i < dup_result.num_rows(); ++i) {
@@ -1847,13 +1848,18 @@ QueueManager::AckResult QueueManager::acknowledge_message(const std::string& tra
         if (status == "completed") {
             // Update cursor and release lease if all messages in batch are ACKed
             // OPTIMIZATION: Return partition_id from UPDATE to avoid separate query
+            // CRITICAL FIX: Reset acked_count to 0 when batch completes, add worker_id reset
             std::string sql = R"(
                 UPDATE queen.partition_consumers 
                 SET last_consumed_id = m.id,
                     last_consumed_created_at = m.created_at,
                     last_consumed_at = NOW(),
                     total_messages_consumed = total_messages_consumed + 1,
-                    acked_count = acked_count + 1,
+                    acked_count = CASE 
+                        WHEN acked_count + 1 >= batch_size AND batch_size > 0 
+                        THEN 0
+                        ELSE acked_count + 1
+                    END,
                     -- Release lease when all messages in batch are ACKed
                     lease_expires_at = CASE 
                         WHEN acked_count + 1 >= batch_size AND batch_size > 0 
@@ -1869,6 +1875,11 @@ QueueManager::AckResult QueueManager::acknowledge_message(const std::string& tra
                         WHEN acked_count + 1 >= batch_size AND batch_size > 0 
                         THEN 0 
                         ELSE batch_size 
+                    END,
+                    worker_id = CASE 
+                        WHEN acked_count + 1 >= batch_size AND batch_size > 0 
+                        THEN NULL 
+                        ELSE worker_id 
                     END
                 FROM queen.messages m
                 JOIN queen.partitions p ON p.id = m.partition_id
@@ -1933,13 +1944,18 @@ QueueManager::AckResult QueueManager::acknowledge_message(const std::string& tra
             }
             
             // Still advance cursor for failed messages (they are "consumed")
+            // CRITICAL FIX: Reset acked_count to 0 when batch completes, add worker_id reset
             std::string cursor_sql = R"(
                 UPDATE queen.partition_consumers 
                 SET last_consumed_id = m.id,
                     last_consumed_created_at = m.created_at,
                     last_consumed_at = NOW(),
                     total_messages_consumed = total_messages_consumed + 1,
-                    acked_count = acked_count + 1,
+                    acked_count = CASE 
+                        WHEN acked_count + 1 >= batch_size AND batch_size > 0 
+                        THEN 0
+                        ELSE acked_count + 1
+                    END,
                     -- Release lease when all messages in batch are ACKed
                     lease_expires_at = CASE 
                         WHEN acked_count + 1 >= batch_size AND batch_size > 0 
@@ -1955,6 +1971,11 @@ QueueManager::AckResult QueueManager::acknowledge_message(const std::string& tra
                         WHEN acked_count + 1 >= batch_size AND batch_size > 0 
                         THEN 0 
                         ELSE batch_size 
+                    END,
+                    worker_id = CASE 
+                        WHEN acked_count + 1 >= batch_size AND batch_size > 0 
+                        THEN NULL 
+                        ELSE worker_id 
                     END
                 FROM queen.messages m
                 JOIN queen.partitions p ON p.id = m.partition_id
@@ -2213,6 +2234,7 @@ std::vector<QueueManager::AckResult> QueueManager::acknowledge_messages(const st
                 std::string partition_id = batch_info.get_value(0, "partition_id");
                 
                 // Advance cursor atomically
+                // CRITICAL FIX: Use subquery to ensure acked_count comparison uses the NEW value
                 std::string cursor_sql = R"(
                     UPDATE queen.partition_consumers
                     SET 
@@ -2224,7 +2246,11 @@ std::vector<QueueManager::AckResult> QueueManager::acknowledge_messages(const st
                         batch_retry_count = 0,
                         pending_estimate = GREATEST(0, pending_estimate - $3),
                         last_stats_update = NOW(),
-                        acked_count = acked_count + $3,
+                        acked_count = CASE 
+                            WHEN acked_count + $3 >= batch_size AND batch_size > 0 
+                            THEN 0
+                            ELSE acked_count + $3
+                        END,
                         lease_expires_at = CASE 
                             WHEN acked_count + $3 >= batch_size AND batch_size > 0 
                             THEN NULL 
@@ -2244,6 +2270,11 @@ std::vector<QueueManager::AckResult> QueueManager::acknowledge_messages(const st
                             WHEN acked_count + $3 >= batch_size AND batch_size > 0 
                             THEN 0 
                             ELSE batch_size 
+                        END,
+                        worker_id = CASE 
+                            WHEN acked_count + $3 >= batch_size AND batch_size > 0 
+                            THEN NULL 
+                            ELSE worker_id 
                         END
                     WHERE partition_id = $4 AND consumer_group = $5
                     RETURNING (lease_expires_at IS NULL) as lease_released
@@ -2446,13 +2477,17 @@ bool QueueManager::initialize_schema() {
             
             CREATE TABLE IF NOT EXISTS queen.messages (
                 id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-                transaction_id VARCHAR(255) UNIQUE NOT NULL,
+                transaction_id VARCHAR(255) NOT NULL,
                 trace_id UUID DEFAULT gen_random_uuid(),
                 partition_id UUID REFERENCES queen.partitions(id) ON DELETE CASCADE,
                 payload JSONB NOT NULL,
                 created_at TIMESTAMPTZ DEFAULT NOW(),
                 is_encrypted BOOLEAN DEFAULT FALSE
             );
+            
+            -- Unique constraint scoped to partition (not global)
+            CREATE UNIQUE INDEX IF NOT EXISTS messages_partition_transaction_unique 
+                ON queen.messages(partition_id, transaction_id);
             
             CREATE TABLE IF NOT EXISTS queen.partition_consumers (
                 id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
