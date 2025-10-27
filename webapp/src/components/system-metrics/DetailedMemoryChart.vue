@@ -1,0 +1,202 @@
+<template>
+  <div class="memory-chart">
+    <!-- Chart -->
+    <div class="chart-container">
+      <Line v-if="chartData" :data="chartData" :options="chartOptions" />
+      <div v-else class="flex items-center justify-center h-full text-gray-500 text-sm">
+        No data available
+      </div>
+    </div>
+  </div>
+</template>
+
+<script setup>
+import { computed } from 'vue';
+import { Line } from 'vue-chartjs';
+import {
+  Chart as ChartJS,
+  CategoryScale,
+  LinearScale,
+  PointElement,
+  LineElement,
+  Title,
+  Tooltip,
+  Legend,
+} from 'chart.js';
+
+ChartJS.register(
+  CategoryScale,
+  LinearScale,
+  PointElement,
+  LineElement,
+  Title,
+  Tooltip,
+  Legend
+);
+
+const props = defineProps({
+  data: Object,
+  aggregation: {
+    type: String,
+    default: 'avg',
+  },
+});
+
+function getNestedValue(obj, path) {
+  return path.split('.').reduce((acc, part) => acc?.[part], obj);
+}
+
+// Colors for different replicas (same as CPU for consistency)
+const replicaColors = [
+  { color: 'rgba(244, 63, 94, 1)', bg: 'rgba(244, 63, 94, 0.1)' },
+  { color: 'rgba(59, 130, 246, 1)', bg: 'rgba(59, 130, 246, 0.1)' },
+  { color: 'rgba(245, 158, 11, 1)', bg: 'rgba(245, 158, 11, 0.1)' },
+  { color: 'rgba(14, 165, 233, 1)', bg: 'rgba(14, 165, 233, 0.1)' },
+];
+
+const chartData = computed(() => {
+  if (!props.data?.replicas?.length) return null;
+
+  const replicas = props.data.replicas;
+  const datasets = [];
+
+  // Get all unique timestamps across all replicas
+  const allTimestamps = new Set();
+  replicas.forEach(replica => {
+    replica.timeSeries.forEach(point => {
+      allTimestamps.add(point.timestamp);
+    });
+  });
+  const sortedTimestamps = Array.from(allTimestamps).sort();
+
+  // Create datasets for each replica
+  replicas.forEach((replica, replicaIndex) => {
+    const colorScheme = replicaColors[replicaIndex % replicaColors.length];
+    const replicaLabel = `${replica.hostname}`;
+
+    // Memory MB dataset for this replica
+    const dataMap = new Map();
+    replica.timeSeries.forEach(point => {
+      const value = getNestedValue(point.metrics, 'memory.rss_bytes');
+      const rawValue = value?.[props.aggregation] !== undefined ? value[props.aggregation] : null;
+      dataMap.set(point.timestamp, rawValue !== null ? (rawValue / 1024 / 1024) : null);
+    });
+
+    datasets.push({
+      label: replicaLabel,
+      data: sortedTimestamps.map(ts => dataMap.get(ts) ?? null),
+      borderColor: colorScheme.color,
+      backgroundColor: colorScheme.bg,
+      borderWidth: 2,
+      fill: false,
+      tension: 0,
+      pointRadius: 0,
+      pointHoverRadius: 5,
+      pointHoverBackgroundColor: colorScheme.color,
+    });
+  });
+
+  return {
+    labels: sortedTimestamps.map(ts => {
+      const date = new Date(ts);
+      return date.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' });
+    }),
+    datasets,
+  };
+});
+
+const chartOptions = {
+  responsive: true,
+  maintainAspectRatio: false,
+  interaction: {
+    mode: 'index',
+    intersect: false,
+  },
+  plugins: {
+    legend: {
+      display: true,
+      position: 'bottom',
+      labels: {
+        boxWidth: 12,
+        boxHeight: 12,
+        padding: 10,
+        font: {
+          size: 11,
+        },
+        color: '#9ca3af',
+        usePointStyle: true,
+      },
+    },
+    tooltip: {
+      backgroundColor: 'rgba(0, 0, 0, 0.9)',
+      padding: 12,
+      titleColor: '#fff',
+      bodyColor: '#fff',
+      borderColor: 'rgba(255, 255, 255, 0.1)',
+      borderWidth: 1,
+      displayColors: true,
+      callbacks: {
+        label: function(context) {
+          const value = context.parsed.y;
+          return `${context.dataset.label}: ${value.toFixed(0)} MB`;
+        }
+      }
+    },
+  },
+  scales: {
+    x: {
+      grid: {
+        display: false,
+      },
+      ticks: {
+        color: '#9ca3af',
+        font: {
+          size: 11,
+        },
+        maxRotation: 0,
+        autoSkipPadding: 20,
+      },
+    },
+    y: {
+      type: 'linear',
+      display: true,
+      position: 'left',
+      beginAtZero: true,
+      grid: {
+        color: 'rgba(0, 0, 0, 0.05)',
+        drawBorder: false,
+      },
+      ticks: {
+        color: '#9ca3af',
+        font: {
+          size: 11,
+        },
+        callback: function(value) {
+          return value.toFixed(0) + ' MB';
+        },
+      },
+      title: {
+        display: true,
+        text: 'Memory (MB)',
+        color: '#6b7280',
+        font: {
+          size: 12,
+          weight: 600,
+        },
+      },
+    },
+  },
+};
+</script>
+
+<style scoped>
+.memory-chart {
+  width: 100%;
+}
+
+.chart-container {
+  height: 300px;
+  position: relative;
+}
+</style>
+

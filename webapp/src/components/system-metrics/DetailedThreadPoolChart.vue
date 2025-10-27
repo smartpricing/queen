@@ -140,7 +140,7 @@ const chartData = computed(() => {
         borderWidth: 2,
         fill: false,
         tension: 0,
-        pointRadius: 2,
+        pointRadius: 0,
         pointHoverRadius: 5,
         pointHoverBackgroundColor: colorScheme.dbPool,
       });
@@ -161,7 +161,7 @@ const chartData = computed(() => {
         borderWidth: 2,
         fill: false,
         tension: 0,
-        pointRadius: 2,
+        pointRadius: 0,
         pointHoverRadius: 5,
         pointHoverBackgroundColor: colorScheme.dbQueue,
       });
@@ -182,7 +182,7 @@ const chartData = computed(() => {
         borderWidth: 2,
         fill: false,
         tension: 0,
-        pointRadius: 2,
+        pointRadius: 0,
         pointHoverRadius: 5,
         pointHoverBackgroundColor: colorScheme.sysPool,
       });
@@ -203,7 +203,7 @@ const chartData = computed(() => {
         borderWidth: 2,
         fill: false,
         tension: 0,
-        pointRadius: 2,
+        pointRadius: 0,
         pointHoverRadius: 5,
         pointHoverBackgroundColor: colorScheme.sysQueue,
       });

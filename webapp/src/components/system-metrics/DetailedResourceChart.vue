@@ -77,12 +77,12 @@ function getNestedValue(obj, path) {
   return path.split('.').reduce((acc, part) => acc?.[part], obj);
 }
 
-// Colors for different replicas
+// Colors for different replicas (CPU and Memory use same color per replica)
 const replicaColors = [
-  { cpu: 'rgba(244, 63, 94, 1)', cpuBg: 'rgba(244, 63, 94, 0.1)', memory: 'rgba(168, 85, 247, 1)', memoryBg: 'rgba(168, 85, 247, 0.1)' },
-  { cpu: 'rgba(59, 130, 246, 1)', cpuBg: 'rgba(59, 130, 246, 0.1)', memory: 'rgba(34, 197, 94, 1)', memoryBg: 'rgba(34, 197, 94, 0.1)' },
-  { cpu: 'rgba(245, 158, 11, 1)', cpuBg: 'rgba(245, 158, 11, 0.1)', memory: 'rgba(236, 72, 153, 1)', memoryBg: 'rgba(236, 72, 153, 0.1)' },
-  { cpu: 'rgba(14, 165, 233, 1)', cpuBg: 'rgba(14, 165, 233, 0.1)', memory: 'rgba(251, 146, 60, 1)', memoryBg: 'rgba(251, 146, 60, 0.1)' },
+  { color: 'rgba(244, 63, 94, 1)', bg: 'rgba(244, 63, 94, 0.1)' },
+  { color: 'rgba(59, 130, 246, 1)', bg: 'rgba(59, 130, 246, 0.1)' },
+  { color: 'rgba(245, 158, 11, 1)', bg: 'rgba(245, 158, 11, 0.1)' },
+  { color: 'rgba(14, 165, 233, 1)', bg: 'rgba(14, 165, 233, 0.1)' },
 ];
 
 const chartData = computed(() => {
@@ -117,14 +117,14 @@ const chartData = computed(() => {
       datasets.push({
         label: `${replicaLabel} - CPU %`,
         data: sortedTimestamps.map(ts => dataMap.get(ts) ?? null),
-        borderColor: colorScheme.cpu,
-        backgroundColor: colorScheme.cpuBg,
+        borderColor: colorScheme.color,
+        backgroundColor: colorScheme.bg,
         borderWidth: 2,
         fill: false,
         tension: 0,
-        pointRadius: 2,
+        pointRadius: 0,
         pointHoverRadius: 5,
-        pointHoverBackgroundColor: colorScheme.cpu,
+        pointHoverBackgroundColor: colorScheme.color,
         yAxisID: 'y-cpu',
       });
     }
@@ -141,14 +141,15 @@ const chartData = computed(() => {
       datasets.push({
         label: `${replicaLabel} - Memory (MB)`,
         data: sortedTimestamps.map(ts => dataMap.get(ts) ?? null),
-        borderColor: colorScheme.memory,
-        backgroundColor: colorScheme.memoryBg,
+        borderColor: colorScheme.color,
+        backgroundColor: colorScheme.bg,
         borderWidth: 2,
+        borderDash: [5, 5],
         fill: false,
         tension: 0,
-        pointRadius: 2,
+        pointRadius: 0,
         pointHoverRadius: 5,
-        pointHoverBackgroundColor: colorScheme.memory,
+        pointHoverBackgroundColor: colorScheme.color,
         yAxisID: 'y-memory',
       });
     }

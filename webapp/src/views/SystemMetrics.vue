@@ -64,17 +64,33 @@
             </div>
           </div>
 
-          <!-- CPU & Memory Chart -->
-          <div class="chart-flat">
-            <div class="flex items-center gap-2 mb-4">
-              <div class="w-8 h-8 rounded-lg bg-rose-500/10 dark:bg-rose-500/20 flex items-center justify-center">
-                <svg class="w-5 h-5 text-rose-600 dark:text-rose-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 3v2m6-2v2M9 19v2m6-2v2M5 9H3m2 6H3m18-6h-2m2 6h-2M7 19h10a2 2 0 002-2V7a2 2 0 00-2-2H7a2 2 0 00-2 2v10a2 2 0 002 2zM9 9h6v6H9V9z" />
-                </svg>
+          <!-- CPU & Memory Charts (Side by Side) -->
+          <div class="grid grid-cols-1 lg:grid-cols-2 gap-2">
+            <!-- CPU Chart -->
+            <div class="chart-flat">
+              <div class="flex items-center gap-2 mb-4">
+                <div class="w-8 h-8 rounded-lg bg-rose-500/10 dark:bg-rose-500/20 flex items-center justify-center">
+                  <svg class="w-5 h-5 text-rose-600 dark:text-rose-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 3v2m6-2v2M9 19v2m6-2v2M5 9H3m2 6H3m18-6h-2m2 6h-2M7 19h10a2 2 0 002-2V7a2 2 0 00-2-2H7a2 2 0 00-2 2v10a2 2 0 002 2zM9 9h6v6H9V9z" />
+                  </svg>
+                </div>
+                <h3 class="text-sm font-semibold text-gray-900 dark:text-gray-100">CPU Usage</h3>
               </div>
-              <h3 class="text-sm font-semibold text-gray-900 dark:text-gray-100">CPU & Memory Usage</h3>
+              <DetailedCpuChart :data="data" :aggregation="selectedAggregation" />
             </div>
-            <DetailedResourceChart :data="data" :aggregation="selectedAggregation" />
+
+            <!-- Memory Chart -->
+            <div class="chart-flat">
+              <div class="flex items-center gap-2 mb-4">
+                <div class="w-8 h-8 rounded-lg bg-purple-500/10 dark:bg-purple-500/20 flex items-center justify-center">
+                  <svg class="w-5 h-5 text-purple-600 dark:text-purple-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 12h14M5 12a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v4a2 2 0 01-2 2M5 12a2 2 0 00-2 2v4a2 2 0 002 2h14a2 2 0 002-2v-4a2 2 0 00-2-2m-2-4h.01M17 16h.01" />
+                  </svg>
+                </div>
+                <h3 class="text-sm font-semibold text-gray-900 dark:text-gray-100">Memory Usage</h3>
+              </div>
+              <DetailedMemoryChart :data="data" :aggregation="selectedAggregation" />
+            </div>
           </div>
 
           <!-- Database Metrics Chart -->
@@ -182,7 +198,8 @@ import { ref, computed, onMounted, onUnmounted, watch } from 'vue';
 import { systemMetricsApi } from '../api/system-metrics';
 
 import LoadingSpinner from '../components/common/LoadingSpinner.vue';
-import DetailedResourceChart from '../components/system-metrics/DetailedResourceChart.vue';
+import DetailedCpuChart from '../components/system-metrics/DetailedCpuChart.vue';
+import DetailedMemoryChart from '../components/system-metrics/DetailedMemoryChart.vue';
 import DetailedDatabaseChart from '../components/system-metrics/DetailedDatabaseChart.vue';
 import DetailedThreadPoolChart from '../components/system-metrics/DetailedThreadPoolChart.vue';
 
