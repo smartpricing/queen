@@ -1958,7 +1958,12 @@ static void worker_thread(const Config& config, int worker_id, int num_workers,
                 global_poll_intention_registry,
                 queue_manager,
                 global_response_queue,
-                2  // 2 poll workers
+                2,  // 2 poll workers
+                config.queue.poll_worker_interval,
+                config.queue.poll_db_interval,
+                config.queue.backoff_threshold,
+                config.queue.backoff_multiplier,
+                config.queue.max_poll_interval
             );
         }
         

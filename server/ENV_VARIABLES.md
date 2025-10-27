@@ -53,13 +53,54 @@ This document lists all environment variables supported by the Queen C++ server.
 | `BATCH_INSERT_SIZE` | int | 1000 | Batch size for bulk inserts |
 
 ### Long Polling
+
+The system uses a sophisticated two-layer optimization strategy:
+
+#### 1. Dual-Interval Rate Limiting *(Active)*
+
+The poll workers use two separate intervals to balance responsiveness and database efficiency:
+
+- **`POLL_WORKER_INTERVAL`**: How often workers wake up to check for new client requests (in-memory registry check, very cheap)
+- **`POLL_DB_INTERVAL`**: Initial interval for database queries per queue/consumer group (aggressive first attempt)
+
+This separation allows workers to be responsive to new clients (50ms registry checks) while starting with aggressive DB queries (100ms initial), then backing off automatically if queues are empty.
+
 | Variable | Type | Default | Description |
 |----------|------|---------|-------------|
-| `QUEUE_POLL_INTERVAL` | int | 100 | Initial poll interval (ms) |
-| `QUEUE_POLL_INTERVAL_FILTERED` | int | 50 | Poll interval for filtered consumers (ms) |
-| `QUEUE_MAX_POLL_INTERVAL` | int | 2000 | Maximum poll interval after backoff (ms) |
-| `QUEUE_BACKOFF_THRESHOLD` | int | 5 | Empty polls before backoff starts |
-| `QUEUE_BACKOFF_MULTIPLIER` | double | 2.0 | Exponential backoff multiplier |
+| `POLL_WORKER_INTERVAL` | int | 50 | How often poll workers wake to check registry (ms) - cheap in-memory operation |
+| `POLL_DB_INTERVAL` | int | 100 | Initial DB query interval (ms) - first attempt is aggressive, then backoff kicks in |
+
+#### 2. Adaptive Exponential Backoff *(Active)*
+
+When a queue/consumer group consistently returns empty results, the system automatically increases the query interval to reduce unnecessary database load. The interval resets immediately when messages become available.
+
+**How it works:**
+1. Track consecutive empty pop results per group
+2. After `QUEUE_BACKOFF_THRESHOLD` empty results, multiply interval by `QUEUE_BACKOFF_MULTIPLIER`
+3. Continue increasing up to `QUEUE_MAX_POLL_INTERVAL`
+4. Reset to `POLL_DB_INTERVAL` when messages arrive
+
+**Example:** With default settings (initial=100ms, threshold=1, multiplier=2.0):
+- Query 1: 100ms (aggressive first attempt)
+- Empty result 1: Increase to 200ms (backoff threshold reached)
+- Empty result 2: Increase to 400ms
+- Empty result 3: Increase to 800ms
+- Empty result 4: Increase to 1600ms
+- Empty result 5+: Stay at 2000ms (capped at max)
+- Messages arrive: Reset to 100ms immediately
+
+| Variable | Type | Default | Description |
+|----------|------|---------|-------------|
+| `QUEUE_BACKOFF_THRESHOLD` | int | 1 | Number of consecutive empty pops before backoff starts (1 = immediate backoff) |
+| `QUEUE_BACKOFF_MULTIPLIER` | double | 2.0 | Exponential backoff multiplier (interval *= multiplier) |
+| `QUEUE_MAX_POLL_INTERVAL` | int | 2000 | Maximum poll interval after backoff (ms) - caps the growth |
+
+#### Legacy Variables *(Not Currently Used)*
+
+| Variable | Type | Default | Description |
+|----------|------|---------|-------------|
+| `QUEUE_POLL_INTERVAL` | int | 100 | Reserved for future use |
+| `QUEUE_POLL_INTERVAL_FILTERED` | int | 50 | Reserved for future use |
 
 ### Partition Selection
 | Variable | Type | Default | Description |

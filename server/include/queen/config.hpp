@@ -133,12 +133,18 @@ struct QueueConfig {
     int default_batch_size = 1;
     int batch_insert_size = 1000;
     
-    // Long polling
-    int poll_interval = 100;             // 100ms - initial poll interval
-    int poll_interval_filtered = 50;     // 50ms for filtered consumers
-    int max_poll_interval = 2000;        // 2000ms - max poll interval after backoff
-    int backoff_threshold = 5;           // Number of empty polls before backoff
-    double backoff_multiplier = 2.0;     // Exponential backoff multiplier
+    // Long polling - Dual-interval rate limiting (ACTIVE)
+    int poll_worker_interval = 50;       // 50ms - How often poll workers wake up to check registry (in-memory, cheap)
+    int poll_db_interval = 100;          // 100ms - Initial DB query interval (aggressive first attempt, then backoff)
+    
+    // Long polling - Adaptive exponential backoff (ACTIVE)
+    int backoff_threshold = 1;           // Number of consecutive empty pops before backoff starts (1 = immediate backoff)
+    double backoff_multiplier = 2.0;     // Exponential backoff multiplier (interval *= multiplier each time)
+    int max_poll_interval = 2000;        // 2000ms - Maximum poll interval after backoff
+    
+    // Legacy long polling settings (reserved for future use)
+    int poll_interval = 100;             // 100ms - Reserved
+    int poll_interval_filtered = 50;     // 50ms - Reserved
     
     // Partition selection for filtered pops
     int max_partition_candidates = 100;  // Number of candidate partitions to fetch
@@ -179,11 +185,18 @@ struct QueueConfig {
         config.default_batch_size = get_env_int("DEFAULT_BATCH_SIZE", 1);
         config.batch_insert_size = get_env_int("BATCH_INSERT_SIZE", 1000);
         
+        // Long polling - Dual-interval rate limiting
+        config.poll_worker_interval = get_env_int("POLL_WORKER_INTERVAL", 50);
+        config.poll_db_interval = get_env_int("POLL_DB_INTERVAL", 100);
+        
+        // Long polling - Adaptive exponential backoff
+        config.backoff_threshold = get_env_int("QUEUE_BACKOFF_THRESHOLD", 1);
+        config.backoff_multiplier = get_env_double("QUEUE_BACKOFF_MULTIPLIER", 2.0);
+        config.max_poll_interval = get_env_int("QUEUE_MAX_POLL_INTERVAL", 2000);
+        
+        // Legacy long polling (reserved)
         config.poll_interval = get_env_int("QUEUE_POLL_INTERVAL", 100);
         config.poll_interval_filtered = get_env_int("QUEUE_POLL_INTERVAL_FILTERED", 50);
-        config.max_poll_interval = get_env_int("QUEUE_MAX_POLL_INTERVAL", 2000);
-        config.backoff_threshold = get_env_int("QUEUE_BACKOFF_THRESHOLD", 5);
-        config.backoff_multiplier = get_env_double("QUEUE_BACKOFF_MULTIPLIER", 2.0);
         
         config.max_partition_candidates = get_env_int("MAX_PARTITION_CANDIDATES", 100);
         

@@ -5,6 +5,8 @@
 #include <iomanip>
 #include <thread>
 #include <unordered_set>
+#include <unordered_map>
+#include <mutex>
 
 namespace queen {
 
@@ -27,9 +29,15 @@ void init_long_polling(
     std::shared_ptr<PollIntentionRegistry> registry,
     std::shared_ptr<QueueManager> queue_manager,
     std::shared_ptr<ResponseQueue> response_queue,
-    int worker_count
+    int worker_count,
+    int poll_worker_interval_ms,
+    int poll_db_interval_ms,
+    int backoff_threshold,
+    double backoff_multiplier,
+    int max_poll_interval_ms
 ) {
-    spdlog::info("Initializing long-polling with {} poll workers", worker_count);
+    spdlog::info("Initializing long-polling with {} poll workers (worker_interval={}ms, db_interval={}ms, backoff: {}x after {} empty)", 
+                worker_count, poll_worker_interval_ms, poll_db_interval_ms, backoff_multiplier, backoff_threshold);
     
     // Push never-returning jobs to ThreadPool to reserve worker threads
     for (int worker_id = 0; worker_id < worker_count; worker_id++) {
@@ -41,7 +49,11 @@ void init_long_polling(
                 queue_manager,
                 thread_pool,
                 response_queue,
-                100  // 100ms poll interval
+                poll_worker_interval_ms,
+                poll_db_interval_ms,
+                backoff_threshold,
+                backoff_multiplier,
+                max_poll_interval_ms
             );
         });
     }
@@ -50,6 +62,15 @@ void init_long_polling(
                 worker_count, thread_pool->pool_size());
 }
 
+// Per-group backoff state
+struct GroupBackoffState {
+    int consecutive_empty_pops = 0;
+    int current_interval_ms;
+    
+    GroupBackoffState() : consecutive_empty_pops(0), current_interval_ms(100) {}
+    GroupBackoffState(int base_interval) : consecutive_empty_pops(0), current_interval_ms(base_interval) {}
+};
+
 void poll_worker_loop(
     int worker_id,
     int total_workers,
@@ -57,12 +78,24 @@ void poll_worker_loop(
     std::shared_ptr<QueueManager> queue_manager,
     std::shared_ptr<astp::ThreadPool> thread_pool,
     std::shared_ptr<ResponseQueue> response_queue,
-    int poll_interval_ms
+    int poll_worker_interval_ms,
+    int poll_db_interval_ms,
+    int backoff_threshold,
+    double backoff_multiplier,
+    int max_poll_interval_ms
 ) {
-    spdlog::info("Poll worker {} started (1 of {})", worker_id, total_workers);
+    spdlog::info("Poll worker {} started (1 of {}) - worker_interval={}ms, db_interval={}ms, backoff={}x@{}, max={}ms", 
+                worker_id, total_workers, poll_worker_interval_ms, poll_db_interval_ms, 
+                backoff_multiplier, backoff_threshold, max_poll_interval_ms);
     
     int loop_count = 0;
-    int consecutive_empty_pops = 0;  // Track empty results for backoff
+    
+    // Track last query time per group key for rate limiting
+    std::unordered_map<std::string, std::chrono::steady_clock::time_point> last_query_times;
+    
+    // Track backoff state per group for adaptive exponential backoff (thread-safe shared state)
+    auto backoff_states = std::make_shared<std::unordered_map<std::string, GroupBackoffState>>();
+    auto backoff_mutex = std::make_shared<std::mutex>();
     
     while (registry->is_running()) {
         loop_count++;
@@ -102,7 +135,7 @@ void poll_worker_loop(
             
             if (all_intentions.empty()) {
                 // No intentions, sleep and continue
-                std::this_thread::sleep_for(std::chrono::milliseconds(poll_interval_ms));
+                std::this_thread::sleep_for(std::chrono::milliseconds(poll_worker_interval_ms));
                 continue;
             }
             
@@ -114,7 +147,7 @@ void poll_worker_loop(
             
             if (my_intentions.empty()) {
                 // No work for this worker
-                std::this_thread::sleep_for(std::chrono::milliseconds(poll_interval_ms));
+                std::this_thread::sleep_for(std::chrono::milliseconds(poll_worker_interval_ms));
                 continue;
             }
             
@@ -127,15 +160,41 @@ void poll_worker_loop(
             // Process each group
             for (auto& [key, batch] : grouped) {
                 try {
-                    // Determine if this is queue-based or namespace-based
-                    bool is_queue_based = batch[0].is_queue_based();
-                    
                     spdlog::debug("Poll worker {} processing group '{}' ({} intentions)", 
                                 worker_id, key, batch.size());
                     
-                    // Skip lightweight count - just try the pop directly
-                    // The count was causing false positives (said messages available but pop returned 0)
-                    // This happens because count doesn't account for SKIP LOCKED or active leases
+                    // Get current backoff state for this group (thread-safe)
+                    int current_interval_ms;
+                    int current_empty_count;
+                    {
+                        std::lock_guard<std::mutex> lock(*backoff_mutex);
+                        // Initialize backoff state if new group
+                        if (backoff_states->find(key) == backoff_states->end()) {
+                            backoff_states->emplace(key, GroupBackoffState(poll_db_interval_ms));
+                        }
+                        auto& backoff_state = (*backoff_states)[key];
+                        current_interval_ms = backoff_state.current_interval_ms;
+                        current_empty_count = backoff_state.consecutive_empty_pops;
+                    }
+                    
+                    // Rate-limit DB queries per group (using adaptive interval)
+                    auto now = std::chrono::steady_clock::now();
+                    auto last_query_it = last_query_times.find(key);
+                    
+                    if (last_query_it != last_query_times.end()) {
+                        auto time_since_last_query = std::chrono::duration_cast<std::chrono::milliseconds>(
+                            now - last_query_it->second).count();
+                        
+                        if (time_since_last_query < current_interval_ms) {
+                            spdlog::debug("Poll worker {} skipping group '{}' - last query {}ms ago (current interval: {}ms, empty_count: {})",
+                                        worker_id, key, time_since_last_query, current_interval_ms, current_empty_count);
+                            continue; // Too soon since last query
+                        }
+                    }
+                    
+                    // Update last query time for this group
+                    last_query_times[key] = now;
+                    
                     {
                         // Check if this GROUP is already being processed (shared across all workers)
                         bool success = registry->mark_group_in_flight(key);
@@ -153,6 +212,7 @@ void poll_worker_loop(
                         auto batch_copy = batch;
                         auto group_key = key;  // Explicit copy
                         
+                        // Capture everything by value (including shared_ptrs)
                         thread_pool->push([=]() {
                             try {
                                 // Calculate total batch size for all waiting clients
@@ -180,6 +240,21 @@ void poll_worker_loop(
                                 }
                                 
                                 if (!result.messages.empty()) {
+                                    // Messages found - reset backoff for this group
+                                    {
+                                        std::lock_guard<std::mutex> lock(*backoff_mutex);
+                                        auto it = backoff_states->find(group_key);
+                                        if (it != backoff_states->end()) {
+                                            if (it->second.consecutive_empty_pops > 0) {
+                                                spdlog::debug("Resetting backoff for group '{}' (was: {}ms, {} empty)",
+                                                            group_key, it->second.current_interval_ms, 
+                                                            it->second.consecutive_empty_pops);
+                                            }
+                                            it->second.consecutive_empty_pops = 0;
+                                            it->second.current_interval_ms = poll_db_interval_ms; // Reset to base
+                                        }
+                                    }
+                                    
                                     // Distribute messages to waiting clients
                                     auto fulfilled_ids = distribute_to_clients(result, batch_copy, response_queue);
                                     
@@ -191,8 +266,31 @@ void poll_worker_loop(
                                     spdlog::info("Long-poll fulfilled {} intentions with {} messages for group '{}'",
                                                fulfilled_ids.size(), result.messages.size(), group_key);
                                 } else {
-                                    // No messages yet - keep intentions in registry
-                                    // Poll worker will try again on next cycle (100ms later)
+                                    // No messages - increment backoff counter and apply exponential backoff
+                                    {
+                                        std::lock_guard<std::mutex> lock(*backoff_mutex);
+                                        auto it = backoff_states->find(group_key);
+                                        if (it != backoff_states->end()) {
+                                            it->second.consecutive_empty_pops++;
+                                            
+                                            // Apply exponential backoff if threshold reached
+                                            if (it->second.consecutive_empty_pops >= backoff_threshold) {
+                                                int old_interval = it->second.current_interval_ms;
+                                                it->second.current_interval_ms = std::min(
+                                                    static_cast<int>(it->second.current_interval_ms * backoff_multiplier),
+                                                    max_poll_interval_ms
+                                                );
+                                                
+                                                if (it->second.current_interval_ms > old_interval) {
+                                                    spdlog::info("Backoff activated for group '{}': {}ms -> {}ms (empty count: {})",
+                                                                group_key, old_interval, it->second.current_interval_ms,
+                                                                it->second.consecutive_empty_pops);
+                                                }
+                                            }
+                                        }
+                                    }
+                                    
+                                    // Keep intentions in registry - poll worker will try again later
                                     // Timeout handler will send 204 when deadline is reached
                                     spdlog::debug("Pop returned no messages for group '{}' - keeping {} intentions in registry",
                                                 group_key, batch_copy.size());
@@ -219,8 +317,8 @@ void poll_worker_loop(
             spdlog::error("Poll worker {} error: {}", worker_id, e.what());
         }
         
-        // Adaptive sleep based on poll interval
-        std::this_thread::sleep_for(std::chrono::milliseconds(poll_interval_ms));
+        // Sleep based on worker interval (checking registry is cheap)
+        std::this_thread::sleep_for(std::chrono::milliseconds(poll_worker_interval_ms));
     }
     
     spdlog::info("Poll worker {} stopped", worker_id);
