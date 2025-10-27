@@ -150,6 +150,209 @@ for await (const e of client.take('events@analytics', { autoAck: true })) {
 }
 ```
 
+### Architecture
+
+┌─────────────────────────────────────────────────────────────────────────────────────────────┐
+│                              QUEEN MESSAGE QUEUE SERVER ARCHITECTURE                        │
+│                             (Acceptor/Worker Pattern with uWebSockets)                      │
+└─────────────────────────────────────────────────────────────────────────────────────────────┘
+
+                                    ┌──────────────────┐
+                                    │  Client Request  │
+                                    └────────┬─────────┘
+                                             │
+                                             ▼
+┌────────────────────────────────────────────────────────────────────────────────────────────┐
+│                                   UWS ACCEPTOR THREAD                                      │
+│  ┌──────────────────────────────────────────────────────────────────────────────────────┐  │
+│  │  • Main event loop (acceptor->run())                                                 │  │
+│  │  • Listens on port 6632                                                              │  │
+│  │  • Round-robin distributes connections to workers                                    │  │
+│  └──────────────────────────────────────────────────────────────────────────────────────┘  │
+└─────────────────┬──────────────────┬──────────────────┬────────────────────────────────────┘
+                  │                  │                  │
+          ┌───────┴───────┐  ┌───────┴───────┐   ┌──────┴────────┐
+          ▼               ▼                  ▼                   ▼
+┌─────────────────┐ ┌─────────────────┐ ┌─────────────────┐     ┌─────────────────┐
+│ UWS WORKER 0    │ │ UWS WORKER 1    │ │ UWS WORKER 2    │ ... │ UWS WORKER N    │
+│ (std::thread)   │ │ (std::thread)   │ │ (std::thread)   │     │ (std::thread)   │
+├─────────────────┤ ├─────────────────┤ ├─────────────────┤     ├─────────────────┤
+│ • Event Loop    │ │ • Event Loop    │ │ • Event Loop    │     │ • Event Loop    │
+│ • HTTP Routes   │ │ • HTTP Routes   │ │ • HTTP Routes   │     │ • HTTP Routes   │
+│ • WS Handlers   │ │ • WS Handlers   │ │ • WS Handlers   │     │ • WS Handlers   │
+│                 │ │                 │ │                 │     │                 │
+│ ┌─────────────┐ │ │ ┌─────────────┐ │ │ ┌─────────────┐ │     │ ┌─────────────┐ │
+│ │RESPONSE     │ │ │ │RESPONSE     │ │ │ │RESPONSE     │ │     │ │RESPONSE     │ │
+│ │TIMER        │ │ │ │TIMER        │ │ │ │TIMER        │ │     │ │TIMER        │ │
+│ │(us_timer_t) │ │ │ │(us_timer_t) │ │ │ │(us_timer_t) │ │     │ │(us_timer_t) │ │
+│ │25ms tick    │ │ │ │25ms tick    │ │ │ │25ms tick    │ │     │ │25ms tick    │ │
+│ └──────┬──────┘ │ │ └──────┬──────┘ │ │ └──────┬──────┘ │     │ └──────┬──────┘ │
+└────────┼────────┘ └────────┼────────┘ └────────┼────────┘     └────────┼────────┘
+         │                   │                   │                       │
+         └───────────────────┴───────────────────┴───────────────────────┘
+                                      │
+                                      ▼ (Drain responses)
+                        ┌──────────────────────────┐
+                        │  GLOBAL RESPONSE QUEUE   │◄──────────────────┐
+                        │  (Thread-safe queue)     │                   │
+                        │  std::queue<ResponseItem>│                   │
+                        └──────────────────────────┘                   │
+                                      ▲                                │
+                                      │ Push results                   │
+                                      │                                │
+                                                                       │
+┌──────────────────────────────────────────────────────────────────────────────────────────┐
+│                          GLOBAL DB THREADPOOL (astp::ThreadPool)                         │
+│  ┌────────────┐ ┌────────────┐ ┌────────────┐            ┌────────────┐                  │
+│  │  Thread 1  │ │  Thread 2  │ │  Thread 3  │   ...      │  Thread N  │                  │
+│  └─────┬──────┘ └─────┬──────┘ └─────┬──────┘            └─────┬──────┘                  │
+│        │              │              │                         │                         │
+│        └──────────────┴──────────────┴─────────────────────────┘                         │
+│                                      │                                                   │
+│  Jobs: • PUSH operations             │                                                   │
+│        • POP operations (immediate)  │                                                   │
+│        • ACK operations              │                                                   │
+│        • Transaction operations      │                                                   │
+│        • POLL WORKERS (reserved)     │                                                   │
+└──────────────────────────────────────┼───────────────────────────────────────────────────┘
+                                       │
+              ┌────────────────────────┴──────────────────────────┐
+              │                                                   │
+              ▼                                                   ▼
+┌──────────────────────────────┐                   ┌──────────────────────────────┐
+│   POLL WORKER THREADS        │                   │   DB OPERATION THREADS       │
+│   (Reserved from ThreadPool) │                   │   (Dynamic task execution)   │
+├──────────────────────────────┤                   ├──────────────────────────────┤
+│                              │                   │                              │
+│ ┌──────────────────────────┐ │                   │ • Execute DB queries         │
+│ │ POLL WORKER 0            │ │                   │ • Get connection from pool   │
+│ │ • Loop every 50ms        │ │                   │ • Return connection          │
+│ │ • Check registry         │ │                   │ • Push to response queue     │
+│ │ • Group intentions       │ │                   │                              │
+│ │ • Submit DB jobs         │ │                   └──────────┬───────────────────┘
+│ │ • Adaptive backoff       │ │                              │
+│ └────────┬─────────────────┘ │                              │
+│          │                   │                              │
+│ ┌────────┴─────────────────┐ │                              │
+│ │ POLL WORKER 1            │ │                              │
+│ │ • Loop every 50ms        │ │                              │
+│ │ • Load balanced (hash)   │ │                              │
+│ │ • Rate limit: 100ms→2s   │ │                              │
+│ │ • Timeout detection      │ │                              │
+│ └──────────────────────────┘ │                              │
+└────────┬─────────────────────┘                              │
+         │                                                    │
+         ├────────► Get intentions                            │
+         │                                                    │
+         ▼                                                    │
+┌─────────────────────────────────┐                           │
+│  POLL INTENTION REGISTRY        │                           │
+│  (Shared, thread-safe)          │                           │
+├─────────────────────────────────┤                           │
+│ • Store long-poll requests      │                           │
+│ • Group by queue/partition/CG   │                           │
+│ • Track timeouts                │                           │
+│ • In-flight group tracking      │                           │
+│                                 │                           │
+│ std::unordered_map<             │                           │
+│   request_id → PollIntention    │                           │
+│ >                               │                           │
+└─────────────────────────────────┘                           │
+                                                              │
+                                                              │
+        All threads use connection pool ──────────────────────┘
+                         │
+                         ▼
+┌──────────────────────────────────────────────────────────────────────────────────┐
+│                        GLOBAL DATABASE POOL (DatabasePool)                       │
+│  ┌──────────────────────────────────────────────────────────────────────────┐    │
+│  │  Connection Queue (std::queue<DatabaseConnection>)                       │    │
+│  │  ┌──────────┐ ┌──────────┐ ┌──────────┐       ┌──────────┐               │    │
+│  │  │  Conn 1  │ │  Conn 2  │ │  Conn 3  │  ...  │  Conn N  │  (N=150)      │    │
+│  │  │ PGconn*  │ │ PGconn*  │ │ PGconn*  │       │ PGconn*  │               │    │
+│  │  └──────────┘ └──────────┘ └──────────┘       └──────────┘               │    │
+│  │                                                                          │    │
+│  │  Mutex + Condition Variable for thread-safe get/return                   │    │
+│  └──────────────────────────────────────────────────────────────────────────┘    │
+└──────────────────────────────────────┬───────────────────────────────────────────┘
+                                       │
+                                       ▼
+                            ┌──────────────────┐
+                            │   PostgreSQL     │
+                            │   Database       │
+                            │                  │
+                            │  • messages      │
+                            │  • queues        │
+                            │  • partitions    │
+                            │  • leases        │
+                            └──────────────────┘
+
+┌──────────────────────────────────────────────────────────────────────────────────┐
+│                    ADDITIONAL SYSTEM COMPONENTS                                  │
+├──────────────────────────────────────────────────────────────────────────────────┤
+│                                                                                  │
+│  SYSTEM THREADPOOL (separate from DB pool):                                      │
+│    • Metrics collection                                                          │
+│    • Lease reclamation (every 5s)                                                │
+│    • Retention cleanup (every 5min)                                              │
+│    • File buffer recovery                                                        │
+│                                                                                  │
+│  RESPONSE REGISTRY:                                                              │
+│    • Track HTTP response objects                                                 │
+│    • Thread-safe access                                                          │
+│    • Cleanup expired entries                                                     │
+│                                                                                  │
+│  FILE BUFFER MANAGER:                                                            │
+│    • Durability layer for PUSH operations                                        │
+│    • Write-ahead buffer before DB                                                │
+│    • Background flush to DB                                                      │
+│    • Crash recovery on startup                                                   │
+│                                                                                  │
+│  METRICS COLLECTOR:                                                              │
+│    • Track request counts                                                        │
+│    • Track message counts                                                        │
+│    • Per-worker statistics                                                       │
+│                                                                                  │
+└──────────────────────────────────────────────────────────────────────────────────┘
+
+┌──────────────────────────────────────────────────────────────────────────────────┐
+│                              REQUEST FLOW EXAMPLES                               │
+├──────────────────────────────────────────────────────────────────────────────────┤
+│                                                                                  │
+│  PUSH (async):                                                                   │
+│    Client → Acceptor → Worker → Register response → Submit to DB ThreadPool      │
+│           → DB Thread executes → Push to Response Queue → Timer drains queue     │
+│           → Send HTTP response                                                   │
+│                                                                                  │
+│  POP (immediate, no wait):                                                       │
+│    Client → Acceptor → Worker → Register response → Submit to DB ThreadPool      │
+│           → DB Thread queries → Push to Response Queue → Timer drains → Response │
+│                                                                                  │
+│  POP (long-poll, wait=true):                                                     │
+│    Client → Acceptor → Worker → Register response → Check for messages           │
+│           → No messages? Register intention in Registry                          │
+│           → Poll Worker wakes (50ms) → Groups intentions → Rate limits (100ms+)  │
+│           → Submits DB query job → Gets messages → Push to Response Queue        │
+│           → Timer drains → Send response                                         │
+│           → Adaptive backoff if empty (100→200→400→...→2000ms)                   │
+│                                                                                  │
+│  TIMEOUT:                                                                        │
+│    Poll Worker detects deadline exceeded → Push 204 to Response Queue            │
+│           → Remove from registry → Timer drains → Send 204 No Content            │
+│                                                                                  │
+└──────────────────────────────────────────────────────────────────────────────────┘
+
+KEY CHARACTERISTICS:
+• Acceptor Pattern: One acceptor thread + N worker threads (default: 10)
+• Non-blocking I/O: All HTTP/WebSocket handled in event loops
+• DB ThreadPool: Separate pool for blocking DB operations (size: based on pool size)
+• Poll Workers: Reserved threads (2) that continuously check for long-poll intentions
+• Response Decoupling: DB threads push results to queue, timers drain in event loop
+• Rate Limiting: Dual-interval (50ms wake + 100ms+ DB query) with exponential backoff
+• Connection Pool: 150 connections shared across all threads
+• Timers: uSockets timers (us_timer_t) integrated with event loop for low overhead
+
+
 ### PostgreSQL Failover
 
 Queen automatically buffers messages to disk when PostgreSQL is unavailable - **zero message loss**:
