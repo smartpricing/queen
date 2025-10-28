@@ -1,9 +1,9 @@
 <template>
-  <div class="page-flat">
-    <div class="py-4 px-3">
-      <div class="space-y-2.5">
+  <div class="page-professional">
+    <div class="page-content">
+      <div class="page-inner">
         <!-- Filters with New Queue Button -->
-        <div class="filter-flat">
+        <div class="filter-card">
           <div class="flex flex-col sm:flex-row gap-3">
             <div class="flex-1">
               <input
@@ -40,61 +40,61 @@
 
         <LoadingSpinner v-if="loading && !queues.length" />
 
-        <div v-else-if="error" class="error-flat">
+        <div v-else-if="error" class="error-card">
           <p><strong>Error loading queues:</strong> {{ error }}</p>
         </div>
 
         <!-- Queues Table -->
-        <div v-else class="table-flat">
+        <div v-else class="data-card">
           <div class="table-container scrollbar-thin">
             <table class="table">
               <thead>
                 <tr>
-                  <th @click="sortBy('name')" class="cursor-pointer hover:text-rose-600 dark:hover:text-rose-400 transition-colors">
+                  <th @click="sortBy('name')" class="cursor-pointer hover:text-blue-600 dark:hover:text-blue-400 transition-colors">
                     <div class="flex items-center gap-1">
                       Queue Name
-                      <svg class="w-3 h-3 transition-transform" :class="getSortClass('name')" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7" />
+                      <svg class="w-3 h-3 transition-transform" :class="getSortClass('name')" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2">
+                        <path stroke-linecap="round" stroke-linejoin="round" d="M19 9l-7 7-7-7" />
                       </svg>
                     </div>
                   </th>
-                  <th @click="sortBy('namespace')" class="hidden md:table-cell cursor-pointer hover:text-rose-600 dark:hover:text-rose-400 transition-colors">
+                  <th @click="sortBy('namespace')" class="hidden md:table-cell cursor-pointer hover:text-blue-600 dark:hover:text-blue-400 transition-colors">
                     <div class="flex items-center gap-1">
                       Namespace
-                      <svg class="w-3 h-3 transition-transform" :class="getSortClass('namespace')" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7" />
+                      <svg class="w-3 h-3 transition-transform" :class="getSortClass('namespace')" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2">
+                        <path stroke-linecap="round" stroke-linejoin="round" d="M19 9l-7 7-7-7" />
                       </svg>
                     </div>
                   </th>
-                  <th @click="sortBy('partitions')" class="text-right cursor-pointer hover:text-rose-600 dark:hover:text-rose-400 transition-colors">
+                  <th @click="sortBy('partitions')" class="text-right cursor-pointer hover:text-blue-600 dark:hover:text-blue-400 transition-colors">
                     <div class="flex items-center justify-end gap-1">
                       Partitions
-                      <svg class="w-3 h-3 transition-transform" :class="getSortClass('partitions')" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7" />
+                      <svg class="w-3 h-3 transition-transform" :class="getSortClass('partitions')" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2">
+                        <path stroke-linecap="round" stroke-linejoin="round" d="M19 9l-7 7-7-7" />
                       </svg>
                     </div>
                   </th>
-                  <th @click="sortBy('pending')" class="text-right cursor-pointer hover:text-rose-600 dark:hover:text-rose-400 transition-colors">
+                  <th @click="sortBy('pending')" class="text-right cursor-pointer hover:text-blue-600 dark:hover:text-blue-400 transition-colors">
                     <div class="flex items-center justify-end gap-1">
                       Pending
-                      <svg class="w-3 h-3 transition-transform" :class="getSortClass('pending')" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7" />
+                      <svg class="w-3 h-3 transition-transform" :class="getSortClass('pending')" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2">
+                        <path stroke-linecap="round" stroke-linejoin="round" d="M19 9l-7 7-7-7" />
                       </svg>
                     </div>
                   </th>
-                  <th @click="sortBy('processing')" class="text-right hidden sm:table-cell cursor-pointer hover:text-rose-600 dark:hover:text-rose-400 transition-colors">
+                  <th @click="sortBy('processing')" class="text-right hidden sm:table-cell cursor-pointer hover:text-blue-600 dark:hover:text-blue-400 transition-colors">
                     <div class="flex items-center justify-end gap-1">
                       Processing
-                      <svg class="w-3 h-3 transition-transform" :class="getSortClass('processing')" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7" />
+                      <svg class="w-3 h-3 transition-transform" :class="getSortClass('processing')" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2">
+                        <path stroke-linecap="round" stroke-linejoin="round" d="M19 9l-7 7-7-7" />
                       </svg>
                     </div>
                   </th>
-                  <th @click="sortBy('total')" class="text-right cursor-pointer hover:text-rose-600 dark:hover:text-rose-400 transition-colors">
+                  <th @click="sortBy('total')" class="text-right cursor-pointer hover:text-blue-600 dark:hover:text-blue-400 transition-colors">
                     <div class="flex items-center justify-end gap-1">
                       Total
-                      <svg class="w-3 h-3 transition-transform" :class="getSortClass('total')" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7" />
+                      <svg class="w-3 h-3 transition-transform" :class="getSortClass('total')" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2">
+                        <path stroke-linecap="round" stroke-linejoin="round" d="M19 9l-7 7-7-7" />
                       </svg>
                     </div>
                   </th>
@@ -149,7 +149,7 @@
           </div>
           
           <!-- Pagination -->
-          <div v-if="totalPages > 1" class="flex items-center justify-between mt-4 pt-4 border-t border-gray-200/30 dark:border-gray-700/30">
+          <div v-if="totalPages > 1" class="flex items-center justify-between mt-4 pt-4 border-t border-gray-200/60 dark:border-gray-800/60">
             <div class="text-sm text-gray-600 dark:text-gray-400">
               Showing {{ startIndex + 1 }}-{{ endIndex }} of {{ filteredQueues.length }}
             </div>
@@ -370,127 +370,105 @@ onUnmounted(() => {
 </script>
 
 <style scoped>
-.page-flat {
-  min-height: 100%;
+/* Professional Page Design */
+.page-professional {
+  @apply min-h-screen bg-gray-50 dark:bg-[#0d1117];
+  background-image: 
+    radial-gradient(at 0% 0%, rgba(59, 130, 246, 0.03) 0px, transparent 50%),
+    radial-gradient(at 100% 0%, rgba(99, 102, 241, 0.03) 0px, transparent 50%);
 }
 
-.filter-flat {
-  background: #ffffff;
-  border: none;
-  box-shadow: none;
-  border-radius: 0.75rem;
-  padding: 1rem;
+.dark .page-professional {
+  background-image: 
+    radial-gradient(at 0% 0%, rgba(59, 130, 246, 0.05) 0px, transparent 50%),
+    radial-gradient(at 100% 0%, rgba(99, 102, 241, 0.05) 0px, transparent 50%);
 }
 
-.dark .filter-flat {
-  background: #0a0d14;
+.page-content {
+  @apply px-6 lg:px-8 py-6 space-y-6;
 }
 
-/* Override input styles for flat design */
-.filter-flat :deep(.input) {
-  background: transparent;
-  border: 1px solid rgba(156, 163, 175, 0.15);
-  transition: all 0.2s ease;
+.page-inner {
+  @apply space-y-6;
 }
 
-.filter-flat :deep(.input:hover) {
-  border-color: rgba(156, 163, 175, 0.25);
+.filter-card {
+  @apply bg-white dark:bg-[#161b22] border border-gray-200/40 dark:border-gray-800/40;
+  @apply rounded-xl p-4;
+  box-shadow: 0 1px 3px 0 rgba(0, 0, 0, 0.04), 0 1px 2px 0 rgba(0, 0, 0, 0.02);
 }
 
-.filter-flat :deep(.input:focus) {
-  background: rgba(244, 63, 94, 0.02);
-  border-color: rgba(244, 63, 94, 0.4);
-  box-shadow: 0 0 0 3px rgba(244, 63, 94, 0.05);
+.dark .filter-card {
+  box-shadow: 0 1px 3px 0 rgba(0, 0, 0, 0.4), 0 1px 2px 0 rgba(0, 0, 0, 0.2);
 }
 
-.dark .filter-flat :deep(.input) {
-  border-color: rgba(156, 163, 175, 0.1);
+/* Override input styles */
+.filter-card :deep(.input) {
+  @apply bg-gray-50 dark:bg-gray-800/40 border border-gray-200/60 dark:border-gray-700/60;
+  @apply rounded-lg px-3 py-2 text-sm;
+  transition: all 0.15s cubic-bezier(0.4, 0, 0.2, 1);
 }
 
-.dark .filter-flat :deep(.input:hover) {
-  border-color: rgba(156, 163, 175, 0.2);
+.filter-card :deep(.input:hover) {
+  @apply border-gray-300 dark:border-gray-600;
 }
 
-.dark .filter-flat :deep(.input:focus) {
-  background: rgba(244, 63, 94, 0.03);
-  border-color: rgba(244, 63, 94, 0.5);
-  box-shadow: 0 0 0 3px rgba(244, 63, 94, 0.08);
+.filter-card :deep(.input:focus) {
+  @apply bg-white dark:bg-gray-800 border-blue-500 dark:border-blue-400;
+  box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.1);
+  outline: none;
 }
 
-.table-flat {
-  background: #ffffff;
-  border: none;
-  box-shadow: none;
-  border-radius: 0.75rem;
-  padding: 0;
+.data-card {
+  @apply bg-white dark:bg-[#161b22] border border-gray-200/40 dark:border-gray-800/40;
+  @apply rounded-xl overflow-hidden;
+  box-shadow: 0 1px 3px 0 rgba(0, 0, 0, 0.04), 0 1px 2px 0 rgba(0, 0, 0, 0.02);
 }
 
-.dark .table-flat {
-  background: #0a0d14;
+.dark .data-card {
+  box-shadow: 0 1px 3px 0 rgba(0, 0, 0, 0.4), 0 1px 2px 0 rgba(0, 0, 0, 0.2);
 }
 
-/* Flat table styling - zebra stripes, no borders */
-.table-flat :deep(.table) {
-  border-collapse: separate;
-  border-spacing: 0;
+/* Table styling */
+.data-card :deep(.table) {
+  @apply border-0;
 }
 
-.table-flat :deep(.table thead) {
-  background: transparent;
-  border-bottom: 1px solid rgba(156, 163, 175, 0.08);
+.data-card :deep(.table thead) {
+  @apply bg-transparent border-b border-gray-200/80 dark:border-gray-800/80;
+  background: linear-gradient(to bottom, rgba(249, 250, 251, 0.5), transparent);
 }
 
-.dark .table-flat :deep(.table thead) {
-  border-bottom-color: rgba(156, 163, 175, 0.1);
+.dark .data-card :deep(.table thead) {
+  background: linear-gradient(to bottom, rgba(255, 255, 255, 0.01), transparent);
 }
 
-.table-flat :deep(.table th) {
-  padding: 1rem 1rem;
-  font-weight: 600;
+.data-card :deep(.table thead th) {
+  @apply text-xs font-bold text-gray-500 dark:text-gray-400 uppercase tracking-wider;
+  @apply py-3 px-5;
   letter-spacing: 0.05em;
 }
 
-.table-flat :deep(.table tbody tr) {
-  border: none;
-  transition: all 0.15s ease;
+.data-card :deep(.table tbody tr) {
+  @apply border-b border-gray-100/60 dark:border-gray-800/40;
+  transition: background-color 0.15s cubic-bezier(0.4, 0, 0.2, 1);
 }
 
-/* Zebra striping */
-.table-flat :deep(.table tbody tr:nth-child(even)) {
-  background: rgba(0, 0, 0, 0.015);
+.data-card :deep(.table tbody tr:last-child) {
+  @apply border-b-0;
 }
 
-.dark .table-flat :deep(.table tbody tr:nth-child(even)) {
-  background: rgba(255, 255, 255, 0.02);
+.data-card :deep(.table tbody tr:hover) {
+  @apply bg-blue-50/50 dark:bg-blue-900/10;
 }
 
-/* Hover effect with left accent */
-.table-flat :deep(.table tbody tr:hover) {
-  background: rgba(244, 63, 94, 0.03);
-  box-shadow: inset 3px 0 0 0 rgba(244, 63, 94, 0.6);
+.data-card :deep(.table tbody td) {
+  @apply py-3.5 px-5 text-sm;
 }
 
-.dark .table-flat :deep(.table tbody tr:hover) {
-  background: rgba(244, 63, 94, 0.05);
-  box-shadow: inset 3px 0 0 0 rgba(244, 63, 94, 0.8);
-}
-
-.table-flat :deep(.table td) {
-  padding: 0.875rem 1rem;
-  border: none;
-}
-
-.error-flat {
-  background: transparent;
-  border: none;
-  box-shadow: none;
-  border-radius: 0.75rem;
-  padding: 1rem;
-  color: #dc2626;
-  font-size: 0.875rem;
-}
-
-.dark .error-flat {
-  color: #fca5a5;
+.error-card {
+  @apply bg-red-50 dark:bg-red-900/10 border border-red-200/60 dark:border-red-800/60;
+  @apply rounded-xl p-4 text-sm text-red-800 dark:text-red-400;
+  box-shadow: 0 1px 3px 0 rgba(239, 68, 68, 0.1);
 }
 </style>

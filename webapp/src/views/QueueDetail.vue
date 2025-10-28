@@ -1,24 +1,24 @@
 <template>
-  <div class="page-flat">
-    <div class="py-4 px-3">
-      <div class="space-y-2.5">
+  <div class="page-professional">
+    <div class="page-content">
+      <div class="page-inner">
         <LoadingSpinner v-if="loading && !queueData" />
 
-        <div v-else-if="error" class="error-flat">
+        <div v-else-if="error" class="error-card">
           <p><strong>Error loading queue:</strong> {{ error }}</p>
         </div>
 
         <template v-else-if="queueData">
           <!-- Queue Header Card -->
-          <div class="header-section">
-            <div class="flex items-center justify-between mb-2">
+          <div class="header-card">
+            <div class="flex items-center justify-between mb-3">
               <div class="flex items-center gap-3">
-                <button @click="goBack" class="p-1.5 hover:bg-black/5 dark:hover:bg-white/5 rounded-lg transition-colors">
-                  <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 19l-7-7m0 0l7-7m-7 7h18" />
+                <button @click="goBack" class="p-2 hover:bg-gray-100 dark:hover:bg-gray-800/50 rounded-lg transition-colors">
+                  <svg class="w-5 h-5 text-gray-600 dark:text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2">
+                    <path stroke-linecap="round" stroke-linejoin="round" d="M10 19l-7-7m0 0l7-7m-7 7h18" />
                   </svg>
                 </button>
-                <h2 class="text-xl font-bold gradient-text">{{ statusData?.queue?.name }}</h2>
+                <h2 class="text-xl font-bold text-gray-900 dark:text-white tracking-tight">{{ statusData?.queue?.name }}</h2>
               </div>
               
               <div class="flex gap-2">
@@ -46,72 +46,28 @@
           </div>
 
           <!-- Status Metrics -->
-          <div class="grid grid-cols-2 lg:grid-cols-4 gap-2">
-            <div class="metric-flat">
-              <div class="flex items-start gap-3">
-                <div class="metric-icon-flat bg-yellow-500/10 dark:bg-yellow-500/20">
-                  <svg class="w-5 h-5 text-yellow-600 dark:text-yellow-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
-                  </svg>
-                </div>
-                <div class="flex-1">
-                  <p class="metric-label">Pending</p>
-                  <p class="metric-value-flat">{{ formatNumber(calculatedPending) }}</p>
-                </div>
-              </div>
+          <div class="metrics-grid">
+            <div class="metric-card-compact">
+              <span class="metric-label-sm">PENDING</span>
+              <div class="metric-value-sm text-orange-600 dark:text-orange-400">{{ formatNumber(calculatedPending) }}</div>
             </div>
-            <div class="metric-flat">
-              <div class="flex items-start gap-3">
-                <div class="metric-icon-flat bg-purple-500/10 dark:bg-purple-500/20">
-                  <svg class="w-5 h-5 text-purple-600 dark:text-purple-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4m0 4v.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
-                  </svg>
-                </div>
-                <div class="flex-1">
-                  <p class="metric-label">Processing</p>
-                  <p class="metric-value-flat">{{ formatNumber(statusData?.totals?.messages?.processing || 0) }}</p>
-                </div>
-              </div>
+            <div class="metric-card-compact">
+              <span class="metric-label-sm">PROCESSING</span>
+              <div class="metric-value-sm text-blue-600 dark:text-blue-400">{{ formatNumber(statusData?.totals?.messages?.processing || 0) }}</div>
             </div>
-            <div class="metric-flat">
-              <div class="flex items-start gap-3">
-                <div class="metric-icon-flat bg-green-500/10 dark:bg-green-500/20">
-                  <svg class="w-5 h-5 text-green-600 dark:text-green-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
-                  </svg>
-                </div>
-                <div class="flex-1">
-                  <p class="metric-label">Completed</p>
-                  <p class="metric-value-flat text-green-600 dark:text-green-400">{{ formatNumber(statusData?.totals?.messages?.completed || 0) }}</p>
-                </div>
-              </div>
+            <div class="metric-card-compact">
+              <span class="metric-label-sm">COMPLETED</span>
+              <div class="metric-value-sm text-emerald-600 dark:text-emerald-400">{{ formatNumber(statusData?.totals?.messages?.completed || 0) }}</div>
             </div>
-            <div class="metric-flat">
-              <div class="flex items-start gap-3">
-                <div class="metric-icon-flat bg-red-500/10 dark:bg-red-500/20">
-                  <svg class="w-5 h-5 text-red-600 dark:text-red-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
-                  </svg>
-                </div>
-                <div class="flex-1">
-                  <p class="metric-label">Failed</p>
-                  <p class="metric-value-flat text-red-600 dark:text-red-400">{{ formatNumber(statusData?.totals?.messages?.failed || 0) }}</p>
-                </div>
-              </div>
+            <div class="metric-card-compact">
+              <span class="metric-label-sm">FAILED</span>
+              <div class="metric-value-sm text-red-600 dark:text-red-400">{{ formatNumber(statusData?.totals?.messages?.failed || 0) }}</div>
             </div>
           </div>
 
           <!-- Queue Configuration -->
-          <div class="config-section">
-            <div class="flex items-center gap-2 mb-3">
-              <div class="w-7 h-7 rounded-lg bg-gradient-to-br from-blue-500/10 to-cyan-500/20 flex items-center justify-center">
-                <svg class="w-4 h-4 text-blue-600 dark:text-blue-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
-                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
-                </svg>
-              </div>
-              <h3 class="text-base font-semibold text-gray-900 dark:text-gray-100">Queue Configuration</h3>
-            </div>
+          <div class="config-card">
+            <h3 class="text-sm font-semibold text-gray-900 dark:text-white mb-4 tracking-tight">Queue Configuration</h3>
             <div class="grid grid-cols-2 md:grid-cols-3 gap-x-6 gap-y-3 text-sm">
               <div>
                 <span class="text-gray-500 dark:text-gray-400 block mb-0.5">Lease Time</span>
@@ -163,7 +119,7 @@
               <table class="table">
                 <thead>
                   <tr>
-                    <th @click="sortPartitions('name')" class="cursor-pointer hover:text-rose-600 dark:hover:text-rose-400 transition-colors">
+                    <th @click="sortPartitions('name')" class="cursor-pointer hover:text-blue-600 dark:hover:text-blue-400 transition-colors">
                       <div class="flex items-center gap-1">
                         Partition
                         <svg class="w-3 h-3 transition-transform" :class="getPartitionSortClass('name')" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -171,7 +127,7 @@
                         </svg>
                       </div>
                     </th>
-                    <th @click="sortPartitions('pending')" class="text-right cursor-pointer hover:text-rose-600 dark:hover:text-rose-400 transition-colors">
+                    <th @click="sortPartitions('pending')" class="text-right cursor-pointer hover:text-blue-600 dark:hover:text-blue-400 transition-colors">
                       <div class="flex items-center justify-end gap-1">
                         Pending
                         <svg class="w-3 h-3 transition-transform" :class="getPartitionSortClass('pending')" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -179,7 +135,7 @@
                         </svg>
                       </div>
                     </th>
-                    <th @click="sortPartitions('processing')" class="text-right cursor-pointer hover:text-rose-600 dark:hover:text-rose-400 transition-colors">
+                    <th @click="sortPartitions('processing')" class="text-right cursor-pointer hover:text-blue-600 dark:hover:text-blue-400 transition-colors">
                       <div class="flex items-center justify-end gap-1">
                         Processing
                         <svg class="w-3 h-3 transition-transform" :class="getPartitionSortClass('processing')" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -187,7 +143,7 @@
                         </svg>
                       </div>
                     </th>
-                    <th @click="sortPartitions('completed')" class="text-right cursor-pointer hover:text-rose-600 dark:hover:text-rose-400 transition-colors">
+                    <th @click="sortPartitions('completed')" class="text-right cursor-pointer hover:text-blue-600 dark:hover:text-blue-400 transition-colors">
                       <div class="flex items-center justify-end gap-1">
                         Completed
                         <svg class="w-3 h-3 transition-transform" :class="getPartitionSortClass('completed')" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -195,7 +151,7 @@
                         </svg>
                       </div>
                     </th>
-                    <th @click="sortPartitions('failed')" class="text-right cursor-pointer hover:text-rose-600 dark:hover:text-rose-400 transition-colors">
+                    <th @click="sortPartitions('failed')" class="text-right cursor-pointer hover:text-blue-600 dark:hover:text-blue-400 transition-colors">
                       <div class="flex items-center justify-end gap-1">
                         Failed
                         <svg class="w-3 h-3 transition-transform" :class="getPartitionSortClass('failed')" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -403,9 +359,6 @@ onMounted(() => {
 </script>
 
 <style scoped>
-.page-flat {
-  min-height: 100%;
-}
 
 .header-section {
   background: transparent;
@@ -457,9 +410,9 @@ onMounted(() => {
 }
 
 .partition-section :deep(.input:focus) {
-  background: rgba(244, 63, 94, 0.02);
-  border-color: rgba(244, 63, 94, 0.4);
-  box-shadow: 0 0 0 3px rgba(244, 63, 94, 0.05);
+  background: rgba(59, 130, 246, 0.02);
+  border-color: rgba(59, 130, 246, 0.4);
+  box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.05);
 }
 
 .dark .partition-section :deep(.input) {
@@ -467,9 +420,9 @@ onMounted(() => {
 }
 
 .dark .partition-section :deep(.input:focus) {
-  background: rgba(244, 63, 94, 0.03);
-  border-color: rgba(244, 63, 94, 0.5);
-  box-shadow: 0 0 0 3px rgba(244, 63, 94, 0.08);
+  background: rgba(59, 130, 246, 0.03);
+  border-color: rgba(59, 130, 246, 0.5);
+  box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.08);
 }
 
 /* Flat table styling */
@@ -507,13 +460,13 @@ onMounted(() => {
 }
 
 .partition-section :deep(.table tbody tr:hover) {
-  background: rgba(244, 63, 94, 0.03);
-  box-shadow: inset 3px 0 0 0 rgba(244, 63, 94, 0.6);
+  background: rgba(59, 130, 246, 0.03);
+  box-shadow: inset 3px 0 0 0 rgba(59, 130, 246, 0.6);
 }
 
 .dark .partition-section :deep(.table tbody tr:hover) {
-  background: rgba(244, 63, 94, 0.05);
-  box-shadow: inset 3px 0 0 0 rgba(244, 63, 94, 0.8);
+  background: rgba(59, 130, 246, 0.05);
+  box-shadow: inset 3px 0 0 0 rgba(59, 130, 246, 0.8);
 }
 
 .partition-section :deep(.table td) {

@@ -1,19 +1,9 @@
 <template>
-  <div class="page-flat">
-    <div class="py-4 px-3">
-      <div class="space-y-2.5">
-        <!-- Header -->
-        <div class="flex items-center justify-between mb-4">
-          <div>
-            <h1 class="text-2xl font-bold text-gray-900 dark:text-gray-100">Traces</h1>
-            <p class="text-sm text-gray-600 dark:text-gray-400 mt-1">
-              Search and explore message traces across your workflows
-            </p>
-          </div>
-        </div>
-
+  <div class="page-professional">
+    <div class="page-content">
+      <div class="page-inner">
         <!-- Search Box -->
-        <div class="filter-flat">
+        <div class="filter-card">
           <div class="space-y-3">
             <div class="flex gap-3">
               <div class="flex-1">
@@ -54,7 +44,7 @@
 
         <LoadingSpinner v-if="loading" />
 
-        <div v-else-if="error" class="error-flat">
+        <div v-else-if="error" class="error-card">
           <p><strong>Error loading traces:</strong> {{ error }}</p>
         </div>
 

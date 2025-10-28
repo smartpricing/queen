@@ -59,15 +59,15 @@
   }
   
   .btn-primary {
-    @apply bg-gradient-to-br from-rose-600 to-rose-700 hover:from-rose-700 hover:to-rose-800 
-           active:from-rose-800 active:to-rose-900 text-white shadow-sm hover:shadow-md 
+    @apply bg-gradient-to-br from-blue-600 to-blue-700 hover:from-blue-700 hover:to-blue-800 
+           active:from-blue-800 active:to-blue-900 text-white shadow-sm hover:shadow-md 
            disabled:opacity-50 disabled:cursor-not-allowed;
-    box-shadow: 0 1px 2px 0 rgb(0 0 0 / 0.05), 0 0 0 1px rgb(244 63 94 / 0.1);
+    box-shadow: 0 1px 2px 0 rgb(0 0 0 / 0.05), 0 0 0 1px rgb(59 130 246 / 0.1);
   }
   
   .btn-primary:hover {
     box-shadow: 0 4px 6px -1px rgb(0 0 0 / 0.1), 0 2px 4px -2px rgb(0 0 0 / 0.1), 
-                0 0 0 1px rgb(244 63 94 / 0.2);
+                0 0 0 1px rgb(59 130 246 / 0.2);
   }
   
   .btn-secondary {
@@ -122,23 +122,23 @@
   }
   
   .badge-info {
-    @apply bg-purple-100 text-purple-700 dark:bg-purple-900/30 dark:text-purple-400 
-           ring-1 ring-purple-600/20 dark:ring-purple-400/20;
-    box-shadow: 0 0 0 0 rgba(168, 85, 247, 0);
+    @apply bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400 
+           ring-1 ring-blue-600/20 dark:ring-blue-400/20;
+    box-shadow: 0 0 0 0 rgba(59, 130, 246, 0);
   }
   
   .badge-info:hover {
-    box-shadow: 0 0 8px 0 rgba(168, 85, 247, 0.3);
+    box-shadow: 0 0 8px 0 rgba(59, 130, 246, 0.3);
   }
   
   .input {
     @apply w-full px-3 py-2 text-sm border rounded-lg bg-white dark:bg-slate-800 
-           focus:outline-none focus:ring-2 focus:ring-rose-500 focus:border-transparent 
+           focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent 
            transition-all duration-200;
   }
   
   .input:focus {
-    box-shadow: 0 0 0 3px rgba(244, 63, 94, 0.1);
+    box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.1);
   }
   
   /* Table styles */
@@ -174,9 +174,7 @@
   }
   
   .table tbody tr:hover {
-    @apply bg-gradient-to-r from-rose-50/50 to-purple-50/50 
-           dark:from-rose-900/10 dark:to-purple-900/10;
-    box-shadow: inset 3px 0 0 0 rgb(244, 63, 94, 0.5);
+    @apply bg-blue-50/50 dark:bg-blue-900/10;
   }
   
   .table td {
@@ -186,10 +184,6 @@
   /* Metric card specific */
   .metric-value {
     @apply text-2xl sm:text-3xl font-bold mt-1.5;
-    background: linear-gradient(135deg, #f43f5e 0%, #ec4899 50%, #a855f7 100%);
-    -webkit-background-clip: text;
-    -webkit-text-fill-color: transparent;
-    background-clip: text;
     letter-spacing: -0.02em;
   }
   
@@ -240,11 +234,11 @@
   }
   
   .scrollbar-thin::-webkit-scrollbar-thumb {
-    @apply bg-gradient-to-b from-rose-400 to-purple-400 rounded-full;
+    @apply bg-gradient-to-b from-blue-400 to-indigo-400 rounded-full;
   }
   
   .scrollbar-thin::-webkit-scrollbar-thumb:hover {
-    @apply from-rose-500 to-purple-500;
+    @apply from-blue-500 to-indigo-500;
   }
   
   /* Custom utilities */
@@ -317,17 +311,17 @@
 
 /* Focus visible for accessibility */
 :focus-visible {
-  @apply outline-2 outline-offset-2 outline-rose-500 rounded;
+  @apply outline-2 outline-offset-2 outline-blue-500 rounded;
 }
 
 /* Selection color */
 ::selection {
-  @apply bg-rose-200 dark:bg-rose-800/50 text-gray-900 dark:text-gray-100;
+  @apply bg-blue-200 dark:bg-blue-800/50 text-gray-900 dark:text-gray-100;
 }
 
 /* Gradient text utility */
 .gradient-text {
-  background: linear-gradient(135deg, #f43f5e 0%, #ec4899 50%, #a855f7 100%);
+  background: linear-gradient(135deg, #3b82f6 0%, #6366f1 100%);
   -webkit-background-clip: text;
   -webkit-text-fill-color: transparent;
   background-clip: text;
@@ -339,11 +333,11 @@
   background: white;
   border-radius: 0.75rem;
   padding: 1px;
-  background: linear-gradient(135deg, rgba(244, 63, 94, 0.2), rgba(168, 85, 247, 0.2));
+  background: linear-gradient(135deg, rgba(59, 130, 246, 0.2), rgba(99, 102, 241, 0.2));
 }
 
 .dark .card-gradient-border {
-  background: linear-gradient(135deg, rgba(244, 63, 94, 0.3), rgba(168, 85, 247, 0.3));
+  background: linear-gradient(135deg, rgba(59, 130, 246, 0.3), rgba(99, 102, 241, 0.3));
 }
 
 .card-gradient-border > * {

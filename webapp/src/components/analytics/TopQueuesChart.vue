@@ -69,9 +69,9 @@ function createGradientBars() {
     }
     
     const gradient = ctx.createLinearGradient(chartArea.left, 0, chartArea.right, 0);
-    gradient.addColorStop(0, 'rgba(244, 63, 94, 0.8)');
-    gradient.addColorStop(0.5, 'rgba(236, 72, 153, 0.8)');
-    gradient.addColorStop(1, 'rgba(168, 85, 247, 0.8)');
+    gradient.addColorStop(0, 'rgba(59, 130, 246, 0.8)');
+    gradient.addColorStop(0.5, 'rgba(79, 70, 229, 0.8)');
+    gradient.addColorStop(1, 'rgba(99, 102, 241, 0.8)');
     
     return gradient;
   };
@@ -94,7 +94,7 @@ const chartOptions = {
         font: {
           size: 11,
         },
-        color: '#9ca3af',
+        color: '#6b7280',
       },
     },
     y: {

@@ -1,73 +1,57 @@
 <template>
   <div class="flex flex-col h-full overflow-hidden">
     <!-- Logo section -->
-    <div class="p-3 flex-shrink-0 mb-2">
+    <div class="p-5 flex-shrink-0">
       <div 
         v-if="!isCollapsed" 
         class="flex items-center gap-3"
       >
-        <div class="relative">
-          <img src="/assets/queen-logo-rose.svg" alt="Queen" class="h-8 w-8 flex-shrink-0 transition-transform hover:scale-110" />
-          <div class="absolute inset-0 bg-rose-500 opacity-0 blur-xl transition-opacity hover:opacity-20 -z-10"></div>
-        </div>
+        <img src="/assets/queen-logo-rose.svg" alt="Queen" class="h-8 w-8 flex-shrink-0" />
         <div class="min-w-0">
-          <h1 class="text-base font-bold text-gray-900 dark:text-gray-100 truncate">Queen</h1>
+          <h1 class="text-sm font-bold text-gray-900 dark:text-white truncate tracking-tight">Queen</h1>
           <p class="text-xs text-gray-500 dark:text-gray-400 truncate">Message Queue</p>
         </div>
       </div>
       <div 
         v-else 
-        class="flex items-center justify-center relative"
+        class="flex items-center justify-center"
       >
-        <img src="/assets/queen-logo-rose.svg" alt="Queen" class="h-8 w-8 transition-transform hover:scale-110" />
-        <div class="absolute inset-0 bg-rose-500 opacity-0 blur-xl transition-opacity hover:opacity-20 -z-10"></div>
+        <img src="/assets/queen-logo-rose.svg" alt="Queen" class="h-8 w-8" />
       </div>
     </div>
     
     <!-- Navigation -->
-    <nav class="flex-1 p-3 space-y-1 overflow-y-auto overflow-x-hidden scrollbar-thin">
+    <nav class="flex-1 px-3 py-2 overflow-y-auto overflow-x-hidden">
       <router-link
         v-for="item in navigation"
         :key="item.path"
         :to="item.path"
         @click="$emit('close')"
         :title="item.name"
-        class="flex items-center rounded-lg transition-all duration-200 text-sm group relative"
+        class="nav-item group relative"
         :class="[
-          isActive(item.path) && !isCollapsed
-            ? 'bg-rose-500/8 dark:bg-rose-500/10 text-rose-600 dark:text-rose-400 font-medium'
-            : isActive(item.path) && isCollapsed
-            ? 'text-rose-600 dark:text-rose-400 font-medium'
-            : 'text-gray-700 dark:text-gray-300 hover:bg-black/5 dark:hover:bg-white/5',
-          isCollapsed ? 'px-3 py-3 justify-center' : 'px-3 py-2.5 gap-3'
+          isActive(item.path) ? 'nav-item-active' : 'nav-item-inactive',
+          isCollapsed ? 'nav-item-collapsed' : 'nav-item-expanded'
         ]"
       >
-        <div :class="[
-          'flex items-center justify-center rounded-md transition-all flex-shrink-0',
-          isActive(item.path) ? 'w-8 h-8 bg-gradient-to-br from-rose-500 to-purple-500 text-white shadow-sm' : 'w-5 h-5'
-        ]">
-          <svg 
-            class="transition-transform group-hover:scale-110" 
-            :class="isActive(item.path) ? 'w-4 h-4' : 'w-5 h-5'"
-            fill="none" 
-            stroke="currentColor" 
-            viewBox="0 0 24 24"
-          >
-            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" :d="item.iconPath" />
-          </svg>
-        </div>
-        
-        <span 
-          v-if="!isCollapsed" 
-          class="whitespace-nowrap overflow-hidden text-ellipsis"
+        <svg 
+          class="nav-icon" 
+          fill="none" 
+          stroke="currentColor" 
+          viewBox="0 0 24 24"
+          stroke-width="1.5"
         >
+          <path stroke-linecap="round" stroke-linejoin="round" :d="item.iconPath" />
+        </svg>
+        
+        <span v-if="!isCollapsed" class="nav-label">
           {{ item.name }}
         </span>
         
         <!-- Tooltip for collapsed state -->
         <div 
           v-if="isCollapsed"
-          class="absolute left-full ml-2 px-3 py-1.5 bg-gray-900 dark:bg-gray-700 text-white text-xs rounded-lg opacity-0 pointer-events-none group-hover:opacity-100 transition-opacity whitespace-nowrap z-50 shadow-lg"
+          class="nav-tooltip"
         >
           {{ item.name }}
         </div>
@@ -75,34 +59,30 @@
     </nav>
     
     <!-- Utilities Section (Desktop: theme, health, refresh, collapse) -->
-    <div class="flex-shrink-0 hidden lg:block">
-      <div class="h-px bg-gradient-to-r from-transparent via-gray-300 dark:via-gray-700 to-transparent mb-2"></div>
-      
-      <div class="p-3 space-y-1">
+    <div class="flex-shrink-0 hidden lg:block border-t border-gray-200/60 dark:border-gray-800/60">
+      <div class="px-3 py-3">
         <!-- Refresh Button -->
         <button
           v-if="showRefresh"
           @click="handleRefresh"
           :disabled="isRefreshing"
           :title="isCollapsed ? 'Refresh' : ''"
-          class="w-full flex items-center rounded-lg transition-all duration-200 text-sm text-gray-700 dark:text-gray-300 hover:bg-black/5 dark:hover:bg-white/5 group relative"
-          :class="isCollapsed ? 'px-3 py-2.5 justify-center' : 'px-3 py-2.5 gap-3'"
+          class="utility-btn group"
+          :class="isCollapsed ? 'utility-btn-collapsed' : 'utility-btn-expanded'"
         >
           <svg 
-            class="w-5 h-5 flex-shrink-0 transition-transform"
-            :class="{ 'animate-spin': isRefreshing, 'group-hover:rotate-90': !isRefreshing }"
+            class="utility-icon"
+            :class="{ 'animate-spin': isRefreshing }"
             fill="none" 
             stroke="currentColor" 
             viewBox="0 0 24 24"
+            stroke-width="1.5"
           >
-            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+            <path stroke-linecap="round" stroke-linejoin="round" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
           </svg>
-          <span v-if="!isCollapsed">Refresh</span>
+          <span v-if="!isCollapsed" class="utility-label">Refresh</span>
           
-          <div 
-            v-if="isCollapsed"
-            class="absolute left-full ml-2 px-3 py-1.5 bg-gray-900 dark:bg-gray-700 text-white text-xs rounded-lg opacity-0 pointer-events-none group-hover:opacity-100 transition-opacity whitespace-nowrap z-50 shadow-lg"
-          >
+          <div v-if="isCollapsed" class="nav-tooltip">
             Refresh
           </div>
         </button>
@@ -111,19 +91,16 @@
         <button
           @click="toggleTheme"
           :title="isCollapsed ? (isDark ? 'Light mode' : 'Dark mode') : ''"
-          class="w-full flex items-center rounded-lg transition-all duration-200 text-sm text-gray-700 dark:text-gray-300 hover:bg-black/5 dark:hover:bg-white/5 group relative"
-          :class="isCollapsed ? 'px-3 py-2.5 justify-center' : 'px-3 py-2.5 gap-3'"
+          class="utility-btn group"
+          :class="isCollapsed ? 'utility-btn-collapsed' : 'utility-btn-expanded'"
         >
-          <svg class="w-5 h-5 flex-shrink-0" fill="currentColor" viewBox="0 0 24 24">
-            <path v-if="isDark" d="M12 3v1m0 16v1m9-9h-1M4 12H3m15.364 6.364l-.707-.707M6.343 6.343l-.707-.707m12.728 0l-.707.707M6.343 17.657l-.707.707M16 12a4 4 0 11-8 0 4 4 0 018 0z"/>
-            <path v-else d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm0 18c-4.41 0-8-3.59-8-8s3.59-8 8-8 8 3.59 8 8-3.59 8-8 8z" opacity="0.5"/>
+          <svg class="utility-icon" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="1.5">
+            <path v-if="isDark" stroke-linecap="round" stroke-linejoin="round" d="M12 3v2.25m6.364.386l-1.591 1.591M21 12h-2.25m-.386 6.364l-1.591-1.591M12 18.75V21m-4.773-4.227l-1.591 1.591M5.25 12H3m4.227-4.773L5.636 5.636M15.75 12a3.75 3.75 0 11-7.5 0 3.75 3.75 0 017.5 0z"/>
+            <path v-else stroke-linecap="round" stroke-linejoin="round" d="M21.752 15.002A9.718 9.718 0 0118 15.75c-5.385 0-9.75-4.365-9.75-9.75 0-1.33.266-2.597.748-3.752A9.753 9.753 0 003 11.25C3 16.635 7.365 21 12.75 21a9.753 9.753 0 009.002-5.998z"/>
           </svg>
-          <span v-if="!isCollapsed">{{ isDark ? 'Light Mode' : 'Dark Mode' }}</span>
+          <span v-if="!isCollapsed" class="utility-label">{{ isDark ? 'Light Mode' : 'Dark Mode' }}</span>
           
-          <div 
-            v-if="isCollapsed"
-            class="absolute left-full ml-2 px-3 py-1.5 bg-gray-900 dark:bg-gray-700 text-white text-xs rounded-lg opacity-0 pointer-events-none group-hover:opacity-100 transition-opacity whitespace-nowrap z-50 shadow-lg"
-          >
+          <div v-if="isCollapsed" class="nav-tooltip">
             {{ isDark ? 'Light mode' : 'Dark mode' }}
           </div>
         </button>
@@ -131,22 +108,19 @@
         <!-- Health Status -->
         <div
           :title="isCollapsed ? (isHealthy ? 'System Healthy' : 'System Error') : ''"
-          class="w-full flex items-center rounded-lg text-sm group relative"
+          class="utility-status group"
           :class="[
-            isHealthy ? 'text-green-600 dark:text-green-400' : 'text-red-600 dark:text-red-400',
-            isCollapsed ? 'px-3 py-2.5 justify-center' : 'px-3 py-2.5 gap-3'
+            isHealthy ? 'text-emerald-500 dark:text-emerald-400' : 'text-red-500 dark:text-red-400',
+            isCollapsed ? 'utility-btn-collapsed' : 'utility-btn-expanded'
           ]"
         >
-          <svg class="w-5 h-5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path v-if="isHealthy" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
-            <path v-else stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 14l2-2m0 0l2-2m-2 2l-2-2m2 2l2 2m7-2a9 9 0 11-18 0 9 9 0 0118 0z" />
+          <svg class="utility-icon" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="1.5">
+            <path v-if="isHealthy" stroke-linecap="round" stroke-linejoin="round" d="M9 12.75L11.25 15 15 9.75M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+            <path v-else stroke-linecap="round" stroke-linejoin="round" d="M9.75 9.75l4.5 4.5m0-4.5l-4.5 4.5M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
           </svg>
-          <span v-if="!isCollapsed" class="font-medium">{{ isHealthy ? 'Healthy' : 'Error' }}</span>
+          <span v-if="!isCollapsed" class="utility-label font-medium">{{ isHealthy ? 'Healthy' : 'Error' }}</span>
           
-          <div 
-            v-if="isCollapsed"
-            class="absolute left-full ml-2 px-3 py-1.5 bg-gray-900 dark:bg-gray-700 text-white text-xs rounded-lg opacity-0 pointer-events-none group-hover:opacity-100 transition-opacity whitespace-nowrap z-50 shadow-lg"
-          >
+          <div v-if="isCollapsed" class="nav-tooltip">
             {{ isHealthy ? 'System Healthy' : 'System Error' }}
           </div>
         </div>
@@ -154,25 +128,23 @@
         <!-- Collapse Button -->
         <button 
           @click="$emit('toggle-collapse')"
-          class="w-full flex items-center rounded-lg transition-all duration-200 text-sm text-gray-700 dark:text-gray-300 hover:bg-black/5 dark:hover:bg-white/5 group relative"
-          :class="isCollapsed ? 'px-3 py-2.5 justify-center' : 'px-3 py-2.5 gap-3'"
+          class="utility-btn group"
+          :class="isCollapsed ? 'utility-btn-collapsed' : 'utility-btn-expanded'"
           :title="isCollapsed ? 'Expand sidebar' : 'Collapse sidebar'"
         >
           <svg 
-            class="w-5 h-5 transition-transform duration-300 flex-shrink-0" 
+            class="utility-icon transition-transform duration-200" 
             :class="{ 'rotate-180': isCollapsed }"
             fill="none" 
             stroke="currentColor" 
             viewBox="0 0 24 24"
+            stroke-width="1.5"
           >
-            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 19l-7-7 7-7m8 14l-7-7 7-7" />
+            <path stroke-linecap="round" stroke-linejoin="round" d="M18.75 19.5l-7.5-7.5 7.5-7.5m-6 15L5.25 12l7.5-7.5" />
           </svg>
-          <span v-if="!isCollapsed" class="whitespace-nowrap">Collapse</span>
+          <span v-if="!isCollapsed" class="utility-label">Collapse</span>
           
-          <div 
-            v-if="isCollapsed"
-            class="absolute left-full ml-2 px-3 py-1.5 bg-gray-900 dark:bg-gray-700 text-white text-xs rounded-lg opacity-0 pointer-events-none group-hover:opacity-100 transition-opacity whitespace-nowrap z-50 shadow-lg"
-          >
+          <div v-if="isCollapsed" class="nav-tooltip">
             Expand sidebar
           </div>
         </button>
@@ -312,3 +284,77 @@ const isActive = (path) => {
   return route.path.startsWith(path);
 };
 </script>
+
+<style scoped>
+/* Professional Navigation Styles - Condoktur inspired */
+
+.nav-item {
+  @apply flex items-center mb-1 text-sm font-medium;
+  @apply rounded-lg;
+  transition: background-color 0.15s cubic-bezier(0.4, 0, 0.2, 1), color 0.15s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.nav-item-expanded {
+  @apply px-3 py-2.5 gap-3;
+}
+
+.nav-item-collapsed {
+  @apply px-3 py-2.5 justify-center;
+}
+
+.nav-item-active {
+  @apply bg-gray-100 dark:bg-gray-800/70 text-gray-900 dark:text-white;
+  font-weight: 600;
+  box-shadow: 0 1px 2px 0 rgba(0, 0, 0, 0.05);
+}
+
+.dark .nav-item-active {
+  box-shadow: 0 1px 2px 0 rgba(0, 0, 0, 0.3);
+}
+
+.nav-item-inactive {
+  @apply text-gray-600 dark:text-gray-400 hover:bg-gray-50 dark:hover:bg-gray-800/50 hover:text-gray-900 dark:hover:text-gray-100;
+}
+
+.nav-icon {
+  @apply w-5 h-5 flex-shrink-0;
+}
+
+.nav-label {
+  @apply whitespace-nowrap overflow-hidden text-ellipsis;
+}
+
+.nav-tooltip {
+  @apply absolute left-full ml-3 px-3 py-1.5 bg-gray-900 dark:bg-gray-800 text-white text-xs rounded-lg;
+  @apply opacity-0 pointer-events-none group-hover:opacity-100 whitespace-nowrap z-50;
+  transition: opacity 0.15s cubic-bezier(0.4, 0, 0.2, 1);
+  box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.3), 0 2px 4px -1px rgba(0, 0, 0, 0.2);
+}
+
+/* Utility Button Styles */
+.utility-btn {
+  @apply w-full flex items-center mb-1 rounded-lg text-sm font-medium text-gray-600 dark:text-gray-400;
+  @apply hover:bg-gray-50 dark:hover:bg-gray-800/50 hover:text-gray-900 dark:hover:text-gray-100;
+  transition: background-color 0.15s cubic-bezier(0.4, 0, 0.2, 1), color 0.15s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.utility-btn-expanded {
+  @apply px-3 py-2.5 gap-3;
+}
+
+.utility-btn-collapsed {
+  @apply px-3 py-2.5 justify-center;
+}
+
+.utility-status {
+  @apply w-full flex items-center mb-1 rounded-lg text-sm font-medium;
+}
+
+.utility-icon {
+  @apply w-5 h-5 flex-shrink-0;
+}
+
+.utility-label {
+  @apply whitespace-nowrap overflow-hidden text-ellipsis;
+}
+</style>

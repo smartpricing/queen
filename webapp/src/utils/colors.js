@@ -3,17 +3,18 @@
 
 export const colors = {
   // Primary brand colors (used for charts, accents, etc.)
+  // Professional blue color scheme for a clean, modern look
   primary: {
-    name: 'Rose',
-    hex: '#f43f5e',      // rose-500
-    rgb: 'rgb(244, 63, 94)',
-    rgba: (opacity) => `rgba(244, 63, 94, ${opacity})`,
+    name: 'Blue',
+    hex: '#3b82f6',      // blue-500
+    rgb: 'rgb(59, 130, 246)',
+    rgba: (opacity) => `rgba(59, 130, 246, ${opacity})`,
   },
   secondary: {
-    name: 'Purple', 
-    hex: '#a855f7',      // purple-500
-    rgb: 'rgb(168, 85, 247)',
-    rgba: (opacity) => `rgba(168, 85, 247, ${opacity})`,
+    name: 'Indigo', 
+    hex: '#6366f1',      // indigo-500
+    rgb: 'rgb(99, 102, 241)',
+    rgba: (opacity) => `rgba(99, 102, 241, ${opacity})`,
   },
   
   // Status colors
@@ -40,14 +41,14 @@ export const colors = {
   
   // Chart colors (for consistency)
   charts: {
-    // Main data series
+    // Main data series - professional blue tones
     ingested: {
-      border: 'rgb(244, 63, 94)',      // Rose
-      background: 'rgba(244, 63, 94, 0.1)',
+      border: 'rgb(59, 130, 246)',      // Blue
+      background: 'rgba(59, 130, 246, 0.1)',
     },
     processed: {
-      border: 'rgb(168, 85, 247)',     // Purple
-      background: 'rgba(168, 85, 247, 0.1)',
+      border: 'rgb(99, 102, 241)',     // Indigo
+      background: 'rgba(99, 102, 241, 0.1)',
     },
     
     // Status distribution

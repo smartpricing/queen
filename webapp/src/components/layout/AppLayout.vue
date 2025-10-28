@@ -1,16 +1,16 @@
 <template>
-  <div class="flex h-screen bg-gray-100 dark:bg-[#0d1117] overflow-hidden">
+  <div class="flex h-screen bg-gray-50 dark:bg-[#0d1117] overflow-hidden">
     <!-- Mobile overlay -->
     <div 
       v-if="isSidebarOpen && isMobile"
-      class="fixed inset-0 bg-black bg-opacity-50 z-20 lg:hidden"
+      class="fixed inset-0 bg-black/60 z-20 lg:hidden backdrop-blur-sm"
       @click="closeSidebar"
     ></div>
     
     <!-- Sidebar -->
     <transition
-      enter-active-class="transition-all duration-300"
-      leave-active-class="transition-all duration-300"
+      enter-active-class="transition-all duration-200"
+      leave-active-class="transition-all duration-200"
       enter-from-class="-translate-x-full lg:translate-x-0"
       leave-to-class="-translate-x-full lg:translate-x-0"
     >
@@ -19,10 +19,11 @@
         :class="[
           'fixed lg:relative inset-y-0 left-0 z-30 lg:z-0',
           isCollapsed && !isMobile ? 'w-16' : 'w-64',
-          'bg-white dark:bg-[#0a0d14]',
-          'transform transition-all duration-300',
+          'bg-white dark:bg-[#161b22] border-r border-gray-200/60 dark:border-gray-800/60',
+          'transform transition-all duration-200',
           'flex flex-col'
         ]"
+        style="box-shadow: 1px 0 3px 0 rgba(0, 0, 0, 0.03);"
       >
         <AppSidebar 
           :is-collapsed="isCollapsed && !isMobile" 
@@ -39,15 +40,15 @@
       <button 
         v-if="isMobile && !isSidebarOpen"
         @click="toggleSidebar"
-        class="lg:hidden fixed top-4 left-4 z-10 p-2 rounded-lg bg-white dark:bg-slate-800 shadow-lg hover:bg-gray-100 dark:hover:bg-slate-700 transition-colors"
+        class="lg:hidden fixed top-5 left-4 z-10 p-2.5 rounded-lg bg-white dark:bg-[#161b22] border border-gray-200 dark:border-gray-800 shadow-sm hover:bg-gray-50 dark:hover:bg-[#1d2229] transition-colors"
         aria-label="Toggle menu"
       >
-        <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h16M4 12h16M4 18h16" />
+        <svg class="w-5 h-5 text-gray-700 dark:text-gray-300" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="1.5">
+          <path stroke-linecap="round" stroke-linejoin="round" d="M3.75 6.75h16.5M3.75 12h16.5m-16.5 5.25h16.5" />
         </svg>
       </button>
       
-      <main class="flex-1 overflow-y-auto scrollbar-thin">
+      <main class="flex-1 overflow-y-auto">
         <slot />
       </main>
     </div>

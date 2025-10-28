@@ -7,13 +7,13 @@ export default {
   theme: {
     extend: {
       colors: {
-        // Primary brand colors - Rose & Purple theme
-        'queen-rose': '#f43f5e',         // rose-500
-        'queen-purple': '#a855f7',       // purple-500
-        'queen-pink': '#ec4899',         // pink-500
+        // Primary brand colors - Professional Blue & Indigo theme
+        'queen-blue': '#3b82f6',         // blue-500
+        'queen-indigo': '#6366f1',       // indigo-500
+        'queen-sky': '#0ea5e9',          // sky-500
         // Aliases for primary/secondary
-        'primary': '#f43f5e',
-        'secondary': '#a855f7',
+        'primary': '#3b82f6',
+        'secondary': '#6366f1',
       },
       fontFamily: {
         sans: ['Inter', '-apple-system', 'BlinkMacSystemFont', 'Segoe UI', 'sans-serif'],

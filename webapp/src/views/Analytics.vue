@@ -1,9 +1,9 @@
 <template>
-  <div class="page-flat">
-    <div class="py-4 px-3">
-      <div class="space-y-2.5">
+  <div class="page-professional">
+    <div class="page-content">
+      <div class="page-inner">
         <!-- Filters -->
-        <div class="filter-flat">
+        <div class="filter-card">
           <AnalyticsFilters
           v-model:time-range="timeRange"
           v-model:queue="queueFilter"
@@ -17,7 +17,7 @@
 
         <LoadingSpinner v-if="loading && !statusData" />
 
-        <div v-else-if="error" class="error-flat">
+        <div v-else-if="error" class="error-card">
           <p><strong>Error loading analytics:</strong> {{ error }}</p>
         </div>
 
@@ -36,10 +36,10 @@
           </div>
 
           <!-- Message Flow Chart -->
-          <div class="chart-flat">
+          <div class="chart-card-professional">
             <div class="flex items-center gap-2 mb-2">
-              <div class="w-7 h-7 rounded-lg bg-gradient-to-br from-rose-500/10 to-purple-500/20 flex items-center justify-center">
-                <svg class="w-4 h-4 text-rose-600 dark:text-rose-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <div class="w-7 h-7 rounded-lg bg-blue-500/10 dark:bg-blue-500/15 flex items-center justify-center">
+                <svg class="w-4 h-4 text-blue-600 dark:text-blue-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 12l3-3 3 3 4-4M8 21l4-4 4 4M3 4h18M4 4h16v12a1 1 0 01-1 1H5a1 1 0 01-1-1V4z" />
                 </svg>
               </div>
@@ -49,11 +49,11 @@
           </div>
 
           <!-- Charts Row -->
-          <div class="grid grid-cols-1 lg:grid-cols-2 gap-2">
+          <div class="grid grid-cols-1 lg:grid-cols-2 gap-5">
             <!-- Top Queues Chart -->
-            <div class="chart-flat">
+            <div class="chart-card-professional">
               <div class="flex items-center gap-2 mb-2">
-                <div class="w-7 h-7 rounded-lg bg-gradient-to-br from-indigo-500/10 to-violet-500/20 flex items-center justify-center">
+                <div class="w-7 h-7 rounded-lg bg-indigo-500/10 dark:bg-indigo-500/15 flex items-center justify-center">
                   <svg class="w-4 h-4 text-indigo-600 dark:text-indigo-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z" />
                   </svg>
@@ -64,9 +64,9 @@
             </div>
             
             <!-- Message Distribution Chart -->
-            <div class="chart-flat">
+            <div class="chart-card-professional">
               <div class="flex items-center gap-2 mb-2">
-                <div class="w-7 h-7 rounded-lg bg-gradient-to-br from-green-500/10 to-emerald-500/20 flex items-center justify-center">
+                <div class="w-7 h-7 rounded-lg bg-emerald-500/10 dark:bg-emerald-500/15 flex items-center justify-center">
                   <svg class="w-4 h-4 text-green-600 dark:text-green-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 3.055A9.001 9.001 0 1020.945 13H11V3.055z" />
                     <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M20.488 9H15V3.512A9.025 9.025 0 0120.488 9z" />
@@ -79,7 +79,7 @@
           </div>
 
           <!-- Performance Metrics -->
-          <div class="info-flat">
+          <div class="info-card-white">
             <div class="flex items-center gap-2 mb-2">
               <div class="w-7 h-7 rounded-lg bg-gradient-to-br from-blue-500/10 to-cyan-500/20 flex items-center justify-center">
                 <svg class="w-4 h-4 text-blue-600 dark:text-blue-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -94,7 +94,7 @@
           <!-- Detailed Stats -->
           <div class="grid grid-cols-1 lg:grid-cols-2 gap-2">
             <!-- Leases Info -->
-            <div class="info-flat">
+            <div class="info-card-white">
               <div class="flex items-center gap-2 mb-2">
                 <div class="w-7 h-7 rounded-lg bg-gradient-to-br from-purple-500/10 to-indigo-500/20 flex items-center justify-center">
                   <svg class="w-4 h-4 text-purple-600 dark:text-purple-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -124,7 +124,7 @@
             </div>
 
             <!-- Dead Letter Queue -->
-            <div class="info-flat">
+            <div class="info-card-white">
               <div class="flex items-center gap-2 mb-2">
                 <div class="w-7 h-7 rounded-lg bg-gradient-to-br from-red-500/10 to-rose-500/20 flex items-center justify-center">
                   <svg class="w-4 h-4 text-red-600 dark:text-red-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -278,9 +278,6 @@ onUnmounted(() => {
 </script>
 
 <style scoped>
-.page-flat {
-  min-height: 100%;
-}
 
 .chart-flat {
   background: #ffffff;
@@ -328,9 +325,9 @@ onUnmounted(() => {
 }
 
 .filter-flat :deep(.input:focus) {
-  background: rgba(244, 63, 94, 0.02);
-  border-color: rgba(244, 63, 94, 0.4);
-  box-shadow: 0 0 0 3px rgba(244, 63, 94, 0.05);
+  background: rgba(59, 130, 246, 0.02);
+  border-color: rgba(59, 130, 246, 0.4);
+  box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.05);
 }
 
 .dark .filter-flat :deep(.input) {
@@ -338,9 +335,9 @@ onUnmounted(() => {
 }
 
 .dark .filter-flat :deep(.input:focus) {
-  background: rgba(244, 63, 94, 0.03);
-  border-color: rgba(244, 63, 94, 0.5);
-  box-shadow: 0 0 0 3px rgba(244, 63, 94, 0.08);
+  background: rgba(59, 130, 246, 0.03);
+  border-color: rgba(59, 130, 246, 0.5);
+  box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.08);
 }
 
 .info-flat {

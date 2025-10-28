@@ -51,9 +51,9 @@ const chartData = computed(() => {
         data: data,
         backgroundColor: [
           'rgba(236, 72, 153, 0.8)',   // Pink - Pending
-          'rgba(168, 85, 247, 0.8)',   // Purple - Processing  
-          'rgba(139, 92, 246, 0.8)',   // Violet - Completed
-          'rgba(244, 63, 94, 0.8)',    // Rose - Failed
+          'rgba(59, 130, 246, 0.8)',   // Blue - Processing  
+          'rgba(16, 185, 129, 0.8)',   // Green - Completed
+          'rgba(239, 68, 68, 0.8)',    // Red - Failed
           'rgba(192, 132, 252, 0.7)',  // Light Purple - Dead Letter
         ],
         borderColor: [

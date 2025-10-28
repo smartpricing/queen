@@ -1,165 +1,133 @@
 <template>
-  <div class="dashboard-flat">
-    <div class="py-4 px-3">
-      <div class="space-y-2.5">
-        <LoadingSpinner v-if="loading && !overview" />
+  <div class="dashboard-professional">
+    <!-- Dashboard Content -->
+    <div class="dashboard-content">
+      <LoadingSpinner v-if="loading && !overview" />
 
-        <div v-else-if="error" class="error-card">
-          <p><strong>Error loading dashboard:</strong> {{ error }}</p>
-        </div>
+      <div v-else-if="error" class="error-card">
+        <p><strong>Error loading dashboard:</strong> {{ error }}</p>
+      </div>
 
-        <template v-else>
-          <!-- Metric Cards - Flat -->
-          <div class="grid grid-cols-2 lg:grid-cols-4 gap-2">
-            <div class="metric-flat">
-              <div class="flex items-start gap-3">
-                <div class="metric-icon-flat bg-rose-500/10 dark:bg-rose-500/20">
-                  <svg class="w-5 h-5 text-rose-600 dark:text-rose-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h16M4 10h16M4 14h16M4 18h16" />
-                  </svg>
-                </div>
-                <div class="flex-1">
-                  <p class="metric-label">Queues</p>
-                  <p class="metric-value-flat-sm">{{ formatNumber(overview?.queues || 0) }}</p>
-                  <p class="text-xs text-gray-500 dark:text-gray-400 mt-0.5">
-                    Partitions: <span class="font-semibold">{{ formatNumber(overview?.partitions || 0) }}</span>
-                  </p>
-                </div>
-              </div>
+      <template v-else>
+        <!-- Metric Cards - Professional -->
+        <div class="metrics-grid">
+          <!-- Queues Card -->
+          <div class="metric-card-top metric-card-clickable" @click="navigateToQueues">
+            <div class="flex items-center justify-between mb-0.5">
+              <span class="metric-label">QUEUES</span>
+              <svg class="w-4 h-4 text-gray-400 dark:text-gray-500 card-arrow" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2">
+                <path stroke-linecap="round" stroke-linejoin="round" d="M9 5l7 7-7 7" />
+              </svg>
             </div>
-
-            <div class="metric-flat">
-              <div class="flex items-start gap-3">
-                <div class="metric-icon-flat bg-yellow-500/10 dark:bg-yellow-500/20">
-                  <svg class="w-5 h-5 text-yellow-600 dark:text-yellow-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
-                  </svg>
-                </div>
-                <div class="flex-1">
-                  <p class="metric-label">Pending</p>
-                  <p class="metric-value-flat-sm">{{ formatNumber(calculatedPending) }}</p>
-                  <p class="text-xs text-gray-500 dark:text-gray-400 mt-0.5">
-                    Processing: <span class="font-semibold">{{ formatNumber(overview?.messages?.processing || 0) }}</span>
-                  </p>
-                </div>
-              </div>
-            </div>
-
-            <div class="metric-flat">
-              <div class="flex items-start gap-3">
-                <div class="metric-icon-flat bg-green-500/10 dark:bg-green-500/20">
-                  <svg class="w-5 h-5 text-green-600 dark:text-green-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
-                  </svg>
-                </div>
-                <div class="flex-1">
-                  <p class="metric-label">Completed</p>
-                  <p class="metric-value-flat-sm text-green-600 dark:text-green-400">{{ formatNumber(overview?.messages?.completed || 0) }}</p>
-                  <p class="text-xs text-gray-500 dark:text-gray-400 mt-0.5">
-                    Total in DB: <span class="font-semibold">{{ formatNumber(overview?.messages?.total || 0) }}</span>
-                  </p>
-                </div>
-              </div>
-            </div>
-
-            <div class="metric-flat">
-              <div class="flex items-start gap-3">
-                <div class="metric-icon-flat bg-red-500/10 dark:bg-red-500/20">
-                  <svg class="w-5 h-5 text-red-600 dark:text-red-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
-                  </svg>
-                </div>
-                <div class="flex-1">
-                  <p class="metric-label">Failed</p>
-                  <p class="metric-value-flat-sm text-red-600 dark:text-red-400">{{ formatNumber(overview?.messages?.failed || 0) }}</p>
-                  <p class="text-xs text-gray-500 dark:text-gray-400 mt-0.5">
-                    Dead Letter: <span class="font-semibold">{{ formatNumber(overview?.messages?.deadLetter || 0) }}</span>
-                  </p>
-                </div>
-              </div>
-            </div>
+            <div class="metric-value text-gray-600 dark:text-gray-300">{{ formatNumber(overview?.queues || 0) }}</div>
+            <div class="metric-subtext-bottom">{{ formatNumber(overview?.partitions || 0) }} partitions</div>
           </div>
 
-          <!-- Throughput Chart - Flat -->
-          <div class="chart-flat">
-            <div class="flex items-center justify-between mb-4">
-              <div class="flex items-center gap-2">
-                <div class="w-8 h-8 rounded-lg bg-rose-500/10 dark:bg-rose-500/20 flex items-center justify-center">
-                  <svg class="w-5 h-5 text-rose-600 dark:text-rose-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 12l3-3 3 3 4-4M8 21l4-4 4 4M3 4h18M4 4h16v12a1 1 0 01-1 1H5a1 1 0 01-1-1V4z" />
-                  </svg>
-                </div>
-                <h3 class="text-sm font-semibold text-gray-900 dark:text-gray-100">Message Throughput</h3>
-              </div>
-              <span class="text-xs text-gray-500 dark:text-gray-400 px-2.5 py-1 bg-gray-100 dark:bg-slate-700 rounded-full">
-                Last Hour
-              </span>
+          <!-- Pending Card -->
+          <div class="metric-card-top metric-card-clickable" @click="navigateToPending">
+            <div class="flex items-center justify-between mb-0.5">
+              <span class="metric-label">PENDING</span>
+              <svg class="w-4 h-4 text-gray-400 dark:text-gray-500 card-arrow" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2">
+                <path stroke-linecap="round" stroke-linejoin="round" d="M9 5l7 7-7 7" />
+              </svg>
             </div>
-            <div class="chart-area">
+            <div class="metric-value text-orange-600 dark:text-orange-400">{{ formatNumber(calculatedPending) }}</div>
+            <div class="metric-subtext-bottom">{{ formatNumber(overview?.messages?.processing || 0) }} processing</div>
+          </div>
+
+          <!-- Completed Card -->
+          <div class="metric-card-top metric-card-clickable" @click="navigateToCompleted">
+            <div class="flex items-center justify-between mb-0.5">
+              <span class="metric-label">COMPLETED</span>
+              <svg class="w-4 h-4 text-gray-400 dark:text-gray-500 card-arrow" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2">
+                <path stroke-linecap="round" stroke-linejoin="round" d="M9 5l7 7-7 7" />
+              </svg>
+            </div>
+            <div class="metric-value text-emerald-600 dark:text-emerald-400">{{ formatNumber(overview?.messages?.completed || 0) }}</div>
+            <div class="metric-subtext-bottom">{{ formatNumber(overview?.messages?.total || 0) }} total</div>
+          </div>
+
+          <!-- Failed Card -->
+          <div class="metric-card-top metric-card-clickable" @click="navigateToFailed">
+            <div class="flex items-center justify-between mb-0.5">
+              <span class="metric-label">FAILED</span>
+              <svg class="w-4 h-4 text-gray-400 dark:text-gray-500 card-arrow" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2">
+                <path stroke-linecap="round" stroke-linejoin="round" d="M9 5l7 7-7 7" />
+              </svg>
+            </div>
+            <div class="metric-value text-red-600 dark:text-red-400">{{ formatNumber(overview?.messages?.failed || 0) }}</div>
+            <div class="metric-subtext-bottom">{{ formatNumber(overview?.messages?.deadLetter || 0) }} DLQ</div>
+          </div>
+        </div>
+
+        <!-- Charts Grid -->
+        <div class="charts-grid">
+          <!-- Throughput Chart -->
+          <div class="chart-card chart-card-clickable" @click="navigateToAnalytics">
+            <div class="chart-header">
+              <div class="flex items-center gap-2">
+                <h3 class="chart-title">Message Throughput</h3>
+                <svg class="w-3.5 h-3.5 text-gray-400 dark:text-gray-500 card-arrow" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2">
+                  <path stroke-linecap="round" stroke-linejoin="round" d="M9 5l7 7-7 7" />
+                </svg>
+              </div>
+              <span class="chart-badge">Last Hour</span>
+            </div>
+            <div class="chart-body">
               <ThroughputChart :data="status" />
             </div>
           </div>
 
-          <!-- Resource Usage Chart - Flat -->
-          <div class="chart-flat">
-            <div class="flex items-center justify-between mb-4">
+          <!-- Resource Usage Chart -->
+          <div class="chart-card chart-card-clickable" @click="navigateToSystemMetrics">
+            <div class="chart-header">
               <div class="flex items-center gap-2">
-                <div class="w-8 h-8 rounded-lg bg-rose-500/10 dark:bg-rose-500/20 flex items-center justify-center">
-                  <svg class="w-5 h-5 text-rose-600 dark:text-rose-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 3v2m6-2v2M9 19v2m6-2v2M5 9H3m2 6H3m18-6h-2m2 6h-2M7 19h10a2 2 0 002-2V7a2 2 0 00-2-2H7a2 2 0 00-2 2v10a2 2 0 002 2zM9 9h6v6H9V9z" />
-                  </svg>
-                </div>
-                <h3 class="text-sm font-semibold text-gray-900 dark:text-gray-100">Resource Usage</h3>
+                <h3 class="chart-title">Resource Usage</h3>
+                <svg class="w-3.5 h-3.5 text-gray-400 dark:text-gray-500 card-arrow" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2">
+                  <path stroke-linecap="round" stroke-linejoin="round" d="M9 5l7 7-7 7" />
+                </svg>
               </div>
-              <span class="text-xs text-gray-500 dark:text-gray-400 px-2.5 py-1 bg-gray-100 dark:bg-slate-700 rounded-full">
-                Last Hour
-              </span>
+              <span class="chart-badge">Last Hour</span>
             </div>
-            <div class="chart-area">
+            <div class="chart-body">
               <ResourceUsageChart :data="systemMetrics" />
             </div>
           </div>
+        </div>
 
-          <!-- Queue Metrics Chart - Flat -->
-          <div class="chart-flat">
-            <div class="flex items-center justify-between mb-4">
-              <div class="flex items-center gap-2">
-                <div class="w-8 h-8 rounded-lg bg-blue-500/10 dark:bg-blue-500/20 flex items-center justify-center">
-                  <svg class="w-5 h-5 text-blue-600 dark:text-blue-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 7v10c0 2.21 3.582 4 8 4s8-1.79 8-4V7M4 7c0 2.21 3.582 4 8 4s8-1.79 8-4M4 7c0-2.21 3.582-4 8-4s8 1.79 8 4m0 5c0 2.21-3.582 4-8 4s-8-1.79-8-4" />
-                  </svg>
-                </div>
-                <h3 class="text-sm font-semibold text-gray-900 dark:text-gray-100">Queue & Connection Metrics</h3>
-              </div>
-              <span class="text-xs text-gray-500 dark:text-gray-400 px-2.5 py-1 bg-gray-100 dark:bg-slate-700 rounded-full">
-                Last Hour
-              </span>
+        <!-- Queue Metrics Chart -->
+        <div class="chart-card chart-card-clickable" @click="navigateToSystemMetrics">
+          <div class="chart-header">
+            <div class="flex items-center gap-2">
+              <h3 class="chart-title">Queue & Connection Metrics</h3>
+              <svg class="w-3.5 h-3.5 text-gray-400 dark:text-gray-500 card-arrow" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2">
+                <path stroke-linecap="round" stroke-linejoin="round" d="M9 5l7 7-7 7" />
+              </svg>
             </div>
-            <div class="chart-area">
-              <QueueMetricsChart :data="systemMetrics" />
-            </div>
+            <span class="chart-badge">Last Hour</span>
           </div>
+          <div class="chart-body">
+            <QueueMetricsChart :data="systemMetrics" />
+          </div>
+        </div>
 
-          <!-- Top Queues - Flat -->
-          <div class="table-flat">
-            <div class="flex items-center gap-2 mb-4">
-              <div class="w-7 h-7 rounded-lg bg-indigo-500/10 dark:bg-indigo-500/20 flex items-center justify-center">
-                <svg class="w-4 h-4 text-indigo-600 dark:text-indigo-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 19V6l12-3v13M9 19c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zm12-3c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zM9 10l12-3" />
-                </svg>
-              </div>
-              <h3 class="text-sm font-semibold text-gray-900 dark:text-gray-100">Top Queues by Activity</h3>
-            </div>
+        <!-- Top Queues Table -->
+        <div class="chart-card">
+          <div class="chart-header">
+            <h3 class="chart-title">Top Queues by Activity</h3>
+          </div>
+          <div class="chart-body">
             <TopQueuesTable :queues="topQueues" />
           </div>
-        </template>
-      </div>
+        </div>
+      </template>
     </div>
   </div>
 </template>
 
 <script setup>
 import { ref, computed, onMounted, onUnmounted } from 'vue';
+import { useRouter } from 'vue-router';
 import { resourcesApi } from '../api/resources';
 import { analyticsApi } from '../api/analytics';
 import { queuesApi } from '../api/queues';
@@ -171,6 +139,8 @@ import ThroughputChart from '../components/dashboard/ThroughputChart.vue';
 import ResourceUsageChart from '../components/dashboard/ResourceUsageChart.vue';
 import QueueMetricsChart from '../components/dashboard/QueueMetricsChart.vue';
 import TopQueuesTable from '../components/dashboard/TopQueuesTable.vue';
+
+const router = useRouter();
 
 const loading = ref(false);
 const error = ref(null);
@@ -238,191 +208,228 @@ onUnmounted(() => {
     window.registerRefreshCallback('/', null);
   }
 });
+
+// Navigation functions
+function navigateToQueues() {
+  router.push('/queues');
+}
+
+function navigateToPending() {
+  router.push('/messages?status=pending');
+}
+
+function navigateToCompleted() {
+  router.push('/messages?status=completed');
+}
+
+function navigateToFailed() {
+  router.push('/messages?status=failed');
+}
+
+function navigateToAnalytics() {
+  router.push('/analytics');
+}
+
+function navigateToSystemMetrics() {
+  router.push('/system-metrics');
+}
 </script>
 
 <style scoped>
-/* Tesla-inspired flat design - no borders, no shadows */
+/* Professional Dashboard Design - Condoktur inspired */
 
-.dashboard-flat {
-  min-height: 100%;
+.dashboard-professional {
+  @apply min-h-screen bg-gray-50 dark:bg-[#0d1117];
+  background-image: 
+    radial-gradient(at 0% 0%, rgba(59, 130, 246, 0.03) 0px, transparent 50%),
+    radial-gradient(at 100% 0%, rgba(99, 102, 241, 0.03) 0px, transparent 50%);
 }
 
-/* Flat metric cards - white on gray background */
-.metric-flat {
-  background: #ffffff;
-  border: none;
-  box-shadow: none;
-  border-radius: 0.75rem;
-  padding: 0.75rem;
-  transition: all 0.3s ease;
+.dark .dashboard-professional {
+  background-image: 
+    radial-gradient(at 0% 0%, rgba(59, 130, 246, 0.05) 0px, transparent 50%),
+    radial-gradient(at 100% 0%, rgba(99, 102, 241, 0.05) 0px, transparent 50%);
 }
 
-.dark .metric-flat {
-  background: #0a0d14;
+.dashboard-content {
+  @apply px-6 lg:px-8 py-6 space-y-6;
 }
 
-.metric-flat:hover {
-  background: #fafafa;
-  transform: translateY(-2px);
+/* Metrics Grid */
+.metrics-grid {
+  @apply grid grid-cols-2 lg:grid-cols-4 gap-5;
 }
 
-.dark .metric-flat:hover {
-  background: #101319;
+.metric-card-top {
+  @apply bg-white dark:bg-[#161b22] border border-gray-200/40 dark:border-gray-800/40;
+  @apply rounded-xl p-4;
+  box-shadow: 0 1px 3px 0 rgba(0, 0, 0, 0.04), 0 1px 2px 0 rgba(0, 0, 0, 0.02);
+  transition: box-shadow 0.2s cubic-bezier(0.4, 0, 0.2, 1), border-color 0.2s cubic-bezier(0.4, 0, 0.2, 1);
 }
 
-.metric-icon-flat {
-  width: 2rem;
-  height: 2rem;
-  border-radius: 0.5rem;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  flex-shrink: 0;
-  transition: all 0.3s ease;
+.dark .metric-card-top {
+  box-shadow: 0 1px 3px 0 rgba(0, 0, 0, 0.4), 0 1px 2px 0 rgba(0, 0, 0, 0.2);
 }
 
-.metric-flat:hover .metric-icon-flat {
-  transform: scale(1.05);
+.metric-card-clickable {
+  cursor: pointer;
 }
 
-.metric-value-flat {
-  font-size: 2rem;
-  font-weight: 700;
-  line-height: 1.1;
-  margin-top: 0.25rem;
-  background: linear-gradient(135deg, #f43f5e 0%, #ec4899 50%, #a855f7 100%);
-  -webkit-background-clip: text;
-  -webkit-text-fill-color: transparent;
-  background-clip: text;
-  letter-spacing: -0.02em;
+.metric-card-clickable:hover {
+  box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.08), 0 2px 4px -1px rgba(0, 0, 0, 0.04);
+  border-color: rgba(59, 130, 246, 0.4);
 }
 
-.metric-value-flat-sm {
-  font-size: 1.5rem;
-  font-weight: 700;
-  line-height: 1.1;
-  margin-top: 0.125rem;
-  background: linear-gradient(135deg, #f43f5e 0%, #ec4899 50%, #a855f7 100%);
-  -webkit-background-clip: text;
-  -webkit-text-fill-color: transparent;
-  background-clip: text;
-  letter-spacing: -0.02em;
+.dark .metric-card-clickable:hover {
+  box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.5), 0 2px 4px -1px rgba(0, 0, 0, 0.3);
+  border-color: rgba(59, 130, 246, 0.5);
 }
 
-/* Flat chart card - white on gray background */
-.chart-flat {
-  background: #ffffff;
-  border: none;
-  box-shadow: none;
-  border-radius: 0.75rem;
-  padding: 1rem;
-  transition: all 0.3s ease;
+.metric-card {
+  @apply bg-white dark:bg-[#161b22] border border-gray-200/50 dark:border-gray-800/50;
+  @apply rounded-lg p-4;
+  box-shadow: 0 1px 3px 0 rgba(0, 0, 0, 0.05);
 }
 
-.dark .chart-flat {
-  background: #0a0d14;
+.dark .metric-card {
+  box-shadow: 0 1px 3px 0 rgba(0, 0, 0, 0.3);
 }
 
-.chart-flat:hover {
-  background: #fafafa;
+.metric-label {
+  @apply text-[11px] font-bold text-gray-500 dark:text-gray-400 tracking-wider uppercase;
+  letter-spacing: 0.05em;
 }
 
-.dark .chart-flat:hover {
-  background: #101319;
+.metric-subtext {
+  @apply text-[11px] text-gray-500 dark:text-gray-400 font-medium;
 }
 
-.chart-area {
-  border: none;
-  box-shadow: none;
+.metric-subtext-bottom {
+  @apply text-[11px] text-gray-500 dark:text-gray-400 font-medium mt-2;
 }
 
-/* Flat info cards - white on gray background */
-.info-flat {
-  background: #ffffff;
-  border: none;
-  box-shadow: none;
-  border-radius: 0.75rem;
-  padding: 1rem;
-  transition: all 0.3s ease;
+.card-arrow {
+  transition: transform 0.2s cubic-bezier(0.4, 0, 0.2, 1);
 }
 
-.dark .info-flat {
-  background: #0a0d14;
+.metric-card-clickable:hover .card-arrow,
+.chart-card-clickable:hover .card-arrow {
+  transform: translateX(2px);
+  color: #3b82f6;
 }
 
-.info-flat:hover {
-  background: #fafafa;
+.dark .metric-card-clickable:hover .card-arrow,
+.dark .chart-card-clickable:hover .card-arrow {
+  color: #60a5fa;
 }
 
-.dark .info-flat:hover {
-  background: #101319;
+.metric-value {
+  @apply text-2xl font-bold;
+  @apply tracking-tight mt-1;
+  letter-spacing: -0.025em;
+  line-height: 1.2;
 }
 
-/* Flat table card - white on gray background */
-.table-flat {
-  background: #ffffff;
-  border: none;
-  box-shadow: none;
-  border-radius: 0.75rem;
-  padding: 1rem;
-  transition: all 0.3s ease;
+/* Charts Grid */
+.charts-grid {
+  @apply grid grid-cols-1 lg:grid-cols-2 gap-5;
 }
 
-.dark .table-flat {
-  background: #0a0d14;
+.chart-card {
+  @apply bg-white dark:bg-[#161b22] border border-gray-200/40 dark:border-gray-800/40;
+  @apply rounded-xl overflow-hidden;
+  box-shadow: 0 1px 3px 0 rgba(0, 0, 0, 0.04), 0 1px 2px 0 rgba(0, 0, 0, 0.02);
+  transition: box-shadow 0.2s cubic-bezier(0.4, 0, 0.2, 1), border-color 0.2s cubic-bezier(0.4, 0, 0.2, 1);
 }
 
-.table-flat:hover {
-  background: #fafafa;
+.dark .chart-card {
+  box-shadow: 0 1px 3px 0 rgba(0, 0, 0, 0.4), 0 1px 2px 0 rgba(0, 0, 0, 0.2);
 }
 
-.dark .table-flat:hover {
-  background: #101319;
+.chart-card-clickable {
+  cursor: pointer;
 }
 
-/* Error card - flat */
+.chart-card-clickable:hover {
+  box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.08), 0 2px 4px -1px rgba(0, 0, 0, 0.04);
+  border-color: rgba(59, 130, 246, 0.4);
+}
+
+.dark .chart-card-clickable:hover {
+  box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.5), 0 2px 4px -1px rgba(0, 0, 0, 0.3);
+  border-color: rgba(59, 130, 246, 0.5);
+}
+
+.chart-header {
+  @apply px-5 py-3.5 border-b border-gray-100/80 dark:border-gray-800/80;
+  @apply flex items-center justify-between;
+  background: linear-gradient(to bottom, rgba(249, 250, 251, 0.5), transparent);
+}
+
+.dark .chart-header {
+  background: linear-gradient(to bottom, rgba(255, 255, 255, 0.01), transparent);
+}
+
+.chart-title {
+  @apply text-sm font-semibold text-gray-900 dark:text-white tracking-tight;
+  letter-spacing: -0.01em;
+}
+
+.chart-badge {
+  @apply text-[10px] text-gray-600 dark:text-gray-400 bg-gray-100/80 dark:bg-gray-800/80;
+  @apply px-2.5 py-1 rounded-full font-semibold tracking-wide;
+  border: 1px solid rgba(0, 0, 0, 0.04);
+}
+
+.dark .chart-badge {
+  border-color: rgba(255, 255, 255, 0.06);
+}
+
+.chart-body {
+  @apply p-5;
+  background: linear-gradient(to bottom, transparent, rgba(249, 250, 251, 0.3));
+}
+
+.dark .chart-body {
+  background: linear-gradient(to bottom, transparent, rgba(0, 0, 0, 0.1));
+}
+
+/* Error card */
 .error-card {
-  background: transparent;
-  border: none;
-  box-shadow: none;
-  border-radius: 0.75rem;
-  padding: 1rem;
-  color: #dc2626;
-  font-size: 0.875rem;
+  @apply bg-red-50 dark:bg-red-900/10 border border-red-200/60 dark:border-red-800/60;
+  @apply rounded-xl p-4 text-sm text-red-800 dark:text-red-400;
+  box-shadow: 0 1px 3px 0 rgba(239, 68, 68, 0.1);
 }
 
-.dark .error-card {
-  color: #fca5a5;
+/* Table overrides for professional look */
+.chart-card :deep(.table) {
+  @apply border-0;
 }
 
-/* Override global table styles for flat look */
-.table-flat :deep(.table) {
-  border: none;
+.chart-card :deep(.table thead) {
+  @apply bg-transparent border-b border-gray-200/80 dark:border-gray-800/80;
 }
 
-.table-flat :deep(.table thead) {
-  background: none;
-  border-bottom: 1px solid rgba(0, 0, 0, 0.05);
+.chart-card :deep(.table thead th) {
+  @apply text-xs font-bold text-gray-500 dark:text-gray-400 uppercase tracking-wider;
+  @apply py-3 px-5;
+  letter-spacing: 0.05em;
 }
 
-.dark .table-flat :deep(.table thead) {
-  border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+.chart-card :deep(.table tbody tr) {
+  @apply border-b border-gray-100/60 dark:border-gray-800/40;
+  transition: background-color 0.15s cubic-bezier(0.4, 0, 0.2, 1);
 }
 
-.table-flat :deep(.table tbody tr) {
-  border-color: rgba(0, 0, 0, 0.03);
+.chart-card :deep(.table tbody tr:last-child) {
+  @apply border-b-0;
 }
 
-.dark .table-flat :deep(.table tbody tr) {
-  border-color: rgba(255, 255, 255, 0.03);
+.chart-card :deep(.table tbody tr:hover) {
+  @apply bg-gray-50/80 dark:bg-gray-800/30;
 }
 
-.table-flat :deep(.table tbody tr:hover) {
-  background: rgba(244, 63, 94, 0.03);
-  box-shadow: none;
-}
-
-.dark .table-flat :deep(.table tbody tr:hover) {
-  background: rgba(244, 63, 94, 0.05);
+.chart-card :deep(.table tbody td) {
+  @apply py-3.5 px-5 text-sm;
 }
 </style>

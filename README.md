@@ -17,9 +17,35 @@
 
 ---
 
+Why "Queen"? Because years ago, when I first read the word "queue" in my mind, I read it as "queen".
+
+---
+
 ## Introduction
 
-QueenMQ is a queue system written in C++ and backed by Postgres. Supports queues and consumer groups.
+QueenMQ is a queue system written in C++ and backed by PostgreSQL, born from the need to manage many FIFO partitions for Smartchat with solid guarantees around delivery and failure handling. During the initial development, I realized that with a few simple additions to the original design, I could build a very powerful and flexible queue system. This project is almost entirely written by AI, with my supervision—only the test files (or a good part of them) are manually written.
+
+Here are the main features:
+- Unlimited FIFO partitions within queues
+- Queue semantics like RabbitMQ
+- Consumer groups over queues like Kafka
+- QoS levels: Exactly-once delivery (with transactionId), at-least-once delivery, and at-most-once delivery
+- Subscription modes for replay (new messages only or from a specific timestamp) and message history control
+- Transactions between operations (push and ack mainly) for atomicity
+- Dead letter queue for failure handling
+- Lease renewal for long-running tasks
+- Message tracing for debugging workflows
+
+The system consists of a PostgreSQL database, a replicated server that can be scaled horizontally (though it won't be the bottleneck), and a client library for interacting with the server. All client-server communication happens over HTTP, and the client library is written in JavaScript (support for other languages is planned). There's also a modern Vue 3 web app for monitoring and managing the system.
+
+With proper batching, the system can handle 100k **messages** (not req/s) per second on modest hardware.
+
+Main documentation:
+- [Client Guide](client-js/client-v2/README.md)
+- [Server Guide](server/README.md)
+- [API Reference](API.md)
+- [Webapp](webapp/README.md)
+
 
 ## JS Client Usage
 

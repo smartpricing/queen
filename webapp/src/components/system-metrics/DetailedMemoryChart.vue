@@ -48,7 +48,7 @@ function getNestedValue(obj, path) {
 
 // Colors for different replicas (same as CPU for consistency)
 const replicaColors = [
-  { color: 'rgba(244, 63, 94, 1)', bg: 'rgba(244, 63, 94, 0.1)' },
+  { color: 'rgba(59, 130, 246, 1)', bg: 'rgba(59, 130, 246, 0.1)' },
   { color: 'rgba(59, 130, 246, 1)', bg: 'rgba(59, 130, 246, 0.1)' },
   { color: 'rgba(245, 158, 11, 1)', bg: 'rgba(245, 158, 11, 0.1)' },
   { color: 'rgba(14, 165, 233, 1)', bg: 'rgba(14, 165, 233, 0.1)' },

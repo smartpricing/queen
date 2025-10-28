@@ -6,28 +6,28 @@
         @click="selectedMetrics.cpu = !selectedMetrics.cpu"
         :class="[
           'metric-toggle',
-          selectedMetrics.cpu ? 'metric-toggle-active-rose' : 'metric-toggle-inactive'
+          selectedMetrics.cpu ? 'metric-toggle-active-blue' : 'metric-toggle-inactive'
         ]"
       >
-        <div :class="['metric-dot', selectedMetrics.cpu ? 'bg-rose-500' : 'bg-gray-400']"></div>
+        <div :class="['metric-dot', selectedMetrics.cpu ? 'bg-blue-500' : 'bg-gray-400']"></div>
         CPU %
       </button>
       <button
         @click="selectedMetrics.memory = !selectedMetrics.memory"
         :class="[
           'metric-toggle',
-          selectedMetrics.memory ? 'metric-toggle-active-purple' : 'metric-toggle-inactive'
+          selectedMetrics.memory ? 'metric-toggle-active-indigo' : 'metric-toggle-inactive'
         ]"
       >
-        <div :class="['metric-dot', selectedMetrics.memory ? 'bg-purple-500' : 'bg-gray-400']"></div>
+        <div :class="['metric-dot', selectedMetrics.memory ? 'bg-indigo-500' : 'bg-gray-400']"></div>
         Memory (MB)
       </button>
     </div>
 
     <!-- Chart -->
-    <div class="chart-container">
+    <div class="chart-container h-52">
       <Line v-if="chartData" :data="chartData" :options="chartOptions" />
-      <div v-else class="flex items-center justify-center h-full text-gray-500 text-sm">
+      <div v-else class="flex items-center justify-center h-full text-gray-500 dark:text-gray-400 text-sm">
         No data available
       </div>
     </div>
@@ -116,14 +116,14 @@ const chartData = computed(() => {
         const avg = values.reduce((sum, v) => sum + v, 0) / values.length;
         return avg / 100;
       }),
-      borderColor: 'rgba(244, 63, 94, 1)',
-      backgroundColor: 'rgba(244, 63, 94, 0.1)',
+      borderColor: 'rgba(59, 130, 246, 1)',
+      backgroundColor: 'rgba(59, 130, 246, 0.1)',
       borderWidth: 2,
       fill: true,
       tension: 0,
       pointRadius: 0,
       pointHoverRadius: 5,
-      pointHoverBackgroundColor: 'rgba(244, 63, 94, 1)',
+      pointHoverBackgroundColor: 'rgba(59, 130, 246, 1)',
       yAxisID: 'y-cpu',
     });
   }
@@ -138,14 +138,14 @@ const chartData = computed(() => {
         const avg = values.reduce((sum, v) => sum + v, 0) / values.length;
         return avg / 1024 / 1024;
       }),
-      borderColor: 'rgba(168, 85, 247, 1)',
-      backgroundColor: 'rgba(168, 85, 247, 0.1)',
+      borderColor: 'rgba(99, 102, 241, 1)',
+      backgroundColor: 'rgba(99, 102, 241, 0.1)',
       borderWidth: 2,
       fill: true,
       tension: 0,
       pointRadius: 0,
       pointHoverRadius: 5,
-      pointHoverBackgroundColor: 'rgba(168, 85, 247, 1)',
+      pointHoverBackgroundColor: 'rgba(99, 102, 241, 1)',
       yAxisID: 'y-memory',
     });
   }
@@ -166,7 +166,7 @@ const chartOptions = computed(() => {
         display: false,
       },
       ticks: {
-        color: '#9ca3af',
+        color: '#6b7280',
         font: {
           size: 11,
         },
@@ -184,11 +184,11 @@ const chartOptions = computed(() => {
       position: 'left',
       beginAtZero: true,
       grid: {
-        color: 'rgba(244, 63, 94, 0.1)',
+        color: 'rgba(156, 163, 175, 0.1)',
         drawBorder: false,
       },
       ticks: {
-        color: 'rgba(244, 63, 94, 0.8)',
+        color: '#6b7280',
         font: {
           size: 11,
         },
@@ -199,7 +199,7 @@ const chartOptions = computed(() => {
       title: {
         display: true,
         text: 'CPU %',
-        color: 'rgba(244, 63, 94, 0.8)',
+        color: '#6b7280',
         font: {
           size: 11,
           weight: 600,
@@ -220,7 +220,7 @@ const chartOptions = computed(() => {
         drawBorder: false,
       },
       ticks: {
-        color: 'rgba(168, 85, 247, 0.8)',
+        color: '#6b7280',
         font: {
           size: 11,
         },
@@ -231,7 +231,7 @@ const chartOptions = computed(() => {
       title: {
         display: true,
         text: 'Memory (MB)',
-        color: 'rgba(168, 85, 247, 0.8)',
+        color: '#6b7280',
         font: {
           size: 11,
           weight: 600,
@@ -283,7 +283,6 @@ const chartOptions = computed(() => {
 }
 
 .chart-container {
-  height: 250px;
   position: relative;
 }
 
@@ -291,46 +290,67 @@ const chartOptions = computed(() => {
   display: flex;
   align-items: center;
   gap: 0.5rem;
-  padding: 0.375rem 0.75rem;
+  padding: 0.5rem 0.75rem;
   border-radius: 0.5rem;
-  font-size: 0.75rem;
-  font-weight: 500;
-  transition: all 0.2s ease;
+  font-size: 0.6875rem;
+  font-weight: 600;
+  transition: background-color 0.15s cubic-bezier(0.4, 0, 0.2, 1), border-color 0.15s cubic-bezier(0.4, 0, 0.2, 1), color 0.15s cubic-bezier(0.4, 0, 0.2, 1);
   cursor: pointer;
+  letter-spacing: 0.01em;
 }
 
-.metric-toggle-active-rose {
-  background: rgba(244, 63, 94, 0.1);
-  color: #f43f5e;
-  border: 1px solid rgba(244, 63, 94, 0.2);
+.metric-toggle-active-blue {
+  background: rgba(59, 130, 246, 0.12);
+  color: #2563eb;
+  border: 1px solid rgba(59, 130, 246, 0.3);
+  box-shadow: 0 1px 2px 0 rgba(59, 130, 246, 0.1);
 }
 
-.metric-toggle-active-purple {
-  background: rgba(168, 85, 247, 0.1);
-  color: #a855f7;
-  border: 1px solid rgba(168, 85, 247, 0.2);
+.dark .metric-toggle-active-blue {
+  background: rgba(59, 130, 246, 0.18);
+  color: #60a5fa;
+  border: 1px solid rgba(59, 130, 246, 0.4);
+}
+
+.metric-toggle-active-indigo {
+  background: rgba(99, 102, 241, 0.12);
+  color: #4f46e5;
+  border: 1px solid rgba(99, 102, 241, 0.3);
+  box-shadow: 0 1px 2px 0 rgba(99, 102, 241, 0.1);
+}
+
+.dark .metric-toggle-active-indigo {
+  background: rgba(99, 102, 241, 0.18);
+  color: #818cf8;
+  border: 1px solid rgba(99, 102, 241, 0.4);
 }
 
 .metric-toggle-inactive {
   background: transparent;
-  color: #9ca3af;
-  border: 1px solid rgba(0, 0, 0, 0.1);
+  color: #6b7280;
+  border: 1px solid rgba(0, 0, 0, 0.12);
 }
 
 .dark .metric-toggle-inactive {
-  border-color: rgba(255, 255, 255, 0.1);
+  color: #9ca3af;
+  border-color: rgba(255, 255, 255, 0.12);
 }
 
-.metric-toggle:hover {
-  transform: translateY(-1px);
+
+.metric-toggle-active-blue:hover {
+  background: rgba(59, 130, 246, 0.15);
 }
 
-.metric-toggle-active-rose:hover {
-  background: rgba(244, 63, 94, 0.15);
+.dark .metric-toggle-active-blue:hover {
+  background: rgba(59, 130, 246, 0.2);
 }
 
-.metric-toggle-active-purple:hover {
-  background: rgba(168, 85, 247, 0.15);
+.metric-toggle-active-indigo:hover {
+  background: rgba(99, 102, 241, 0.15);
+}
+
+.dark .metric-toggle-active-indigo:hover {
+  background: rgba(99, 102, 241, 0.2);
 }
 
 .metric-toggle-inactive:hover {
@@ -342,8 +362,8 @@ const chartOptions = computed(() => {
 }
 
 .metric-dot {
-  width: 0.5rem;
-  height: 0.5rem;
+  width: 0.4rem;
+  height: 0.4rem;
   border-radius: 50%;
 }
 </style>

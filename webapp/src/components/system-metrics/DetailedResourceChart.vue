@@ -9,7 +9,7 @@
           selectedMetrics.cpu ? 'metric-toggle-active-rose' : 'metric-toggle-inactive'
         ]"
       >
-        <div :class="['metric-dot', selectedMetrics.cpu ? 'bg-rose-500' : 'bg-gray-400']"></div>
+        <div :class="['metric-dot', selectedMetrics.cpu ? 'bg-blue-500' : 'bg-gray-400']"></div>
         CPU %
       </button>
       <button
@@ -79,7 +79,7 @@ function getNestedValue(obj, path) {
 
 // Colors for different replicas (CPU and Memory use same color per replica)
 const replicaColors = [
-  { color: 'rgba(244, 63, 94, 1)', bg: 'rgba(244, 63, 94, 0.1)' },
+  { color: 'rgba(59, 130, 246, 1)', bg: 'rgba(59, 130, 246, 0.1)' },
   { color: 'rgba(59, 130, 246, 1)', bg: 'rgba(59, 130, 246, 0.1)' },
   { color: 'rgba(245, 158, 11, 1)', bg: 'rgba(245, 158, 11, 0.1)' },
   { color: 'rgba(14, 165, 233, 1)', bg: 'rgba(14, 165, 233, 0.1)' },
@@ -188,11 +188,11 @@ const chartOptions = computed(() => {
       position: 'left',
       beginAtZero: true,
       grid: {
-        color: 'rgba(244, 63, 94, 0.1)',
+        color: 'rgba(59, 130, 246, 0.1)',
         drawBorder: false,
       },
       ticks: {
-        color: 'rgba(244, 63, 94, 0.8)',
+        color: 'rgba(59, 130, 246, 0.8)',
         font: {
           size: 11,
         },
@@ -203,7 +203,7 @@ const chartOptions = computed(() => {
       title: {
         display: true,
         text: 'CPU %',
-        color: 'rgba(244, 63, 94, 0.8)',
+        color: 'rgba(59, 130, 246, 0.8)',
         font: {
           size: 12,
           weight: 600,
@@ -223,7 +223,7 @@ const chartOptions = computed(() => {
         drawBorder: false,
       },
       ticks: {
-        color: 'rgba(168, 85, 247, 0.8)',
+        color: 'rgba(99, 102, 241, 0.8)',
         font: {
           size: 11,
         },
@@ -234,7 +234,7 @@ const chartOptions = computed(() => {
       title: {
         display: true,
         text: 'Memory (MB)',
-        color: 'rgba(168, 85, 247, 0.8)',
+        color: 'rgba(99, 102, 241, 0.8)',
         font: {
           size: 12,
           weight: 600,
@@ -314,15 +314,15 @@ const chartOptions = computed(() => {
 }
 
 .metric-toggle-active-rose {
-  background: rgba(244, 63, 94, 0.1);
-  color: #f43f5e;
-  border: 1px solid rgba(244, 63, 94, 0.2);
+  background: rgba(59, 130, 246, 0.12);
+  color: #2563eb;
+  border: 1px solid rgba(59, 130, 246, 0.3);
 }
 
 .metric-toggle-active-purple {
-  background: rgba(168, 85, 247, 0.1);
-  color: #a855f7;
-  border: 1px solid rgba(168, 85, 247, 0.2);
+  background: rgba(99, 102, 241, 0.12);
+  color: #4f46e5;
+  border: 1px solid rgba(99, 102, 241, 0.3);
 }
 
 .metric-toggle-inactive {
@@ -340,11 +340,11 @@ const chartOptions = computed(() => {
 }
 
 .metric-toggle-active-rose:hover {
-  background: rgba(244, 63, 94, 0.15);
+  background: rgba(59, 130, 246, 0.18);
 }
 
 .metric-toggle-active-purple:hover {
-  background: rgba(168, 85, 247, 0.15);
+  background: rgba(99, 102, 241, 0.18);
 }
 
 .metric-toggle-inactive:hover {

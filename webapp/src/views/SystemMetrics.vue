@@ -1,34 +1,26 @@
 <template>
-  <div class="system-metrics-page">
-    <div class="py-4 px-3">
-      <div class="space-y-2.5">
-        <!-- Header -->
-        <div class="flex items-center justify-between mb-4">
-          <div class="flex items-center gap-3">
-            <div class="w-10 h-10 rounded-xl bg-blue-500/10 dark:bg-blue-500/20 flex items-center justify-center">
-              <svg class="w-6 h-6 text-blue-600 dark:text-blue-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z" />
-              </svg>
+  <div class="page-professional">
+    <div class="page-content">
+      <div class="page-inner">
+        <!-- Header with Time Range Selector -->
+        <div class="filter-card">
+          <div class="flex items-center justify-between">
+            <h2 class="text-lg font-semibold text-gray-900 dark:text-white">System Metrics</h2>
+            
+            <!-- Time Range Selector -->
+            <div class="flex items-center gap-2">
+              <button
+                v-for="range in timeRanges"
+                :key="range.value"
+                @click="selectedTimeRange = range.value"
+                :class="[
+                  'time-range-btn',
+                  selectedTimeRange === range.value ? 'time-range-active' : 'time-range-inactive'
+                ]"
+              >
+                {{ range.label }}
+              </button>
             </div>
-            <div>
-              <h1 class="text-xl font-bold text-gray-900 dark:text-white">System Metrics</h1>
-              <p class="text-sm text-gray-500 dark:text-gray-400">Real-time system performance monitoring</p>
-            </div>
-          </div>
-
-          <!-- Time Range Selector -->
-          <div class="flex items-center gap-2">
-            <button
-              v-for="range in timeRanges"
-              :key="range.value"
-              @click="selectedTimeRange = range.value"
-              :class="[
-                'time-range-btn',
-                selectedTimeRange === range.value ? 'time-range-active' : 'time-range-inactive'
-              ]"
-            >
-              {{ range.label }}
-            </button>
           </div>
         </div>
 
@@ -40,7 +32,7 @@
 
         <template v-else>
           <!-- Aggregation Type Selector -->
-          <div class="chart-flat">
+          <div class="info-card-white">
             <div class="flex items-center justify-between">
               <div class="flex items-center gap-2">
                 <svg class="w-5 h-5 text-gray-600 dark:text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -65,12 +57,12 @@
           </div>
 
           <!-- CPU & Memory Charts (Side by Side) -->
-          <div class="grid grid-cols-1 lg:grid-cols-2 gap-2">
+          <div class="grid grid-cols-1 lg:grid-cols-2 gap-5">
             <!-- CPU Chart -->
-            <div class="chart-flat">
+            <div class="chart-card-professional">
               <div class="flex items-center gap-2 mb-4">
-                <div class="w-8 h-8 rounded-lg bg-rose-500/10 dark:bg-rose-500/20 flex items-center justify-center">
-                  <svg class="w-5 h-5 text-rose-600 dark:text-rose-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <div class="w-8 h-8 rounded-lg bg-blue-500/10 dark:bg-blue-500/15 flex items-center justify-center">
+                  <svg class="w-5 h-5 text-blue-600 dark:text-blue-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 3v2m6-2v2M9 19v2m6-2v2M5 9H3m2 6H3m18-6h-2m2 6h-2M7 19h10a2 2 0 002-2V7a2 2 0 00-2-2H7a2 2 0 00-2 2v10a2 2 0 002 2zM9 9h6v6H9V9z" />
                   </svg>
                 </div>
@@ -80,10 +72,10 @@
             </div>
 
             <!-- Memory Chart -->
-            <div class="chart-flat">
+            <div class="chart-card-professional">
               <div class="flex items-center gap-2 mb-4">
-                <div class="w-8 h-8 rounded-lg bg-purple-500/10 dark:bg-purple-500/20 flex items-center justify-center">
-                  <svg class="w-5 h-5 text-purple-600 dark:text-purple-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <div class="w-8 h-8 rounded-lg bg-indigo-500/10 dark:bg-indigo-500/15 flex items-center justify-center">
+                  <svg class="w-5 h-5 text-indigo-600 dark:text-indigo-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 12h14M5 12a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v4a2 2 0 01-2 2M5 12a2 2 0 00-2 2v4a2 2 0 002 2h14a2 2 0 002-2v-4a2 2 0 00-2-2m-2-4h.01M17 16h.01" />
                   </svg>
                 </div>
@@ -383,9 +375,9 @@ onUnmounted(() => {
 }
 
 .agg-type-active {
-  background: rgba(244, 63, 94, 0.1);
-  color: #f43f5e;
-  border: 1px solid rgba(244, 63, 94, 0.2);
+  background: rgba(59, 130, 246, 0.12);
+  color: #2563eb;
+  border: 1px solid rgba(59, 130, 246, 0.3);
 }
 
 .agg-type-inactive {
@@ -398,12 +390,9 @@ onUnmounted(() => {
   border-color: rgba(255, 255, 255, 0.1);
 }
 
-.agg-type-btn:hover {
-  transform: translateY(-1px);
-}
 
 .agg-type-active:hover {
-  background: rgba(244, 63, 94, 0.15);
+  background: rgba(59, 130, 246, 0.18);
 }
 
 .agg-type-inactive:hover {

@@ -16,28 +16,28 @@
         @click="selectedMetrics.dbQueue = !selectedMetrics.dbQueue"
         :class="[
           'metric-toggle',
-          selectedMetrics.dbQueue ? 'metric-toggle-active-amber' : 'metric-toggle-inactive'
+          selectedMetrics.dbQueue ? 'metric-toggle-active-orange' : 'metric-toggle-inactive'
         ]"
       >
-        <div :class="['metric-dot', selectedMetrics.dbQueue ? 'bg-amber-500' : 'bg-gray-400']"></div>
+        <div :class="['metric-dot', selectedMetrics.dbQueue ? 'bg-orange-500' : 'bg-gray-400']"></div>
         DB Queue
       </button>
       <button
         @click="selectedMetrics.systemQueue = !selectedMetrics.systemQueue"
         :class="[
           'metric-toggle',
-          selectedMetrics.systemQueue ? 'metric-toggle-active-green' : 'metric-toggle-inactive'
+          selectedMetrics.systemQueue ? 'metric-toggle-active-sky' : 'metric-toggle-inactive'
         ]"
       >
-        <div :class="['metric-dot', selectedMetrics.systemQueue ? 'bg-green-500' : 'bg-gray-400']"></div>
+        <div :class="['metric-dot', selectedMetrics.systemQueue ? 'bg-sky-500' : 'bg-gray-400']"></div>
         System Queue
       </button>
     </div>
 
     <!-- Chart -->
-    <div class="chart-container">
+    <div class="chart-container h-52">
       <Line v-if="chartData" :data="chartData" :options="chartOptions" />
-      <div v-else class="flex items-center justify-center h-full text-gray-500 text-sm">
+      <div v-else class="flex items-center justify-center h-full text-gray-500 dark:text-gray-400 text-sm">
         No data available
       </div>
     </div>
@@ -148,14 +148,14 @@ const chartData = computed(() => {
         if (values.length === 0) return null;
         return values.reduce((sum, v) => sum + v, 0); // SUM for total queued
       }),
-      borderColor: 'rgba(245, 158, 11, 1)',
-      backgroundColor: 'rgba(245, 158, 11, 0.1)',
+      borderColor: 'rgba(249, 115, 22, 1)',
+      backgroundColor: 'rgba(249, 115, 22, 0.1)',
       borderWidth: 2,
       fill: true,
       tension: 0,
       pointRadius: 0,
       pointHoverRadius: 5,
-      pointHoverBackgroundColor: 'rgba(245, 158, 11, 1)',
+      pointHoverBackgroundColor: 'rgba(249, 115, 22, 1)',
     });
   }
 
@@ -168,14 +168,14 @@ const chartData = computed(() => {
         if (values.length === 0) return null;
         return values.reduce((sum, v) => sum + v, 0); // SUM for total queued
       }),
-      borderColor: 'rgba(34, 197, 94, 1)',
-      backgroundColor: 'rgba(34, 197, 94, 0.1)',
+      borderColor: 'rgba(14, 165, 233, 1)',
+      backgroundColor: 'rgba(14, 165, 233, 0.1)',
       borderWidth: 2,
       fill: true,
       tension: 0,
       pointRadius: 0,
       pointHoverRadius: 5,
-      pointHoverBackgroundColor: 'rgba(34, 197, 94, 1)',
+      pointHoverBackgroundColor: 'rgba(14, 165, 233, 1)',
     });
   }
 
@@ -221,7 +221,7 @@ const chartOptions = {
         display: false,
       },
       ticks: {
-        color: '#9ca3af',
+        color: '#6b7280',
         font: {
           size: 11,
         },
@@ -235,11 +235,11 @@ const chartOptions = {
       position: 'left',
       beginAtZero: true,
       grid: {
-        color: 'rgba(0, 0, 0, 0.05)',
+        color: 'rgba(156, 163, 175, 0.1)',
         drawBorder: false,
       },
       ticks: {
-        color: '#9ca3af',
+        color: '#6b7280',
         font: {
           size: 11,
         },
@@ -258,7 +258,6 @@ const chartOptions = {
 }
 
 .chart-container {
-  height: 250px;
   position: relative;
 }
 
@@ -266,56 +265,88 @@ const chartOptions = {
   display: flex;
   align-items: center;
   gap: 0.5rem;
-  padding: 0.375rem 0.75rem;
+  padding: 0.5rem 0.75rem;
   border-radius: 0.5rem;
-  font-size: 0.75rem;
-  font-weight: 500;
-  transition: all 0.2s ease;
+  font-size: 0.6875rem;
+  font-weight: 600;
+  transition: background-color 0.15s cubic-bezier(0.4, 0, 0.2, 1), border-color 0.15s cubic-bezier(0.4, 0, 0.2, 1), color 0.15s cubic-bezier(0.4, 0, 0.2, 1);
   cursor: pointer;
+  letter-spacing: 0.01em;
 }
 
 .metric-toggle-active-blue {
-  background: rgba(59, 130, 246, 0.1);
-  color: #3b82f6;
-  border: 1px solid rgba(59, 130, 246, 0.2);
+  background: rgba(59, 130, 246, 0.12);
+  color: #2563eb;
+  border: 1px solid rgba(59, 130, 246, 0.3);
+  box-shadow: 0 1px 2px 0 rgba(59, 130, 246, 0.1);
 }
 
-.metric-toggle-active-amber {
-  background: rgba(245, 158, 11, 0.1);
-  color: #f59e0b;
-  border: 1px solid rgba(245, 158, 11, 0.2);
+.dark .metric-toggle-active-blue {
+  background: rgba(59, 130, 246, 0.18);
+  color: #60a5fa;
+  border: 1px solid rgba(59, 130, 246, 0.4);
 }
 
-.metric-toggle-active-green {
-  background: rgba(34, 197, 94, 0.1);
-  color: #22c55e;
-  border: 1px solid rgba(34, 197, 94, 0.2);
+.metric-toggle-active-orange {
+  background: rgba(249, 115, 22, 0.12);
+  color: #ea580c;
+  border: 1px solid rgba(249, 115, 22, 0.3);
+  box-shadow: 0 1px 2px 0 rgba(249, 115, 22, 0.1);
+}
+
+.dark .metric-toggle-active-orange {
+  background: rgba(249, 115, 22, 0.18);
+  color: #fb923c;
+  border: 1px solid rgba(249, 115, 22, 0.4);
+}
+
+.metric-toggle-active-sky {
+  background: rgba(14, 165, 233, 0.12);
+  color: #0284c7;
+  border: 1px solid rgba(14, 165, 233, 0.3);
+  box-shadow: 0 1px 2px 0 rgba(14, 165, 233, 0.1);
+}
+
+.dark .metric-toggle-active-sky {
+  background: rgba(14, 165, 233, 0.18);
+  color: #38bdf8;
+  border: 1px solid rgba(14, 165, 233, 0.4);
 }
 
 .metric-toggle-inactive {
   background: transparent;
-  color: #9ca3af;
-  border: 1px solid rgba(0, 0, 0, 0.1);
+  color: #6b7280;
+  border: 1px solid rgba(0, 0, 0, 0.12);
 }
 
 .dark .metric-toggle-inactive {
-  border-color: rgba(255, 255, 255, 0.1);
+  color: #9ca3af;
+  border-color: rgba(255, 255, 255, 0.12);
 }
 
-.metric-toggle:hover {
-  transform: translateY(-1px);
-}
 
 .metric-toggle-active-blue:hover {
   background: rgba(59, 130, 246, 0.15);
 }
 
-.metric-toggle-active-amber:hover {
-  background: rgba(245, 158, 11, 0.15);
+.dark .metric-toggle-active-blue:hover {
+  background: rgba(59, 130, 246, 0.2);
 }
 
-.metric-toggle-active-green:hover {
-  background: rgba(34, 197, 94, 0.15);
+.metric-toggle-active-orange:hover {
+  background: rgba(249, 115, 22, 0.15);
+}
+
+.dark .metric-toggle-active-orange:hover {
+  background: rgba(249, 115, 22, 0.2);
+}
+
+.metric-toggle-active-sky:hover {
+  background: rgba(14, 165, 233, 0.15);
+}
+
+.dark .metric-toggle-active-sky:hover {
+  background: rgba(14, 165, 233, 0.2);
 }
 
 .metric-toggle-inactive:hover {
@@ -327,8 +358,8 @@ const chartOptions = {
 }
 
 .metric-dot {
-  width: 0.5rem;
-  height: 0.5rem;
+  width: 0.4rem;
+  height: 0.4rem;
   border-radius: 50%;
 }
 </style>

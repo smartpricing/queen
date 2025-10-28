@@ -48,22 +48,22 @@ const chartData = computed(() => {
       {
         label: 'Ingested',
         data: throughput.map(t => t.ingested || t.ingestedPerSecond || 0),
-        backgroundColor: createGradientBars('rose'),
+        backgroundColor: createGradientBars('blue'),
         borderColor: 'transparent',
         borderWidth: 0,
-        borderRadius: 4,
-        barPercentage: 0.9,
-        categoryPercentage: 0.95,
+        borderRadius: 3,
+        barPercentage: 0.85,
+        categoryPercentage: 0.9,
       },
       {
         label: 'Processed',
         data: throughput.map(t => t.processed || t.processedPerSecond || 0),
-        backgroundColor: createGradientBars('purple'),
+        backgroundColor: createGradientBars('indigo'),
         borderColor: 'transparent',
         borderWidth: 0,
-        borderRadius: 4,
-        barPercentage: 0.9,
-        categoryPercentage: 0.95,
+        borderRadius: 3,
+        barPercentage: 0.85,
+        categoryPercentage: 0.9,
       },
     ],
   };
@@ -75,17 +75,17 @@ function createGradientBars(color) {
     const {ctx, chartArea} = chart;
     
     if (!chartArea) {
-      return color === 'rose' ? colors.charts.ingested.border : colors.charts.processed.border;
+      return color === 'blue' ? colors.charts.ingested.border : colors.charts.processed.border;
     }
     
     const gradient = ctx.createLinearGradient(0, chartArea.top, 0, chartArea.bottom);
     
-    if (color === 'rose') {
-      gradient.addColorStop(0, 'rgba(244, 63, 94, 0.9)');
-      gradient.addColorStop(1, 'rgba(244, 63, 94, 0.5)');
-    } else if (color === 'purple') {
-      gradient.addColorStop(0, 'rgba(168, 85, 247, 0.9)');
-      gradient.addColorStop(1, 'rgba(168, 85, 247, 0.5)');
+    if (color === 'blue') {
+      gradient.addColorStop(0, 'rgba(59, 130, 246, 0.8)');
+      gradient.addColorStop(1, 'rgba(59, 130, 246, 0.4)');
+    } else if (color === 'indigo') {
+      gradient.addColorStop(0, 'rgba(99, 102, 241, 0.8)');
+      gradient.addColorStop(1, 'rgba(99, 102, 241, 0.4)');
     }
     
     return gradient;
@@ -114,7 +114,7 @@ const chartOptions = {
         font: {
           size: 10,
         },
-        color: '#9ca3af',
+        color: '#6b7280',
       },
     },
     y: {
@@ -130,7 +130,7 @@ const chartOptions = {
         font: {
           size: 11,
         },
-        color: '#9ca3af',
+        color: '#6b7280',
         padding: 8,
       },
     },
