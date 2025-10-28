@@ -73,6 +73,26 @@ await queen
     await sendEmail(message.data)
   })
 
+// Subscription modes (control message history)
+// Skip historical messages, only process new ones
+await queen
+  .queue('events')
+  .group('realtime-monitor')
+  .subscriptionMode('new')
+  .consume(async (message) => {
+    console.log('New event only:', message.data)
+  })
+
+// Start from a specific timestamp
+const timestamp = '2025-10-28T10:00:00.000Z'
+await queen
+  .queue('events')
+  .group('replay-from-timestamp')
+  .subscriptionFrom(timestamp)
+  .consume(async (message) => {
+    console.log('Replaying from 10am:', message.data)
+  })
+
 // Transactions (atomic ack + push)
 const [msg] = await queen.queue('input').pop()
 await queen
@@ -112,6 +132,7 @@ await queen.close()
 - ✅ Auto-acknowledgment (or manual control)
 - ✅ Partitions for ordered processing
 - ✅ Consumer groups for scaling
+- ✅ **Subscription modes (new messages only or from timestamp)**
 - ✅ Transactions for atomicity
 - ✅ Client-side buffering for speed
 - ✅ Dead letter queue for failures
@@ -123,12 +144,14 @@ await queen.close()
 
 ### Client
 
-See the **[Complete V2 Guide](client-js/client-v2/README.md)** with 13 parts covering everything from basics to advanced features:
+See the **[Complete V2 Guide](client-js/client-v2/README.md)** with 14 parts covering everything from basics to advanced features:
 - Queue creation, push, and consume
 - Partitions and consumer groups
+- **Subscription modes (new messages, timestamps)**
 - Transactions and buffering
 - Dead letter queues
 - Lease renewal
+- Message tracing
 - Complete real-world pipeline example
 - And much more!
 

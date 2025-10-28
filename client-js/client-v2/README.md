@@ -10,6 +10,7 @@ Welcome to Queen client! This is your friendly guide to mastering message queues
 - [Part 3: Pop vs Consume (Choose Your Adventure)](#part-3-pop-vs-consume-choose-your-adventure)
 - [Part 4: Partitions - Organize Your World](#part-4-partitions---organize-your-world)
 - [Part 5: Consumer Groups - Share the Load](#part-5-consumer-groups---share-the-load)
+- [Part 5.5: Subscription Modes - Control Message History](#part-55-subscription-modes---control-message-history)
 - [Part 6: Namespaces & Tasks - The Wildcard Way](#part-6-namespaces--tasks---the-wildcard-way)
 - [Part 7: Transactions - All or Nothing](#part-7-transactions---all-or-nothing)
 - [Part 8: Client-Side Buffering - Speed Demon Mode](#part-8-client-side-buffering---speed-demon-mode)
@@ -338,6 +339,165 @@ await queen
     await logOrderMetrics(message.data)
   })
 ```
+
+---
+
+## Part 5.5: Subscription Modes - Control Message History
+
+When a consumer group first subscribes to a queue, should it process **all historical messages** or only **new messages** that arrive after subscription? Subscription modes give you control!
+
+**Use cases:**
+- Start fresh without processing old backlog
+- Subscribe to real-time events only
+- Join a stream at a specific point in time
+- Skip historical data for new analytics consumers
+
+### Default Behavior (All Messages)
+
+By default, consumer groups start from the **beginning** and process all messages:
+
+```javascript
+// This consumer group gets ALL messages, including historical ones
+await queen
+  .queue('events')
+  .group('new-analytics')
+  .consume(async (message) => {
+    console.log('Processing:', message.data)
+  })
+```
+
+### Subscription Mode: 'new'
+
+Skip all historical messages and only process messages that arrive **after** subscription:
+
+```javascript
+// Only process NEW messages, skip historical backlog
+await queen
+  .queue('events')
+  .group('realtime-monitor')
+  .subscriptionMode('new')  // 👈 Skip history
+  .consume(async (message) => {
+    console.log('New event:', message.data)
+  })
+```
+
+**What happens:**
+1. Consumer subscribes at `T0`
+2. All messages before `T0` are skipped
+3. Only messages arriving after `T0` are processed
+
+### Subscription Mode: 'new-only'
+
+Alias for `'new'` - same behavior:
+
+```javascript
+await queen
+  .queue('events')
+  .group('fresh-start')
+  .subscriptionMode('new-only')
+  .consume(async (message) => {
+    // Only new messages
+  })
+```
+
+### Subscription From: 'now'
+
+Alternative syntax using `subscriptionFrom('now')`:
+
+```javascript
+await queen
+  .queue('events')
+  .group('from-now')
+  .subscriptionFrom('now')  // 👈 Start from now
+  .consume(async (message) => {
+    console.log('New event:', message.data)
+  })
+```
+
+### Subscription From: Timestamp
+
+Start consuming from a **specific timestamp**:
+
+```javascript
+// Start from a specific point in time
+const startTime = '2025-10-28T10:00:00.000Z'
+
+await queen
+  .queue('events')
+  .group('replay-from-10am')
+  .subscriptionFrom(startTime)  // 👈 ISO 8601 timestamp
+  .consume(async (message) => {
+    // Process messages from 10am onwards
+  })
+```
+
+**Dynamic timestamp example:**
+
+```javascript
+// Start from 1 hour ago
+const oneHourAgo = new Date(Date.now() - 3600000).toISOString()
+
+await queen
+  .queue('events')
+  .group('last-hour')
+  .subscriptionFrom(oneHourAgo)
+  .consume(async (message) => {
+    console.log('Processing recent event:', message.data)
+  })
+```
+
+### Real-World Example: Multi-Consumer Setup
+
+```javascript
+// Group 1: Process ALL messages (including backlog)
+await queen
+  .queue('user-actions')
+  .group('batch-analytics')
+  .consume(async (message) => {
+    await generateFullReport(message.data)
+  })
+
+// Group 2: Only NEW messages (real-time monitoring)
+await queen
+  .queue('user-actions')
+  .group('realtime-alerts')
+  .subscriptionMode('new')
+  .consume(async (message) => {
+    await sendRealtimeAlert(message.data)
+  })
+
+// Group 3: Replay from specific time (debugging)
+await queen
+  .queue('user-actions')
+  .group('debug-replay')
+  .subscriptionFrom('2025-10-28T15:30:00.000Z')
+  .consume(async (message) => {
+    await debugSpecificTimeframe(message.data)
+  })
+```
+
+**Result:**
+- `batch-analytics`: Processes all 10,000 historical messages + new ones
+- `realtime-alerts`: Skips 10,000 historical messages, only processes new ones
+- `debug-replay`: Starts from 3:30 PM, processes everything after that
+
+### Important Notes
+
+⚠️ **Subscription modes only work with consumer groups:**
+- Requires `.group('name')`
+- Does NOT work with default queue mode (no group)
+- Each consumer group maintains its own subscription position
+
+🎯 **First subscription matters:**
+- Subscription mode is set when the consumer group **first subscribes**
+- Subsequent consumers in the same group inherit the same position
+- To change subscription mode, use a different group name
+
+💡 **Best Practices:**
+- Use `'new'` for real-time monitoring and alerting
+- Use default (all) for batch processing and analytics
+- Use timestamps for replay/debugging scenarios
+- Name groups descriptively based on their subscription mode
 
 ---
 
@@ -1378,6 +1538,26 @@ await queen.queue().namespace('my-ns').consume(async (msg) => { /* process */ })
 
 // Consume by task
 await queen.queue().task('my-task').consume(async (msg) => { /* process */ })
+```
+
+### Subscription Modes
+
+```javascript
+// Default (all messages, including historical)
+await queen.queue('q').group('my-group').consume(async (msg) => { /* all messages */ })
+
+// Skip historical messages, only new ones
+await queen.queue('q').group('my-group').subscriptionMode('new').consume(async (msg) => { /* new only */ })
+
+// Alternative: subscriptionMode('new-only')
+await queen.queue('q').group('my-group').subscriptionMode('new-only').consume(async (msg) => { /* new only */ })
+
+// Subscribe from 'now'
+await queen.queue('q').group('my-group').subscriptionFrom('now').consume(async (msg) => { /* from now */ })
+
+// Subscribe from timestamp
+const timestamp = '2025-10-28T10:00:00.000Z'
+await queen.queue('q').group('my-group').subscriptionFrom(timestamp).consume(async (msg) => { /* from timestamp */ })
 ```
 
 ### Acknowledgment
