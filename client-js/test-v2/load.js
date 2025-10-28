@@ -28,6 +28,7 @@ export async function testLoad(client) {
     .wait(false)
     .limit(1)
     .consume(async msgs => {
+        console.log(`Messages: ${msgs.length}`)
         for (const msg of msgs) {
             if (lastId === null) {
                 lastId = msg.data.id
@@ -42,6 +43,7 @@ export async function testLoad(client) {
     })
 
     const uniqueIdsCount = uniqueIds.size;
+    console.log(`Unique IDs count: ${uniqueIdsCount}`)
 
     return { success: uniqueIdsCount === messagesToPush, message: 'Load test completed successfully' }
 }

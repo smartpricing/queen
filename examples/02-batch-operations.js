@@ -1,24 +1,56 @@
-import { Queen } from 'queen-mq'
+/**
+ * Example 02: Batch Operations
+ * 
+ * This example demonstrates:
+ * - Pushing multiple messages at once
+ * - Consuming messages in batches
+ * - Processing batches efficiently
+ */
 
-const client = new Queen({ 
-    baseUrls: ['http://localhost:6632']
-});
+import { Queen } from '../client-js/client-v2/index.js'
 
-const queue = 'batch-processing'
+const queen = new Queen('http://localhost:6632')
 
-await client.queue(queue, {});
+const queueName = 'batch-example'
 
-// Push batch of messages
-const messages = Array.from({ length: 100 }, (_, i) => ({
-    message: `Batch message ${i + 1}`,
-    index: i + 1
-}));
+console.log('Creating queue...')
+await queen.queue(queueName).create()
 
-await client.push(`${queue}/batch-partition`, messages);
+// Push a batch of messages
+console.log('Pushing 20 messages...')
+const messages = Array.from({ length: 20 }, (_, i) => ({
+  data: {
+    id: i + 1,
+    value: Math.random() * 100
+  }
+}))
 
-// Consume data with iterators, getting the entire batch
-for await (const messages of client.takeBatch(queue, { limit: 1, batch: 10 })) {
-    const newMex = messages.map(x => x.data.id * 2)
-    await client.ack(messages)
-}
+await queen.queue(queueName).push(messages)
+console.log('Pushed 20 messages')
 
+// Consume in batches of 5
+console.log('\nConsuming in batches of 5...')
+let batchCount = 0
+
+await queen
+  .queue(queueName)
+  .batch(5)          // Get up to 5 messages at a time
+  .limit(20)         // Process up to 20 messages total
+  .consume(async (batch) => {
+    batchCount++
+    console.log(`Batch ${batchCount}: Received ${batch.length} messages`)
+    
+    // Process the batch
+    const sum = batch.reduce((acc, msg) => acc + msg.data.value, 0)
+    const avg = sum / batch.length
+    
+    console.log(`  Average value: ${avg.toFixed(2)}`)
+    
+    // Auto-acked on success!
+  })
+
+console.log(`\nProcessed ${batchCount} batches`)
+
+// Cleanup
+await queen.close()
+console.log('Done!')

@@ -1,32 +1,75 @@
-import { Queen } from 'queen-mq'
+/**
+ * Example 03: Transactional Pipeline
+ * 
+ * This example demonstrates:
+ * - Processing messages from one queue
+ * - Atomically acking input and pushing to output queue
+ * - Ensuring exactly-once processing with transactions
+ */
 
-const client = new Queen({ 
-    baseUrls: ['http://localhost:6632']
-});
+import { Queen } from '../client-js/client-v2/index.js'
 
-const queue = 'html-processing'
+const queen = new Queen('http://localhost:6632')
 
-await client.queue(queue, {});
+const inputQueue = 'pipeline-input'
+const outputQueue = 'pipeline-output'
 
-// Push test messages
-await client.push(queue, [
-    { id: 1, data: 'Message 1' },
-    { id: 2, data: 'Message 2' },
-    { id: 3, data: 'Message 3' }
-]);
+console.log('Creating queues...')
+await queen.queue(inputQueue).create()
+await queen.queue(outputQueue).create()
 
-// Consume data from any partition of the queue, continuously
-// This "pipeline" is useful for doing exactly-once processing
-await client 
-    .pipeline(queue)
-    .take(10)
-    .processBatch(async (messages) => {
-        return messages.map(x => x.data.id * 2);
-    })
-    .atomically((tx, originalMessages, processedMessages) => { // ack and push are transactional
-        tx.ack(originalMessages);
-        tx.push('another-queue', processedMessages); 
-    })
-    .repeat({ continuous: true })
-    .execute();
+// Push some input messages
+console.log('Pushing input messages...')
+const inputs = Array.from({ length: 10 }, (_, i) => ({
+  data: { id: i + 1, value: i * 2 }
+}))
 
+await queen.queue(inputQueue).push(inputs)
+console.log('Pushed 10 input messages')
+
+// Process with transactions
+console.log('\nProcessing with transactional pipeline...')
+
+await queen
+  .queue(inputQueue)
+  .batch(1)
+  .limit(10)
+  .autoAck(false)  // Disable auto-ack for manual transaction control
+  .consume(async (message) => {
+    // Transform the message
+    const processed = {
+      originalId: message.data.id,
+      transformed: message.data.value * 2,
+      timestamp: Date.now()
+    }
+    
+    console.log(`Processing message ${message.data.id}: ${message.data.value} -> ${processed.transformed}`)
+    
+    // Atomically: ack the input and push the output
+    await queen
+      .transaction()
+      .ack(message)
+      .queue(outputQueue)
+      .push([{ data: processed }])
+      .commit()
+    
+    console.log(`  Committed transaction for message ${message.data.id}`)
+  })
+
+// Verify outputs
+console.log('\nVerifying output queue...')
+const outputs = await queen
+  .queue(outputQueue)
+  .batch(10)
+  .wait(false)
+  .pop()
+
+console.log(`Found ${outputs.length} messages in output queue`)
+outputs.forEach(msg => {
+  console.log(`  ID: ${msg.data.originalId}, Value: ${msg.data.transformed}`)
+})
+
+// Cleanup
+await queen.ack(outputs, true)
+await queen.close()
+console.log('\nDone!')

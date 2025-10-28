@@ -1,131 +1,174 @@
 /**
- * Example: Dead Letter Queue (DLQ) Monitoring
+ * Example 12: Dead Letter Queue Monitoring
  * 
- * This example demonstrates how to:
- * 1. Configure a queue with DLQ enabled
- * 2. Monitor failed messages in the DLQ
- * 3. Query DLQ with various filters
+ * This example demonstrates:
+ * - Handling failed messages
+ * - Messages moving to DLQ after max retries
+ * - Querying the DLQ
+ * - Monitoring and alerting on failures
  */
 
 import { Queen } from '../client-js/client-v2/index.js'
 
-const client = new Queen({ baseUrl: 'http://localhost:6632' })
+const queen = new Queen('http://localhost:6632')
 
-async function main() {
-  // 1. Create a queue with DLQ enabled
-  console.log('Creating queue with DLQ enabled...')
-  await client
-    .queue('payment-processing')
-    .config({
-      retryLimit: 3,
-      dlqAfterMaxRetries: true,  // Auto-move to DLQ after max retries
-      maxWaitTimeSeconds: 3600   // Move to DLQ if not processed within 1 hour
-    })
-    .create()
+const queueName = 'risky-operations'
 
-  // 2. Simulate some failed messages
-  console.log('\nPushing test messages...')
-  await client
-    .queue('payment-processing')
-    .push([
-      { data: { orderId: '12345', amount: 100 } },
-      { data: { orderId: '12346', amount: 200 } }
-    ])
+console.log('Creating queue with DLQ enabled...')
+await queen
+  .queue(queueName)
+  .config({
+    retryLimit: 2,              // Retry only 2 times
+    dlqAfterMaxRetries: true    // Move to DLQ after retries exhausted
+  })
+  .create()
 
-  // 3. Consume with failures
-  console.log('\nProcessing messages (some will fail)...')
-  await client
-    .queue('payment-processing')
-    .batch(10)
-    .limit(10)
-    .each()
-    .consume(async (msg) => {
-      // Simulate random failures
-      if (msg.payload.orderId === '12346') {
-        throw new Error('Payment gateway timeout')
-      }
-      console.log(`✓ Processed order ${msg.payload.orderId}`)
-    })
-    .onError(async (msg, error) => {
-      console.log(`✗ Failed order ${msg.payload.orderId}: ${error.message}`)
-      await client.ack(msg, false, { error: error.message })
-    })
+// Push some messages (some will fail)
+console.log('\nPushing 10 messages...')
+for (let i = 1; i <= 10; i++) {
+  await queen.queue(queueName).push([{
+    data: {
+      id: i,
+      value: i <= 5 ? i * 10 : -i,  // Negative values will fail
+      shouldFail: i > 5
+    }
+  }])
+}
+console.log('Pushed 10 messages (5 will succeed, 5 will fail)')
 
-  // Wait for DLQ processing
-  await new Promise(resolve => setTimeout(resolve, 1000))
+// Process messages (simulating failures)
+console.log('\n--- Processing Messages ---')
 
-  // 4. Query DLQ messages
-  console.log('\n=== Checking Dead Letter Queue ===')
-  
-  const dlqResult = await client
-    .queue('payment-processing')
-    .dlq()
-    .limit(10)
-    .get()
+let successCount = 0
+let failureCount = 0
+let attemptCounts = new Map()
 
-  console.log(`\nFound ${dlqResult.total} message(s) in DLQ`)
-  
-  if (dlqResult.messages.length > 0) {
-    console.log('\nDLQ Messages:')
-    dlqResult.messages.forEach((msg, i) => {
-      console.log(`\n${i + 1}. Order ${msg.data.orderId}`)
-      console.log(`   Error: ${msg.errorMessage}`)
-      console.log(`   Retry Count: ${msg.retryCount}`)
-      console.log(`   Failed At: ${msg.movedToDlqAt}`)
-      console.log(`   Transaction ID: ${msg.transactionId}`)
-    })
-  }
+await queen
+  .queue(queueName)
+  .limit(50)  // Allow retries (up to 50 total attempts)
+  .consume(async (message) => {
+    const attemptKey = message.data.id
+    const attempts = (attemptCounts.get(attemptKey) || 0) + 1
+    attemptCounts.set(attemptKey, attempts)
+    
+    console.log(`Processing message ${message.data.id} (attempt ${attempts})`)
+    
+    // Simulate processing failure for negative values
+    if (message.data.value < 0) {
+      failureCount++
+      console.log(`  ❌ Failed: Negative value ${message.data.value}`)
+      throw new Error('Negative values not allowed')
+    }
+    
+    successCount++
+    console.log(`  ✅ Success: Processed value ${message.data.value}`)
+  })
+  .onError(async (message, error) => {
+    console.log(`  ⚠️  Error handler: ${error.message}`)
+  })
 
-  // 5. Query with consumer group filter
-  console.log('\n=== Querying DLQ for specific consumer group ===')
-  
-  const groupDlqResult = await client
-    .queue('payment-processing')
-    .dlq('my-worker-group')  // Specific consumer group
-    .limit(10)
-    .get()
+console.log('\n--- Processing Complete ---')
+console.log(`Successful: ${successCount}`)
+console.log(`Failed: ${failureCount}`)
 
-  console.log(`Found ${groupDlqResult.total} message(s) for consumer group 'my-worker-group'`)
+// Wait a moment for DLQ processing
+await new Promise(resolve => setTimeout(resolve, 1000))
 
-  // 6. Query with date range
-  console.log('\n=== Querying DLQ with date range ===')
-  
-  const today = new Date()
-  const yesterday = new Date(today.getTime() - 24 * 60 * 60 * 1000)
-  
-  const dateDlqResult = await client
-    .queue('payment-processing')
-    .dlq()
-    .from(yesterday.toISOString())
-    .to(today.toISOString())
-    .limit(10)
-    .get()
+// Query the DLQ
+console.log('\n--- Checking Dead Letter Queue ---')
+const dlqResult = await queen
+  .queue(queueName)
+  .dlq()
+  .limit(100)
+  .get()
 
-  console.log(`Found ${dateDlqResult.total} message(s) in the last 24 hours`)
+console.log(`Found ${dlqResult.total} messages in DLQ\n`)
 
-  // 7. Pagination example
-  console.log('\n=== Pagination Example ===')
-  
-  const page1 = await client
-    .queue('payment-processing')
-    .dlq()
-    .limit(5)
-    .offset(0)
-    .get()
-
-  console.log(`Page 1: ${page1.messages.length} messages (Total: ${page1.total})`)
-
-  const page2 = await client
-    .queue('payment-processing')
-    .dlq()
-    .limit(5)
-    .offset(5)
-    .get()
-
-  console.log(`Page 2: ${page2.messages.length} messages`)
-
-  console.log('\n✅ DLQ monitoring example completed!')
+if (dlqResult.messages && dlqResult.messages.length > 0) {
+  console.log('DLQ Messages:')
+  dlqResult.messages.forEach((msg, idx) => {
+    console.log(`\n${idx + 1}. Message ID: ${msg.data.id}`)
+    console.log(`   Value: ${msg.data.value}`)
+    console.log(`   Error: ${msg.errorMessage}`)
+    console.log(`   Retry Count: ${msg.retryCount}`)
+    console.log(`   Failed At: ${new Date(msg.dlqTimestamp).toISOString()}`)
+  })
 }
 
-main().catch(console.error)
+// Demonstrate DLQ monitoring patterns
+console.log('\n--- DLQ Monitoring Patterns ---')
 
+// Pattern 1: Alert on DLQ threshold
+const dlqThreshold = 3
+if (dlqResult.total > dlqThreshold) {
+  console.log(`\n🚨 ALERT: DLQ has ${dlqResult.total} messages (threshold: ${dlqThreshold})`)
+  console.log('   Action: Investigate failing messages')
+}
+
+// Pattern 2: Categorize errors
+const errorTypes = {}
+dlqResult.messages.forEach(msg => {
+  const errorType = msg.errorMessage || 'Unknown'
+  errorTypes[errorType] = (errorTypes[errorType] || 0) + 1
+})
+
+console.log('\n📊 Error Distribution:')
+for (const [error, count] of Object.entries(errorTypes)) {
+  console.log(`   ${error}: ${count} occurrences`)
+}
+
+// Pattern 3: Time-based DLQ query
+console.log('\n--- Time-Based DLQ Query ---')
+const oneMinuteAgo = new Date(Date.now() - 60000).toISOString()
+const recentDlq = await queen
+  .queue(queueName)
+  .dlq()
+  .from(oneMinuteAgo)
+  .limit(100)
+  .get()
+
+console.log(`Messages that failed in the last minute: ${recentDlq.total}`)
+
+// Pattern 4: Consumer group specific DLQ
+console.log('\n--- Consumer Group Specific DLQ ---')
+
+// Create a message that will fail for a specific consumer group
+await queen.queue(queueName).push([{
+  data: { id: 999, value: -999, group: 'specific-group' }
+}])
+
+// Process with a consumer group
+await queen
+  .queue(queueName)
+  .group('specific-group')
+  .limit(10)
+  .consume(async (message) => {
+    if (message.data.value < 0) {
+      throw new Error('Group-specific failure')
+    }
+  })
+
+// Wait for DLQ
+await new Promise(resolve => setTimeout(resolve, 1000))
+
+// Query DLQ for specific group
+const groupDlq = await queen
+  .queue(queueName)
+  .dlq('specific-group')
+  .limit(10)
+  .get()
+
+console.log(`DLQ messages for group 'specific-group': ${groupDlq.total}`)
+
+// Best practices summary
+console.log('\n--- DLQ Best Practices ---')
+console.log('1. ✅ Monitor DLQ size regularly')
+console.log('2. ✅ Set up alerts for DLQ threshold')
+console.log('3. ✅ Categorize and track error types')
+console.log('4. ✅ Use time-based queries for trend analysis')
+console.log('5. ✅ Investigate and fix root causes')
+console.log('6. ✅ Consider reprocessing or manual intervention for DLQ messages')
+
+// Cleanup
+await queen.close()
+console.log('\n✅ Done!')

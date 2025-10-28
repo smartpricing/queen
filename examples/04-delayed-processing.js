@@ -1,36 +1,57 @@
-import { Queen } from 'queen-mq'
+/**
+ * Example 04: Delayed Processing
+ * 
+ * This example demonstrates:
+ * - Configuring a queue with delayed processing
+ * - Messages become available after a delay
+ * - Useful for scheduled tasks, rate limiting, etc.
+ */
 
-const client = new Queen({ 
-    baseUrls: ['http://localhost:6632']
-});
+import { Queen } from '../client-js/client-v2/index.js'
 
-const queue = 'delayed-queue'
+const queen = new Queen('http://localhost:6632')
 
-// Configure queue with delayed processing
-await client.queue(queue, {
-    delayedProcessing: 2 // 2 seconds delay
-});
+const queueName = 'delayed-example'
 
-const startTime = Date.now();
+console.log('Creating queue with 5 second delay...')
+await queen
+  .queue(queueName)
+  .config({
+    delayedProcessing: 5  // Messages invisible for 5 seconds
+  })
+  .create()
 
-// Push message
-await client.push(queue, { 
-    message: 'Delayed message', 
-    sentAt: startTime 
-});
+// Push messages
+console.log('Pushing messages at', new Date().toISOString())
+await queen.queue(queueName).push([
+  { data: { task: 'Send reminder email', delay: 5 } },
+  { data: { task: 'Update cache', delay: 5 } },
+  { data: { task: 'Sync data', delay: 5 } }
+])
 
-// Try to take immediately (should get nothing)
-for await (const msg of client.take(queue, { limit: 1 })) {
-    // This won't execute - message is delayed
+// Try to pop immediately (should get nothing)
+console.log('\nTrying to pop immediately...')
+const immediate = await queen.queue(queueName).batch(10).wait(false).pop()
+console.log(`Received ${immediate.length} messages (should be 0)`)
+
+// Wait for the delay
+console.log('\nWaiting 5 seconds for messages to become available...')
+for (let i = 5; i > 0; i--) {
+  process.stdout.write(`${i}... `)
+  await new Promise(resolve => setTimeout(resolve, 1000))
 }
+console.log('\n')
 
-// Wait for delay period
-await new Promise(resolve => setTimeout(resolve, 2500));
+// Now pop again
+console.log('Popping at', new Date().toISOString())
+const delayed = await queen.queue(queueName).batch(10).wait(true).pop()
+console.log(`Received ${delayed.length} messages`)
 
-// Try to take again (should get the message now)
-for await (const msg of client.take(queue, { limit: 1 })) {
-    const processingDelay = Date.now() - startTime;
-    console.log(`Message processed after ${processingDelay}ms delay`);
-    await client.ack(msg);
-}
+delayed.forEach(msg => {
+  console.log(`  Task: ${msg.data.task}`)
+})
 
+// Cleanup
+await queen.ack(delayed, true)
+await queen.close()
+console.log('\nDone!')
