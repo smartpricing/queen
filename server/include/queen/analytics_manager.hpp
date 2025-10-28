@@ -42,6 +42,18 @@ public:
     nlohmann::json get_message(const std::string& partition_id, const std::string& transaction_id);
     bool delete_message(const std::string& partition_id, const std::string& transaction_id);
     
+    // Dead Letter Queue
+    struct DLQFilters {
+        std::string queue;
+        std::string consumer_group;
+        std::string partition;
+        std::string from;
+        std::string to;
+        int limit = 100;
+        int offset = 0;
+    };
+    nlohmann::json get_dlq_messages(const DLQFilters& filters);
+    
     // Status & Dashboard
     struct StatusFilters {
         std::string from;
@@ -74,6 +86,9 @@ public:
         std::string worker_id;
     };
     nlohmann::json get_system_metrics(const SystemMetricsFilters& filters);
+    
+    // Consumer Groups
+    nlohmann::json get_consumer_groups();
     
 private:
     // Helper methods

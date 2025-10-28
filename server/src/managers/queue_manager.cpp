@@ -210,8 +210,8 @@ bool QueueManager::ensure_queue_exists(const std::string& queue_name,
         ScopedConnection conn(db_pool_.get());
         
         std::string sql = R"(
-            INSERT INTO queen.queues (name, namespace, task, priority, lease_time, retry_limit, retry_delay, max_size, ttl)
-            VALUES ($1, $2, $3, 0, 300, 3, 1000, 10000, 3600)
+            INSERT INTO queen.queues (name, namespace, task, priority, lease_time, retry_limit, retry_delay, max_queue_size, ttl)
+            VALUES ($1, $2, $3, 0, 300, 3, 1000, 0, 3600)
             ON CONFLICT (name) DO NOTHING
         )";
         
@@ -329,7 +329,7 @@ bool QueueManager::configure_queue(const std::string& queue_name,
         std::string sql = R"(
             INSERT INTO queen.queues (
                 name, namespace, task, priority, lease_time, retry_limit, retry_delay,
-                max_size, ttl, dead_letter_queue, dlq_after_max_retries, delayed_processing,
+                max_queue_size, ttl, dead_letter_queue, dlq_after_max_retries, delayed_processing,
                 window_buffer, retention_seconds, completed_retention_seconds, 
                 retention_enabled, encryption_enabled, max_wait_time_seconds
             ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18)
@@ -340,7 +340,7 @@ bool QueueManager::configure_queue(const std::string& queue_name,
                 lease_time = EXCLUDED.lease_time,
                 retry_limit = EXCLUDED.retry_limit,
                 retry_delay = EXCLUDED.retry_delay,
-                max_size = EXCLUDED.max_size,
+                max_queue_size = EXCLUDED.max_queue_size,
                 ttl = EXCLUDED.ttl,
                 dead_letter_queue = EXCLUDED.dead_letter_queue,
                 dlq_after_max_retries = EXCLUDED.dlq_after_max_retries,
@@ -557,14 +557,20 @@ std::vector<PushResult> QueueManager::push_messages(const std::vector<PushItem>&
                 SELECT 
                   q.name,
                   q.max_queue_size,
-                  COALESCE(SUM(pc.pending_estimate), 0)::integer as current_depth
+                  (
+                    SELECT COUNT(m.id)::integer
+                    FROM queen.messages m
+                    JOIN queen.partitions p ON p.id = m.partition_id
+                    LEFT JOIN queen.partition_consumers pc ON pc.partition_id = p.id
+                      AND pc.consumer_group = '__QUEUE_MODE__'
+                    WHERE p.queue_id = q.id
+                      AND (pc.last_consumed_created_at IS NULL 
+                           OR m.created_at > pc.last_consumed_created_at
+                           OR (m.created_at = pc.last_consumed_created_at AND m.id > pc.last_consumed_id))
+                  ) as current_depth
                 FROM queen.queues q
-                LEFT JOIN queen.partitions p ON p.queue_id = q.id
-                LEFT JOIN queen.partition_consumers pc ON pc.partition_id = p.id
-                  AND pc.consumer_group = '__QUEUE_MODE__'
                 WHERE q.name = ANY($1::varchar[])
                   AND q.max_queue_size > 0
-                GROUP BY q.name, q.max_queue_size
             )";
             
             auto capacity_result = QueryResult(capacity_conn->exec_params(capacity_check_sql, {queues_array}));
@@ -1826,36 +1832,16 @@ QueueManager::AckResult QueueManager::acknowledge_message(const std::string& tra
     try {
         ScopedConnection conn(db_pool_.get());
         
-        std::string partition_id;
-        
-        // If partition_id provided directly, use it (more efficient)
-        if (partition_id_param.has_value() && !partition_id_param->empty()) {
-            partition_id = *partition_id_param;
-            spdlog::debug("Using provided partition_id {} for transaction {}", partition_id, transaction_id);
-        } else {
-            // FALLBACK: Get the partition_id for this transaction_id from active lease
-            // Must scope to the consumer_group's active partition to handle duplicate transaction_ids across partitions
-            std::string get_partition_sql = R"(
-                SELECT m.partition_id
-                FROM queen.messages m
-                JOIN queen.partition_consumers pc ON pc.partition_id = m.partition_id
-                WHERE m.transaction_id = $1 
-                  AND pc.consumer_group = $2
-                  AND pc.lease_expires_at > NOW()
-                LIMIT 1
-            )";
-            
-            auto partition_result = QueryResult(conn->exec_params(get_partition_sql, {transaction_id, consumer_group}));
-            
-            if (!partition_result.is_success() || partition_result.num_rows() == 0) {
-                spdlog::warn("Message not found or no active lease for transaction {} in consumer_group {}", transaction_id, consumer_group);
-                result.status = "not_found";
-                return result;
-            }
-            
-            partition_id = partition_result.get_value(0, "partition_id");
-            spdlog::debug("Looked up partition_id {} for transaction {}", partition_id, transaction_id);
+        // CRITICAL: partition_id is now MANDATORY to prevent acking wrong message
+        // when transactionId is not unique across partitions
+        if (!partition_id_param.has_value() || partition_id_param->empty()) {
+            spdlog::error("partition_id is required for acknowledgment of transaction {}", transaction_id);
+            result.status = "invalid_request";
+            return result;
         }
+        
+        std::string partition_id = *partition_id_param;
+        spdlog::debug("Using provided partition_id {} for transaction {}", partition_id, transaction_id);
         
         // If lease ID provided, validate it
         if (lease_id.has_value()) {
@@ -2088,35 +2074,16 @@ std::vector<QueueManager::AckResult> QueueManager::acknowledge_messages(const st
             };
             
             std::string txn_array = build_txn_array(all_txn_ids);
-            std::string partition_id;
             
-            // If first ack has partition_id, use it directly (more efficient)
-            if (acks[0].partition_id.has_value() && !acks[0].partition_id->empty()) {
-                partition_id = *acks[0].partition_id;
-                spdlog::debug("Using provided partition_id {} for batch ACK", partition_id);
-            } else {
-                // FALLBACK: Get partition_id from database
-                // Get batch size info to determine if this is a total batch failure
-                // CRITICAL: Ensure all messages are from the same partition with active lease
-                std::string batch_size_sql = R"(
-                    SELECT pc.batch_size, pc.partition_id
-                    FROM queen.messages m
-                    JOIN queen.partition_consumers pc ON pc.partition_id = m.partition_id 
-                      AND pc.consumer_group = $2
-                      AND pc.lease_expires_at > NOW()
-                    WHERE m.transaction_id = ANY($1::varchar[])
-                    LIMIT 1
-                )";
-                
-                auto batch_info_result = QueryResult(conn->exec_params(batch_size_sql, {txn_array, actual_consumer_group}));
-                
-                if (!batch_info_result.is_success() || batch_info_result.num_rows() == 0) {
-                    throw std::runtime_error("Cannot find leased batch size for acknowledgment");
-                }
-                
-                partition_id = batch_info_result.get_value(0, "partition_id");
-                spdlog::debug("Looked up partition_id {} for batch ACK", partition_id);
+            // CRITICAL: partition_id is now MANDATORY to prevent acking wrong message
+            // when transactionId is not unique across partitions
+            // All messages in batch must have partition_id set (validated at API layer)
+            if (!acks[0].partition_id.has_value() || acks[0].partition_id->empty()) {
+                throw std::runtime_error("partition_id is required for batch acknowledgment");
             }
+            
+            std::string partition_id = *acks[0].partition_id;
+            spdlog::debug("Using provided partition_id {} for batch ACK", partition_id);
             
             // Get batch size for the partition
             std::string batch_size_sql = R"(
@@ -2522,7 +2489,6 @@ bool QueueManager::initialize_schema() {
                 lease_time INTEGER DEFAULT 300,
                 retry_limit INTEGER DEFAULT 3,
                 retry_delay INTEGER DEFAULT 1000,
-                max_size INTEGER DEFAULT 10000,
                 ttl INTEGER DEFAULT 3600,
                 dead_letter_queue BOOLEAN DEFAULT FALSE,
                 dlq_after_max_retries BOOLEAN DEFAULT FALSE,

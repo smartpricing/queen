@@ -10,6 +10,7 @@ import { QueueBuilder } from './builders/QueueBuilder.js'
 import { TransactionBuilder } from './builders/TransactionBuilder.js'
 import { CLIENT_DEFAULTS } from './utils/defaults.js'
 import { validateUrl, validateUrls } from './utils/validation.js'
+import * as logger from './utils/logger.js'
 
 export class Queen {
   #httpClient
@@ -18,6 +19,8 @@ export class Queen {
   #shutdownHandlers = []
 
   constructor(config = {}) {
+    logger.log('Queen.constructor', { config: typeof config === 'object' && !Array.isArray(config) ? { ...config, urls: config.urls?.length || 0 } : { type: typeof config } })
+    
     // Normalize config
     this.#config = this.#normalizeConfig(config)
 
@@ -29,6 +32,8 @@ export class Queen {
 
     // Setup graceful shutdown
     this.#setupGracefulShutdown()
+    
+    logger.log('Queen.constructor', { status: 'initialized', urls: this.#config.urls.length })
   }
 
   #normalizeConfig(config) {
@@ -92,9 +97,15 @@ export class Queen {
   }
 
   #setupGracefulShutdown() {
+    let signalReceivedCount = 0;
     const shutdown = async (signal) => {
       console.log(`\nReceived ${signal}, shutting down gracefully...`)
       try {
+        signalReceivedCount++;
+        if (signalReceivedCount > 1) {
+          console.log('Received multiple shutdown signals, exiting immediately')
+          process.exit(1)
+        }
         await this.close()
         process.exit(0)
       } catch (error) {
@@ -137,6 +148,9 @@ export class Queen {
   // ===========================
 
   async ack(message, status = true, context = {}) {
+    const isBatch = Array.isArray(message)
+    logger.log('Queen.ack', { isBatch, count: isBatch ? message.length : 1, status, context })
+    
     // Handle batch acknowledgment
     if (Array.isArray(message)) {
       if (message.length === 0) {
@@ -161,6 +175,11 @@ export class Queen {
             throw new Error('Message must have transactionId or id property')
           }
 
+          // CRITICAL: partitionId is now MANDATORY to prevent acking wrong message
+          if (!partitionId) {
+            throw new Error('Message must have partitionId property to ensure message uniqueness')
+          }
+
           const msgStatus = msg._status !== undefined ? msg._status : status
           const statusStr = typeof msgStatus === 'boolean'
             ? (msgStatus ? 'completed' : 'failed')
@@ -168,11 +187,11 @@ export class Queen {
 
           const ack = {
             transactionId,
+            partitionId,
             status: statusStr,
             error: msg._error || context.error || null
           }
 
-          if (partitionId) ack.partitionId = partitionId
           if (leaseId) ack.leaseId = leaseId
 
           return ack
@@ -192,13 +211,18 @@ export class Queen {
             throw new Error('Message must have transactionId or id property')
           }
 
+          // CRITICAL: partitionId is now MANDATORY to prevent acking wrong message
+          if (!partitionId) {
+            throw new Error('Message must have partitionId property to ensure message uniqueness')
+          }
+
           const ack = {
             transactionId,
+            partitionId,
             status: statusStr,
             error: context.error || null
           }
 
-          if (partitionId) ack.partitionId = partitionId
           if (leaseId) ack.leaseId = leaseId
 
           return ack
@@ -213,11 +237,14 @@ export class Queen {
         })
 
         if (result && result.error) {
+          logger.error('Queen.ack', { type: 'batch', error: result.error })
           return { success: false, error: result.error }
         }
 
+        logger.log('Queen.ack', { type: 'batch', success: true, count: acknowledgments.length })
         return { success: true, ...result }
       } catch (error) {
+        logger.error('Queen.ack', { type: 'batch', error: error.message })
         return { success: false, error: error.message }
       }
     }
@@ -231,29 +258,37 @@ export class Queen {
       return { success: false, error: 'Message must have transactionId or id property' }
     }
 
+    // CRITICAL: partitionId is now MANDATORY to prevent acking wrong message
+    if (!partitionId) {
+      return { success: false, error: 'Message must have partitionId property to ensure message uniqueness' }
+    }
+
     const statusStr = typeof status === 'boolean'
       ? (status ? 'completed' : 'failed')
       : status
 
     const body = {
       transactionId,
+      partitionId,
       status: statusStr,
       error: context.error || null,
       consumerGroup: context.group || null
     }
 
-    if (partitionId) body.partitionId = partitionId
     if (leaseId) body.leaseId = leaseId
 
     try {
       const result = await this.#httpClient.post('/api/v1/ack', body)
 
       if (result && result.error) {
+        logger.error('Queen.ack', { type: 'single', transactionId, error: result.error })
         return { success: false, error: result.error }
       }
 
+      logger.log('Queen.ack', { type: 'single', transactionId, success: true })
       return { success: true, ...result }
     } catch (error) {
+      logger.error('Queen.ack', { type: 'single', transactionId, error: error.message })
       return { success: false, error: error.message }
     }
   }
@@ -278,8 +313,11 @@ export class Queen {
     }
 
     if (leaseIds.length === 0) {
+      logger.warn('Queen.renew', 'No valid lease IDs found for renewal')
       return { success: false, error: 'No valid lease IDs found for renewal' }
     }
+    
+    logger.log('Queen.renew', { count: leaseIds.length })
 
     const results = []
     for (const leaseId of leaseIds) {
@@ -290,11 +328,14 @@ export class Queen {
           success: true,
           newExpiresAt: result.leaseId ? result.newExpiresAt : result.lease_expires_at
         })
+        logger.log('Queen.renew', { leaseId, success: true })
       } catch (error) {
         results.push({ leaseId, success: false, error: error.message })
+        logger.error('Queen.renew', { leaseId, error: error.message })
       }
     }
 
+    logger.log('Queen.renew', { total: results.length, successful: results.filter(r => r.success).length })
     return Array.isArray(messageOrLeaseId) ? results : results[0]
   }
 
@@ -303,11 +344,15 @@ export class Queen {
   // ===========================
 
   async flushAllBuffers() {
+    logger.log('Queen.flushAllBuffers', 'Starting flush of all buffers')
     await this.#bufferManager.flushAllBuffers()
+    logger.log('Queen.flushAllBuffers', 'Completed')
   }
 
   getBufferStats() {
-    return this.#bufferManager.getStats()
+    const stats = this.#bufferManager.getStats()
+    logger.log('Queen.getBufferStats', stats)
+    return stats
   }
 
   // ===========================
@@ -315,13 +360,16 @@ export class Queen {
   // ===========================
 
   async close() {
+    logger.log('Queen.close', 'Starting shutdown')
     console.log('Closing Queen client...')
 
     // Flush all buffers
     try {
       await this.#bufferManager.flushAllBuffers()
+      logger.log('Queen.close', 'All buffers flushed')
       console.log('All buffers flushed')
     } catch (error) {
+      logger.error('Queen.close', { error: error.message, phase: 'buffer-flush' })
       console.warn('Error flushing buffers:', error)
     }
 
@@ -334,6 +382,7 @@ export class Queen {
     }
     this.#shutdownHandlers = []
 
+    logger.log('Queen.close', 'Client closed successfully')
     console.log('Queen client closed')
   }
 }

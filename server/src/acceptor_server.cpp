@@ -488,7 +488,7 @@ static void setup_worker_routes(uWS::App* app,
                     if (body.contains("options") && body["options"].is_object()) {
                         auto opts = body["options"];
                         options.lease_time = opts.value("leaseTime", 300);
-                        options.max_size = opts.value("maxSize", 10000);
+                        options.max_size = opts.value("maxSize", 0);  // Default: unlimited (0)
                         options.ttl = opts.value("ttl", 3600);
                         options.retry_limit = opts.value("retryLimit", 3);
                         options.retry_delay = opts.value("retryDelay", 1000);
@@ -569,6 +569,25 @@ static void setup_worker_routes(uWS::App* app,
                         if (file_buffer && !file_buffer->is_db_healthy()) {
                             spdlog::warn("[Worker {}] PUSH: DB known to be down, using file buffer immediately for {}", worker_id, request_id);
                             
+                            // Validate items before writing to file buffer
+                            for (const auto& item_json : body["items"]) {
+                                // Validate partition type if present
+                                if (item_json.contains("partition") && !item_json["partition"].is_string()) {
+                                    spdlog::error("[Worker {}] PUSH: Invalid partition type for {}, must be string", worker_id, request_id);
+                                    nlohmann::json error_response = {{"error", "Partition must be a string"}};
+                                    global_response_queue->push(request_id, error_response, true, 400);
+                                    return;
+                                }
+                                
+                                // Validate queue type
+                                if (!item_json.contains("queue") || !item_json["queue"].is_string()) {
+                                    spdlog::error("[Worker {}] PUSH: Invalid or missing queue for {}", worker_id, request_id);
+                                    nlohmann::json error_response = {{"error", "Queue must be a string"}};
+                                    global_response_queue->push(request_id, error_response, true, 400);
+                                    return;
+                                }
+                            }
+                            
                             // Write all items to file buffer with failover flag
                             for (const auto& item_json : body["items"]) {
                                 nlohmann::json buffered_event = {
@@ -600,9 +619,41 @@ static void setup_worker_routes(uWS::App* app,
                         }
                         
                         try {
-                            // Parse items
+                            // Parse items with validation
                             std::vector<PushItem> items;
                             for (const auto& item_json : body["items"]) {
+                                // Validate partition type if present
+                                if (item_json.contains("partition") && !item_json["partition"].is_string()) {
+                                    spdlog::error("[Worker {}] PUSH: Invalid partition type for {}, must be string", worker_id, request_id);
+                                    nlohmann::json error_response = {{"error", "Partition must be a string"}};
+                                    global_response_queue->push(request_id, error_response, true, 400);
+                                    return;
+                                }
+                                
+                                // Validate queue type
+                                if (!item_json.contains("queue") || !item_json["queue"].is_string()) {
+                                    spdlog::error("[Worker {}] PUSH: Invalid or missing queue for {}", worker_id, request_id);
+                                    nlohmann::json error_response = {{"error", "Queue must be a string"}};
+                                    global_response_queue->push(request_id, error_response, true, 400);
+                                    return;
+                                }
+                                
+                                // Validate transactionId type if present
+                                if (item_json.contains("transactionId") && !item_json["transactionId"].is_string()) {
+                                    spdlog::error("[Worker {}] PUSH: Invalid transactionId type for {}, must be string", worker_id, request_id);
+                                    nlohmann::json error_response = {{"error", "TransactionId must be a string"}};
+                                    global_response_queue->push(request_id, error_response, true, 400);
+                                    return;
+                                }
+                                
+                                // Validate traceId type if present
+                                if (item_json.contains("traceId") && !item_json["traceId"].is_string()) {
+                                    spdlog::error("[Worker {}] PUSH: Invalid traceId type for {}, must be string", worker_id, request_id);
+                                    nlohmann::json error_response = {{"error", "TraceId must be a string"}};
+                                    global_response_queue->push(request_id, error_response, true, 400);
+                                    return;
+                                }
+                                
                                 PushItem item;
                                 item.queue = item_json["queue"];
                                 item.partition = item_json.value("partition", "Default");
@@ -715,6 +766,12 @@ static void setup_worker_routes(uWS::App* app,
                             global_response_queue->push(request_id, json_results, false, 201);
                             spdlog::info("[Worker {}] PUSH: Queued success response for {} ({} items)", worker_id, request_id, results.size());
                             
+                        } catch (const nlohmann::json::exception& json_error) {
+                            // JSON parsing/validation error - return 400 error, do NOT trigger failover
+                            spdlog::error("[Worker {}] PUSH: JSON validation error for {}: {}", 
+                                       worker_id, request_id, json_error.what());
+                            nlohmann::json error_response = {{"error", std::string("Invalid JSON data: ") + json_error.what()}};
+                            global_response_queue->push(request_id, error_response, true, 400);
                         } catch (const std::exception& db_error) {
                             // FAILOVER: PostgreSQL exception - fallback to file buffer for all items (if available)
                             if (file_buffer) {
@@ -783,8 +840,8 @@ static void setup_worker_routes(uWS::App* app,
             int batch = get_query_param_int(req, "batch", config.queue.default_batch_size);
             
             auto pool_stats = queue_manager->get_pool_stats();
-            spdlog::info("[Worker {}] SPOP: [{}/{}] batch={}, wait={} | Pool: {}/{} conn ({} in use)", 
-                        worker_id, queue_name, partition_name, batch, wait,
+            spdlog::info("[Worker {}] SPOP: [{}/{}@{}] batch={}, wait={} | Pool: {}/{} conn ({} in use)", 
+                        worker_id, queue_name, partition_name, consumer_group, batch, wait,
                         pool_stats.available, pool_stats.total, pool_stats.in_use);
             
             PopOptions options;
@@ -865,6 +922,7 @@ static void setup_worker_routes(uWS::App* app,
                         nlohmann::json msg_json = {
                             {"id", msg.id},
                             {"transactionId", msg.transaction_id},
+                            {"partitionId", msg.partition_id},
                             {"traceId", msg.trace_id.empty() ? nlohmann::json(nullptr) : nlohmann::json(msg.trace_id)},
                             {"queue", msg.queue_name},
                             {"partition", msg.partition_name},
@@ -872,7 +930,7 @@ static void setup_worker_routes(uWS::App* app,
                             {"retryCount", msg.retry_count},
                             {"priority", msg.priority},
                             {"createdAt", created_at_ss.str()},
-                            {"consumerGroup", nlohmann::json(nullptr)},
+                            {"consumerGroup", consumer_group == "__QUEUE_MODE__" ? nlohmann::json(nullptr) : nlohmann::json(consumer_group)},
                             {"leaseId", result.lease_id.has_value() ? nlohmann::json(*result.lease_id) : nlohmann::json(nullptr)}
                         };
                         response["messages"].push_back(msg_json);
@@ -933,8 +991,13 @@ static void setup_worker_routes(uWS::App* app,
                             ack.error = ack_json["error"];
                         }
                         
+                        // CRITICAL: partition_id is now MANDATORY to prevent acking wrong message
+                        // when transactionId is not unique across partitions
                         if (ack_json.contains("partitionId") && !ack_json["partitionId"].is_null() && ack_json["partitionId"].is_string()) {
                             ack.partition_id = ack_json["partitionId"];
+                        } else {
+                            send_error_response(res, "Each acknowledgment must have a valid partitionId string to ensure message uniqueness", 400);
+                            return;
                         }
                         
                         ack_items.push_back(ack);
@@ -1024,8 +1087,8 @@ static void setup_worker_routes(uWS::App* app,
             int batch = get_query_param_int(req, "batch", config.queue.default_batch_size);
             
             auto pool_stats = queue_manager->get_pool_stats();
-            spdlog::info("[Worker {}] QPOP: [{}/*] batch={}, wait={} | Pool: {}/{} conn ({} in use)", 
-                        worker_id, queue_name, batch, wait,
+            spdlog::info("[Worker {}] QPOP: [{}/*@{}] batch={}, wait={} | Pool: {}/{} conn ({} in use)", 
+                        worker_id, queue_name, consumer_group, batch, wait,
                         pool_stats.available, pool_stats.total, pool_stats.in_use);
             
             PopOptions options;
@@ -1106,6 +1169,7 @@ static void setup_worker_routes(uWS::App* app,
                         nlohmann::json msg_json = {
                             {"id", msg.id},
                             {"transactionId", msg.transaction_id},
+                            {"partitionId", msg.partition_id},
                             {"traceId", msg.trace_id.empty() ? nlohmann::json(nullptr) : nlohmann::json(msg.trace_id)},
                             {"queue", msg.queue_name},
                             {"partition", msg.partition_name},
@@ -1113,7 +1177,7 @@ static void setup_worker_routes(uWS::App* app,
                             {"retryCount", msg.retry_count},
                             {"priority", msg.priority},
                             {"createdAt", created_at_ss.str()},
-                            {"consumerGroup", nlohmann::json(nullptr)},
+                            {"consumerGroup", consumer_group == "__QUEUE_MODE__" ? nlohmann::json(nullptr) : nlohmann::json(consumer_group)},
                             {"leaseId", result.lease_id.has_value() ? nlohmann::json(*result.lease_id) : nlohmann::json(nullptr)}
                         };
                         response["messages"].push_back(msg_json);
@@ -1170,9 +1234,14 @@ static void setup_worker_routes(uWS::App* app,
                         lease_id = body["leaseId"];
                     }
                     
+                    // CRITICAL: partition_id is now MANDATORY to prevent acking wrong message
+                    // when transactionId is not unique across partitions
                     std::optional<std::string> partition_id;
                     if (body.contains("partitionId") && !body["partitionId"].is_null() && body["partitionId"].is_string()) {
                         partition_id = body["partitionId"];
+                    } else {
+                        send_error_response(res, "partitionId is required to ensure message uniqueness", 400);
+                        return;
                     }
                     
                     // Register response in uWebSockets thread - SAFE
@@ -1320,6 +1389,7 @@ static void setup_worker_routes(uWS::App* app,
                         nlohmann::json msg_json = {
                             {"id", msg.id},
                             {"transactionId", msg.transaction_id},
+                            {"partitionId", msg.partition_id},
                             {"traceId", msg.trace_id.empty() ? nlohmann::json(nullptr) : nlohmann::json(msg.trace_id)},
                             {"queue", msg.queue_name},
                             {"partition", msg.partition_name},
@@ -1327,7 +1397,7 @@ static void setup_worker_routes(uWS::App* app,
                             {"retryCount", msg.retry_count},
                             {"priority", msg.priority},
                             {"createdAt", created_at_ss.str()},
-                            {"consumerGroup", nlohmann::json(nullptr)},
+                            {"consumerGroup", consumer_group == "__QUEUE_MODE__" ? nlohmann::json(nullptr) : nlohmann::json(consumer_group)},
                             {"leaseId", result.lease_id.has_value() ? nlohmann::json(*result.lease_id) : nlohmann::json(nullptr)}
                         };
                         response["messages"].push_back(msg_json);
@@ -1419,7 +1489,18 @@ static void setup_worker_routes(uWS::App* app,
                                         error = op["error"];
                                     }
                                     
-                                    auto ack_result = queue_manager->acknowledge_message(transaction_id, status, error, consumer_group, std::nullopt);
+                                    // CRITICAL: partition_id is now MANDATORY
+                                    std::optional<std::string> partition_id;
+                                    if (op.contains("partitionId") && !op["partitionId"].is_null() && op["partitionId"].is_string()) {
+                                        partition_id = op["partitionId"];
+                                    } else {
+                                        nlohmann::json error_response = {{"error", "partitionId is required for ack operations to ensure message uniqueness"}};
+                                        global_response_queue->push(request_id, error_response, true, 400);
+                                        spdlog::error("[Worker {}] TRANSACTION: Missing partitionId in ack operation for {}", worker_id, request_id);
+                                        return;
+                                    }
+                                    
+                                    auto ack_result = queue_manager->acknowledge_message(transaction_id, status, error, consumer_group, std::nullopt, partition_id);
                                     nlohmann::json ack_result_json;
                                     ack_result_json["type"] = "ack";
                                     ack_result_json["success"] = ack_result.success;
@@ -1628,6 +1709,25 @@ static void setup_worker_routes(uWS::App* app,
         }
     });
     
+    // GET /api/v1/dlq - Get dead letter queue messages
+    app->get("/api/v1/dlq", [analytics_manager](auto* res, auto* req) {
+        try {
+            AnalyticsManager::DLQFilters filters;
+            filters.queue = get_query_param(req, "queue");
+            filters.consumer_group = get_query_param(req, "consumerGroup");
+            filters.partition = get_query_param(req, "partition");
+            filters.from = get_query_param(req, "from");
+            filters.to = get_query_param(req, "to");
+            filters.limit = get_query_param_int(req, "limit", 100);
+            filters.offset = get_query_param_int(req, "offset", 0);
+            
+            auto response = analytics_manager->get_dlq_messages(filters);
+            send_json_response(res, response);
+        } catch (const std::exception& e) {
+            send_error_response(res, e.what(), 500);
+        }
+    });
+    
     // ============================================================================
     // Status/Dashboard Routes
     // ============================================================================
@@ -1725,6 +1825,16 @@ static void setup_worker_routes(uWS::App* app,
             filters.worker_id = get_query_param(req, "workerId");
             
             auto response = analytics_manager->get_system_metrics(filters);
+            send_json_response(res, response);
+        } catch (const std::exception& e) {
+            send_error_response(res, e.what(), 500);
+        }
+    });
+    
+    // GET /api/v1/consumer-groups - Consumer groups
+    app->get("/api/v1/consumer-groups", [analytics_manager](auto* res, auto* req) {
+        try {
+            auto response = analytics_manager->get_consumer_groups();
             send_json_response(res, response);
         } catch (const std::exception& e) {
             send_error_response(res, e.what(), 500);

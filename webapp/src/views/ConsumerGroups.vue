@@ -124,7 +124,12 @@
                 </tr>
               </thead>
               <tbody>
-                <tr v-for="group in filteredGroups" :key="group.name">
+                <tr 
+                  v-for="group in filteredGroups" 
+                  :key="group.name"
+                  @click="selectGroup(group)"
+                  class="cursor-pointer"
+                >
                   <td>
                     <div class="font-medium text-gray-900 dark:text-gray-100">{{ group.name }}</div>
                     <div class="text-xs text-gray-500 dark:text-gray-400 md:hidden">
@@ -170,6 +175,94 @@
         </div>
       </div>
     </div>
+
+    <!-- Consumer Group Detail Modal -->
+    <div v-if="selectedGroup" class="modal-overlay" @click="closeDetail">
+      <div class="modal-content" @click.stop>
+        <div class="modal-header">
+          <div>
+            <h2 class="text-2xl font-bold text-gray-900 dark:text-gray-100">
+              {{ selectedGroup.name }}
+            </h2>
+            <p class="text-sm text-gray-500 dark:text-gray-400 mt-1">
+              Consumer Group Details
+            </p>
+          </div>
+          <button @click="closeDetail" class="close-btn">
+            <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" />
+            </svg>
+          </button>
+        </div>
+
+        <div class="modal-body">
+          <!-- Summary Stats -->
+          <div class="grid grid-cols-2 lg:grid-cols-4 gap-3 mb-6">
+            <div class="stat-card">
+              <div class="stat-label">Total Members</div>
+              <div class="stat-value">{{ selectedGroup.members }}</div>
+            </div>
+            <div class="stat-card">
+              <div class="stat-label">Topics</div>
+              <div class="stat-value">{{ selectedGroup.topics.length }}</div>
+            </div>
+            <div class="stat-card">
+              <div class="stat-label">Total Lag</div>
+              <div class="stat-value">{{ formatNumber(selectedGroup.totalLag) }}</div>
+            </div>
+            <div class="stat-card">
+              <div class="stat-label">Max Time Lag</div>
+              <div class="stat-value">{{ selectedGroup.maxTimeLag > 0 ? formatDuration(selectedGroup.maxTimeLag) : '0ms' }}</div>
+            </div>
+          </div>
+
+          <!-- Per-Queue Details -->
+          <div v-for="(queueData, queueName) in selectedGroup.queues" :key="queueName" class="queue-section">
+            <h3 class="queue-title">
+              <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10" />
+              </svg>
+              {{ queueName }}
+              <span class="partition-count">{{ queueData.partitions.length }} partition{{ queueData.partitions.length !== 1 ? 's' : '' }}</span>
+            </h3>
+
+            <div class="partitions-table">
+              <table class="detail-table">
+                <thead>
+                  <tr>
+                    <th>Partition</th>
+                    <th>Worker ID</th>
+                    <th class="text-right">Consumed</th>
+                    <th class="text-right">Offset Lag</th>
+                    <th class="text-right">Time Lag</th>
+                    <th class="text-center">Lease</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr v-for="partition in queueData.partitions" :key="partition.partition">
+                    <td class="font-medium">{{ partition.partition }}</td>
+                    <td>
+                      <code class="worker-id">{{ partition.workerId || 'N/A' }}</code>
+                    </td>
+                    <td class="text-right">{{ formatNumber(partition.totalConsumed) }}</td>
+                    <td class="text-right font-medium" :class="partition.offsetLag > 0 ? 'text-orange-600 dark:text-orange-400' : 'text-green-600 dark:text-green-400'">
+                      {{ formatNumber(partition.offsetLag) }}
+                    </td>
+                    <td class="text-right font-medium" :class="partition.timeLagSeconds > 300 ? 'text-red-600 dark:text-red-400' : 'text-gray-900 dark:text-gray-100'">
+                      {{ partition.timeLagSeconds > 0 ? formatDuration(partition.timeLagSeconds) : '0ms' }}
+                    </td>
+                    <td class="text-center">
+                      <span v-if="partition.leaseActive" class="badge badge-success text-xs">Active</span>
+                      <span v-else class="badge badge-secondary text-xs">Inactive</span>
+                    </td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
   </div>
 </template>
 
@@ -186,6 +279,7 @@ const error = ref(null);
 const consumerGroups = ref([]);
 const searchQuery = ref('');
 const statusFilter = ref('');
+const selectedGroup = ref(null);
 
 const filteredGroups = computed(() => {
   let filtered = consumerGroups.value;
@@ -221,6 +315,14 @@ const stats = computed(() => {
 function clearFilters() {
   searchQuery.value = '';
   statusFilter.value = '';
+}
+
+function selectGroup(group) {
+  selectedGroup.value = group;
+}
+
+function closeDetail() {
+  selectedGroup.value = null;
 }
 
 async function loadData() {
@@ -429,5 +531,215 @@ onUnmounted(() => {
 
 .dark .error-flat {
   color: #fca5a5;
+}
+
+/* Modal styles */
+.modal-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.6);
+  backdrop-filter: blur(4px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 50;
+  padding: 1rem;
+}
+
+.modal-content {
+  background: #ffffff;
+  border-radius: 1rem;
+  max-width: 1200px;
+  width: 100%;
+  max-height: 90vh;
+  display: flex;
+  flex-direction: column;
+  box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.25);
+}
+
+.dark .modal-content {
+  background: #0a0d14;
+  border: 1px solid rgba(156, 163, 175, 0.1);
+}
+
+.modal-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  padding: 1.5rem;
+  border-bottom: 1px solid rgba(156, 163, 175, 0.1);
+}
+
+.dark .modal-header {
+  border-bottom-color: rgba(156, 163, 175, 0.15);
+}
+
+.close-btn {
+  padding: 0.5rem;
+  border-radius: 0.5rem;
+  color: #6b7280;
+  transition: all 0.2s;
+}
+
+.close-btn:hover {
+  background: rgba(156, 163, 175, 0.1);
+  color: #374151;
+}
+
+.dark .close-btn:hover {
+  background: rgba(156, 163, 175, 0.15);
+  color: #e5e7eb;
+}
+
+.modal-body {
+  padding: 1.5rem;
+  overflow-y: auto;
+  flex: 1;
+}
+
+.stat-card {
+  background: rgba(244, 63, 94, 0.03);
+  border: 1px solid rgba(244, 63, 94, 0.1);
+  border-radius: 0.75rem;
+  padding: 1rem;
+}
+
+.dark .stat-card {
+  background: rgba(244, 63, 94, 0.05);
+  border-color: rgba(244, 63, 94, 0.15);
+}
+
+.stat-label {
+  font-size: 0.75rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: #6b7280;
+  margin-bottom: 0.25rem;
+}
+
+.dark .stat-label {
+  color: #9ca3af;
+}
+
+.stat-value {
+  font-size: 1.5rem;
+  font-weight: 700;
+  background: linear-gradient(135deg, #f43f5e 0%, #ec4899 50%, #a855f7 100%);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+}
+
+.queue-section {
+  margin-bottom: 1.5rem;
+}
+
+.queue-title {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: 1.125rem;
+  font-weight: 600;
+  color: #111827;
+  margin-bottom: 0.75rem;
+  padding: 0.75rem;
+  background: rgba(168, 85, 247, 0.05);
+  border-radius: 0.5rem;
+  border-left: 3px solid rgba(168, 85, 247, 0.5);
+}
+
+.dark .queue-title {
+  color: #f9fafb;
+  background: rgba(168, 85, 247, 0.08);
+  border-left-color: rgba(168, 85, 247, 0.7);
+}
+
+.partition-count {
+  font-size: 0.75rem;
+  font-weight: 500;
+  color: #6b7280;
+  margin-left: auto;
+}
+
+.dark .partition-count {
+  color: #9ca3af;
+}
+
+.partitions-table {
+  border-radius: 0.75rem;
+  overflow: hidden;
+  border: 1px solid rgba(156, 163, 175, 0.1);
+}
+
+.dark .partitions-table {
+  border-color: rgba(156, 163, 175, 0.15);
+}
+
+.detail-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.875rem;
+}
+
+.detail-table thead {
+  background: rgba(249, 250, 251, 0.8);
+  border-bottom: 1px solid rgba(156, 163, 175, 0.1);
+}
+
+.dark .detail-table thead {
+  background: rgba(17, 24, 39, 0.5);
+  border-bottom-color: rgba(156, 163, 175, 0.15);
+}
+
+.detail-table th {
+  padding: 0.75rem 1rem;
+  font-weight: 600;
+  text-align: left;
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: #6b7280;
+}
+
+.dark .detail-table th {
+  color: #9ca3af;
+}
+
+.detail-table td {
+  padding: 0.75rem 1rem;
+  border-bottom: 1px solid rgba(156, 163, 175, 0.05);
+  color: #374151;
+}
+
+.dark .detail-table td {
+  border-bottom-color: rgba(156, 163, 175, 0.08);
+  color: #d1d5db;
+}
+
+.detail-table tbody tr:last-child td {
+  border-bottom: none;
+}
+
+.detail-table tbody tr:hover {
+  background: rgba(244, 63, 94, 0.02);
+}
+
+.dark .detail-table tbody tr:hover {
+  background: rgba(244, 63, 94, 0.05);
+}
+
+.worker-id {
+  background: rgba(168, 85, 247, 0.1);
+  color: #7c3aed;
+  padding: 0.25rem 0.5rem;
+  border-radius: 0.25rem;
+  font-size: 0.75rem;
+  font-family: 'Monaco', 'Menlo', monospace;
+}
+
+.dark .worker-id {
+  background: rgba(168, 85, 247, 0.15);
+  color: #c4b5fd;
 }
 </style>

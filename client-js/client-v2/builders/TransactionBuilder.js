@@ -2,6 +2,8 @@
  * Transaction builder for atomic operations
  */
 
+import * as logger from '../utils/logger.js'
+
 export class TransactionBuilder {
   #httpClient
   #operations = []
@@ -13,18 +15,27 @@ export class TransactionBuilder {
 
   ack(messages, status = 'completed') {
     const msgs = Array.isArray(messages) ? messages : [messages]
+    
+    logger.log('TransactionBuilder.ack', { count: msgs.length, status })
 
     msgs.forEach(msg => {
       const transactionId = typeof msg === 'string' ? msg : (msg.transactionId || msg.id)
+      const partitionId = typeof msg === 'object' ? msg.partitionId : null
       const leaseId = typeof msg === 'object' ? msg.leaseId : null
 
       if (!transactionId) {
         throw new Error('Message must have transactionId or id property')
       }
 
+      // CRITICAL: partitionId is now MANDATORY to prevent acking wrong message
+      if (!partitionId) {
+        throw new Error('Message must have partitionId property to ensure message uniqueness')
+      }
+
       this.#operations.push({
         type: 'ack',
         transactionId,
+        partitionId,
         status
       })
 
@@ -41,13 +52,27 @@ export class TransactionBuilder {
     return {
       push: (items) => {
         const itemArray = Array.isArray(items) ? items : [items]
+        
+        logger.log('TransactionBuilder.queue.push', { queue: queueName, count: itemArray.length })
 
         this.#operations.push({
           type: 'push',
-          items: itemArray.map(item => ({
-            queue: queueName,
-            payload: item.payload || item
-          }))
+          items: itemArray.map(item => {
+            // Check if property exists, not just truthy (to support null values)
+            let payloadValue
+            if ('data' in item) {
+              payloadValue = item.data
+            } else if ('payload' in item) {
+              payloadValue = item.payload
+            } else {
+              payloadValue = item
+            }
+
+            return {
+              queue: queueName,
+              payload: payloadValue
+            }
+          })
         })
 
         return this
@@ -57,19 +82,29 @@ export class TransactionBuilder {
 
   async commit() {
     if (this.#operations.length === 0) {
+      logger.error('TransactionBuilder.commit', 'No operations to commit')
       throw new Error('Transaction has no operations to commit')
     }
 
-    const result = await this.#httpClient.post('/api/v1/transaction', {
-      operations: this.#operations,
-      requiredLeases: [...new Set(this.#requiredLeases)] // Unique leases
-    })
+    logger.log('TransactionBuilder.commit', { operationCount: this.#operations.length, requiredLeases: this.#requiredLeases.length })
 
-    if (!result.success) {
-      throw new Error(result.error || 'Transaction failed')
+    try {
+      const result = await this.#httpClient.post('/api/v1/transaction', {
+        operations: this.#operations,
+        requiredLeases: [...new Set(this.#requiredLeases)] // Unique leases
+      })
+
+      if (!result.success) {
+        logger.error('TransactionBuilder.commit', { error: result.error })
+        throw new Error(result.error || 'Transaction failed')
+      }
+
+      logger.log('TransactionBuilder.commit', { status: 'success' })
+      return result
+    } catch (error) {
+      logger.error('TransactionBuilder.commit', { error: error.message })
+      throw error
     }
-
-    return result
   }
 }
 

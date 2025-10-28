@@ -2,6 +2,8 @@
  * HTTP client with retry, load balancing, and failover support
  */
 
+import * as logger from '../utils/logger.js'
+
 export class HttpClient {
   #baseUrl
   #loadBalancer
@@ -26,10 +28,20 @@ export class HttpClient {
     this.#retryAttempts = retryAttempts
     this.#retryDelayMillis = retryDelayMillis
     this.#enableFailover = enableFailover
+    
+    logger.log('HttpClient.constructor', { 
+      hasLoadBalancer: !!loadBalancer, 
+      baseUrl: baseUrl || 'load-balanced', 
+      timeoutMillis, 
+      retryAttempts,
+      enableFailover 
+    })
   }
 
   async #executeRequest(url, method, body = null, requestTimeoutMillis = null) {
     const effectiveTimeout = requestTimeoutMillis || this.#timeoutMillis
+    logger.log('HttpClient.request', { method, url, hasBody: !!body, timeout: effectiveTimeout })
+    
     const controller = new AbortController()
     const timeoutId = setTimeout(() => controller.abort(), effectiveTimeout)
 
@@ -45,6 +57,8 @@ export class HttpClient {
       }
 
       const response = await fetch(url, options)
+      
+      logger.log('HttpClient.response', { method, url, status: response.status })
 
       // Handle 204 No Content
       if (response.status === 204) {
@@ -66,6 +80,7 @@ export class HttpClient {
           // Ignore JSON parse errors
         }
 
+        logger.error('HttpClient.request', { method, url, status: error.status, error: error.message })
         throw error
       }
 
@@ -92,8 +107,10 @@ export class HttpClient {
         const timeoutError = new Error(`Request timeout after ${effectiveTimeout}ms`)
         timeoutError.name = 'AbortError'
         timeoutError.timeout = effectiveTimeout
+        logger.error('HttpClient.request', { method, url, error: 'timeout', timeout: effectiveTimeout })
         throw timeoutError
       }
+      logger.error('HttpClient.request', { method, url, error: error.message })
       throw error
     } finally {
       clearTimeout(timeoutId)
@@ -118,11 +135,13 @@ export class HttpClient {
         // Wait before retry (except on last attempt)
         if (attempt < this.#retryAttempts - 1) {
           const delay = this.#retryDelayMillis * Math.pow(2, attempt)
+          logger.warn('HttpClient.retry', { method, path, attempt: attempt + 1, delay, error: error.message })
           await new Promise(resolve => setTimeout(resolve, delay))
         }
       }
     }
 
+    logger.error('HttpClient.retry', { method, path, error: 'Max retries exceeded', attempts: this.#retryAttempts })
     throw lastError
   }
 
@@ -134,6 +153,8 @@ export class HttpClient {
     const urls = this.#loadBalancer.getAllUrls()
     const attemptedUrls = new Set()
     let lastError = null
+
+    logger.log('HttpClient.failover', { method, path, totalServers: urls.length })
 
     for (let i = 0; i < urls.length; i++) {
       const url = this.#loadBalancer.getNextUrl()
@@ -148,6 +169,7 @@ export class HttpClient {
         return await this.#executeRequest(url + path, method, body, requestTimeoutMillis)
       } catch (error) {
         lastError = error
+        logger.warn('HttpClient.failover', { url, method, path, error: error.message })
         console.warn(`Request failed for ${url}: ${method} ${path} - ${error.message}`)
 
         // Don't retry on client errors (4xx)
@@ -159,6 +181,7 @@ export class HttpClient {
       }
     }
 
+    logger.error('HttpClient.failover', { method, path, error: 'All servers failed', attempted: attemptedUrls.size })
     throw lastError || new Error('All servers failed')
   }
 

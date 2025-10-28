@@ -23,6 +23,7 @@
 | **Resources** | `/api/v1/resources/tasks` | GET | List tasks |
 | **Resources** | `/api/v1/messages` | GET | List messages (filtered) |
 | **Resources** | `/api/v1/messages/:transactionId` | GET | Message details |
+| **Resources** | `/api/v1/dlq` | GET | Dead letter queue messages |
 | **Status** | `/api/v1/status` | GET | Dashboard overview |
 | **Status** | `/api/v1/status/queues` | GET | Queue statistics |
 | **Status** | `/api/v1/status/queues/:queue` | GET | Queue detail stats |
@@ -86,12 +87,16 @@ curl -X POST http://localhost:6632/api/v1/configure \
 - `leaseTime` - Time in seconds before message lease expires (default: 300)
 - `maxSize` - Maximum queue size (default: 10000)
 - `retryLimit` - Max retry attempts (default: 3)
+- `retryDelay` - Delay in milliseconds between retries (default: 1000)
 - `priority` - Queue priority (default: 0)
 - `delayedProcessing` - Delay in seconds before message is available (default: 0)
 - `windowBuffer` - Time in seconds messages wait before being available (default: 0)
 - `retentionSeconds` - Retention time for pending messages (default: 0)
 - `completedRetentionSeconds` - Retention time for completed messages (default: 0)
 - `encryptionEnabled` - Enable message encryption (default: false)
+- `deadLetterQueue` - Enable dead letter queue functionality (default: false)
+- `dlqAfterMaxRetries` - Automatically move messages to DLQ after max retries (default: false)
+- `maxWaitTimeSeconds` - Maximum time a message can wait before being moved to DLQ (default: 0)
 
 ---
 
@@ -190,12 +195,16 @@ curl "http://localhost:6632/api/v1/pop?namespace=billing&consumerGroup=workers"
 
 #### `POST /api/v1/ack`
 Acknowledge a single message.
+
+**⚠️ IMPORTANT:** `partitionId` is **required** to ensure the correct message is acknowledged, especially when `transactionId` values may not be unique across partitions.
+
 ```bash
 # Acknowledge as completed
 curl -X POST http://localhost:6632/api/v1/ack \
   -H "Content-Type: application/json" \
   -d '{
     "transactionId": "msg-transaction-id",
+    "partitionId": "partition-uuid",
     "status": "completed"
   }'
 
@@ -204,6 +213,7 @@ curl -X POST http://localhost:6632/api/v1/ack \
   -H "Content-Type: application/json" \
   -d '{
     "transactionId": "msg-transaction-id",
+    "partitionId": "partition-uuid",
     "status": "failed",
     "error": "Processing error message"
   }'
@@ -213,6 +223,7 @@ curl -X POST http://localhost:6632/api/v1/ack \
   -H "Content-Type: application/json" \
   -d '{
     "transactionId": "msg-transaction-id",
+    "partitionId": "partition-uuid",
     "status": "completed",
     "consumerGroup": "workers"
   }'
@@ -220,6 +231,9 @@ curl -X POST http://localhost:6632/api/v1/ack \
 
 #### `POST /api/v1/ack/batch`
 Acknowledge multiple messages at once.
+
+**⚠️ IMPORTANT:** `partitionId` is **required** for each acknowledgment to ensure the correct messages are acknowledged, especially when `transactionId` values may not be unique across partitions.
+
 ```bash
 curl -X POST http://localhost:6632/api/v1/ack/batch \
   -H "Content-Type: application/json" \
@@ -228,10 +242,12 @@ curl -X POST http://localhost:6632/api/v1/ack/batch \
     "acknowledgments": [
       {
         "transactionId": "tx-1",
+        "partitionId": "partition-uuid-1",
         "status": "completed"
       },
       {
         "transactionId": "tx-2",
+        "partitionId": "partition-uuid-2",
         "status": "failed",
         "error": "Validation error"
       }
@@ -245,6 +261,9 @@ curl -X POST http://localhost:6632/api/v1/ack/batch \
 
 #### `POST /api/v1/transaction`
 Execute atomic operations (push + ack).
+
+**⚠️ IMPORTANT:** `partitionId` is **required** for ack operations to ensure the correct message is acknowledged.
+
 ```bash
 curl -X POST http://localhost:6632/api/v1/transaction \
   -H "Content-Type: application/json" \
@@ -253,6 +272,7 @@ curl -X POST http://localhost:6632/api/v1/transaction \
       {
         "type": "ack",
         "transactionId": "original-msg-id",
+        "partitionId": "partition-uuid",
         "status": "completed"
       },
       {
@@ -338,6 +358,60 @@ Get details for a specific message.
 curl http://localhost:6632/api/v1/messages/transaction-id-here
 ```
 
+#### `GET /api/v1/dlq`
+Get dead letter queue (DLQ) messages with optional filters.
+```bash
+# Get all DLQ messages for a queue
+curl "http://localhost:6632/api/v1/dlq?queue=myqueue&limit=50"
+
+# Get DLQ messages for a specific consumer group
+curl "http://localhost:6632/api/v1/dlq?queue=myqueue&consumerGroup=workers"
+
+# Get DLQ messages with date range
+curl "http://localhost:6632/api/v1/dlq?queue=myqueue&from=2024-01-01&to=2024-01-31"
+
+# Get DLQ messages for a specific partition
+curl "http://localhost:6632/api/v1/dlq?queue=myqueue&partition=customer-123"
+```
+
+**Query Parameters:**
+- `queue` - Filter by queue name (required)
+- `consumerGroup` - Filter by consumer group (optional)
+- `partition` - Filter by partition name (optional)
+- `from` - Start date/time (ISO 8601 format) (optional)
+- `to` - End date/time (ISO 8601 format) (optional)
+- `limit` - Number of results (default: 100)
+- `offset` - Pagination offset (default: 0)
+
+**Response:**
+```json
+{
+  "messages": [
+    {
+      "id": "dlq-entry-id",
+      "messageId": "original-message-id",
+      "partitionId": "partition-uuid",
+      "transactionId": "transaction-id",
+      "consumerGroup": "__QUEUE_MODE__",
+      "errorMessage": "Processing failed: invalid data",
+      "retryCount": 3,
+      "originalCreatedAt": "2024-01-15T10:30:00.000Z",
+      "movedToDlqAt": "2024-01-15T10:35:00.000Z",
+      "messageCreatedAt": "2024-01-15T10:30:00.000Z",
+      "queueName": "myqueue",
+      "namespace": "billing",
+      "task": "process-invoice",
+      "partitionName": "Default",
+      "data": { "orderId": "12345", "amount": 100 },
+      "traceId": "trace-uuid"
+    }
+  ],
+  "total": 42,
+  "limit": 100,
+  "offset": 0
+}
+```
+
 ---
 
 ### Dashboard & Status
@@ -379,6 +453,22 @@ curl "http://localhost:6632/api/v1/status/analytics?interval=hour&from=2024-01-0
 - `queue` - Filter by queue
 - `namespace` - Filter by namespace
 - `task` - Filter by task
+
+#### `GET /api/v1/consumer-groups`
+Get all consumer groups with their topics, members, and lag statistics. Includes both named consumer groups (bus/pub-sub mode) and `__QUEUE_MODE__` (default queue mode).
+```bash
+curl "http://localhost:6632/api/v1/consumer-groups"
+```
+
+**Response:**
+Returns an array of consumer groups with:
+- `name` - Consumer group name (including `__QUEUE_MODE__` for queue-mode consumers)
+- `topics` - Array of queue/topic names subscribed
+- `members` - Number of partition consumers
+- `totalLag` - Total offset lag across all partitions
+- `maxTimeLag` - Maximum time lag in seconds
+- `state` - Group state: "Stable", "Lagging", or "Dead"
+- `queues` - Detailed per-queue partition information
 
 ---
 

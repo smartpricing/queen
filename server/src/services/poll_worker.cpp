@@ -376,7 +376,7 @@ std::vector<std::string> distribute_to_clients(
                 {"retryCount", msg.retry_count},
                 {"priority", msg.priority},
                 {"createdAt", created_at_ss.str()},
-                {"consumerGroup", nlohmann::json(nullptr)},
+                {"consumerGroup", intention.consumer_group == "__QUEUE_MODE__" ? nlohmann::json(nullptr) : nlohmann::json(intention.consumer_group)},
                 {"leaseId", result.lease_id.has_value() ? nlohmann::json(*result.lease_id) : nlohmann::json(nullptr)}
             };
             

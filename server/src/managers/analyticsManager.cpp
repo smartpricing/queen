@@ -434,6 +434,36 @@ nlohmann::json AnalyticsManager::list_messages(const MessageFilters& filters) {
         std::string from_iso, to_iso;
         get_time_range(filters.from, filters.to, from_iso, to_iso, 1);
         
+        // First, detect mode for ALL messages (before filtering)
+        std::string mode_query = R"(
+            SELECT 
+                bool_or(pc.consumer_group = '__QUEUE_MODE__') as has_queue_mode,
+                COUNT(DISTINCT pc.consumer_group) FILTER (WHERE pc.consumer_group != '__QUEUE_MODE__') as bus_groups_count
+            FROM queen.messages m
+            JOIN queen.partitions p ON p.id = m.partition_id
+            JOIN queen.queues q ON q.id = p.queue_id
+            LEFT JOIN queen.partition_consumers pc ON pc.partition_id = p.id
+            WHERE m.created_at >= $1 AND m.created_at <= $2
+        )";
+        
+        std::vector<std::string> mode_params = {from_iso, to_iso};
+        
+        if (!filters.queue.empty()) {
+            mode_query += " AND q.name = $3";
+            mode_params.push_back(filters.queue);
+        }
+        
+        auto mode_result = QueryResult(conn->exec_params(mode_query, mode_params));
+        bool has_queue_mode = false;
+        int total_bus_groups = 0;
+        
+        if (mode_result.is_success() && mode_result.num_rows() > 0) {
+            std::string has_queue_str = mode_result.get_value(0, "has_queue_mode");
+            has_queue_mode = (has_queue_str == "t" || has_queue_str == "true");
+            total_bus_groups = safe_stoi(mode_result.get_value(0, "bus_groups_count"));
+        }
+        
+        // Now query messages with the mode already known
         std::string query = R"(
             SELECT 
                 m.id,
@@ -446,20 +476,31 @@ nlohmann::json AnalyticsManager::list_messages(const MessageFilters& filters) {
                 q.namespace,
                 q.task,
                 q.priority as queue_priority,
-                pc.lease_expires_at,
+                pc_queue.lease_expires_at,
+                -- Queue mode status (from __QUEUE_MODE__)
                 CASE
                     WHEN dlq.message_id IS NOT NULL THEN 'dead_letter'
-                    WHEN pc.last_consumed_created_at IS NOT NULL AND (
-                        m.created_at < pc.last_consumed_created_at OR 
-                        (DATE_TRUNC('milliseconds', m.created_at) = DATE_TRUNC('milliseconds', pc.last_consumed_created_at) AND m.id <= pc.last_consumed_id)
+                    WHEN pc_queue.last_consumed_created_at IS NOT NULL AND (
+                        m.created_at < pc_queue.last_consumed_created_at OR 
+                        (DATE_TRUNC('milliseconds', m.created_at) = DATE_TRUNC('milliseconds', pc_queue.last_consumed_created_at) AND m.id <= pc_queue.last_consumed_id)
                     ) THEN 'completed'
-                    WHEN pc.lease_expires_at IS NOT NULL AND pc.lease_expires_at > NOW() THEN 'processing'
+                    WHEN pc_queue.lease_expires_at IS NOT NULL AND pc_queue.lease_expires_at > NOW() THEN 'processing'
                     ELSE 'pending'
-                END as message_status
+                END as queue_status,
+                -- Bus mode: count of consumer groups that consumed this message
+                (
+                    SELECT COUNT(*)::integer
+                    FROM queen.partition_consumers pc
+                    WHERE pc.partition_id = m.partition_id
+                      AND pc.consumer_group != '__QUEUE_MODE__'
+                      AND pc.last_consumed_created_at IS NOT NULL
+                      AND (m.created_at < pc.last_consumed_created_at OR 
+                           (DATE_TRUNC('milliseconds', m.created_at) = DATE_TRUNC('milliseconds', pc.last_consumed_created_at) AND m.id <= pc.last_consumed_id))
+                ) as consumed_by_groups_count
             FROM queen.messages m
             JOIN queen.partitions p ON p.id = m.partition_id
             JOIN queen.queues q ON q.id = p.queue_id
-            LEFT JOIN queen.partition_consumers pc ON pc.partition_id = p.id AND pc.consumer_group = '__QUEUE_MODE__'
+            LEFT JOIN queen.partition_consumers pc_queue ON pc_queue.partition_id = p.id AND pc_queue.consumer_group = '__QUEUE_MODE__'
             LEFT JOIN queen.dead_letter_queue dlq ON dlq.message_id = m.id
             WHERE m.created_at >= $1 AND m.created_at <= $2
         )";
@@ -484,17 +525,47 @@ nlohmann::json AnalyticsManager::list_messages(const MessageFilters& filters) {
             params.push_back(filters.task);
         }
         if (!filters.status.empty()) {
-            // Add status filter with the same CASE logic
-            query += R"( AND CASE
-                WHEN dlq.message_id IS NOT NULL THEN 'dead_letter'
-                WHEN pc.last_consumed_created_at IS NOT NULL AND (
-                    m.created_at < pc.last_consumed_created_at OR 
-                    (DATE_TRUNC('milliseconds', m.created_at) = DATE_TRUNC('milliseconds', pc.last_consumed_created_at) AND m.id <= pc.last_consumed_id)
-                ) THEN 'completed'
-                WHEN pc.lease_expires_at IS NOT NULL AND pc.lease_expires_at > NOW() THEN 'processing'
-                ELSE 'pending'
-            END = $)" + std::to_string(params.size() + 1);
-            params.push_back(filters.status);
+            // Apply filter based on detected mode
+            if (!has_queue_mode && total_bus_groups > 0) {
+                // Pure Bus Mode - filter based on ALL groups consumption
+                if (filters.status == "completed") {
+                    query += R"( AND (
+                        SELECT COUNT(*)::integer
+                        FROM queen.partition_consumers pc
+                        WHERE pc.partition_id = m.partition_id
+                          AND pc.consumer_group != '__QUEUE_MODE__'
+                          AND pc.last_consumed_created_at IS NOT NULL
+                          AND (m.created_at < pc.last_consumed_created_at OR 
+                               (DATE_TRUNC('milliseconds', m.created_at) = DATE_TRUNC('milliseconds', pc.last_consumed_created_at) AND m.id <= pc.last_consumed_id))
+                    ) >= )" + std::to_string(total_bus_groups);
+                } else if (filters.status == "pending") {
+                    query += R"( AND (
+                        SELECT COUNT(*)::integer
+                        FROM queen.partition_consumers pc
+                        WHERE pc.partition_id = m.partition_id
+                          AND pc.consumer_group != '__QUEUE_MODE__'
+                          AND pc.last_consumed_created_at IS NOT NULL
+                          AND (m.created_at < pc.last_consumed_created_at OR 
+                               (DATE_TRUNC('milliseconds', m.created_at) = DATE_TRUNC('milliseconds', pc.last_consumed_created_at) AND m.id <= pc.last_consumed_id))
+                    ) < )" + std::to_string(total_bus_groups);
+                } else {
+                    // Other statuses (dead_letter, processing)
+                    query += " AND queue_status = $" + std::to_string(params.size() + 1);
+                    params.push_back(filters.status);
+                }
+            } else {
+                // Queue Mode or Hybrid - filter based on queue_status
+                query += R"( AND CASE
+                    WHEN dlq.message_id IS NOT NULL THEN 'dead_letter'
+                    WHEN pc_queue.last_consumed_created_at IS NOT NULL AND (
+                        m.created_at < pc_queue.last_consumed_created_at OR 
+                        (DATE_TRUNC('milliseconds', m.created_at) = DATE_TRUNC('milliseconds', pc_queue.last_consumed_created_at) AND m.id <= pc_queue.last_consumed_id)
+                    ) THEN 'completed'
+                    WHEN pc_queue.lease_expires_at IS NOT NULL AND pc_queue.lease_expires_at > NOW() THEN 'processing'
+                    ELSE 'pending'
+                END = $)" + std::to_string(params.size() + 1);
+                params.push_back(filters.status);
+            }
         }
         
         query += " ORDER BY m.created_at DESC, m.id DESC";
@@ -506,10 +577,29 @@ nlohmann::json AnalyticsManager::list_messages(const MessageFilters& filters) {
         auto result = QueryResult(conn->exec_params(query, params));
         
         nlohmann::json messages = nlohmann::json::array();
+        
         for (int i = 0; i < result.num_rows(); i++) {
             std::string trace_val = result.get_value(i, "trace_id");
             std::string lease_val = result.get_value(i, "lease_expires_at");
             std::string queue_path = result.get_value(i, "queue_name") + "/" + result.get_value(i, "partition_name");
+            
+            int consumed_by_groups = safe_stoi(result.get_value(i, "consumed_by_groups_count"));
+            std::string queue_status = result.get_value(i, "queue_status");
+            
+            // Compute final display status based on mode
+            std::string display_status;
+            if (queue_status == "dead_letter") {
+                display_status = "dead_letter";
+            } else if (!has_queue_mode && total_bus_groups > 0) {
+                // Pure Bus Mode - show bus status only
+                display_status = consumed_by_groups == total_bus_groups ? "completed" : "pending";
+            } else if (has_queue_mode && total_bus_groups == 0) {
+                // Pure Queue Mode - show queue status
+                display_status = queue_status;
+            } else {
+                // Hybrid or no consumers - default to queue status
+                display_status = queue_status;
+            }
             
             nlohmann::json msg = {
                 {"id", result.get_value(i, "id")},
@@ -520,7 +610,12 @@ nlohmann::json AnalyticsManager::list_messages(const MessageFilters& filters) {
                 {"partition", result.get_value(i, "partition_name")},
                 {"namespace", result.get_value(i, "namespace")},
                 {"task", result.get_value(i, "task")},
-                {"status", result.get_value(i, "message_status")},
+                {"status", display_status},
+                {"queueStatus", queue_status},
+                {"busStatus", {
+                    {"consumedBy", consumed_by_groups},
+                    {"totalGroups", total_bus_groups}
+                }},
                 {"traceId", trace_val.empty() ? nullptr : nlohmann::json(trace_val)},
                 {"queuePriority", safe_stoi(result.get_value(i, "queue_priority"))},
                 {"createdAt", result.get_value(i, "created_at")},
@@ -530,7 +625,16 @@ nlohmann::json AnalyticsManager::list_messages(const MessageFilters& filters) {
             messages.push_back(msg);
         }
         
-        return {{"messages", messages}};
+        return {
+            {"messages", messages},
+            {"mode", {
+                {"hasQueueMode", has_queue_mode},
+                {"busGroupsCount", total_bus_groups},
+                {"type", !has_queue_mode && total_bus_groups > 0 ? "bus" : 
+                         has_queue_mode && total_bus_groups == 0 ? "queue" :
+                         has_queue_mode && total_bus_groups > 0 ? "hybrid" : "none"}
+            }}
+        };
     } catch (const std::exception& e) {
         spdlog::error("Error in list_messages: {}", e.what());
         throw;
@@ -559,24 +663,44 @@ nlohmann::json AnalyticsManager::get_message(const std::string& partition_id, co
                 q.retry_delay,
                 q.ttl,
                 q.priority as queue_priority,
-                pc.lease_expires_at,
-                pc.last_consumed_created_at,
-                pc.last_consumed_id,
+                pc_queue.lease_expires_at,
+                pc_queue.last_consumed_created_at,
+                pc_queue.last_consumed_id,
                 dlq.error_message,
                 dlq.retry_count,
+                -- Queue mode status
                 CASE
                     WHEN dlq.message_id IS NOT NULL THEN 'dead_letter'
-                    WHEN pc.last_consumed_created_at IS NOT NULL AND (
-                        m.created_at < pc.last_consumed_created_at OR 
-                        (DATE_TRUNC('milliseconds', m.created_at) = DATE_TRUNC('milliseconds', pc.last_consumed_created_at) AND m.id <= pc.last_consumed_id)
+                    WHEN pc_queue.last_consumed_created_at IS NOT NULL AND (
+                        m.created_at < pc_queue.last_consumed_created_at OR 
+                        (DATE_TRUNC('milliseconds', m.created_at) = DATE_TRUNC('milliseconds', pc_queue.last_consumed_created_at) AND m.id <= pc_queue.last_consumed_id)
                     ) THEN 'completed'
-                    WHEN pc.lease_expires_at IS NOT NULL AND pc.lease_expires_at > NOW() THEN 'processing'
+                    WHEN pc_queue.lease_expires_at IS NOT NULL AND pc_queue.lease_expires_at > NOW() THEN 'processing'
                     ELSE 'pending'
-                END as message_status
+                END as queue_status,
+                -- Bus mode: count of consumer groups that consumed this message
+                (
+                    SELECT COUNT(*)::integer
+                    FROM queen.partition_consumers pc
+                    WHERE pc.partition_id = m.partition_id
+                      AND pc.consumer_group != '__QUEUE_MODE__'
+                      AND pc.last_consumed_created_at IS NOT NULL
+                      AND (m.created_at < pc.last_consumed_created_at OR 
+                           (DATE_TRUNC('milliseconds', m.created_at) = DATE_TRUNC('milliseconds', pc.last_consumed_created_at) AND m.id <= pc.last_consumed_id))
+                ) as consumed_by_groups_count,
+                -- Total bus mode consumer groups
+                (
+                    SELECT COUNT(*)::integer
+                    FROM queen.partition_consumers pc
+                    WHERE pc.partition_id = m.partition_id
+                      AND pc.consumer_group != '__QUEUE_MODE__'
+                ) as total_bus_groups,
+                -- Check if __QUEUE_MODE__ consumer exists
+                (pc_queue.consumer_group IS NOT NULL) as has_queue_mode
             FROM queen.messages m
             JOIN queen.partitions p ON p.id = m.partition_id
             JOIN queen.queues q ON q.id = p.queue_id
-            LEFT JOIN queen.partition_consumers pc ON pc.partition_id = p.id AND pc.consumer_group = '__QUEUE_MODE__'
+            LEFT JOIN queen.partition_consumers pc_queue ON pc_queue.partition_id = p.id AND pc_queue.consumer_group = '__QUEUE_MODE__'
             LEFT JOIN queen.dead_letter_queue dlq ON dlq.message_id = m.id
             WHERE m.partition_id = $1::uuid AND m.transaction_id = $2
         )";
@@ -593,6 +717,27 @@ nlohmann::json AnalyticsManager::get_message(const std::string& partition_id, co
         std::string retry_val = result.get_value(0, "retry_count");
         std::string queue_path = result.get_value(0, "queue_name") + "/" + result.get_value(0, "partition_name");
         
+        // Get mode detection values
+        bool has_queue_mode = result.get_value(0, "has_queue_mode") == "t";
+        int total_bus_groups = safe_stoi(result.get_value(0, "total_bus_groups"));
+        int consumed_by_groups = safe_stoi(result.get_value(0, "consumed_by_groups_count"));
+        std::string queue_status = result.get_value(0, "queue_status");
+        
+        // Compute smart display status
+        std::string display_status;
+        if (queue_status == "dead_letter") {
+            display_status = "dead_letter";
+        } else if (!has_queue_mode && total_bus_groups > 0) {
+            // Pure Bus Mode
+            display_status = consumed_by_groups == total_bus_groups ? "completed" : "pending";
+        } else if (has_queue_mode && total_bus_groups == 0) {
+            // Pure Queue Mode
+            display_status = queue_status;
+        } else {
+            // Hybrid or no consumers
+            display_status = queue_status;
+        }
+        
         nlohmann::json response = {
             {"id", result.get_value(0, "id")},
             {"transactionId", result.get_value(0, "transaction_id")},
@@ -602,7 +747,19 @@ nlohmann::json AnalyticsManager::get_message(const std::string& partition_id, co
             {"partition", result.get_value(0, "partition_name")},
             {"namespace", result.get_value(0, "namespace")},
             {"task", result.get_value(0, "task")},
-            {"status", result.get_value(0, "message_status")},
+            {"status", display_status},
+            {"queueStatus", queue_status},
+            {"busStatus", {
+                {"consumedBy", consumed_by_groups},
+                {"totalGroups", total_bus_groups}
+            }},
+            {"mode", {
+                {"hasQueueMode", has_queue_mode},
+                {"busGroupsCount", total_bus_groups},
+                {"type", !has_queue_mode && total_bus_groups > 0 ? "bus" : 
+                         has_queue_mode && total_bus_groups == 0 ? "queue" :
+                         has_queue_mode && total_bus_groups > 0 ? "hybrid" : "none"}
+            }},
             {"traceId", trace_val.empty() ? nullptr : nlohmann::json(trace_val)},
             {"createdAt", result.get_value(0, "created_at")},
             {"errorMessage", error_val.empty() ? nullptr : nlohmann::json(error_val)},
@@ -693,6 +850,180 @@ bool AnalyticsManager::delete_message(const std::string& partition_id, const std
         return true;
     } catch (const std::exception& e) {
         spdlog::error("Error in delete_message: {}", e.what());
+        throw;
+    }
+}
+
+nlohmann::json AnalyticsManager::get_dlq_messages(const DLQFilters& filters) {
+    try {
+        ScopedConnection conn(db_pool_.get());
+        
+        // Build WHERE clause based on filters
+        std::string where_clause = " WHERE 1=1";
+        std::vector<std::string> params;
+        int param_num = 1;
+        
+        if (!filters.queue.empty()) {
+            where_clause += " AND q.name = $" + std::to_string(param_num++);
+            params.push_back(filters.queue);
+        }
+        
+        if (!filters.consumer_group.empty()) {
+            where_clause += " AND dlq.consumer_group = $" + std::to_string(param_num++);
+            params.push_back(filters.consumer_group);
+        }
+        
+        if (!filters.partition.empty()) {
+            where_clause += " AND p.name = $" + std::to_string(param_num++);
+            params.push_back(filters.partition);
+        }
+        
+        if (!filters.from.empty()) {
+            where_clause += " AND dlq.failed_at >= $" + std::to_string(param_num++) + "::timestamptz";
+            params.push_back(filters.from);
+        }
+        
+        if (!filters.to.empty()) {
+            where_clause += " AND dlq.failed_at <= $" + std::to_string(param_num++) + "::timestamptz";
+            params.push_back(filters.to);
+        }
+        
+        // Query DLQ messages with full message details
+        std::string query = R"(
+            SELECT 
+                dlq.id,
+                dlq.message_id,
+                dlq.partition_id,
+                dlq.consumer_group,
+                dlq.error_message,
+                dlq.retry_count,
+                dlq.original_created_at,
+                dlq.failed_at as moved_to_dlq_at,
+                m.transaction_id,
+                m.payload,
+                m.is_encrypted,
+                m.trace_id,
+                m.created_at as message_created_at,
+                q.name as queue_name,
+                q.namespace,
+                q.task,
+                p.name as partition_name
+            FROM queen.dead_letter_queue dlq
+            JOIN queen.messages m ON dlq.message_id = m.id
+            JOIN queen.partitions p ON m.partition_id = p.id
+            JOIN queen.queues q ON p.queue_id = q.id
+        )" + where_clause + R"(
+            ORDER BY dlq.failed_at DESC
+            LIMIT $)" + std::to_string(param_num++) + R"(
+            OFFSET $)" + std::to_string(param_num++);
+        
+        params.push_back(std::to_string(filters.limit));
+        params.push_back(std::to_string(filters.offset));
+        
+        auto result = QueryResult(conn->exec_params(query, params));
+        
+        if (!result.is_success()) {
+            spdlog::error("Failed to fetch DLQ messages: {}", result.error_message());
+            return nlohmann::json::array();
+        }
+        
+        nlohmann::json messages = nlohmann::json::array();
+        
+        for (size_t i = 0; i < result.num_rows(); i++) {
+            std::string payload_str = result.get_value(i, "payload");
+            std::string is_encrypted_str = result.get_value(i, "is_encrypted");
+            bool is_encrypted = (is_encrypted_str == "t" || is_encrypted_str == "true");
+            nlohmann::json payload;
+            
+            try {
+                if (is_encrypted) {
+                    // Decrypt the payload
+                    auto encrypted_json = nlohmann::json::parse(payload_str);
+                    
+                    EncryptionService::EncryptedData encrypted_data;
+                    encrypted_data.encrypted = encrypted_json["encrypted"];
+                    encrypted_data.iv = encrypted_json["iv"];
+                    encrypted_data.auth_tag = encrypted_json["authTag"];
+                    
+                    auto enc_service = get_encryption_service();
+                    if (enc_service && enc_service->is_enabled()) {
+                        auto decrypted = enc_service->decrypt_payload(encrypted_data);
+                        if (decrypted.has_value()) {
+                            payload = nlohmann::json::parse(*decrypted);
+                        } else {
+                            spdlog::error("Failed to decrypt DLQ message payload for message_id: {}", 
+                                         result.get_value(i, "message_id"));
+                            payload = payload_str;  // Return encrypted data as fallback
+                        }
+                    } else {
+                        spdlog::warn("DLQ message is encrypted but encryption service not available");
+                        payload = payload_str;
+                    }
+                } else {
+                    // Parse as normal JSON
+                    payload = nlohmann::json::parse(payload_str);
+                }
+            } catch (const std::exception& e) {
+                spdlog::warn("Failed to parse DLQ payload for message_id {}: {}", 
+                            result.get_value(i, "message_id"), e.what());
+                payload = payload_str; // Fallback to string if JSON parse fails
+            }
+            
+            nlohmann::json message = {
+                {"id", result.get_value(i, "id")},
+                {"messageId", result.get_value(i, "message_id")},
+                {"partitionId", result.get_value(i, "partition_id")},
+                {"transactionId", result.get_value(i, "transaction_id")},
+                {"consumerGroup", result.get_value(i, "consumer_group")},
+                {"errorMessage", result.get_value(i, "error_message")},
+                {"retryCount", safe_stoi(result.get_value(i, "retry_count"))},
+                {"originalCreatedAt", result.get_value(i, "original_created_at")},
+                {"movedToDlqAt", result.get_value(i, "moved_to_dlq_at")},
+                {"messageCreatedAt", result.get_value(i, "message_created_at")},
+                {"queueName", result.get_value(i, "queue_name")},
+                {"namespace", result.get_value(i, "namespace")},
+                {"task", result.get_value(i, "task")},
+                {"partitionName", result.get_value(i, "partition_name")},
+                {"data", payload}
+            };
+            
+            std::string trace_id = result.get_value(i, "trace_id");
+            if (!trace_id.empty()) {
+                message["traceId"] = trace_id;
+            }
+            
+            messages.push_back(message);
+        }
+        
+        // Get total count for pagination
+        std::string count_query = R"(
+            SELECT COUNT(*) as total
+            FROM queen.dead_letter_queue dlq
+            JOIN queen.messages m ON dlq.message_id = m.id
+            JOIN queen.partitions p ON m.partition_id = p.id
+            JOIN queen.queues q ON p.queue_id = q.id
+        )" + where_clause;
+        
+        // Remove limit and offset params for count query
+        std::vector<std::string> count_params(params.begin(), params.end() - 2);
+        auto count_result = QueryResult(conn->exec_params(count_query, count_params));
+        
+        int total = 0;
+        if (count_result.is_success() && count_result.num_rows() > 0) {
+            total = safe_stoi(count_result.get_value(0, "total"));
+        }
+        
+        nlohmann::json response = {
+            {"messages", messages},
+            {"total", total},
+            {"limit", filters.limit},
+            {"offset", filters.offset}
+        };
+        
+        return response;
+        
+    } catch (const std::exception& e) {
+        spdlog::error("Error in get_dlq_messages: {}", e.what());
         throw;
     }
 }
@@ -1413,6 +1744,141 @@ nlohmann::json AnalyticsManager::get_system_metrics(const SystemMetricsFilters& 
         return response;
     } catch (const std::exception& e) {
         spdlog::error("Error in get_system_metrics: {}", e.what());
+        throw;
+    }
+}
+
+nlohmann::json AnalyticsManager::get_consumer_groups() {
+    try {
+        ScopedConnection conn(db_pool_.get());
+        
+        std::string query = R"(
+            SELECT 
+                pc.consumer_group,
+                q.name as queue_name,
+                p.name as partition_name,
+                pc.worker_id,
+                pc.last_consumed_at,
+                pc.last_consumed_id,
+                pc.last_consumed_created_at,
+                pc.total_messages_consumed,
+                pc.total_batches_consumed,
+                pc.lease_expires_at,
+                pc.lease_acquired_at,
+                -- Calculate lag: count messages after last consumed
+                (
+                    SELECT COUNT(*)
+                    FROM queen.messages m
+                    WHERE m.partition_id = pc.partition_id
+                      AND (
+                          pc.last_consumed_created_at IS NULL
+                          OR m.created_at > pc.last_consumed_created_at
+                          OR (DATE_TRUNC('milliseconds', m.created_at) = DATE_TRUNC('milliseconds', pc.last_consumed_created_at) 
+                              AND m.id > pc.last_consumed_id)
+                      )
+                )::integer as offset_lag,
+                -- Calculate time lag: age of oldest unprocessed message
+                (
+                    SELECT EXTRACT(EPOCH FROM (NOW() - m.created_at))::integer
+                    FROM queen.messages m
+                    WHERE m.partition_id = pc.partition_id
+                      AND (
+                          pc.last_consumed_created_at IS NULL
+                          OR m.created_at > pc.last_consumed_created_at
+                          OR (DATE_TRUNC('milliseconds', m.created_at) = DATE_TRUNC('milliseconds', pc.last_consumed_created_at) 
+                              AND m.id > pc.last_consumed_id)
+                      )
+                    ORDER BY m.created_at ASC
+                    LIMIT 1
+                )::integer as time_lag_seconds
+            FROM queen.partition_consumers pc
+            JOIN queen.partitions p ON p.id = pc.partition_id
+            JOIN queen.queues q ON q.id = p.queue_id
+            ORDER BY pc.consumer_group, q.name, p.name
+        )";
+        
+        auto result = QueryResult(conn->exec(query));
+        
+        // Group by consumer group
+        std::map<std::string, nlohmann::json> consumer_groups_map;
+        
+        for (int i = 0; i < result.num_rows(); i++) {
+            std::string consumer_group = result.get_value(i, "consumer_group");
+            std::string queue_name = result.get_value(i, "queue_name");
+            int offset_lag = safe_stoi(result.get_value(i, "offset_lag"));
+            int time_lag_seconds = safe_stoi(result.get_value(i, "time_lag_seconds"));
+            
+            // Initialize consumer group if not exists
+            if (consumer_groups_map.find(consumer_group) == consumer_groups_map.end()) {
+                consumer_groups_map[consumer_group] = {
+                    {"name", consumer_group},
+                    {"topics", nlohmann::json::array()},
+                    {"queues", nlohmann::json::object()},
+                    {"members", 0},
+                    {"totalLag", 0},
+                    {"maxTimeLag", 0},
+                    {"state", "Stable"}
+                };
+            }
+            
+            auto& group = consumer_groups_map[consumer_group];
+            
+            // Add queue to topics if not already present
+            bool queue_exists = false;
+            for (const auto& topic : group["topics"]) {
+                if (topic == queue_name) {
+                    queue_exists = true;
+                    break;
+                }
+            }
+            if (!queue_exists) {
+                group["topics"].push_back(queue_name);
+            }
+            
+            // Track per-queue data
+            if (!group["queues"].contains(queue_name)) {
+                group["queues"][queue_name] = {
+                    {"partitions", nlohmann::json::array()}
+                };
+            }
+            
+            std::string lease_expires = result.get_value(i, "lease_expires_at");
+            group["queues"][queue_name]["partitions"].push_back({
+                {"partition", result.get_value(i, "partition_name")},
+                {"workerId", result.get_value(i, "worker_id")},
+                {"lastConsumedAt", result.get_value(i, "last_consumed_at")},
+                {"totalConsumed", safe_stoi(result.get_value(i, "total_messages_consumed"))},
+                {"offsetLag", offset_lag},
+                {"timeLagSeconds", time_lag_seconds},
+                {"leaseActive", !lease_expires.empty()}
+            });
+            
+            // Aggregate stats
+            group["members"] = group["members"].get<int>() + 1;
+            group["totalLag"] = group["totalLag"].get<int>() + offset_lag;
+            
+            if (time_lag_seconds > group["maxTimeLag"].get<int>()) {
+                group["maxTimeLag"] = time_lag_seconds;
+            }
+            
+            // Determine state
+            std::string last_consumed_at = result.get_value(i, "last_consumed_at");
+            if (time_lag_seconds > 300) { // More than 5 minutes behind
+                group["state"] = "Lagging";
+            } else if (last_consumed_at.empty()) {
+                group["state"] = "Dead";
+            }
+        }
+        
+        // Convert map to array
+        nlohmann::json groups_array = nlohmann::json::array();
+        for (const auto& [group_name, group_data] : consumer_groups_map) {
+            groups_array.push_back(group_data);
+        }
+        
+        return groups_array;
+    } catch (const std::exception& e) {
+        spdlog::error("Error in get_consumer_groups: {}", e.what());
         throw;
     }
 }

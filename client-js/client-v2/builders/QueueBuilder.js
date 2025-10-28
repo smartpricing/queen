@@ -5,6 +5,7 @@
 import { generateUUID } from '../../utils/uuid.js'
 import { isValidUUID } from '../utils/validation.js'
 import { QUEUE_DEFAULTS, CONSUME_DEFAULTS, POP_DEFAULTS } from '../utils/defaults.js'
+import * as logger from '../utils/logger.js'
 
 export class QueueBuilder {
   #queen
@@ -61,13 +62,19 @@ export class QueueBuilder {
   }
 
   create() {
+    // Always merge with QUEUE_DEFAULTS to ensure all options are sent
+    const fullConfig = Object.keys(this.#config).length > 0 
+      ? this.#config 
+      : QUEUE_DEFAULTS
+    
     const payload = {
       queue: this.#queueName,
       namespace: this.#namespace,
       task: this.#task,
-      options: this.#config
+      options: fullConfig
     }
 
+    logger.log('QueueBuilder.create', { queue: this.#queueName, namespace: this.#namespace, task: this.#task })
     return new OperationBuilder(this.#httpClient, 'POST', '/api/v1/configure', payload)
   }
 
@@ -76,6 +83,7 @@ export class QueueBuilder {
       throw new Error('Queue name is required for delete operation')
     }
 
+    logger.log('QueueBuilder.delete', { queue: this.#queueName })
     return new OperationBuilder(
       this.#httpClient,
       'DELETE',
@@ -103,20 +111,31 @@ export class QueueBuilder {
       throw new Error('Queue name is required for push operation')
     }
 
+    logger.log('QueueBuilder.push', { queue: this.#queueName, partition: this.#partition, count: Array.isArray(payload) ? payload.length : 1, buffered: !!this.#bufferOptions })
+
     // Format items
     const items = Array.isArray(payload) ? payload : [payload]
     const formattedItems = items.map(item => {
+      // Determine the payload - check if property exists, not just truthy
+      let payloadValue
+      if ('data' in item) {
+        payloadValue = item.data
+      } else if ('payload' in item) {
+        payloadValue = item.payload
+      } else {
+        payloadValue = item
+      }
+
       const result = {
         queue: this.#queueName,
         partition: this.#partition,
-        payload: item.payload || item,
+        payload: payloadValue,
         transactionId: item.transactionId || generateUUID()
       }
 
       // Include traceId if provided and valid UUID
-      const traceId = item.traceId
-      if (traceId && isValidUUID(traceId)) {
-        result.traceId = traceId
+      if (item.traceId && isValidUUID(item.traceId)) {
+        result.traceId = item.traceId
       }
 
       return result
@@ -222,19 +241,42 @@ export class QueueBuilder {
   }
 
   async pop() {
+    logger.log('QueueBuilder.pop', { queue: this.#queueName, partition: this.#partition, namespace: this.#namespace, task: this.#task, batch: this.#batch, wait: this.#wait, group: this.#group })
+    
     try {
       const path = this.#buildPopPath()
-      const params = this.#buildPopParams()
+      
+      // For pop(), use POP defaults (not CONSUME defaults)
+      // Override autoAck to false unless explicitly set
+      const effectiveAutoAck = this.#autoAck !== CONSUME_DEFAULTS.autoAck ? this.#autoAck : POP_DEFAULTS.autoAck
+      
+      // Build params with correct autoAck for pop
+      const params = new URLSearchParams({
+        batch: this.#batch.toString(),
+        wait: this.#wait.toString(),
+        timeout: this.#timeoutMillis.toString()
+      })
+
+      if (this.#group) params.append('consumerGroup', this.#group)
+      if (this.#namespace) params.append('namespace', this.#namespace)
+      if (this.#task) params.append('task', this.#task)
+      if (effectiveAutoAck) params.append('autoAck', 'true')
+      if (this.#subscriptionMode) params.append('subscriptionMode', this.#subscriptionMode)
+      if (this.#subscriptionFrom) params.append('subscriptionFrom', this.#subscriptionFrom)
 
       const result = await this.#httpClient.get(`${path}?${params}`, this.#timeoutMillis + 5000)
 
       if (!result || !result.messages) {
+        logger.log('QueueBuilder.pop', { status: 'no-messages' })
         return []
       }
 
-      return result.messages.filter(msg => msg != null)
+      const messages = result.messages.filter(msg => msg != null)
+      logger.log('QueueBuilder.pop', { status: 'success', count: messages.length })
+      return messages
     } catch (error) {
       // Return empty array on error instead of throwing
+      logger.error('QueueBuilder.pop', { error: error.message })
       console.warn('Pop failed:', error.message)
       return []
     }
@@ -281,7 +323,20 @@ export class QueueBuilder {
       throw new Error('Queue name is required for buffer flush')
     }
     const queueAddress = `${this.#queueName}/${this.#partition}`
+    logger.log('QueueBuilder.flushBuffer', { queueAddress })
     await this.#bufferManager.flushBuffer(queueAddress)
+  }
+
+  // ===========================
+  // Dead Letter Queue Methods
+  // ===========================
+
+  dlq(consumerGroup = null) {
+    if (!this.#queueName) {
+      throw new Error('Queue name is required for DLQ operations')
+    }
+    logger.log('QueueBuilder.dlq', { queue: this.#queueName, consumerGroup, partition: this.#partition })
+    return new DLQBuilder(this.#httpClient, this.#queueName, consumerGroup, this.#partition)
   }
 }
 
@@ -324,6 +379,8 @@ class OperationBuilder {
   }
 
   async #execute() {
+    logger.log('OperationBuilder.execute', { method: this.#method, path: this.#path })
+    
     try {
       let result
 
@@ -339,6 +396,7 @@ class OperationBuilder {
 
       if (result && result.error) {
         const error = new Error(result.error)
+        logger.error('OperationBuilder.execute', { method: this.#method, path: this.#path, error: result.error })
         if (this.#onErrorCallback) {
           await this.#onErrorCallback(error)
           return { success: false, error: result.error }
@@ -346,6 +404,7 @@ class OperationBuilder {
         throw error
       }
 
+      logger.log('OperationBuilder.execute', { method: this.#method, path: this.#path, status: 'success' })
       if (this.#onSuccessCallback) {
         await this.#onSuccessCallback(result)
       }
@@ -353,6 +412,7 @@ class OperationBuilder {
       return result
 
     } catch (error) {
+      logger.error('OperationBuilder.execute', { method: this.#method, path: this.#path, error: error.message })
       if (this.#onErrorCallback) {
         await this.#onErrorCallback(error)
         return { success: false, error: error.message }
@@ -491,6 +551,8 @@ class PushBuilder {
   }
 
   async #execute() {
+    logger.log('PushBuilder.execute', { queue: this.#queueName, partition: this.#partition, count: this.#formattedItems.length, buffered: !!this.#bufferOptions })
+    
     // Client-side buffering
     if (this.#bufferOptions) {
       for (const item of this.#formattedItems) {
@@ -498,6 +560,8 @@ class PushBuilder {
         this.#bufferManager.addMessage(queueAddress, item, this.#bufferOptions)
       }
       const result = { buffered: true, count: this.#formattedItems.length }
+      
+      logger.log('PushBuilder.execute', { status: 'buffered', count: this.#formattedItems.length })
       
       if (this.#onSuccessCallback) {
         await this.#onSuccessCallback(this.#formattedItems)
@@ -546,9 +610,11 @@ class PushBuilder {
 
         // Only throw if no error callback is defined
         if (failed.length > 0 && !this.#onErrorCallback) {
+          logger.error('PushBuilder.execute', { status: 'failed', count: failed.length })
           throw new Error(failed[0].error || 'Push failed')
         }
 
+        logger.log('PushBuilder.execute', { status: 'success', successful: successful.length, duplicates: duplicates.length, failed: failed.length })
         return results
       }
 
@@ -575,6 +641,83 @@ class PushBuilder {
         return null // Don't throw if callback is defined
       }
       throw error
+    }
+  }
+}
+
+/**
+ * DLQ (Dead Letter Queue) builder for querying failed messages
+ */
+class DLQBuilder {
+  #httpClient
+  #queueName
+  #consumerGroup
+  #partition
+  #limit = 100
+  #offset = 0
+  #from = null
+  #to = null
+
+  constructor(httpClient, queueName, consumerGroup, partition) {
+    this.#httpClient = httpClient
+    this.#queueName = queueName
+    this.#consumerGroup = consumerGroup
+    this.#partition = partition !== 'Default' ? partition : null
+  }
+
+  limit(count) {
+    this.#limit = Math.max(1, count)
+    return this
+  }
+
+  offset(count) {
+    this.#offset = Math.max(0, count)
+    return this
+  }
+
+  from(timestamp) {
+    this.#from = timestamp
+    return this
+  }
+
+  to(timestamp) {
+    this.#to = timestamp
+    return this
+  }
+
+  async get() {
+    const params = new URLSearchParams()
+    
+    params.append('queue', this.#queueName)
+    params.append('limit', this.#limit.toString())
+    params.append('offset', this.#offset.toString())
+    
+    if (this.#consumerGroup) {
+      params.append('consumerGroup', this.#consumerGroup)
+    }
+    
+    if (this.#partition) {
+      params.append('partition', this.#partition)
+    }
+    
+    if (this.#from) {
+      params.append('from', this.#from)
+    }
+    
+    if (this.#to) {
+      params.append('to', this.#to)
+    }
+
+    logger.log('DLQBuilder.get', { queue: this.#queueName, consumerGroup: this.#consumerGroup, partition: this.#partition, limit: this.#limit, offset: this.#offset })
+
+    try {
+      const result = await this.#httpClient.get(`/api/v1/dlq?${params}`)
+      logger.log('DLQBuilder.get', { status: 'success', total: result?.total || 0, messages: result?.messages?.length || 0 })
+      return result || { messages: [], total: 0 }
+    } catch (error) {
+      logger.error('DLQBuilder.get', { error: error.message })
+      console.warn('DLQ query failed:', error.message)
+      return { messages: [], total: 0 }
     }
   }
 }

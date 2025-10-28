@@ -2,6 +2,8 @@
  * Consumer manager for handling concurrent workers
  */
 
+import * as logger from '../utils/logger.js'
+
 export class ConsumerManager {
   #httpClient
   #queen
@@ -33,6 +35,20 @@ export class ConsumerManager {
       signal
     } = options
 
+    logger.log('ConsumerManager.start', { 
+      queue, 
+      partition, 
+      namespace, 
+      task, 
+      group, 
+      concurrency, 
+      batch, 
+      limit, 
+      autoAck,
+      wait,
+      each
+    })
+
     // Build the path and params for pop requests
     const path = this.#buildPath(queue, partition, namespace, task)
     const baseParams = this.#buildParams(batch, wait, timeoutMillis, group, subscriptionMode, subscriptionFrom, namespace, task, autoAck)
@@ -50,12 +66,17 @@ export class ConsumerManager {
         renewLease,
         renewLeaseIntervalMillis,
         each,
-        signal
+        signal,
+        group  // Pass consumer group to workers
       }))
     }
 
+    logger.log('ConsumerManager.start', { status: 'workers-started', count: concurrency })
+
     // Wait for all workers to complete
     await Promise.all(workers)
+    
+    logger.log('ConsumerManager.start', { status: 'completed' })
   }
 
   async #worker(workerId, handler, path, baseParams, options) {
@@ -69,20 +90,25 @@ export class ConsumerManager {
       renewLease,
       renewLeaseIntervalMillis,
       each,
-      signal
+      signal,
+      group
     } = options
 
+    logger.log('ConsumerManager.worker', { workerId, status: 'started', limit, idleMillis })
+    
     let processedCount = 0
     let lastMessageTime = idleMillis ? Date.now() : null
 
     while (true) {
       // Check abort signal
       if (signal && signal.aborted) {
+        logger.log('ConsumerManager.worker', { workerId, status: 'aborted', processedCount })
         break
       }
 
       // Check limit
       if (limit && processedCount >= limit) {
+        logger.log('ConsumerManager.worker', { workerId, status: 'limit-reached', processedCount, limit })
         break
       }
 
@@ -90,6 +116,7 @@ export class ConsumerManager {
       if (idleMillis && lastMessageTime) {
         const idleTime = Date.now() - lastMessageTime
         if (idleTime >= idleMillis) {
+          logger.log('ConsumerManager.worker', { workerId, status: 'idle-timeout', processedCount, idleTime })
           break
         }
       }
@@ -116,6 +143,8 @@ export class ConsumerManager {
           continue
         }
 
+        logger.log('ConsumerManager.worker', { workerId, status: 'messages-received', count: messages.length })
+
         // Update last message time
         if (idleMillis) {
           lastMessageTime = Date.now()
@@ -134,16 +163,18 @@ export class ConsumerManager {
             for (const message of messages) {
               if (signal && signal.aborted) break
 
-              await this.#processMessage(message, handler, autoAck)
+              await this.#processMessage(message, handler, autoAck, group)
               processedCount++
 
               if (limit && processedCount >= limit) break
             }
           } else {
             // Process as batch
-            await this.#processBatch(messages, handler, autoAck)
+            await this.#processBatch(messages, handler, autoAck, group)
             processedCount += messages.length
           }
+          
+          logger.log('ConsumerManager.worker', { workerId, status: 'messages-processed', count: messages.length, total: processedCount })
         } finally {
           // Clear renewal timer
           if (renewalTimer) {
@@ -166,6 +197,7 @@ export class ConsumerManager {
                               error.code === 'ECONNREFUSED'
 
         if (isNetworkError) {
+          logger.warn('ConsumerManager.worker', { workerId, error: 'network', message: error.message })
           console.warn(`Worker ${workerId}: Network error - ${error.message}`)
           // Wait before retry
           await new Promise(resolve => setTimeout(resolve, 1000))
@@ -173,41 +205,60 @@ export class ConsumerManager {
         }
 
         // Other errors - rethrow
+        logger.error('ConsumerManager.worker', { workerId, error: error.message })
         throw error
       }
     }
+    
+    logger.log('ConsumerManager.worker', { workerId, status: 'stopped', processedCount })
   }
 
-  async #processMessage(message, handler, autoAck) {
+  async #processMessage(message, handler, autoAck, group) {
     try {
       await handler(message)
 
       // Auto-ack on success if enabled
       if (autoAck) {
-        await this.#queen.ack(message, true)
+        const context = group ? { group } : {}
+        await this.#queen.ack(message, true, context)
+        logger.log('ConsumerManager.processMessage', { transactionId: message.transactionId, status: 'acked' })
       }
     } catch (error) {
       // Auto-nack on error if enabled
       if (autoAck) {
-        await this.#queen.ack(message, false)
+        const context = group ? { group } : {}
+        await this.#queen.ack(message, false, context)
+        logger.error('ConsumerManager.processMessage', { transactionId: message.transactionId, error: error.message, status: 'nacked' })
+        // Don't rethrow when autoAck is enabled - NACK was already sent
+        // This allows the consumer to continue and retry
+        return
       }
+      logger.error('ConsumerManager.processMessage', { transactionId: message.transactionId, error: error.message })
       throw error
     }
   }
 
-  async #processBatch(messages, handler, autoAck) {
+  async #processBatch(messages, handler, autoAck, group) {
     try {
       await handler(messages)
 
       // Auto-ack on success if enabled
       if (autoAck) {
-        await this.#queen.ack(messages, true)
+        const context = group ? { group } : {}
+        await this.#queen.ack(messages, true, context)
+        logger.log('ConsumerManager.processBatch', { count: messages.length, status: 'acked' })
       }
     } catch (error) {
       // Auto-nack on error if enabled
       if (autoAck) {
-        await this.#queen.ack(messages, false)
+        const context = group ? { group } : {}
+        await this.#queen.ack(messages, false, context)
+        logger.error('ConsumerManager.processBatch', { count: messages.length, error: error.message, status: 'nacked' })
+        // Don't rethrow when autoAck is enabled - NACK was already sent
+        // This allows the consumer to continue and retry
+        return
       }
+      logger.error('ConsumerManager.processBatch', { count: messages.length, error: error.message })
       throw error
     }
   }
@@ -253,7 +304,8 @@ export class ConsumerManager {
     if (subscriptionFrom) params.append('subscriptionFrom', subscriptionFrom)
     if (namespace) params.append('namespace', namespace)
     if (task) params.append('task', task)
-    if (autoAck) params.append('autoAck', 'true')
+    // NEVER send autoAck for consume - client always manages acking
+    // autoAck is only for pop() where server auto-acks immediately
 
     return params
   }

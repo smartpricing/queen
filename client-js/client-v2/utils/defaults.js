@@ -20,7 +20,7 @@ export const QUEUE_DEFAULTS = {
   priority: 0,                         // Default priority
   delayedProcessing: 0,                // No delay (seconds)
   windowBuffer: 0,                     // No window buffering (seconds)
-  maxSize: 10000,                      // Max 10,000 messages per queue
+  maxSize: 0,                         // No limit on messages per queue
   retentionSeconds: 0,                 // No retention (keep forever)
   completedRetentionSeconds: 0,        // No retention for completed messages
   encryptionEnabled: false             // No encryption by default
@@ -29,7 +29,7 @@ export const QUEUE_DEFAULTS = {
 export const CONSUME_DEFAULTS = {
   concurrency: 1,                      // Single worker
   batch: 1,                            // One message at a time
-  autoAck: true,                       // Auto-acknowledge by default
+  autoAck: true,                       // Client-side auto-ack (NOT sent to server)
   wait: true,                          // Long polling enabled
   timeoutMillis: 30000,                // 30 seconds long poll timeout
   limit: null,                         // No limit (run forever)
@@ -44,7 +44,7 @@ export const POP_DEFAULTS = {
   batch: 1,                            // One message
   wait: false,                         // No long polling (immediate return)
   timeoutMillis: 30000,                // 30 seconds if wait=true
-  autoAck: false                       // Manual ack required
+  autoAck: false                       // Server-side auto-ack (false = manual ack required)
 }
 
 export const BUFFER_DEFAULTS = {

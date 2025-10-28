@@ -53,15 +53,34 @@ export class MessageBuffer {
     this.#flushCallback(this.#queueAddress)
   }
 
-  extractMessages() {
-    const messages = [...this.#messages]
-    this.#messages = []
-    this.#firstMessageTime = null
-    this.#flushing = false
+  extractMessages(batchSize = null) {
+    // If no batch size specified, extract all messages
+    if (batchSize === null || batchSize >= this.#messages.length) {
+      const messages = [...this.#messages]
+      this.#messages = []
+      this.#firstMessageTime = null
+      this.#flushing = false
 
-    if (this.#timer) {
-      clearTimeout(this.#timer)
-      this.#timer = null
+      if (this.#timer) {
+        clearTimeout(this.#timer)
+        this.#timer = null
+      }
+
+      return messages
+    }
+
+    // Extract a batch of messages
+    const messages = this.#messages.splice(0, batchSize)
+    
+    // If buffer is now empty, reset state
+    if (this.#messages.length === 0) {
+      this.#firstMessageTime = null
+      this.#flushing = false
+      
+      if (this.#timer) {
+        clearTimeout(this.#timer)
+        this.#timer = null
+      }
     }
 
     return messages
@@ -71,8 +90,29 @@ export class MessageBuffer {
     this.#flushing = value
   }
 
+  forceFlush() {
+    // Immediately trigger flush, ignoring timers
+    if (this.#timer) {
+      clearTimeout(this.#timer)
+      this.#timer = null
+    }
+    this.#triggerFlush()
+  }
+
+  cancelTimer() {
+    // Cancel the timer without triggering a flush
+    if (this.#timer) {
+      clearTimeout(this.#timer)
+      this.#timer = null
+    }
+  }
+
   get messageCount() {
     return this.#messages.length
+  }
+
+  get options() {
+    return this.#options
   }
 
   get firstMessageAge() {

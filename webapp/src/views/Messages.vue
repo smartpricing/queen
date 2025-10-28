@@ -17,6 +17,28 @@
           </div>
         </div>
 
+        <!-- Mode Indicator (for Bus Mode) -->
+        <div v-if="queueMode && queueMode.type === 'bus'" class="bg-purple-50 dark:bg-purple-900/20 border border-purple-200 dark:border-purple-700/30 rounded-lg p-3">
+          <div class="flex items-center gap-2 text-sm">
+            <svg class="w-5 h-5 text-purple-600 dark:text-purple-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0zm6 3a2 2 0 11-4 0 2 2 0 014 0zM7 10a2 2 0 11-4 0 2 2 0 014 0z" />
+            </svg>
+            <span class="font-medium text-purple-900 dark:text-purple-100">Bus Mode Active</span>
+            <span class="text-purple-700 dark:text-purple-300">{{ queueMode.busGroupsCount }} consumer group(s)</span>
+            <span class="text-xs text-purple-600 dark:text-purple-400 ml-auto">Messages persist for multiple consumers</span>
+          </div>
+        </div>
+        
+        <div v-if="queueMode && queueMode.type === 'hybrid'" class="bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-700/30 rounded-lg p-3">
+          <div class="flex items-center gap-2 text-sm">
+            <svg class="w-5 h-5 text-blue-600 dark:text-blue-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 7h12m0 0l-4-4m4 4l-4 4m0 6H4m0 0l4 4m-4-4l4-4" />
+            </svg>
+            <span class="font-medium text-blue-900 dark:text-blue-100">Hybrid Mode</span>
+            <span class="text-blue-700 dark:text-blue-300">Queue mode + {{ queueMode.busGroupsCount }} consumer group(s)</span>
+          </div>
+        </div>
+
         <!-- Filters -->
         <div class="filter-flat">
           <MessageFilters
@@ -77,7 +99,12 @@
                   </td>
                   <td class="text-right text-xs whitespace-nowrap">{{ formatTime(message.createdAt) }}</td>
                   <td class="text-right">
-                    <StatusBadge :status="message.status" :show-dot="false" />
+                    <div class="flex flex-col items-end gap-1">
+                      <StatusBadge :status="message.status" :show-dot="false" />
+                      <div v-if="message.busStatus && message.busStatus.totalGroups > 0" class="text-xs text-gray-600 dark:text-gray-400">
+                        {{ message.busStatus.consumedBy }}/{{ message.busStatus.totalGroups }} groups
+                      </div>
+                    </div>
                   </td>
                 </tr>
               </tbody>
@@ -149,6 +176,7 @@ const loading = ref(false);
 const error = ref(null);
 const messages = ref([]);
 const queues = ref([]);
+const queueMode = ref(null); // { hasQueueMode, busGroupsCount, type }
 const searchQuery = ref('');
 const queueFilter = ref('');
 const statusFilter = ref('');
@@ -193,6 +221,7 @@ async function loadData() {
     
     const messagesRes = await messagesApi.getMessages(params);
     messages.value = messagesRes.data.messages || [];
+    queueMode.value = messagesRes.data.mode || null;
     
     totalPages.value = messages.value.length === itemsPerPage ? currentPage.value + 1 : currentPage.value;
   } catch (err) {
