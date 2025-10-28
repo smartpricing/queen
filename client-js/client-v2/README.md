@@ -1,6 +1,6 @@
-# 👑 Queen Client V2 - The Joyful Guide
+# 👑 Queen Client
 
-Welcome to Queen v2! This is your friendly guide to mastering message queues without losing your sanity. We'll start simple and gradually unlock the superpowers. 🚀
+Welcome to Queen client! This is your friendly guide to mastering message queues without losing your sanity. We'll start simple and gradually unlock the superpowers. 🚀
 
 ## Table of Contents
 

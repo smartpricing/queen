@@ -7,7 +7,7 @@
 [![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE.md)
 [![Node](https://img.shields.io/badge/node-%3E%3D22.0.0-brightgreen.svg)](https://nodejs.org/)
 
-[Quick Start](#js-client-usage) • [Examples](#-examples) • [Webapp](#webapp) • [Server Setup](#install-server-and-configure-it) • [HTTP API](#raw-http-api)
+[Quick Start](#js-client-usage-v2) • [Complete V2 Guide](client-js/client-v2/README.md) • [Examples](#-examples) • [Webapp](#webapp) • [Server Setup](#install-server-and-configure-it) • [HTTP API](#raw-http-api)
 
 <p align="center">
   <img src="assets/queen-logo-rose.svg" alt="Queen Logo" width="120" />
@@ -21,159 +21,103 @@
 
 QueenMQ is a queue system written in C++ and backed by Postgres. Supports queues and consumer groups.
 
-## JS Client usage
+## JS Client Usage
 
-```js
+> 📖 **[Complete Guide: client-js/client-v2/README.md](client-js/client-v2/README.md)** - Full tutorial with all features!
+
+```javascript
 import { Queen } from 'queen-mq'
 
-const client = new Queen({ 
-    baseUrls: ['http://localhost:6632'],
-    timeout: 30000,
-    retryAttempts: 3
-});
-
-const queue = 'html-processing'
+// Connect to Queen
+const queen = new Queen('http://localhost:6632')
 
 // Create a queue
-await client.queue(queue, { leaseTime: 30 });
+await queen.queue('tasks').create()
 
-// Push some data, specifyng the partition
-await client.push(`${queue}/customer-1828`, [ { id: 1 } ]); 
+// Push messages
+await queen.queue('tasks').push([
+  { data: { job: 'send-email', to: 'alice@example.com' } },
+  { data: { job: 'process-image', id: 123 } }
+])
 
-// Consume data with iterators
-for await (const msg of client.take(queue, { limit: 1 })) {
-    console.log(msg.data.id)
-    await client.ack(msg) //  OR await client.ack(msg, false) for nack
+// Consume messages (auto-ack on success, auto-nack on error)
+await queen.queue('tasks').consume(async (message) => {
+  console.log('Processing:', message.data)
+  // If this succeeds → message completed ✅
+  // If this throws → message retried 🔄
+})
+
+// Pop messages manually
+const messages = await queen.queue('tasks').batch(10).pop()
+for (const msg of messages) {
+  try {
+    await processMessage(msg.data)
+    await queen.ack(msg, true)  // Success
+  } catch (error) {
+    await queen.ack(msg, false)  // Retry
+  }
 }
 
-// Consume data with iterators, getting the entire batch
-for await (const messages of client.takeBatch(queue, { limit: 1, batch: 10, wait: true, timeout: 2000 })) {
-    const newMex = messages.map(x => x.data.id * 2)
-    await client.ack(messages) //  OR await client.ack(messages, false) for nack
-}
+// Partitions (for ordering)
+await queen
+  .queue('user-events')
+  .partition('user-123')
+  .push([{ data: { event: 'login' } }])
 
-// Consume data with a consumer group
-for await (const msg of client.take(`${queue}@analytics-data`, { limit: 2, batch: 2 })) {
-    // Do your computation and than ack with consumer group
-    await client.ack(msg, true, { group: 'analytics-data' });
-}
+// Consumer groups (for scaling)
+await queen
+  .queue('emails')
+  .group('processors')
+  .concurrency(5)
+  .consume(async (message) => {
+    await sendEmail(message.data)
+  })
 
-// Consume data from any partition of the queue, continusly
-// This "pipeline" is useful for doing exactly one processing
-await client 
-.pipeline(queue)
-.withAutoRenewal({ 
-  interval: 5000  // Renew lease every 5 seconds
-})    
-.withConcurrency(5) // Five parallel promises
-.take(10, {
-  wait: true, // Use long polling
-  timeout: 30000 // Long polling length in millisconds
-})
-.processBatch(async (messages) => {
-    return messages.map(x => x.data.id * 2);
-})
-.atomically((tx, originalMessages, processedMessages) => { // ack and push are transactional inside atomically
-    tx.ack(originalMessages);
-    tx.push('another-queue', processedMessages); 
-})
-.repeat({ continuous: true })
-.execute();
+// Transactions (atomic ack + push)
+const [msg] = await queen.queue('input').pop()
+await queen
+  .transaction()
+  .ack(msg)
+  .queue('output')
+  .push([{ data: { processed: true } }])
+  .commit()
+
+// Client-side buffering (for high throughput)
+await queen
+  .queue('logs')
+  .buffer({ messageCount: 100, timeMillis: 1000 })
+  .push([{ data: { level: 'info', message: 'Server started' } }])
+
+// Graceful shutdown
+await queen.close()
 ```
+
+**Key Features:**
+- ✅ Fluent, chainable API
+- ✅ Auto-acknowledgment (or manual control)
+- ✅ Partitions for ordered processing
+- ✅ Consumer groups for scaling
+- ✅ Transactions for atomicity
+- ✅ Client-side buffering for speed
+- ✅ Dead letter queue for failures
+- ✅ Lease renewal for long tasks
+- ✅ Graceful shutdown with buffer flush
 
 ## 📚 Examples
 
-### Basic Usage
-- **[Basic Queue Operations](examples/01-basic-usage.js)** - Create queue, push, take, and ack messages
-- **[Batch Operations](examples/02-batch-operations.js)** - Push and consume messages in batches
+### Client
 
-### Advanced Features
-- **[Queue Configuration](examples/06-queue-configuration.js)** - Configure maxSize, windowBuffer, delay, retryLimit, and priority
-- **[Delayed Processing](examples/04-delayed-processing.js)** - Process messages after a delay
-- **[Window Buffer](examples/05-window-buffer.js)** - Delay message availability after push
+See the **[Complete V2 Guide](client-js/client-v2/README.md)** with 13 parts covering everything from basics to advanced features:
+- Queue creation, push, and consume
+- Partitions and consumer groups
+- Transactions and buffering
+- Dead letter queues
+- Lease renewal
+- Complete real-world pipeline example
+- And much more!
 
-### Filtering & Routing
-- **[Namespace & Task Filtering](examples/07-namespace-task-filtering.js)** - Route and filter messages by namespace and task
-- **[Consumer Groups](examples/08-consumer-groups.js)** - Multiple consumer groups processing same messages
+**Test Files** (94 working examples): [client-js/test-v2/](client-js/test-v2/)
 
-### Pipelines
-- **[Transactional Pipelines](examples/03-transactional-pipeline.js)** - Atomic processing with ack and push in a transaction
-
-### Event Streaming (QoS 0)
-- **[Event Streaming](examples/09-event-streaming.js)** - At-most-once delivery with buffering and auto-ack
-
-## QoS 0: At-Most-Once Event Streaming
-
-For high-throughput event streams, Queen supports **at-most-once delivery** with server-side buffering and auto-acknowledgment.
-
-### Server-Side Buffering
-
-Batch events on the server for 10-100x reduction in database writes:
-
-```javascript
-// Push with buffering (QoS 0)
-await client.push('metrics', { cpu: 45, memory: 67 }, {
-  bufferMs: 100,      // Server batches for 100ms
-  bufferMax: 100      // Or until 100 events
-});
-
-// Result: 1000 events = ~10 DB writes (instead of 1000)
-```
-
-### Auto-Acknowledgment
-
-Skip manual ack for fire-and-forget consumption:
-
-```javascript
-// Consume with auto-ack
-for await (const msg of client.take('metrics', { autoAck: true })) {
-  updateDashboard(msg.data);
-  // No ack() needed - automatically acknowledged!
-}
-```
-
-### Fan-Out Pattern (Consumer Groups)
-
-Combine buffering + auto-ack + consumer groups for pub/sub:
-
-```javascript
-// Publisher (buffered)
-await client.push('events', { action: 'login' }, { bufferMs: 100 });
-
-// Multiple subscribers (each group gets all messages)
-for await (const e of client.take('events@dashboard', { autoAck: true })) {
-  updateUI(e.data);
-}
-
-for await (const e of client.take('events@analytics', { autoAck: true })) {
-  trackEvent(e.data);
-}
-```
-
-### PostgreSQL Failover
-
-Queen automatically buffers messages to disk when PostgreSQL is unavailable - **zero message loss**:
-
-- Normal pushes go directly to PostgreSQL (FIFO preserved)
-- If PostgreSQL is down, messages buffered to file (macOS: `/tmp/queen`, Linux: `/var/lib/queen/buffers`)
-- Automatic replay when PostgreSQL recovers
-- Survives server crashes and restarts
-- Directory auto-created on first run
-
-**No configuration needed** - failover is automatic!
-
-**Custom directory:**
-```bash
-FILE_BUFFER_DIR=/custom/path ./bin/queen-server
-```
-
-### When to Use
-
-| Feature | Use For | Don't Use For |
-|---------|---------|---------------|
-| **Buffering** | Metrics, logs, analytics, UI updates | Critical tasks, payments |
-| **Auto-Ack** | Fire-and-forget events, notifications | Tasks requiring retry logic |
-| **Failover** | Everything (automatic) | N/A - always beneficial |
 
 ## Architecture
 
@@ -205,6 +149,23 @@ Queen uses a high-performance **acceptor/worker pattern** with uWebSockets, comb
 5. Timeouts detected by Poll Workers, send 204 No Content
 
 This architecture provides high concurrency, efficient connection pooling, and minimal latency for both immediate and long-polling requests.
+
+### PostgreSQL Failover
+
+Queen automatically buffers messages to disk when PostgreSQL is unavailable - **zero message loss**:
+
+- Normal pushes go directly to PostgreSQL (FIFO preserved)
+- If PostgreSQL is down, messages buffered to file (macOS: `/tmp/queen`, Linux: `/var/lib/queen/buffers`)
+- Automatic replay when PostgreSQL recovers
+- Survives server crashes and restarts
+- Directory auto-created on first run
+
+**No configuration needed** - failover is automatic!
+
+**Custom directory:**
+```bash
+FILE_BUFFER_DIR=/custom/path ./bin/queen-server
+```
 
 ## Webapp
 
@@ -285,7 +246,5 @@ You can use Queen directly from HTTP without the JS client.
 
 ### Other TODO Items
 - retention jobs
-- reconsume
-- new client
 - auth
 - streaming engine
