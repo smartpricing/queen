@@ -22,6 +22,35 @@ export async function testConsumer(client) {
     return { success: msgToReturn !== null, message: 'Consumer test completed successfully' }
 }
 
+export async function testConsumerTrace(client) { 
+    const queue = await client.queue('test-queue-v2-consume-trace').create()
+    if (!queue.configured) {
+        return { success: false, message: 'Queue not created' }
+    }
+
+    await client
+    .queue('test-queue-v2-consume-trace')
+    .push([{ data: { message: 'Hello, world!' } }])
+
+    let msgToReturn = null
+
+    await client
+    .queue('test-queue-v2-consume-trace')
+    .batch(1)
+    .limit(1)
+    .each()
+    .consume(async msg => {
+        msgToReturn = msg
+        await msg.trace({
+            traceName: ['test-trace', 'test-trace-2'],
+            eventType: 'info',
+            data: { message: 'Hello, world!'  }
+        })
+    })
+
+    return { success: msgToReturn !== null, message: 'Consumer test completed successfully' }
+}
+
 export async function testConsumerNamespace(client) { 
     const queue = await client.queue('test-queue-v2-namespace')
     .namespace('test-namespace')

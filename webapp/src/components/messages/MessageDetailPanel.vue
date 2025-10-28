@@ -67,6 +67,65 @@
           </div>
         </div>
 
+        <!-- Trace Events -->
+        <div v-if="traceEvents && traceEvents.length > 0" class="mb-6">
+          <h4 class="text-sm font-semibold mb-3 text-gray-700 dark:text-gray-300">
+            Processing Timeline
+          </h4>
+          <div class="space-y-2">
+            <div 
+              v-for="trace in traceEvents" 
+              :key="trace.id"
+              class="bg-gray-50 dark:bg-slate-900 rounded-lg p-3 border-l-4"
+              :class="getTraceColorClass(trace.event_type)"
+            >
+              <!-- Event header -->
+              <div class="flex justify-between items-start mb-2">
+                <span class="text-xs font-semibold uppercase tracking-wide">
+                  {{ trace.event_type }}
+                </span>
+                <span class="text-xs text-gray-500">
+                  {{ formatTime(trace.created_at) }}
+                </span>
+              </div>
+              
+              <!-- Trace names (if any) -->
+              <div v-if="trace.trace_names && trace.trace_names.length > 0" class="mb-2">
+                <div class="flex flex-wrap gap-1">
+                  <span 
+                    v-for="name in trace.trace_names"
+                    :key="name"
+                    class="inline-block px-2 py-0.5 text-xs rounded-full bg-blue-100 dark:bg-blue-900 text-blue-700 dark:text-blue-300"
+                  >
+                    {{ name }}
+                  </span>
+                </div>
+              </div>
+              
+              <!-- User data -->
+              <div class="text-sm text-gray-700 dark:text-gray-300">
+                <div v-if="trace.data && trace.data.text">
+                  {{ trace.data.text }}
+                </div>
+                
+                <div v-if="hasAdditionalData(trace.data)" class="mt-2">
+                  <div class="bg-white dark:bg-slate-800 rounded p-2 text-xs font-mono">
+                    <pre>{{ formatTraceData(trace.data) }}</pre>
+                  </div>
+                </div>
+              </div>
+              
+              <!-- Metadata -->
+              <div class="flex gap-3 mt-2 text-xs text-gray-500">
+                <span v-if="trace.worker_id">Worker: {{ trace.worker_id }}</span>
+                <span v-if="trace.consumer_group && trace.consumer_group !== '__QUEUE_MODE__'">
+                  Group: {{ trace.consumer_group }}
+                </span>
+              </div>
+            </div>
+          </div>
+        </div>
+
         <!-- Payload -->
         <div class="mb-6">
           <label class="text-xs text-gray-500 dark:text-gray-400 block mb-2">Payload</label>
@@ -160,6 +219,7 @@ const error = ref(null);
 const actionLoading = ref(false);
 const actionError = ref(null);
 const messageDetail = ref(null);
+const traceEvents = ref([]);
 const showDeleteConfirm = ref(false);
 
 watch(() => props.message, async (newMessage) => {
@@ -173,10 +233,20 @@ async function loadMessageDetail() {
   
   loading.value = true;
   error.value = null;
+  traceEvents.value = [];
   
   try {
     const response = await messagesApi.getMessage(props.message.partitionId, props.message.transactionId);
     messageDetail.value = response.data;
+    
+    // Load traces
+    try {
+      const traceResponse = await messagesApi.getTraces(props.message.partitionId, props.message.transactionId);
+      traceEvents.value = traceResponse.data.traces || [];
+    } catch (traceErr) {
+      console.warn('Failed to load traces:', traceErr);
+      // Don't fail the whole panel if traces can't be loaded
+    }
   } catch (err) {
     error.value = err.response?.data?.error || err.message;
   } finally {
@@ -237,6 +307,43 @@ async function deleteMessage() {
 function close() {
   emit('close');
   messageDetail.value = null;
+  traceEvents.value = [];
+}
+
+function getTraceColorClass(eventType) {
+  const colors = {
+    info: 'border-blue-400',
+    processing: 'border-green-400',
+    step: 'border-purple-400',
+    error: 'border-red-400',
+    warning: 'border-yellow-400',
+  };
+  return colors[eventType] || 'border-gray-400';
+}
+
+function hasAdditionalData(data) {
+  if (!data || typeof data !== 'object') return false;
+  // Check if there's more than just 'text' field
+  const keys = Object.keys(data).filter(k => k !== 'text');
+  return keys.length > 0;
+}
+
+function formatTraceData(data) {
+  if (!data || typeof data !== 'object') return '';
+  // Remove 'text' field for display since we show it separately
+  const { text, ...rest } = data;
+  return JSON.stringify(rest, null, 2);
+}
+
+function formatTime(timestamp) {
+  if (!timestamp) return '';
+  const date = new Date(timestamp);
+  return date.toLocaleTimeString('en-US', { 
+    hour: '2-digit', 
+    minute: '2-digit', 
+    second: '2-digit',
+    hour12: false 
+  });
 }
 </script>
 

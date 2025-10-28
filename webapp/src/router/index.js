@@ -27,6 +27,11 @@ const routes = [
     component: () => import('../views/Messages.vue'),
   },
   {
+    path: '/traces',
+    name: 'Traces',
+    component: () => import('../views/Traces.vue'),
+  },
+  {
     path: '/analytics',
     name: 'Analytics',
     component: () => import('../views/Analytics.vue'),

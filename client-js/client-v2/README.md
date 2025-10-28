@@ -16,8 +16,9 @@ Welcome to Queen client! This is your friendly guide to mastering message queues
 - [Part 9: Dead Letter Queue - When Things Go Wrong](#part-9-dead-letter-queue---when-things-go-wrong)
 - [Part 10: Lease Renewal - Keep It Locked](#part-10-lease-renewal---keep-it-locked)
 - [Part 11: Queue Configuration - Fine Tuning](#part-11-queue-configuration---fine-tuning)
-- [Part 12: Callbacks & Error Handling](#part-12-callbacks--error-handling)
-- [Part 13: Graceful Shutdown](#part-13-graceful-shutdown)
+- [Part 12: Message Tracing - Debug Your Workflows](#part-12-message-tracing---debug-your-workflows)
+- [Part 13: Callbacks & Error Handling](#part-13-callbacks--error-handling)
+- [Part 14: Graceful Shutdown](#part-14-graceful-shutdown)
 - [Cheat Sheet](#cheat-sheet)
 
 ---
@@ -896,7 +897,246 @@ await queen
 
 ---
 
-## Part 12: Callbacks & Error Handling
+## Part 12: Message Tracing - Debug Your Workflows
+
+Ever wondered what's happening to your messages as they flow through your system? Message tracing lets you record breadcrumbs as messages are processed, perfect for debugging distributed workflows!
+
+### Basic Tracing
+
+```javascript
+await queen.queue('orders').consume(async (msg) => {
+  // Record a trace event
+  await msg.trace({
+    data: { text: 'Order processing started' }
+  })
+  
+  // Do some work
+  const order = await processOrder(msg.data)
+  
+  // Record another trace
+  await msg.trace({
+    data: { 
+      text: 'Order processed successfully',
+      orderId: order.id,
+      total: order.total
+    }
+  })
+}, { autoAck: true })
+```
+
+**What you get:**
+- Timeline of processing events
+- View traces in the frontend (Messages → Click message → Processing Timeline)
+- Never crashes your consumer (safe error handling built-in)
+
+### Trace Names - Connect the Dots
+
+The real power comes from **trace names** - they let you correlate traces across multiple messages!
+
+```javascript
+// Service 1: Order Service
+await queen.queue('orders').consume(async (msg) => {
+  const orderId = msg.data.orderId
+  
+  await msg.trace({
+    traceName: `order-${orderId}`,  // 👈 Link traces with this name
+    data: { text: 'Order created', service: 'orders' }
+  })
+  
+  // Create inventory check
+  await queen.queue('inventory').push([{
+    data: { orderId, items: msg.data.items }
+  }])
+})
+
+// Service 2: Inventory Service
+await queen.queue('inventory').consume(async (msg) => {
+  const orderId = msg.data.orderId
+  
+  await msg.trace({
+    traceName: `order-${orderId}`,  // 👈 Same name = connected!
+    data: { text: 'Stock checked', service: 'inventory' }
+  })
+  
+  // Create payment
+  await queen.queue('payments').push([{
+    data: { orderId }
+  }])
+})
+
+// Service 3: Payment Service
+await queen.queue('payments').consume(async (msg) => {
+  const orderId = msg.data.orderId
+  
+  await msg.trace({
+    traceName: `order-${orderId}`,  // 👈 All connected!
+    data: { text: 'Payment processed', service: 'payments' }
+  })
+})
+```
+
+**Now in the frontend:**
+- Go to **Traces** page
+- Search for `order-12345`
+- See the ENTIRE workflow across all 3 services! 🎉
+
+### Multi-Category Tracing
+
+You can add multiple trace names to organize by different dimensions:
+
+```javascript
+await queen.queue('chat-messages').consume(async (msg) => {
+  const { tenantId, roomId, userId } = msg.data
+  
+  await msg.trace({
+    traceName: [
+      `tenant-${tenantId}`,    // Track by tenant
+      `room-${roomId}`,        // Track by room
+      `user-${userId}`         // Track by user
+    ],
+    data: { text: 'Message sent' }
+  })
+})
+```
+
+**Query any dimension:**
+- Search `tenant-acme` → See all tenant activity
+- Search `room-123` → See all room activity  
+- Search `user-456` → See all user activity
+
+### Event Types
+
+Organize traces by event type for better visualization:
+
+```javascript
+await msg.trace({
+  eventType: 'info',      // Blue in UI
+  data: { text: 'Started processing' }
+})
+
+await msg.trace({
+  eventType: 'step',      // Purple in UI
+  data: { text: 'Validated data' }
+})
+
+await msg.trace({
+  eventType: 'error',     // Red in UI
+  data: { text: 'Validation failed', reason: 'Invalid email' }
+})
+
+await msg.trace({
+  eventType: 'processing', // Green in UI
+  data: { text: 'Sending email' }
+})
+```
+
+### Error Tracking
+
+Traces are perfect for tracking errors without breaking your flow:
+
+```javascript
+await queen.queue('analytics').consume(async (msg) => {
+  try {
+    await msg.trace({ data: { text: 'Job started' } })
+    
+    const result = await computeAnalytics(msg.data)
+    
+    await msg.trace({
+      data: { 
+        text: 'Job completed',
+        recordsProcessed: result.count
+      }
+    })
+  } catch (error) {
+    // Record the error (this won't crash!)
+    await msg.trace({
+      eventType: 'error',
+      data: { 
+        text: 'Job failed',
+        error: error.message,
+        stack: error.stack
+      }
+    })
+    
+    throw error  // Still fail the message for retry
+  }
+}, { autoAck: true })
+```
+
+### Performance Tracking
+
+Track timing and metrics:
+
+```javascript
+await queen.queue('reports').consume(async (msg) => {
+  const start = Date.now()
+  
+  await msg.trace({ data: { text: 'Report generation started' } })
+  
+  const data = await fetchData(msg.data)
+  const fetchTime = Date.now() - start
+  
+  await msg.trace({
+    data: { 
+      text: 'Data fetched',
+      durationMs: fetchTime,
+      rowCount: data.length
+    }
+  })
+  
+  const report = await generatePDF(data)
+  
+  await msg.trace({
+    data: { 
+      text: 'Report generated',
+      totalDurationMs: Date.now() - start,
+      sizeKB: Math.round(report.size / 1024)
+    }
+  })
+})
+```
+
+### Viewing Traces in the UI
+
+**Method 1: From Message Details**
+1. Go to **Messages** page
+2. Click on any message
+3. See "Processing Timeline" with all traces
+
+**Method 2: Search by Trace Name**
+1. Go to **Traces** page
+2. Enter a trace name (e.g., `order-12345`)
+3. See timeline across ALL messages with that name
+
+**Method 3: Browse Available Traces**
+1. Go to **Traces** page
+2. See list of all trace names with statistics
+3. Click any trace name to view
+
+### Important Notes
+
+⚡ **Safe & Non-Blocking**
+- Traces are awaited but NEVER crash your consumer
+- Failures are logged but don't throw errors
+- Your message processing continues normally
+
+🎯 **Best Practices**
+- Use descriptive trace names for easy searching
+- Include relevant data (IDs, counts, durations)
+- Use event types for visual organization
+- Trace both successes and failures
+
+🔍 **Use Cases**
+- Debug distributed workflows
+- Track multi-tenant operations
+- Monitor user journeys
+- Performance analysis
+- Error investigation
+- Audit trails
+
+---
+
+## Part 13: Callbacks & Error Handling
 
 Sometimes you need more control over what happens when messages succeed or fail.
 
@@ -998,7 +1238,7 @@ await queen.ack(messages)
 
 ---
 
-## Part 13: Graceful Shutdown
+## Part 14: Graceful Shutdown
 
 Always clean up properly when shutting down!
 
@@ -1190,6 +1430,41 @@ await queen.queue('q').flushBuffer()
 
 // Get buffer stats
 const stats = queen.getBufferStats()
+```
+
+### Message Tracing
+
+```javascript
+// Basic trace
+await msg.trace({ data: { text: 'Processing started' } })
+
+// Trace with name (for cross-message correlation)
+await msg.trace({
+  traceName: 'order-12345',
+  data: { text: 'Order created' }
+})
+
+// Multiple trace names (multi-dimensional tracking)
+await msg.trace({
+  traceName: ['tenant-acme', 'room-123', 'user-456'],
+  data: { text: 'Message sent' }
+})
+
+// With event type
+await msg.trace({
+  eventType: 'error',  // info, error, step, processing, warning
+  data: { text: 'Processing failed', reason: 'timeout' }
+})
+
+// Rich data
+await msg.trace({
+  traceName: 'report-gen-789',
+  data: { 
+    text: 'Report generated',
+    durationMs: 1500,
+    sizeKB: 250
+  }
+})
 ```
 
 ### DLQ

@@ -145,6 +145,9 @@ export class ConsumerManager {
 
         logger.log('ConsumerManager.worker', { workerId, status: 'messages-received', count: messages.length })
 
+        // Enhance messages with trace() method
+        this.#enhanceMessagesWithTrace(messages, group)
+
         // Update last message time
         if (idleMillis) {
           lastMessageTime = Date.now()
@@ -275,6 +278,80 @@ export class ConsumerManager {
         console.error('Lease renewal failed:', error)
       }
     }, intervalMillis)
+  }
+
+  #enhanceMessagesWithTrace(messages, group) {
+    const httpClient = this.#httpClient
+    const consumerGroup = group || '__QUEUE_MODE__'
+    
+    for (const message of messages) {
+      /**
+       * Record a trace event for this message
+       * @param {object} traceConfig - Configuration object
+       * @param {string|string[]} [traceConfig.traceName] - Single name or array of names for categorization
+       * @param {string} [traceConfig.eventType='info'] - Event type (info, error, step, processing, etc.)
+       * @param {object} traceConfig.data - User data to store with the trace
+       * @returns {Promise<object>} Result with success status
+       * 
+       * IMPORTANT: This method will NEVER crash - errors are logged but don't throw
+       * 
+       * @example
+       * await msg.trace({
+       *   traceName: ['tenant-acme', 'chat-room-123'],
+       *   eventType: 'info',
+       *   data: { text: 'Started processing', orderId: 123 }
+       * });
+       */
+      message.trace = async (traceConfig) => {
+        try {
+          // Validate required structure
+          if (typeof traceConfig !== 'object' || !traceConfig.data) {
+            logger.warn('ConsumerManager.trace', { 
+              error: 'Invalid trace config: requires { data: {...} }',
+              transactionId: message.transactionId 
+            })
+            return { success: false, error: 'Invalid trace config: requires { data: {...} }' }
+          }
+          
+          // Normalize traceName to array
+          let traceNames = null
+          if (traceConfig.traceName) {
+            if (Array.isArray(traceConfig.traceName)) {
+              traceNames = traceConfig.traceName.filter(n => typeof n === 'string' && n.length > 0)
+              if (traceNames.length === 0) traceNames = null
+            } else if (typeof traceConfig.traceName === 'string') {
+              traceNames = [traceConfig.traceName]
+            }
+          }
+          
+          const response = await httpClient.post('/api/v1/traces', {
+            transactionId: message.transactionId,
+            partitionId: message.partitionId,
+            consumerGroup: consumerGroup,
+            traceNames: traceNames,
+            eventType: traceConfig.eventType || 'info',
+            data: traceConfig.data
+          })
+          
+          logger.log('ConsumerManager.trace', { 
+            transactionId: message.transactionId, 
+            success: true,
+            traceNames: traceNames 
+          })
+          return { success: true, ...response }
+        } catch (error) {
+          // CRITICAL: NEVER CRASH - just log and return gracefully
+          logger.error('ConsumerManager.trace', {
+            transactionId: message.transactionId,
+            error: error.message,
+            phase: 'trace-failed'
+          })
+          console.warn(`[TRACE FAILED] ${message.transactionId}: ${error.message}`)
+          
+          return { success: false, error: error.message }
+        }
+      }
+    }
   }
 
   #buildPath(queue, partition, namespace, task) {

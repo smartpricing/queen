@@ -2594,6 +2594,24 @@ bool QueueManager::initialize_schema() {
                 CONSTRAINT unique_metric_per_replica 
                     UNIQUE (timestamp, hostname, port, worker_id)
             );
+            
+            CREATE TABLE IF NOT EXISTS queen.message_traces (
+                id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+                message_id UUID REFERENCES queen.messages(id) ON DELETE CASCADE,
+                partition_id UUID REFERENCES queen.partitions(id) ON DELETE CASCADE,
+                transaction_id VARCHAR(255) NOT NULL,
+                consumer_group VARCHAR(255),
+                event_type VARCHAR(100),
+                data JSONB NOT NULL,
+                created_at TIMESTAMPTZ DEFAULT NOW(),
+                worker_id VARCHAR(255)
+            );
+            
+            CREATE TABLE IF NOT EXISTS queen.message_trace_names (
+                trace_id UUID REFERENCES queen.message_traces(id) ON DELETE CASCADE,
+                trace_name TEXT NOT NULL,
+                PRIMARY KEY (trace_id, trace_name)
+            );
         )";
         
         auto result2 = QueryResult(conn->exec(create_tables_sql));
@@ -2636,6 +2654,11 @@ bool QueueManager::initialize_schema() {
             CREATE INDEX IF NOT EXISTS idx_system_metrics_replica ON queen.system_metrics(hostname, port);
             CREATE INDEX IF NOT EXISTS idx_system_metrics_worker ON queen.system_metrics(worker_id);
             CREATE INDEX IF NOT EXISTS idx_system_metrics_metrics ON queen.system_metrics USING GIN (metrics);
+            CREATE INDEX IF NOT EXISTS idx_message_traces_message_id ON queen.message_traces(message_id);
+            CREATE INDEX IF NOT EXISTS idx_message_traces_transaction_partition ON queen.message_traces(transaction_id, partition_id);
+            CREATE INDEX IF NOT EXISTS idx_message_traces_created_at ON queen.message_traces(created_at DESC);
+            CREATE INDEX IF NOT EXISTS idx_message_trace_names_name ON queen.message_trace_names(trace_name);
+            CREATE INDEX IF NOT EXISTS idx_message_trace_names_trace_id ON queen.message_trace_names(trace_id);
         )";
         
         auto result3 = QueryResult(conn->exec(create_indexes_sql));
@@ -2694,6 +2717,284 @@ bool QueueManager::initialize_schema() {
     } catch (const std::exception& e) {
         spdlog::error("Failed to initialize schema: {}", e.what());
         return false;
+    }
+}
+
+// ============================================================================
+// Message Tracing Implementation
+// ============================================================================
+
+bool QueueManager::record_trace(
+    const std::string& transaction_id,
+    const std::string& partition_id,
+    const std::string& consumer_group,
+    const std::vector<std::string>& trace_names,
+    const std::string& event_type,
+    const nlohmann::json& data,
+    const std::string& worker_id
+) {
+    try {
+        ScopedConnection conn(db_pool_.get());
+        
+        // Start transaction for atomicity
+        if (!conn->begin_transaction()) {
+            spdlog::error("Failed to begin transaction for trace");
+            return false;
+        }
+        
+        // Get message_id from transaction_id + partition_id
+        std::string query = R"(
+            SELECT id FROM queen.messages 
+            WHERE transaction_id = $1 AND partition_id = $2
+            LIMIT 1
+        )";
+        
+        auto result = QueryResult(conn->exec_params(query, {transaction_id, partition_id}));
+        
+        if (result.num_rows() == 0) {
+            spdlog::warn("Message not found for trace: {}/{}", partition_id, transaction_id);
+            conn->rollback_transaction();
+            return false;
+        }
+        
+        std::string message_id = result.get_value(0, 0);
+        
+        // Insert main trace record
+        std::string insert_query = R"(
+            INSERT INTO queen.message_traces 
+            (message_id, partition_id, transaction_id, consumer_group, event_type, data, worker_id)
+            VALUES ($1, $2, $3, $4, $5, $6, $7)
+            RETURNING id
+        )";
+        
+        auto insert_result = QueryResult(conn->exec_params(insert_query, {
+            message_id,
+            partition_id,
+            transaction_id,
+            consumer_group,
+            event_type,
+            data.dump(),
+            worker_id
+        }));
+        
+        if (!insert_result.is_success() || insert_result.num_rows() == 0) {
+            spdlog::error("Failed to insert trace: {}", insert_result.error_message());
+            conn->rollback_transaction();
+            return false;
+        }
+        
+        std::string trace_id = insert_result.get_value(0, 0);
+        
+        // Insert trace names (if any)
+        if (!trace_names.empty()) {
+            for (const auto& name : trace_names) {
+                std::string name_query = R"(
+                    INSERT INTO queen.message_trace_names (trace_id, trace_name)
+                    VALUES ($1, $2)
+                    ON CONFLICT DO NOTHING
+                )";
+                
+                auto name_result = QueryResult(conn->exec_params(name_query, {trace_id, name}));
+                
+                if (!name_result.is_success()) {
+                    spdlog::error("Failed to insert trace name: {}", name_result.error_message());
+                    conn->rollback_transaction();
+                    return false;
+                }
+            }
+            
+            spdlog::debug("Trace recorded: {}/{} with {} names", 
+                         partition_id, transaction_id, trace_names.size());
+        } else {
+            spdlog::debug("Trace recorded: {}/{} (no names)", 
+                         partition_id, transaction_id);
+        }
+        
+        // Commit transaction
+        if (!conn->commit_transaction()) {
+            spdlog::error("Failed to commit trace transaction");
+            conn->rollback_transaction();
+            return false;
+        }
+        
+        return true;
+    } catch (const std::exception& e) {
+        spdlog::error("Exception recording trace: {}", e.what());
+        return false;
+    }
+}
+
+nlohmann::json QueueManager::get_message_traces(
+    const std::string& partition_id,
+    const std::string& transaction_id
+) {
+    try {
+        ScopedConnection conn(db_pool_.get());
+        
+        // Get traces with their associated names
+        std::string query = R"(
+            SELECT 
+                mt.id,
+                mt.event_type,
+                mt.data,
+                mt.consumer_group,
+                mt.worker_id,
+                mt.created_at,
+                COALESCE(
+                    json_agg(mtn.trace_name ORDER BY mtn.trace_name) 
+                    FILTER (WHERE mtn.trace_name IS NOT NULL),
+                    '[]'::json
+                ) as trace_names
+            FROM queen.message_traces mt
+            LEFT JOIN queen.message_trace_names mtn ON mt.id = mtn.trace_id
+            WHERE mt.partition_id = $1 AND mt.transaction_id = $2
+            GROUP BY mt.id, mt.event_type, mt.data, mt.consumer_group, mt.worker_id, mt.created_at
+            ORDER BY mt.created_at ASC
+        )";
+        
+        auto result = QueryResult(conn->exec_params(query, {partition_id, transaction_id}));
+        
+        nlohmann::json traces = nlohmann::json::array();
+        for (int i = 0; i < result.num_rows(); i++) {
+            traces.push_back(result.row_to_json(i));
+        }
+        
+        return {
+            {"traces", traces},
+            {"count", result.num_rows()}
+        };
+    } catch (const std::exception& e) {
+        spdlog::error("Failed to get traces: {}", e.what());
+        throw;
+    }
+}
+
+nlohmann::json QueueManager::get_traces_by_name(
+    const std::string& trace_name,
+    int limit,
+    int offset
+) {
+    try {
+        ScopedConnection conn(db_pool_.get());
+        
+        // Query traces by any matching name
+        std::string query = R"(
+            SELECT 
+                mt.id,
+                mt.transaction_id,
+                mt.partition_id,
+                mt.event_type,
+                mt.data,
+                mt.consumer_group,
+                mt.worker_id,
+                mt.created_at,
+                m.payload as message_payload,
+                q.name as queue_name,
+                p.name as partition_name,
+                COALESCE(
+                    json_agg(mtn2.trace_name ORDER BY mtn2.trace_name) 
+                    FILTER (WHERE mtn2.trace_name IS NOT NULL),
+                    '[]'::json
+                ) as trace_names
+            FROM queen.message_trace_names mtn
+            JOIN queen.message_traces mt ON mtn.trace_id = mt.id
+            LEFT JOIN queen.message_trace_names mtn2 ON mt.id = mtn2.trace_id
+            LEFT JOIN queen.messages m ON mt.message_id = m.id
+            LEFT JOIN queen.partitions p ON mt.partition_id = p.id
+            LEFT JOIN queen.queues q ON p.queue_id = q.id
+            WHERE mtn.trace_name = $1
+            GROUP BY mt.id, mt.transaction_id, mt.partition_id, mt.event_type, 
+                     mt.data, mt.consumer_group, mt.worker_id, mt.created_at,
+                     m.payload, q.name, p.name
+            ORDER BY mt.created_at ASC
+            LIMIT $2 OFFSET $3
+        )";
+        
+        auto result = QueryResult(conn->exec_params(query, {
+            trace_name,
+            std::to_string(limit),
+            std::to_string(offset)
+        }));
+        
+        nlohmann::json traces = nlohmann::json::array();
+        for (int i = 0; i < result.num_rows(); i++) {
+            traces.push_back(result.row_to_json(i));
+        }
+        
+        // Get total count
+        std::string count_query = R"(
+            SELECT COUNT(DISTINCT mt.id)
+            FROM queen.message_trace_names mtn
+            JOIN queen.message_traces mt ON mtn.trace_id = mt.id
+            WHERE mtn.trace_name = $1
+        )";
+        
+        auto count_result = QueryResult(conn->exec_params(count_query, {trace_name}));
+        int total = count_result.num_rows() > 0 ? std::stoi(count_result.get_value(0, 0)) : 0;
+        
+        return {
+            {"traces", traces},
+            {"count", result.num_rows()},
+            {"total", total},
+            {"limit", limit},
+            {"offset", offset}
+        };
+    } catch (const std::exception& e) {
+        spdlog::error("Failed to get traces by name: {}", e.what());
+        throw;
+    }
+}
+
+nlohmann::json QueueManager::get_available_trace_names(
+    int limit,
+    int offset
+) {
+    try {
+        ScopedConnection conn(db_pool_.get());
+        
+        // Query for distinct trace names with counts
+        std::string query = R"(
+            SELECT 
+                trace_name,
+                COUNT(DISTINCT trace_id) as trace_count,
+                COUNT(DISTINCT mt.transaction_id) as message_count,
+                MAX(mt.created_at) as last_seen
+            FROM queen.message_trace_names mtn
+            JOIN queen.message_traces mt ON mtn.trace_id = mt.id
+            GROUP BY trace_name
+            ORDER BY last_seen DESC
+            LIMIT $1 OFFSET $2
+        )";
+        
+        auto result = QueryResult(conn->exec_params(query, {
+            std::to_string(limit),
+            std::to_string(offset)
+        }));
+        
+        nlohmann::json trace_names = nlohmann::json::array();
+        for (int i = 0; i < result.num_rows(); i++) {
+            trace_names.push_back(result.row_to_json(i));
+        }
+        
+        // Get total count
+        std::string count_query = R"(
+            SELECT COUNT(DISTINCT trace_name) as total
+            FROM queen.message_trace_names
+        )";
+        
+        auto count_result = QueryResult(conn->exec(count_query));
+        int total = count_result.num_rows() > 0 ? std::stoi(count_result.get_value(0, 0)) : 0;
+        
+        return {
+            {"trace_names", trace_names},
+            {"count", result.num_rows()},
+            {"total", total},
+            {"limit", limit},
+            {"offset", offset}
+        };
+    } catch (const std::exception& e) {
+        spdlog::error("Failed to get available trace names: {}", e.what());
+        throw;
     }
 }
 

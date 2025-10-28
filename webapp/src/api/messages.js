@@ -22,5 +22,10 @@ export const messagesApi = {
   // Acknowledgment
   ackMessage: (data) => apiClient.post('/api/v1/ack', data),
   batchAck: (data) => apiClient.post('/api/v1/ack/batch', data),
+  
+  // Tracing
+  getTraces: (partitionId, transactionId) => apiClient.get(`/api/v1/traces/${partitionId}/${transactionId}`),
+  getTracesByName: (traceName, params) => apiClient.get(`/api/v1/traces/by-name/${traceName}`, { params }),
+  getAvailableTraceNames: (params) => apiClient.get('/api/v1/traces/names', { params }),
 };
 

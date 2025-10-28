@@ -231,6 +231,33 @@ public:
     // Initialize database schema
     bool initialize_schema();
     
+    // Message tracing
+    bool record_trace(
+        const std::string& transaction_id,
+        const std::string& partition_id,
+        const std::string& consumer_group,
+        const std::vector<std::string>& trace_names,
+        const std::string& event_type,
+        const nlohmann::json& data,
+        const std::string& worker_id
+    );
+    
+    nlohmann::json get_message_traces(
+        const std::string& partition_id,
+        const std::string& transaction_id
+    );
+    
+    nlohmann::json get_traces_by_name(
+        const std::string& trace_name,
+        int limit,
+        int offset
+    );
+    
+    nlohmann::json get_available_trace_names(
+        int limit,
+        int offset
+    );
+    
     // Database pool access (for status/analytics queries)
     std::shared_ptr<DatabasePool> get_db_pool() const { return db_pool_; }
 };

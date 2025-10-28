@@ -88,6 +88,21 @@ await queen
   .buffer({ messageCount: 100, timeMillis: 1000 })
   .push([{ data: { level: 'info', message: 'Server started' } }])
 
+// Message tracing (for debugging and monitoring)
+await queen.queue('orders').consume(async (msg) => {
+  await msg.trace({
+    traceName: ['tenant-acme', 'order-flow-123'],
+    data: { text: 'Processing started', orderId: msg.data.id }
+  })
+  
+  // Process order...
+  
+  await msg.trace({
+    traceName: ['tenant-acme', 'order-flow-123'],
+    data: { text: 'Order completed' }
+  })
+})
+
 // Graceful shutdown
 await queen.close()
 ```
@@ -101,6 +116,7 @@ await queen.close()
 - ✅ Client-side buffering for speed
 - ✅ Dead letter queue for failures
 - ✅ Lease renewal for long tasks
+- ✅ **Message tracing for debugging workflows**
 - ✅ Graceful shutdown with buffer flush
 
 ## 📚 Examples
@@ -176,7 +192,8 @@ A modern Vue 3 web interface for managing and monitoring Queen MQ.
 - 📈 Message throughput visualization
 - 🔍 Queue management and monitoring
 - 👥 Consumer group tracking
-- 💬 Message browser
+- 💬 Message browser with trace timeline
+- 🔎 **Trace explorer for debugging distributed workflows**
 - 📉 Analytics and insights
 - 🌓 Dark/light theme support
 
