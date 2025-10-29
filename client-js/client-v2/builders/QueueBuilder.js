@@ -2,7 +2,13 @@
  * Queue builder for fluent API
  */
 
-import { generateUUID } from '../../utils/uuid.js'
+import { v7 as uuidv7 } from 'uuid';
+
+export const generateUUID = () => {
+  return uuidv7();
+};
+
+//import { generateUUID } from '../../utils/uuid.js'
 import { isValidUUID } from '../utils/validation.js'
 import { QUEUE_DEFAULTS, CONSUME_DEFAULTS, POP_DEFAULTS } from '../utils/defaults.js'
 import * as logger from '../utils/logger.js'
