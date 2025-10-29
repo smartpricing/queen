@@ -109,7 +109,7 @@
                 </div>
                 
                 <div v-if="hasAdditionalData(trace.data)" class="mt-2">
-                  <div class="bg-white dark:bg-slate-800 rounded p-2 text-xs font-mono">
+                  <div class="bg-white dark:bg-slate-800 rounded p-2 text-xs font-mono overflow-x-auto scrollbar-thin">
                     <pre>{{ formatTraceData(trace.data) }}</pre>
                   </div>
                 </div>

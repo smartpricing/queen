@@ -67,112 +67,161 @@
             </div>
           </div>
 
-          <!-- Traces Timeline -->
-          <div class="data-card">
-            <div class="p-4">
-              <h3 class="text-sm font-semibold text-gray-700 dark:text-gray-300 mb-4">Processing Timeline</h3>
-              
-              <div class="space-y-3">
-                <div 
-                  v-for="trace in traces" 
-                  :key="trace.id"
-                  class="border border-gray-200 dark:border-gray-700 rounded-lg p-4 hover:border-rose-300 dark:hover:border-rose-600 transition-colors cursor-pointer"
-                  @click="viewMessage(trace)"
-                >
-                  <!-- Trace Header -->
-                  <div class="flex items-start justify-between mb-3">
-                    <div class="flex items-center gap-3">
-                      <div 
-                        class="w-3 h-3 rounded-full flex-shrink-0 mt-1"
-                        :class="getEventColor(trace.event_type)"
-                      ></div>
-                      <div>
-                        <div class="flex items-center gap-2">
-                          <span class="text-xs font-semibold uppercase tracking-wide text-gray-700 dark:text-gray-300">
-                            {{ trace.event_type }}
-                          </span>
-                          <span class="text-xs text-gray-500 dark:text-gray-400">
-                            {{ formatDateTime(trace.created_at) }}
-                          </span>
-                        </div>
-                        
-                        <!-- Message Info -->
-                        <div class="flex items-center gap-3 mt-1 text-xs text-gray-600 dark:text-gray-400">
-                          <span class="font-medium">{{ trace.queue_name || 'Unknown Queue' }}</span>
-                          <span>•</span>
-                          <span class="font-mono">{{ trace.partition_name || 'Unknown' }}</span>
-                          <span>•</span>
-                          <span class="font-mono text-[10px]">{{ trace.transaction_id }}</span>
-                        </div>
+          <!-- Traces Table -->
+          <div class="table-flat">
+            <div class="overflow-x-auto">
+              <table class="w-full">
+                <thead>
+                  <tr>
+                    <th class="text-left py-3 px-4 font-medium text-xs uppercase tracking-wider text-gray-700 dark:text-gray-300 border-b border-gray-200 dark:border-gray-700">
+                      Event
+                    </th>
+                    <th class="text-left py-3 px-4 font-medium text-xs uppercase tracking-wider text-gray-700 dark:text-gray-300 border-b border-gray-200 dark:border-gray-700">
+                      Time
+                    </th>
+                    <th class="text-left py-3 px-4 font-medium text-xs uppercase tracking-wider text-gray-700 dark:text-gray-300 border-b border-gray-200 dark:border-gray-700">
+                      Queue
+                    </th>
+                    <th class="text-left py-3 px-4 font-medium text-xs uppercase tracking-wider text-gray-700 dark:text-gray-300 border-b border-gray-200 dark:border-gray-700">
+                      Partition
+                    </th>
+                    <th class="text-left py-3 px-4 font-medium text-xs uppercase tracking-wider text-gray-700 dark:text-gray-300 border-b border-gray-200 dark:border-gray-700">
+                      Transaction ID
+                    </th>
+                    <th class="text-left py-3 px-4 font-medium text-xs uppercase tracking-wider text-gray-700 dark:text-gray-300 border-b border-gray-200 dark:border-gray-700">
+                      Trace Names
+                    </th>
+                    <th class="text-left py-3 px-4 font-medium text-xs uppercase tracking-wider text-gray-700 dark:text-gray-300 border-b border-gray-200 dark:border-gray-700">
+                      Data
+                    </th>
+                    <th class="text-left py-3 px-4 font-medium text-xs uppercase tracking-wider text-gray-700 dark:text-gray-300 border-b border-gray-200 dark:border-gray-700">
+                      Worker / Group
+                    </th>
+                    <th class="w-12"></th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr 
+                    v-for="trace in traces" 
+                    :key="trace.id"
+                    class="border-b border-gray-100 dark:border-gray-800 hover:bg-gray-50 dark:hover:bg-gray-800/50 cursor-pointer transition-colors"
+                    @click="viewMessage(trace)"
+                  >
+                    <!-- Event Type -->
+                    <td class="py-3 px-4">
+                      <div class="flex items-center gap-2">
+                        <div 
+                          class="w-2.5 h-2.5 rounded-full flex-shrink-0"
+                          :class="getEventColor(trace.event_type)"
+                        ></div>
+                        <span class="text-xs font-semibold uppercase tracking-wide text-gray-700 dark:text-gray-300">
+                          {{ trace.event_type }}
+                        </span>
                       </div>
-                    </div>
+                    </td>
                     
-                    <!-- Click indicator -->
-                    <svg class="w-5 h-5 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7" />
-                    </svg>
-                  </div>
-
-                  <!-- Trace Names -->
-                  <div v-if="trace.trace_names && trace.trace_names.length > 0" class="mb-3">
-                    <div class="flex flex-wrap gap-1">
-                      <span 
-                        v-for="name in trace.trace_names"
-                        :key="name"
-                        class="inline-block px-2 py-0.5 text-xs rounded-full"
-                        :class="name === currentTraceName 
-                          ? 'bg-rose-100 dark:bg-rose-900 text-rose-700 dark:text-rose-300 font-medium'
-                          : 'bg-blue-100 dark:bg-blue-900 text-blue-700 dark:text-blue-300'"
-                      >
-                        {{ name }}
+                    <!-- Time -->
+                    <td class="py-3 px-4">
+                      <span class="text-xs text-gray-600 dark:text-gray-400 whitespace-nowrap">
+                        {{ formatDateTime(trace.created_at) }}
                       </span>
-                    </div>
-                  </div>
-
-                  <!-- Trace Data -->
-                  <div class="text-sm text-gray-700 dark:text-gray-300">
-                    <div v-if="trace.data && trace.data.text" class="mb-2">
-                      {{ trace.data.text }}
-                    </div>
+                    </td>
                     
-                    <div v-if="hasAdditionalData(trace.data)" class="bg-gray-50 dark:bg-slate-900 rounded p-2 text-xs font-mono">
-                      <pre class="overflow-x-auto scrollbar-thin">{{ formatTraceData(trace.data) }}</pre>
-                    </div>
-                  </div>
+                    <!-- Queue -->
+                    <td class="py-3 px-4">
+                      <span class="text-xs font-medium text-gray-700 dark:text-gray-300">
+                        {{ trace.queue_name || 'Unknown' }}
+                      </span>
+                    </td>
+                    
+                    <!-- Partition -->
+                    <td class="py-3 px-4">
+                      <span class="text-xs font-mono text-gray-600 dark:text-gray-400">
+                        {{ trace.partition_name || 'Unknown' }}
+                      </span>
+                    </td>
+                    
+                    <!-- Transaction ID -->
+                    <td class="py-3 px-4">
+                      <span class="text-xs font-mono text-gray-600 dark:text-gray-400">
+                        {{ trace.transaction_id }}
+                      </span>
+                    </td>
+                    
+                    <!-- Trace Names -->
+                    <td class="py-3 px-4">
+                      <div v-if="trace.trace_names && trace.trace_names.length > 0" class="flex flex-wrap gap-1">
+                        <span 
+                          v-for="name in trace.trace_names"
+                          :key="name"
+                          class="inline-block px-2 py-0.5 text-xs rounded-full whitespace-nowrap"
+                          :class="name === currentTraceName 
+                            ? 'bg-rose-100 dark:bg-rose-900 text-rose-700 dark:text-rose-300 font-medium'
+                            : 'bg-blue-100 dark:bg-blue-900 text-blue-700 dark:text-blue-300'"
+                        >
+                          {{ name }}
+                        </span>
+                      </div>
+                      <span v-else class="text-xs text-gray-400">-</span>
+                    </td>
+                    
+                    <!-- Data -->
+                    <td class="py-3 px-4 max-w-xs">
+                      <div class="text-xs text-gray-700 dark:text-gray-300">
+                        <div v-if="trace.data && trace.data.text" class="truncate" :title="trace.data.text">
+                          {{ trace.data.text }}
+                        </div>
+                        <div v-else-if="hasAdditionalData(trace.data)" class="text-gray-500 dark:text-gray-400 italic">
+                          JSON data
+                        </div>
+                        <span v-else class="text-gray-400">-</span>
+                      </div>
+                    </td>
+                    
+                    <!-- Worker / Group -->
+                    <td class="py-3 px-4">
+                      <div class="text-xs text-gray-600 dark:text-gray-400 space-y-0.5">
+                        <div v-if="trace.worker_id" class="truncate" :title="trace.worker_id">
+                          {{ trace.worker_id }}
+                        </div>
+                        <div v-if="trace.consumer_group && trace.consumer_group !== '__QUEUE_MODE__'" class="text-gray-500 dark:text-gray-500">
+                          {{ trace.consumer_group }}
+                        </div>
+                        <span v-if="!trace.worker_id && (!trace.consumer_group || trace.consumer_group === '__QUEUE_MODE__')" class="text-gray-400">-</span>
+                      </div>
+                    </td>
+                    
+                    <!-- Action -->
+                    <td class="py-3 px-4 text-right">
+                      <svg class="w-4 h-4 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7" />
+                      </svg>
+                    </td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
 
-                  <!-- Metadata Footer -->
-                  <div class="flex gap-4 mt-3 pt-3 border-t border-gray-200 dark:border-gray-700 text-xs text-gray-500 dark:text-gray-400">
-                    <span v-if="trace.worker_id">
-                      <strong>Worker:</strong> {{ trace.worker_id }}
-                    </span>
-                    <span v-if="trace.consumer_group && trace.consumer_group !== '__QUEUE_MODE__'">
-                      <strong>Group:</strong> {{ trace.consumer_group }}
-                    </span>
-                  </div>
-                </div>
-              </div>
-
-              <!-- Pagination -->
-              <div v-if="totalTraces > limit" class="flex items-center justify-between mt-4 pt-4 border-t border-gray-200 dark:border-gray-700">
-                <p class="text-sm text-gray-600 dark:text-gray-400">
-                  Showing {{ offset + 1 }}-{{ Math.min(offset + limit, totalTraces) }} of {{ totalTraces }}
-                </p>
-                <div class="flex gap-2">
-                  <button
-                    @click="previousPage"
-                    :disabled="offset === 0"
-                    class="btn btn-secondary text-sm px-3 py-1.5"
-                  >
-                    Previous
-                  </button>
-                  <button
-                    @click="nextPage"
-                    :disabled="offset + limit >= totalTraces"
-                    class="btn btn-secondary text-sm px-3 py-1.5"
-                  >
-                    Next
-                  </button>
-                </div>
+            <!-- Pagination -->
+            <div v-if="totalTraces > limit" class="flex items-center justify-between mt-4 pt-4 px-4 border-t border-gray-200 dark:border-gray-700">
+              <p class="text-sm text-gray-600 dark:text-gray-400">
+                Showing {{ offset + 1 }}-{{ Math.min(offset + limit, totalTraces) }} of {{ totalTraces }}
+              </p>
+              <div class="flex gap-2">
+                <button
+                  @click="previousPage"
+                  :disabled="offset === 0"
+                  class="btn btn-secondary text-sm px-3 py-1.5"
+                >
+                  Previous
+                </button>
+                <button
+                  @click="nextPage"
+                  :disabled="offset + limit >= totalTraces"
+                  class="btn btn-secondary text-sm px-3 py-1.5"
+                >
+                  Next
+                </button>
               </div>
             </div>
           </div>
@@ -209,39 +258,69 @@
                 <p class="text-xs mt-1">Traces will appear here once messages are processed with trace names</p>
               </div>
               
-              <div v-else class="space-y-2">
-                <div 
-                  v-for="traceName in availableTraceNames" 
-                  :key="traceName.trace_name"
-                  @click="selectTraceName(traceName.trace_name)"
-                  class="border border-gray-200 dark:border-gray-700 rounded-lg p-4 hover:border-rose-300 dark:hover:border-rose-600 hover:bg-gray-50 dark:hover:bg-gray-800/50 transition-colors cursor-pointer"
-                >
-                  <div class="flex items-start justify-between">
-                    <div class="flex-1 min-w-0">
-                      <div class="flex items-center gap-3">
-                        <span class="text-base font-medium text-gray-900 dark:text-gray-100 font-mono">
+              <div v-else class="overflow-x-auto">
+                <table class="w-full">
+                  <thead>
+                    <tr>
+                      <th class="text-left py-3 px-4 font-medium text-xs uppercase tracking-wider text-gray-700 dark:text-gray-300 border-b border-gray-200 dark:border-gray-700">
+                        Trace Name
+                      </th>
+                      <th class="text-left py-3 px-4 font-medium text-xs uppercase tracking-wider text-gray-700 dark:text-gray-300 border-b border-gray-200 dark:border-gray-700">
+                        Traces
+                      </th>
+                      <th class="text-left py-3 px-4 font-medium text-xs uppercase tracking-wider text-gray-700 dark:text-gray-300 border-b border-gray-200 dark:border-gray-700">
+                        Messages
+                      </th>
+                      <th class="text-left py-3 px-4 font-medium text-xs uppercase tracking-wider text-gray-700 dark:text-gray-300 border-b border-gray-200 dark:border-gray-700">
+                        Last Seen
+                      </th>
+                      <th class="w-12"></th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    <tr 
+                      v-for="traceName in availableTraceNames" 
+                      :key="traceName.trace_name"
+                      @click="selectTraceName(traceName.trace_name)"
+                      class="border-b border-gray-100 dark:border-gray-800 hover:bg-gray-50 dark:hover:bg-gray-800/50 cursor-pointer transition-colors"
+                    >
+                      <!-- Trace Name -->
+                      <td class="py-3 px-4">
+                        <span class="text-sm font-medium text-gray-900 dark:text-gray-100 font-mono">
                           {{ traceName.trace_name }}
                         </span>
-                      </div>
-                      <div class="flex items-center gap-4 mt-2 text-xs text-gray-600 dark:text-gray-400">
-                        <span>
-                          <strong>{{ traceName.trace_count }}</strong> trace{{ traceName.trace_count !== 1 ? 's' : '' }}
+                      </td>
+                      
+                      <!-- Trace Count -->
+                      <td class="py-3 px-4">
+                        <span class="text-sm text-gray-700 dark:text-gray-300">
+                          {{ traceName.trace_count }}
                         </span>
-                        <span>•</span>
-                        <span>
-                          <strong>{{ traceName.message_count }}</strong> message{{ traceName.message_count !== 1 ? 's' : '' }}
+                      </td>
+                      
+                      <!-- Message Count -->
+                      <td class="py-3 px-4">
+                        <span class="text-sm text-gray-700 dark:text-gray-300">
+                          {{ traceName.message_count }}
                         </span>
-                        <span>•</span>
-                        <span>
-                          Last: {{ formatDateTime(traceName.last_seen) }}
+                      </td>
+                      
+                      <!-- Last Seen -->
+                      <td class="py-3 px-4">
+                        <span class="text-sm text-gray-600 dark:text-gray-400 whitespace-nowrap">
+                          {{ formatDateTime(traceName.last_seen) }}
                         </span>
-                      </div>
-                    </div>
-                    <svg class="w-5 h-5 text-gray-400 flex-shrink-0 ml-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7" />
-                    </svg>
-                  </div>
-                </div>
+                      </td>
+                      
+                      <!-- Action -->
+                      <td class="py-3 px-4 text-right">
+                        <svg class="w-4 h-4 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7" />
+                        </svg>
+                      </td>
+                    </tr>
+                  </tbody>
+                </table>
               </div>
               
               <!-- Pagination for trace names -->

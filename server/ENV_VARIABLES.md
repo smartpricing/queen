@@ -111,7 +111,41 @@ When a queue/consumer group consistently returns empty results, the system autom
 | Variable | Type | Default | Description |
 |----------|------|---------|-------------|
 | `RESPONSE_TIMER_INTERVAL_MS` | int | 25 | Response queue timer polling interval (ms). Controls how frequently the response queue is checked for ready messages. Lower values reduce latency but increase CPU usage. |
-| `BATCH_PUSH_CHUNK_SIZE` | int | 1000 | Chunk size for batch push operations. Large batch pushes are split into chunks of this size to avoid memory issues and SQL size limits. |
+
+### Batch Push - Size-Based Dynamic Batching (ACTIVE)
+
+Queen now supports intelligent size-based batching that dynamically calculates row sizes and batches messages to optimize PostgreSQL write performance. This replaces the legacy count-based approach with a smarter strategy that accounts for variable message payload sizes.
+
+**How it works:**
+- Estimates the total row size for each message (including payload, indexes, and PostgreSQL overhead)
+- Dynamically accumulates messages until reaching optimal batch size (in MB)
+- Ensures batches stay within PostgreSQL's sweet spot of 2-8 MB per transaction
+- Falls back to legacy count-based batching if disabled
+
+| Variable | Type | Default | Description |
+|----------|------|---------|-------------|
+| `BATCH_PUSH_USE_SIZE_BASED` | bool | true | Enable size-based dynamic batching. Set to `false` to use legacy count-based batching. |
+| `BATCH_PUSH_TARGET_SIZE_MB` | int | 4 | Target batch size in MB. System flushes batches when this size is reached (if min messages met). Sweet spot: 4-6 MB. |
+| `BATCH_PUSH_MIN_SIZE_MB` | int | 2 | Minimum batch size in MB. Ensures batches are large enough to benefit from batching. |
+| `BATCH_PUSH_MAX_SIZE_MB` | int | 8 | Maximum batch size in MB. Hard limit to prevent excessive memory usage and long transactions. |
+| `BATCH_PUSH_MIN_MESSAGES` | int | 100 | Minimum messages per batch. Ensures batches have enough messages even if size not reached. |
+| `BATCH_PUSH_MAX_MESSAGES` | int | 10000 | Maximum messages per batch. Hard limit on message count even if under size limit. |
+| `BATCH_PUSH_CHUNK_SIZE` | int | 1000 | **LEGACY:** Count-based chunk size (used only if `BATCH_PUSH_USE_SIZE_BASED=false`). |
+
+**Performance Benefits:**
+- **Consistent throughput:** Batches are sized optimally regardless of message payload variance
+- **Better memory usage:** Prevents under-batching (small messages) and over-batching (large messages)
+- **PostgreSQL optimization:** Targets the 2-8 MB sweet spot for transaction commit performance
+- **Adaptive:** Automatically adjusts to message size distribution
+
+**Recommended Settings by Workload:**
+
+| Workload Type | TARGET_SIZE_MB | MIN_SIZE_MB | MAX_SIZE_MB | MIN_MESSAGES | MAX_MESSAGES |
+|---------------|----------------|-------------|-------------|--------------|--------------|
+| Small messages (<1KB) | 6 | 3 | 10 | 500 | 20000 |
+| Medium messages (1-10KB) | 4 | 2 | 8 | 100 | 10000 |
+| Large messages (>10KB) | 3 | 2 | 6 | 50 | 5000 |
+| Mixed workload | 4 | 2 | 8 | 100 | 10000 |
 
 ### Queue Defaults
 | Variable | Type | Default | Description |

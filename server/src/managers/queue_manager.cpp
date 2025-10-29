@@ -640,6 +640,59 @@ std::vector<PushResult> QueueManager::push_messages(const std::vector<PushItem>&
     return all_results;
 }
 
+// ═══════════════════════════════════════════════════════════════════════════
+// Size estimation for dynamic batching
+// Estimates the total row size including overhead for optimal batch sizing
+// ═══════════════════════════════════════════════════════════════════════════
+size_t QueueManager::estimate_row_size(const PushItem& item, bool encryption_enabled) const {
+    size_t size = 0;
+    
+    // Fixed overhead per row (tuple header, alignment, system columns)
+    // This includes: tuple header (~28 bytes), alignment padding, ctid, xmin, xmax, etc.
+    size += 500;
+    
+    // UUID columns (id, transaction_id, trace_id, partition_id)
+    // Each UUID is 16 bytes stored + overhead
+    size += 20;  // id (UUID)
+    size += 40;  // transaction_id (VARCHAR(255) but typically UUID ~36 chars)
+    size += 20;  // trace_id (UUID)
+    size += 20;  // partition_id (UUID)
+    
+    // created_at (TIMESTAMPTZ) - 8 bytes
+    size += 8;
+    
+    // is_encrypted (BOOLEAN) - 1 byte
+    size += 1;
+    
+    // Payload (JSONB) - serialize to get actual size
+    std::string payload_str = item.payload.dump();
+    size += payload_str.size();
+    
+    // If encryption enabled, add encryption overhead
+    if (encryption_enabled) {
+        // Encryption adds ~30-40% overhead:
+        // - Base64 encoding of encrypted data (~33% expansion)
+        // - IV, authTag, and JSON wrapper overhead
+        size += static_cast<size_t>(payload_str.size() * 0.35) + 200;
+    }
+    
+    // JSONB has additional overhead for compression and internal metadata
+    // PostgreSQL JSONB stores: varlena header (4 bytes) + version (1 byte) + data
+    size += 50;
+    
+    // Index overhead (estimates for multiple indexes on this row)
+    // - Primary key index (btree on id)
+    // - Unique index (partition_id, transaction_id)
+    // - Index on trace_id
+    // - Index on (partition_id, created_at, id)
+    size += 250;
+    
+    // PostgreSQL page alignment and fragmentation overhead (~10%)
+    size += size / 10;
+    
+    return size;
+}
+
 std::vector<PushResult> QueueManager::push_messages_batch(const std::vector<PushItem>& items) {
     if (items.empty()) {
         return {};
@@ -652,15 +705,117 @@ std::vector<PushResult> QueueManager::push_messages_batch(const std::vector<Push
     std::vector<PushResult> results;
     results.reserve(items.size());
     
-    // Split into smaller chunks to avoid memory issues and SQL size limits
-    const size_t CHUNK_SIZE = config_.batch_push_chunk_size;
-    
-    for (size_t chunk_start = 0; chunk_start < items.size(); chunk_start += CHUNK_SIZE) {
-        size_t chunk_end = std::min(chunk_start + CHUNK_SIZE, items.size());
-        std::vector<PushItem> chunk(items.begin() + chunk_start, items.begin() + chunk_end);
+    // ═══════════════════════════════════════════════════════════════════════════
+    // Dynamic size-based batching (configurable)
+    // ═══════════════════════════════════════════════════════════════════════════
+    if (config_.batch_push_use_size_based) {
+        // Check if queue has encryption enabled (needed for size estimation)
+        bool encryption_enabled = false;
+        try {
+            ScopedConnection check_conn(db_pool_.get());
+            auto encryption_result = QueryResult(check_conn->exec_params(
+                "SELECT encryption_enabled FROM queen.queues WHERE name = $1", 
+                {queue_name}
+            ));
+            
+            if (encryption_result.is_success() && encryption_result.num_rows() > 0) {
+                std::string enc_str = encryption_result.get_value(0, "encryption_enabled");
+                encryption_enabled = (enc_str == "t" || enc_str == "true");
+            }
+        } catch (const std::exception& e) {
+            spdlog::warn("Failed to check encryption status, assuming disabled: {}", e.what());
+        }
         
-        auto chunk_results = push_messages_chunk(chunk, queue_name, partition_name);
-        results.insert(results.end(), chunk_results.begin(), chunk_results.end());
+        // Convert MB to bytes
+        const size_t TARGET_BATCH_SIZE = static_cast<size_t>(config_.batch_push_target_size_mb) * 1024 * 1024;
+        const size_t MIN_BATCH_SIZE = static_cast<size_t>(config_.batch_push_min_size_mb) * 1024 * 1024;
+        const size_t MAX_BATCH_SIZE = static_cast<size_t>(config_.batch_push_max_size_mb) * 1024 * 1024;
+        const size_t MIN_MESSAGES = static_cast<size_t>(config_.batch_push_min_messages);
+        const size_t MAX_MESSAGES = static_cast<size_t>(config_.batch_push_max_messages);
+        
+        size_t accumulated_size = 0;
+        std::vector<PushItem> current_batch;
+        
+        for (size_t i = 0; i < items.size(); ++i) {
+            const auto& item = items[i];
+            
+            // Estimate row size for this item
+            size_t row_size = estimate_row_size(item, encryption_enabled);
+            
+            // Check if we should flush the current batch before adding this item
+            bool should_flush = false;
+            
+            if (!current_batch.empty()) {
+                // Flush if adding this item would exceed max batch size
+                if (accumulated_size + row_size > MAX_BATCH_SIZE) {
+                    should_flush = true;
+                    spdlog::debug("Flushing batch: would exceed MAX_BATCH_SIZE ({} MB)", 
+                                config_.batch_push_max_size_mb);
+                }
+                // Flush if we've hit max message count
+                else if (current_batch.size() >= MAX_MESSAGES) {
+                    should_flush = true;
+                    spdlog::debug("Flushing batch: hit MAX_MESSAGES ({})", MAX_MESSAGES);
+                }
+                // Flush if we've reached target size and minimum message count
+                else if (accumulated_size >= TARGET_BATCH_SIZE && 
+                         current_batch.size() >= MIN_MESSAGES) {
+                    should_flush = true;
+                    spdlog::debug("Flushing batch: reached TARGET_BATCH_SIZE ({} MB) with {} messages", 
+                                config_.batch_push_target_size_mb, current_batch.size());
+                }
+                // Flush if we've reached min size threshold and this is last item
+                else if (i == items.size() - 1 && 
+                         accumulated_size >= MIN_BATCH_SIZE) {
+                    // Don't flush yet, add this last item first
+                    should_flush = false;
+                }
+            }
+            
+            if (should_flush) {
+                // Process current batch
+                spdlog::debug("Processing batch: {} messages, ~{} MB", 
+                            current_batch.size(), 
+                            accumulated_size / (1024.0 * 1024.0));
+                
+                auto chunk_results = push_messages_chunk(current_batch, queue_name, partition_name);
+                results.insert(results.end(), chunk_results.begin(), chunk_results.end());
+                
+                // Reset for next batch
+                current_batch.clear();
+                accumulated_size = 0;
+            }
+            
+            // Add current item to batch
+            current_batch.push_back(item);
+            accumulated_size += row_size;
+        }
+        
+        // Process any remaining items in the last batch
+        if (!current_batch.empty()) {
+            spdlog::debug("Processing final batch: {} messages, ~{} MB", 
+                        current_batch.size(), 
+                        accumulated_size / (1024.0 * 1024.0));
+            
+            auto chunk_results = push_messages_chunk(current_batch, queue_name, partition_name);
+            results.insert(results.end(), chunk_results.begin(), chunk_results.end());
+        }
+        
+    } else {
+        // ═══════════════════════════════════════════════════════════════════════════
+        // Legacy count-based batching (backward compatibility)
+        // ═══════════════════════════════════════════════════════════════════════════
+        const size_t CHUNK_SIZE = config_.batch_push_chunk_size;
+        
+        spdlog::debug("Using legacy count-based batching: {} messages per chunk", CHUNK_SIZE);
+        
+        for (size_t chunk_start = 0; chunk_start < items.size(); chunk_start += CHUNK_SIZE) {
+            size_t chunk_end = std::min(chunk_start + CHUNK_SIZE, items.size());
+            std::vector<PushItem> chunk(items.begin() + chunk_start, items.begin() + chunk_end);
+            
+            auto chunk_results = push_messages_chunk(chunk, queue_name, partition_name);
+            results.insert(results.end(), chunk_results.begin(), chunk_results.end());
+        }
     }
     
     return results;

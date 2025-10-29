@@ -153,7 +153,15 @@ struct QueueConfig {
     int response_timer_interval_ms = 25; // Response timer polling interval in ms
     
     // Batch push settings
-    int batch_push_chunk_size = 1000;    // Process messages in chunks during batch push
+    int batch_push_chunk_size = 1000;    // DEPRECATED: Legacy count-based batching (kept for backward compatibility)
+    
+    // Batch push - Size-based dynamic batching (ACTIVE)
+    int batch_push_target_size_mb = 4;   // Target batch size in MB (sweet spot: 4-6 MB)
+    int batch_push_min_size_mb = 2;      // Minimum batch size in MB (flush at this size minimum)
+    int batch_push_max_size_mb = 8;      // Maximum batch size in MB (hard limit per batch)
+    int batch_push_min_messages = 100;   // Minimum messages per batch (even if size not reached)
+    int batch_push_max_messages = 10000; // Maximum messages per batch (even if under size limit)
+    bool batch_push_use_size_based = true; // Enable size-based batching (false = use legacy count-based)
     
     // Queue defaults
     int default_lease_time = 300;        // 5 minutes
@@ -201,7 +209,15 @@ struct QueueConfig {
         config.max_partition_candidates = get_env_int("MAX_PARTITION_CANDIDATES", 100);
         
         config.response_timer_interval_ms = get_env_int("RESPONSE_TIMER_INTERVAL_MS", 25);
+        
+        // Batch push settings
         config.batch_push_chunk_size = get_env_int("BATCH_PUSH_CHUNK_SIZE", 1000);
+        config.batch_push_target_size_mb = get_env_int("BATCH_PUSH_TARGET_SIZE_MB", 4);
+        config.batch_push_min_size_mb = get_env_int("BATCH_PUSH_MIN_SIZE_MB", 2);
+        config.batch_push_max_size_mb = get_env_int("BATCH_PUSH_MAX_SIZE_MB", 8);
+        config.batch_push_min_messages = get_env_int("BATCH_PUSH_MIN_MESSAGES", 100);
+        config.batch_push_max_messages = get_env_int("BATCH_PUSH_MAX_MESSAGES", 10000);
+        config.batch_push_use_size_based = get_env_bool("BATCH_PUSH_USE_SIZE_BASED", true);
         
         config.default_lease_time = get_env_int("DEFAULT_LEASE_TIME", 300);
         config.default_retry_limit = get_env_int("DEFAULT_RETRY_LIMIT", 3);

@@ -164,6 +164,9 @@ private:
                                                 const std::string& queue_name,
                                                 const std::string& partition_name);
     
+    // Size estimation for dynamic batching
+    size_t estimate_row_size(const PushItem& item, bool encryption_enabled) const;
+    
 public:
     
     PopResult pop_messages(const std::string& queue_name,
