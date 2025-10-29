@@ -74,9 +74,10 @@
         </div>
 
         <!-- Consumer Groups Table -->
-        <div class="data-card">
-          <div class="table-container scrollbar-thin">
-            <table class="table">
+        <div class="chart-card">
+          <div class="chart-body">
+            <div class="table-container scrollbar-thin">
+              <table class="table">
               <thead>
                 <tr>
                   <th>Consumer Group</th>
@@ -134,6 +135,7 @@
               </svg>
               <p>No consumer groups found</p>
               <p class="text-xs mt-2">Consumer groups are created automatically when consumers connect with a consumerGroup parameter.</p>
+            </div>
             </div>
           </div>
         </div>
@@ -320,133 +322,10 @@ onUnmounted(() => {
 </script>
 
 <style scoped>
-.page-professional {
-  @apply min-h-screen bg-gray-50 dark:bg-[#0d1117];
-  background-image: 
-    radial-gradient(at 0% 0%, rgba(59, 130, 246, 0.03) 0px, transparent 50%),
-    radial-gradient(at 100% 0%, rgba(99, 102, 241, 0.03) 0px, transparent 50%);
-}
-
-.dark .page-professional {
-  background-image: 
-    radial-gradient(at 0% 0%, rgba(59, 130, 246, 0.05) 0px, transparent 50%),
-    radial-gradient(at 100% 0%, rgba(99, 102, 241, 0.05) 0px, transparent 50%);
-}
-
-.page-content {
-  @apply px-6 lg:px-8 py-6;
-}
-
-.page-inner {
-  @apply space-y-6;
-}
-
-.info-card {
-  @apply bg-blue-50/50 dark:bg-blue-900/10 border border-blue-200/60 dark:border-blue-800/40;
-  @apply rounded-xl p-4;
-  box-shadow: 0 1px 3px 0 rgba(59, 130, 246, 0.1);
-}
-
-.filter-card {
-  @apply bg-white dark:bg-[#161b22] border border-gray-200/40 dark:border-gray-800/40;
-  @apply rounded-xl p-4;
-  box-shadow: 0 1px 3px 0 rgba(0, 0, 0, 0.04), 0 1px 2px 0 rgba(0, 0, 0, 0.02);
-}
-
-.dark .filter-card {
-  box-shadow: 0 1px 3px 0 rgba(0, 0, 0, 0.4), 0 1px 2px 0 rgba(0, 0, 0, 0.2);
-}
-
-.filter-card :deep(.input) {
-  @apply bg-gray-50 dark:bg-gray-800/40 border border-gray-200/60 dark:border-gray-700/60;
-  @apply rounded-lg px-3 py-2 text-sm;
-  transition: all 0.15s cubic-bezier(0.4, 0, 0.2, 1);
-}
-
-.filter-card :deep(.input:hover) {
-  @apply border-gray-300 dark:border-gray-600;
-}
-
-.filter-card :deep(.input:focus) {
-  @apply bg-white dark:bg-gray-800 border-blue-500 dark:border-blue-400;
-  box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.1);
-  outline: none;
-}
+/* Styles inherited from professional.css */
 
 .metrics-grid {
-  @apply grid grid-cols-2 lg:grid-cols-4 gap-4;
-}
-
-.metric-card-compact {
-  @apply bg-white dark:bg-[#161b22] border border-gray-200/40 dark:border-gray-800/40;
-  @apply rounded-lg p-3;
-  box-shadow: 0 1px 3px 0 rgba(0, 0, 0, 0.04), 0 1px 2px 0 rgba(0, 0, 0, 0.02);
-}
-
-.dark .metric-card-compact {
-  box-shadow: 0 1px 3px 0 rgba(0, 0, 0, 0.4), 0 1px 2px 0 rgba(0, 0, 0, 0.2);
-}
-
-.metric-label-sm {
-  @apply text-[10px] font-bold text-gray-500 dark:text-gray-400 tracking-wider uppercase block mb-1;
-  letter-spacing: 0.05em;
-}
-
-.metric-value-sm {
-  @apply text-xl font-bold tracking-tight;
-  letter-spacing: -0.02em;
-}
-
-.data-card {
-  @apply bg-white dark:bg-[#161b22] border border-gray-200/40 dark:border-gray-800/40;
-  @apply rounded-xl overflow-hidden;
-  box-shadow: 0 1px 3px 0 rgba(0, 0, 0, 0.04), 0 1px 2px 0 rgba(0, 0, 0, 0.02);
-}
-
-.dark .data-card {
-  box-shadow: 0 1px 3px 0 rgba(0, 0, 0, 0.4), 0 1px 2px 0 rgba(0, 0, 0, 0.2);
-}
-
-.data-card :deep(.table) {
-  @apply border-0;
-}
-
-.data-card :deep(.table thead) {
-  @apply bg-transparent border-b border-gray-200/80 dark:border-gray-800/80;
-  background: linear-gradient(to bottom, rgba(249, 250, 251, 0.5), transparent);
-}
-
-.dark .data-card :deep(.table thead) {
-  background: linear-gradient(to bottom, rgba(255, 255, 255, 0.01), transparent);
-}
-
-.data-card :deep(.table thead th) {
-  @apply text-xs font-bold text-gray-500 dark:text-gray-400 uppercase tracking-wider;
-  @apply py-3 px-5;
-  letter-spacing: 0.05em;
-}
-
-.data-card :deep(.table tbody tr) {
-  @apply border-b border-gray-100/60 dark:border-gray-800/40;
-  transition: background-color 0.15s cubic-bezier(0.4, 0, 0.2, 1);
-}
-
-.data-card :deep(.table tbody tr:last-child) {
-  @apply border-b-0;
-}
-
-.data-card :deep(.table tbody tr:hover) {
-  @apply bg-blue-50/50 dark:bg-blue-900/10;
-}
-
-.data-card :deep(.table tbody td) {
-  @apply py-3.5 px-5 text-sm;
-}
-
-.error-card {
-  @apply bg-red-50 dark:bg-red-900/10 border border-red-200/60 dark:border-red-800/60;
-  @apply rounded-xl p-4 text-sm text-red-800 dark:text-red-400;
-  box-shadow: 0 1px 3px 0 rgba(239, 68, 68, 0.1);
+  @apply grid grid-cols-2 lg:grid-cols-4 gap-5;
 }
 
 /* Modal styles */

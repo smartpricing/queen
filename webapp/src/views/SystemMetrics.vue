@@ -60,60 +60,48 @@
           <div class="grid grid-cols-1 lg:grid-cols-2 gap-5">
             <!-- CPU Chart -->
             <div class="chart-card-professional">
-              <div class="flex items-center gap-2 mb-4">
-                <div class="w-8 h-8 rounded-lg bg-blue-500/10 dark:bg-blue-500/15 flex items-center justify-center">
-                  <svg class="w-5 h-5 text-blue-600 dark:text-blue-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 3v2m6-2v2M9 19v2m6-2v2M5 9H3m2 6H3m18-6h-2m2 6h-2M7 19h10a2 2 0 002-2V7a2 2 0 00-2-2H7a2 2 0 00-2 2v10a2 2 0 002 2zM9 9h6v6H9V9z" />
-                  </svg>
-                </div>
-                <h3 class="text-sm font-semibold text-gray-900 dark:text-gray-100">CPU Usage</h3>
+              <div class="chart-header">
+                <h3 class="chart-title">CPU Usage</h3>
               </div>
-              <DetailedCpuChart :data="data" :aggregation="selectedAggregation" />
+              <div class="chart-body">
+                <DetailedCpuChart :data="data" :aggregation="selectedAggregation" />
+              </div>
             </div>
 
             <!-- Memory Chart -->
             <div class="chart-card-professional">
-              <div class="flex items-center gap-2 mb-4">
-                <div class="w-8 h-8 rounded-lg bg-indigo-500/10 dark:bg-indigo-500/15 flex items-center justify-center">
-                  <svg class="w-5 h-5 text-indigo-600 dark:text-indigo-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 12h14M5 12a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v4a2 2 0 01-2 2M5 12a2 2 0 00-2 2v4a2 2 0 002 2h14a2 2 0 002-2v-4a2 2 0 00-2-2m-2-4h.01M17 16h.01" />
-                  </svg>
-                </div>
-                <h3 class="text-sm font-semibold text-gray-900 dark:text-gray-100">Memory Usage</h3>
+              <div class="chart-header">
+                <h3 class="chart-title">Memory Usage</h3>
               </div>
-              <DetailedMemoryChart :data="data" :aggregation="selectedAggregation" />
+              <div class="chart-body">
+                <DetailedMemoryChart :data="data" :aggregation="selectedAggregation" />
+              </div>
             </div>
           </div>
 
           <!-- Database Metrics Chart -->
-          <div class="chart-flat">
-            <div class="flex items-center gap-2 mb-4">
-              <div class="w-8 h-8 rounded-lg bg-blue-500/10 dark:bg-blue-500/20 flex items-center justify-center">
-                <svg class="w-5 h-5 text-blue-600 dark:text-blue-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 7v10c0 2.21 3.582 4 8 4s8-1.79 8-4V7M4 7c0 2.21 3.582 4 8 4s8-1.79 8-4M4 7c0-2.21 3.582-4 8-4s8 1.79 8 4m0 5c0 2.21-3.582 4-8 4s-8-1.79-8-4" />
-                </svg>
-              </div>
-              <h3 class="text-sm font-semibold text-gray-900 dark:text-gray-100">Database Pool</h3>
+          <div class="chart-card-professional">
+            <div class="chart-header">
+              <h3 class="chart-title">Database Pool</h3>
             </div>
-            <DetailedDatabaseChart :data="data" :aggregation="selectedAggregation" />
+            <div class="chart-body">
+              <DetailedDatabaseChart :data="data" :aggregation="selectedAggregation" />
+            </div>
           </div>
 
           <!-- ThreadPool Metrics Chart -->
-          <div class="chart-flat">
-            <div class="flex items-center gap-2 mb-4">
-              <div class="w-8 h-8 rounded-lg bg-amber-500/10 dark:bg-amber-500/20 flex items-center justify-center">
-                <svg class="w-5 h-5 text-amber-600 dark:text-amber-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2H6a2 2 0 01-2-2V6zM14 6a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2h-2a2 2 0 01-2-2V6zM4 16a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2H6a2 2 0 01-2-2v-2zM14 16a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2h-2a2 2 0 01-2-2v-2z" />
-                </svg>
-              </div>
-              <h3 class="text-sm font-semibold text-gray-900 dark:text-gray-100">ThreadPool Metrics</h3>
+          <div class="chart-card-professional">
+            <div class="chart-header">
+              <h3 class="chart-title">Thread Pool</h3>
             </div>
-            <DetailedThreadPoolChart :data="data" :aggregation="selectedAggregation" />
+            <div class="chart-body">
+              <DetailedThreadPoolChart :data="data" :aggregation="selectedAggregation" />
+            </div>
           </div>
 
           <!-- Stats Summary -->
-          <div class="grid grid-cols-1 lg:grid-cols-3 gap-2">
-            <div class="info-flat">
+          <div class="grid grid-cols-1 lg:grid-cols-3 gap-5">
+            <div class="info-card-white">
               <h3 class="text-xs font-semibold text-gray-600 dark:text-gray-400 mb-3">Current Status</h3>
               <div class="space-y-2">
                 <div class="flex justify-between text-sm">
@@ -131,7 +119,7 @@
               </div>
             </div>
 
-            <div class="info-flat" v-if="lastMetrics">
+            <div class="info-card-white" v-if="lastMetrics">
               <h3 class="text-xs font-semibold text-gray-600 dark:text-gray-400 mb-3">Latest Values</h3>
               <div class="space-y-2">
                 <div class="flex justify-between text-sm">
@@ -155,7 +143,7 @@
               </div>
             </div>
 
-            <div class="info-flat" v-if="lastMetrics">
+            <div class="info-card-white" v-if="lastMetrics">
               <h3 class="text-xs font-semibold text-gray-600 dark:text-gray-400 mb-3">Peak Values</h3>
               <div class="space-y-2">
                 <div class="flex justify-between text-sm">
@@ -286,43 +274,7 @@ onUnmounted(() => {
 </script>
 
 <style scoped>
-.system-metrics-page {
-  min-height: 100%;
-}
-
-.chart-flat {
-  background: #ffffff;
-  border: none;
-  box-shadow: none;
-  border-radius: 0.75rem;
-  padding: 1rem;
-  transition: all 0.3s ease;
-}
-
-.dark .chart-flat {
-  background: #0a0d14;
-}
-
-.chart-flat:hover {
-  background: #fafafa;
-}
-
-.dark .chart-flat:hover {
-  background: #101319;
-}
-
-.info-flat {
-  background: #ffffff;
-  border: none;
-  box-shadow: none;
-  border-radius: 0.75rem;
-  padding: 1rem;
-  transition: all 0.3s ease;
-}
-
-.dark .info-flat {
-  background: #0a0d14;
-}
+/* Styles inherited from professional.css */
 
 .time-range-btn {
   padding: 0.5rem 1rem;
@@ -366,33 +318,45 @@ onUnmounted(() => {
 }
 
 .agg-type-btn {
-  padding: 0.375rem 0.75rem;
+  padding: 0.5rem 0.75rem;
   border-radius: 0.5rem;
-  font-size: 0.75rem;
-  font-weight: 500;
-  transition: all 0.2s ease;
+  font-size: 0.6875rem;
+  font-weight: 600;
+  transition: background-color 0.15s cubic-bezier(0.4, 0, 0.2, 1), border-color 0.15s cubic-bezier(0.4, 0, 0.2, 1), color 0.15s cubic-bezier(0.4, 0, 0.2, 1);
   cursor: pointer;
+  letter-spacing: 0.01em;
 }
 
 .agg-type-active {
   background: rgba(59, 130, 246, 0.12);
   color: #2563eb;
   border: 1px solid rgba(59, 130, 246, 0.3);
+  box-shadow: 0 1px 2px 0 rgba(59, 130, 246, 0.1);
+}
+
+.dark .agg-type-active {
+  background: rgba(59, 130, 246, 0.18);
+  color: #60a5fa;
+  border: 1px solid rgba(59, 130, 246, 0.4);
 }
 
 .agg-type-inactive {
   background: transparent;
-  color: #9ca3af;
-  border: 1px solid rgba(0, 0, 0, 0.1);
+  color: #6b7280;
+  border: 1px solid rgba(0, 0, 0, 0.12);
 }
 
 .dark .agg-type-inactive {
-  border-color: rgba(255, 255, 255, 0.1);
+  color: #9ca3af;
+  border-color: rgba(255, 255, 255, 0.12);
 }
 
-
 .agg-type-active:hover {
-  background: rgba(59, 130, 246, 0.18);
+  background: rgba(59, 130, 246, 0.15);
+}
+
+.dark .agg-type-active:hover {
+  background: rgba(59, 130, 246, 0.2);
 }
 
 .agg-type-inactive:hover {

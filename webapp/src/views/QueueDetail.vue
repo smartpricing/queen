@@ -360,118 +360,61 @@ onMounted(() => {
 
 <style scoped>
 
-.header-section {
-  background: transparent;
-  padding: 0;
+/* Styles inherited from professional.css */
+
+.metrics-grid {
+  @apply grid grid-cols-2 lg:grid-cols-4 gap-5;
 }
 
-.config-section {
-  background: #ffffff;
-  border: none;
-  box-shadow: none;
-  border-radius: 0.75rem;
-  padding: 1rem;
-  transition: all 0.3s ease;
+.header-card {
+  @apply bg-white dark:bg-[#161b22] border border-gray-200/40 dark:border-gray-800/40;
+  @apply rounded-xl p-5;
+  box-shadow: 0 1px 3px 0 rgba(0, 0, 0, 0.04), 0 1px 2px 0 rgba(0, 0, 0, 0.02);
 }
 
-.dark .config-section {
-  background: #0a0d14;
+.dark .header-card {
+  box-shadow: 0 1px 3px 0 rgba(0, 0, 0, 0.4), 0 1px 2px 0 rgba(0, 0, 0, 0.2);
 }
 
-.config-section:hover {
-  background: #fafafa;
+.config-card {
+  @apply bg-white dark:bg-[#161b22] border border-gray-200/40 dark:border-gray-800/40;
+  @apply rounded-xl p-5;
+  box-shadow: 0 1px 3px 0 rgba(0, 0, 0, 0.04), 0 1px 2px 0 rgba(0, 0, 0, 0.02);
 }
 
-.dark .config-section:hover {
-  background: #0d1117;
+.dark .config-card {
+  box-shadow: 0 1px 3px 0 rgba(0, 0, 0, 0.4), 0 1px 2px 0 rgba(0, 0, 0, 0.2);
 }
 
 .partition-section {
-  background: #ffffff;
-  border: none;
-  box-shadow: none;
-  border-radius: 0.75rem;
-  padding: 1rem;
+  @apply bg-white dark:bg-[#161b22] border border-gray-200/40 dark:border-gray-800/40;
+  @apply rounded-xl p-4;
+  box-shadow: 0 1px 3px 0 rgba(0, 0, 0, 0.04), 0 1px 2px 0 rgba(0, 0, 0, 0.02);
 }
 
 .dark .partition-section {
-  background: #0a0d14;
+  box-shadow: 0 1px 3px 0 rgba(0, 0, 0, 0.4), 0 1px 2px 0 rgba(0, 0, 0, 0.2);
 }
 
 /* Flat inputs */
-.partition-section :deep(.input) {
-  background: transparent;
-  border: 1px solid rgba(156, 163, 175, 0.15);
-  transition: all 0.2s ease;
-}
-
-.partition-section :deep(.input:hover) {
-  border-color: rgba(156, 163, 175, 0.25);
-}
-
-.partition-section :deep(.input:focus) {
-  background: rgba(59, 130, 246, 0.02);
-  border-color: rgba(59, 130, 246, 0.4);
-  box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.05);
-}
-
-.dark .partition-section :deep(.input) {
-  border-color: rgba(156, 163, 175, 0.1);
-}
-
-.dark .partition-section :deep(.input:focus) {
-  background: rgba(59, 130, 246, 0.03);
-  border-color: rgba(59, 130, 246, 0.5);
-  box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.08);
-}
-
-/* Flat table styling */
-.partition-section :deep(.table) {
-  border-collapse: separate;
-  border-spacing: 0;
-}
-
-.partition-section :deep(.table thead) {
-  background: transparent;
-  border-bottom: 1px solid rgba(156, 163, 175, 0.08);
-}
-
-.dark .partition-section :deep(.table thead) {
-  border-bottom-color: rgba(156, 163, 175, 0.1);
-}
-
-.partition-section :deep(.table th) {
-  padding: 1rem 1rem;
-  font-weight: 600;
+/* Partition table - use data-card styling */
+.partition-section :deep(.table thead th) {
+  @apply text-xs font-bold text-gray-500 dark:text-gray-400 uppercase tracking-wider;
+  @apply py-3 px-5;
   letter-spacing: 0.05em;
 }
 
 .partition-section :deep(.table tbody tr) {
-  border: none;
-  transition: all 0.15s ease;
-}
-
-.partition-section :deep(.table tbody tr:nth-child(even)) {
-  background: rgba(0, 0, 0, 0.015);
-}
-
-.dark .partition-section :deep(.table tbody tr:nth-child(even)) {
-  background: rgba(255, 255, 255, 0.02);
+  @apply border-b border-gray-100/60 dark:border-gray-800/40;
+  transition: background-color 0.15s cubic-bezier(0.4, 0, 0.2, 1);
 }
 
 .partition-section :deep(.table tbody tr:hover) {
-  background: rgba(59, 130, 246, 0.03);
-  box-shadow: inset 3px 0 0 0 rgba(59, 130, 246, 0.6);
+  @apply bg-blue-50/50 dark:bg-blue-900/10;
 }
 
-.dark .partition-section :deep(.table tbody tr:hover) {
-  background: rgba(59, 130, 246, 0.05);
-  box-shadow: inset 3px 0 0 0 rgba(59, 130, 246, 0.8);
-}
-
-.partition-section :deep(.table td) {
-  padding: 0.875rem 1rem;
-  border: none;
+.partition-section :deep(.table tbody td) {
+  @apply py-3.5 px-5 text-sm;
 }
 
 .metric-flat {

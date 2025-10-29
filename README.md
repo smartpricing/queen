@@ -35,10 +35,11 @@ Here are the main features:
 - Dead letter queue for failure handling
 - Lease renewal for long-running tasks
 - Message tracing for debugging workflows
+- Encryption of messages at DB level
 
 The system consists of a PostgreSQL database, a replicated server that can be scaled horizontally (though it won't be the bottleneck), and a client library for interacting with the server. All client-server communication happens over HTTP, and the client library is written in JavaScript (support for other languages is planned). There's also a modern Vue 3 web app for monitoring and managing the system.
 
-With proper batching, the system can handle 100k **messages** (not req/s) per second on modest hardware.
+With proper batching, the system can handle +100k **messages** per second (not req/s) on modest hardware.
 
 Main documentation:
 - [Client Guide](client-js/client-v2/README.md)

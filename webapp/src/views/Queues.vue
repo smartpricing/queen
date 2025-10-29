@@ -45,9 +45,10 @@
         </div>
 
         <!-- Queues Table -->
-        <div v-else class="data-card">
-          <div class="table-container scrollbar-thin">
-            <table class="table">
+        <div v-else class="chart-card">
+          <div class="chart-body">
+            <div class="table-container scrollbar-thin">
+              <table class="table">
               <thead>
                 <tr>
                   <th @click="sortBy('name')" class="cursor-pointer hover:text-blue-600 dark:hover:text-blue-400 transition-colors">
@@ -146,33 +147,34 @@
                 Create your first queue
               </button>
             </div>
-          </div>
-          
-          <!-- Pagination -->
-          <div v-if="totalPages > 1" class="flex items-center justify-between mt-4 pt-4 border-t border-gray-200/60 dark:border-gray-800/60">
-            <div class="text-sm text-gray-600 dark:text-gray-400">
-              Showing {{ startIndex + 1 }}-{{ endIndex }} of {{ filteredQueues.length }}
             </div>
-            <div class="flex gap-2">
-              <button
-                @click="currentPage--"
-                :disabled="currentPage === 1"
-                class="btn btn-secondary px-3 py-1.5"
-              >
-                <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 19l-7-7 7-7" />
-                </svg>
-              </button>
-              <span class="px-3 py-1.5 text-sm">{{ currentPage }} / {{ totalPages }}</span>
-              <button
-                @click="currentPage++"
-                :disabled="currentPage === totalPages"
-                class="btn btn-secondary px-3 py-1.5"
-              >
-                <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7" />
-                </svg>
-              </button>
+          
+            <!-- Pagination -->
+            <div v-if="totalPages > 1" class="flex items-center justify-between mt-4 pt-4 border-t border-gray-200/60 dark:border-gray-800/60">
+              <div class="text-sm text-gray-600 dark:text-gray-400">
+                Showing {{ startIndex + 1 }}-{{ endIndex }} of {{ filteredQueues.length }}
+              </div>
+              <div class="flex gap-2">
+                <button
+                  @click="currentPage--"
+                  :disabled="currentPage === 1"
+                  class="btn btn-secondary px-3 py-1.5"
+                >
+                  <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 19l-7-7 7-7" />
+                  </svg>
+                </button>
+                <span class="px-3 py-1.5 text-sm">{{ currentPage }} / {{ totalPages }}</span>
+                <button
+                  @click="currentPage++"
+                  :disabled="currentPage === totalPages"
+                  class="btn btn-secondary px-3 py-1.5"
+                >
+                  <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7" />
+                  </svg>
+                </button>
+              </div>
             </div>
           </div>
         </div>
@@ -385,90 +387,12 @@ onUnmounted(() => {
 }
 
 .page-content {
-  @apply px-6 lg:px-8 py-6 space-y-6;
+  @apply px-6 lg:px-8 py-6;
 }
 
 .page-inner {
   @apply space-y-6;
 }
 
-.filter-card {
-  @apply bg-white dark:bg-[#161b22] border border-gray-200/40 dark:border-gray-800/40;
-  @apply rounded-xl p-4;
-  box-shadow: 0 1px 3px 0 rgba(0, 0, 0, 0.04), 0 1px 2px 0 rgba(0, 0, 0, 0.02);
-}
-
-.dark .filter-card {
-  box-shadow: 0 1px 3px 0 rgba(0, 0, 0, 0.4), 0 1px 2px 0 rgba(0, 0, 0, 0.2);
-}
-
-/* Override input styles */
-.filter-card :deep(.input) {
-  @apply bg-gray-50 dark:bg-gray-800/40 border border-gray-200/60 dark:border-gray-700/60;
-  @apply rounded-lg px-3 py-2 text-sm;
-  transition: all 0.15s cubic-bezier(0.4, 0, 0.2, 1);
-}
-
-.filter-card :deep(.input:hover) {
-  @apply border-gray-300 dark:border-gray-600;
-}
-
-.filter-card :deep(.input:focus) {
-  @apply bg-white dark:bg-gray-800 border-blue-500 dark:border-blue-400;
-  box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.1);
-  outline: none;
-}
-
-.data-card {
-  @apply bg-white dark:bg-[#161b22] border border-gray-200/40 dark:border-gray-800/40;
-  @apply rounded-xl overflow-hidden;
-  box-shadow: 0 1px 3px 0 rgba(0, 0, 0, 0.04), 0 1px 2px 0 rgba(0, 0, 0, 0.02);
-}
-
-.dark .data-card {
-  box-shadow: 0 1px 3px 0 rgba(0, 0, 0, 0.4), 0 1px 2px 0 rgba(0, 0, 0, 0.2);
-}
-
-/* Table styling */
-.data-card :deep(.table) {
-  @apply border-0;
-}
-
-.data-card :deep(.table thead) {
-  @apply bg-transparent border-b border-gray-200/80 dark:border-gray-800/80;
-  background: linear-gradient(to bottom, rgba(249, 250, 251, 0.5), transparent);
-}
-
-.dark .data-card :deep(.table thead) {
-  background: linear-gradient(to bottom, rgba(255, 255, 255, 0.01), transparent);
-}
-
-.data-card :deep(.table thead th) {
-  @apply text-xs font-bold text-gray-500 dark:text-gray-400 uppercase tracking-wider;
-  @apply py-3 px-5;
-  letter-spacing: 0.05em;
-}
-
-.data-card :deep(.table tbody tr) {
-  @apply border-b border-gray-100/60 dark:border-gray-800/40;
-  transition: background-color 0.15s cubic-bezier(0.4, 0, 0.2, 1);
-}
-
-.data-card :deep(.table tbody tr:last-child) {
-  @apply border-b-0;
-}
-
-.data-card :deep(.table tbody tr:hover) {
-  @apply bg-blue-50/50 dark:bg-blue-900/10;
-}
-
-.data-card :deep(.table tbody td) {
-  @apply py-3.5 px-5 text-sm;
-}
-
-.error-card {
-  @apply bg-red-50 dark:bg-red-900/10 border border-red-200/60 dark:border-red-800/60;
-  @apply rounded-xl p-4 text-sm text-red-800 dark:text-red-400;
-  box-shadow: 0 1px 3px 0 rgba(239, 68, 68, 0.1);
-}
+/* All other styles are inherited from professional.css */
 </style>

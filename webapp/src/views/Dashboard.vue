@@ -361,13 +361,13 @@ function navigateToSystemMetrics() {
 }
 
 .chart-header {
-  @apply px-5 py-3.5 border-b border-gray-100/80 dark:border-gray-800/80;
+  @apply px-5 py-4 border-b border-gray-200/60 dark:border-gray-800/60;
   @apply flex items-center justify-between;
-  background: linear-gradient(to bottom, rgba(249, 250, 251, 0.5), transparent);
+  background: transparent;
 }
 
 .dark .chart-header {
-  background: linear-gradient(to bottom, rgba(255, 255, 255, 0.01), transparent);
+  background: transparent;
 }
 
 .chart-title {
@@ -387,11 +387,6 @@ function navigateToSystemMetrics() {
 
 .chart-body {
   @apply p-5;
-  background: linear-gradient(to bottom, transparent, rgba(249, 250, 251, 0.3));
-}
-
-.dark .chart-body {
-  background: linear-gradient(to bottom, transparent, rgba(0, 0, 0, 0.1));
 }
 
 /* Error card */
@@ -401,35 +396,5 @@ function navigateToSystemMetrics() {
   box-shadow: 0 1px 3px 0 rgba(239, 68, 68, 0.1);
 }
 
-/* Table overrides for professional look */
-.chart-card :deep(.table) {
-  @apply border-0;
-}
-
-.chart-card :deep(.table thead) {
-  @apply bg-transparent border-b border-gray-200/80 dark:border-gray-800/80;
-}
-
-.chart-card :deep(.table thead th) {
-  @apply text-xs font-bold text-gray-500 dark:text-gray-400 uppercase tracking-wider;
-  @apply py-3 px-5;
-  letter-spacing: 0.05em;
-}
-
-.chart-card :deep(.table tbody tr) {
-  @apply border-b border-gray-100/60 dark:border-gray-800/40;
-  transition: background-color 0.15s cubic-bezier(0.4, 0, 0.2, 1);
-}
-
-.chart-card :deep(.table tbody tr:last-child) {
-  @apply border-b-0;
-}
-
-.chart-card :deep(.table tbody tr:hover) {
-  @apply bg-gray-50/80 dark:bg-gray-800/30;
-}
-
-.chart-card :deep(.table tbody td) {
-  @apply py-3.5 px-5 text-sm;
-}
+/* Table styles inherited from professional.css */
 </style>

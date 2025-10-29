@@ -1,5 +1,5 @@
 <template>
-  <div class="table-container scrollbar-thin">
+  <div class="table-container">
     <table class="table">
       <thead>
         <tr>
@@ -17,14 +17,14 @@
           @click="navigateToQueue(queue.name)"
         >
           <td>
-            <div class="font-medium text-gray-900 dark:text-gray-100">{{ queue.name }}</div>
-            <div v-if="queue.namespace" class="text-xs text-gray-500 dark:text-gray-400">
+            <div class="queue-name">{{ queue.name }}</div>
+            <div v-if="queue.namespace" class="queue-namespace">
               {{ queue.namespace }}
             </div>
           </td>
-          <td class="text-right font-medium">{{ formatNumber(queue.messages?.pending || 0) }}</td>
-          <td class="text-right font-medium hidden sm:table-cell">{{ formatNumber(queue.messages?.processing || 0) }}</td>
-          <td class="text-right font-medium text-green-600 dark:text-green-400">
+          <td class="text-right">{{ formatNumber(queue.messages?.pending || 0) }}</td>
+          <td class="text-right hidden sm:table-cell">{{ formatNumber(queue.messages?.processing || 0) }}</td>
+          <td class="text-right text-emerald-600 dark:text-emerald-500">
             {{ formatNumber(queue.messages?.total || 0) }}
           </td>
         </tr>
@@ -51,3 +51,13 @@ function navigateToQueue(queueName) {
   router.push(`/queues/${queueName}`);
 }
 </script>
+
+<style scoped>
+.queue-name {
+  @apply text-sm font-medium text-gray-900 dark:text-white;
+}
+
+.queue-namespace {
+  @apply text-xs text-gray-500 dark:text-gray-400 mt-0.5;
+}
+</style>

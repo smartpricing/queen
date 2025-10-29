@@ -68,7 +68,7 @@
           </div>
 
           <!-- Traces Timeline -->
-          <div class="table-flat">
+          <div class="data-card">
             <div class="p-4">
               <h3 class="text-sm font-semibold text-gray-700 dark:text-gray-300 mb-4">Processing Timeline</h3>
               
@@ -191,13 +191,13 @@
 
         <!-- Available Trace Names -->
         <div v-else class="space-y-4">
-          <div class="table-flat">
+          <div class="data-card">
             <div class="p-4">
               <h3 class="text-sm font-semibold text-gray-700 dark:text-gray-300 mb-4">Available Trace Names</h3>
               
               <LoadingSpinner v-if="loadingNames" />
               
-              <div v-else-if="errorNames" class="error-flat">
+              <div v-else-if="errorNames" class="error-card">
                 <p><strong>Error loading trace names:</strong> {{ errorNames }}</p>
               </div>
               
