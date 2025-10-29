@@ -7,7 +7,7 @@
 [![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE.md)
 [![Node](https://img.shields.io/badge/node-%3E%3D22.0.0-brightgreen.svg)](https://nodejs.org/)
 
-[Quick Start](#js-client-usage-v2) • [Complete V2 Guide](client-js/client-v2/README.md) • [Examples](#-examples) • [Webapp](#webapp) • [Server Setup](#install-server-and-configure-it) • [HTTP API](#raw-http-api)
+[Quick Start](#one-single-example) • [Complete V2 Guide](client-js/client-v2/README.md) • [Webapp](#webapp) • [Server Setup](#install-the-server-and-configure-it) • [HTTP API](#raw-http-api)
 
 <p align="center">
   <img src="assets/queen-logo.svg" alt="Queen Logo" width="120" />
@@ -39,7 +39,7 @@ Here are the main features:
 
 The system consists of a PostgreSQL database, a replicated server that can be scaled horizontally (though it won't be the bottleneck), and a client library for interacting with the server. All client-server communication happens over HTTP, and the client library is written in JavaScript (support for other languages is planned). There's also a modern Vue 3 web app for monitoring and managing the system.
 
-With proper batching, the system can handle +100k **messages** per second (not req/s) on modest hardware.
+With proper batching, the system can handle +200k **messages** per second (not req/s) on modest hardware.
 
 Main documentation:
 - [Client Guide](client-js/client-v2/README.md)
@@ -144,8 +144,6 @@ The dashboard will be available at `http://localhost:4000` or at `http://localho
 
 See [webapp/README.md](webapp/README.md) for more details.
 
-
-
 ## Architecture
 
 Queen uses a high-performance **acceptor/worker pattern** with uWebSockets, combining non-blocking I/O for HTTP/WebSocket with a dedicated thread pool for database operations.
@@ -194,9 +192,7 @@ Queen automatically buffers messages to disk when PostgreSQL is unavailable - **
 FILE_BUFFER_DIR=/custom/path ./bin/queen-server
 ```
 
-
-
-## Install server and configure it
+## Install the server and configure it
 
 ### Quick Start
 
@@ -234,7 +230,7 @@ Includes:
 
 You can use Queen directly from HTTP without the JS client.
 
-[Here the complete list of API endpoints](API.md)
+[Here the complete list of API endpoints](server/API.md)
 
 ## ⚠️ Known Issues & Roadmap
 

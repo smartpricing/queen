@@ -1874,7 +1874,7 @@ process.on('SIGINT', async () => {
 You now know everything about Queen v2! 🎉
 
 **Additional resources:**
-- [API Documentation](../../API.md) - Complete API reference
+- [API Documentation](../../server/API.md) - Complete API reference
 - [Test Examples](../test-v2/) - 94 working test cases
 - [Architecture Guide](../../docs/) - Deep dive into Queen's internals
 
