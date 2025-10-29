@@ -644,7 +644,7 @@ nlohmann::json AnalyticsManager::list_messages(const MessageFilters& filters) {
             total_bus_groups = safe_stoi(mode_result.get_value(0, "bus_groups_count"));
         }
         
-        // Now query messages with the mode already known
+        // Now query messages with per-partition mode information
         std::string query = R"(
             SELECT 
                 m.id,
@@ -677,7 +677,15 @@ nlohmann::json AnalyticsManager::list_messages(const MessageFilters& filters) {
                       AND pc.last_consumed_created_at IS NOT NULL
                       AND (m.created_at < pc.last_consumed_created_at OR 
                            (DATE_TRUNC('milliseconds', m.created_at) = DATE_TRUNC('milliseconds', pc.last_consumed_created_at) AND m.id <= pc.last_consumed_id))
-                ) as consumed_by_groups_count
+                ) as consumed_by_groups_count,
+                -- Per-partition mode detection
+                (pc_queue.consumer_group IS NOT NULL) as partition_has_queue_mode,
+                (
+                    SELECT COUNT(*)::integer
+                    FROM queen.partition_consumers pc
+                    WHERE pc.partition_id = m.partition_id
+                      AND pc.consumer_group != '__QUEUE_MODE__'
+                ) as partition_bus_groups_count
             FROM queen.messages m
             JOIN queen.partitions p ON p.id = m.partition_id
             JOIN queen.queues q ON q.id = p.queue_id
@@ -767,18 +775,26 @@ nlohmann::json AnalyticsManager::list_messages(const MessageFilters& filters) {
             int consumed_by_groups = safe_stoi(result.get_value(i, "consumed_by_groups_count"));
             std::string queue_status = result.get_value(i, "queue_status");
             
-            // Compute final display status based on mode
+            // Get per-partition mode information
+            std::string partition_has_queue_str = result.get_value(i, "partition_has_queue_mode");
+            bool partition_has_queue_mode = (partition_has_queue_str == "t" || partition_has_queue_str == "true");
+            int partition_bus_groups = safe_stoi(result.get_value(i, "partition_bus_groups_count"));
+            
+            // Compute final display status based on THIS MESSAGE'S partition mode
             std::string display_status;
             if (queue_status == "dead_letter") {
                 display_status = "dead_letter";
-            } else if (!has_queue_mode && total_bus_groups > 0) {
-                // Pure Bus Mode - show bus status only
-                display_status = consumed_by_groups == total_bus_groups ? "completed" : "pending";
-            } else if (has_queue_mode && total_bus_groups == 0) {
-                // Pure Queue Mode - show queue status
+            } else if (!partition_has_queue_mode && partition_bus_groups > 0) {
+                // Pure Bus Mode for this partition - show bus status only
+                display_status = consumed_by_groups == partition_bus_groups ? "completed" : "pending";
+            } else if (partition_has_queue_mode && partition_bus_groups == 0) {
+                // Pure Queue Mode for this partition - show queue status
+                display_status = queue_status;
+            } else if (partition_has_queue_mode && partition_bus_groups > 0) {
+                // Hybrid mode for this partition - default to queue status
                 display_status = queue_status;
             } else {
-                // Hybrid or no consumers - default to queue status
+                // No consumers - show queue status (will likely be pending)
                 display_status = queue_status;
             }
             
@@ -795,7 +811,7 @@ nlohmann::json AnalyticsManager::list_messages(const MessageFilters& filters) {
                 {"queueStatus", queue_status},
                 {"busStatus", {
                     {"consumedBy", consumed_by_groups},
-                    {"totalGroups", total_bus_groups}
+                    {"totalGroups", partition_bus_groups}  // Use per-partition count
                 }},
                 {"traceId", trace_val.empty() ? nullptr : nlohmann::json(trace_val)},
                 {"queuePriority", safe_stoi(result.get_value(i, "queue_priority"))},
