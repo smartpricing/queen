@@ -58,6 +58,62 @@
             <div class="metric-value text-red-600 dark:text-red-400">{{ formatNumber(overview?.messages?.failed || 0) }}</div>
             <div class="metric-subtext-bottom">{{ formatNumber(overview?.messages?.deadLetter || 0) }} DLQ</div>
           </div>
+
+          <!-- Average Time Lag Card -->
+          <div class="metric-card-top">
+            <div class="flex items-center justify-between mb-0.5">
+              <span class="metric-label">AVG TIME LAG</span>
+              <div :class="getLagStatusClass(overview?.lag?.time?.avg)">
+                <svg class="w-4 h-4" fill="currentColor" viewBox="0 0 20 20">
+                  <circle cx="10" cy="10" r="4"/>
+                </svg>
+              </div>
+            </div>
+            <div :class="getLagValueClass(overview?.lag?.time?.avg)">{{ formatDuration(overview?.lag?.time?.avg || 0) }}</div>
+            <div class="metric-subtext-bottom">median: {{ formatDuration(overview?.lag?.time?.median || 0) }}</div>
+          </div>
+
+          <!-- Max Time Lag Card -->
+          <div class="metric-card-top">
+            <div class="flex items-center justify-between mb-0.5">
+              <span class="metric-label">MAX TIME LAG</span>
+              <div :class="getLagStatusClass(overview?.lag?.time?.max)">
+                <svg class="w-4 h-4" fill="currentColor" viewBox="0 0 20 20">
+                  <circle cx="10" cy="10" r="4"/>
+                </svg>
+              </div>
+            </div>
+            <div :class="getLagValueClass(overview?.lag?.time?.max)">{{ formatDuration(overview?.lag?.time?.max || 0) }}</div>
+            <div class="metric-subtext-bottom">min: {{ formatDuration(overview?.lag?.time?.min || 0) }}</div>
+          </div>
+
+          <!-- Average Offset Lag Card -->
+          <div class="metric-card-top">
+            <div class="flex items-center justify-between mb-0.5">
+              <span class="metric-label">AVG OFFSET LAG</span>
+              <div :class="getOffsetLagStatusClass(overview?.lag?.offset?.avg)">
+                <svg class="w-4 h-4" fill="currentColor" viewBox="0 0 20 20">
+                  <circle cx="10" cy="10" r="4"/>
+                </svg>
+              </div>
+            </div>
+            <div :class="getOffsetLagValueClass(overview?.lag?.offset?.avg)">{{ formatNumber(overview?.lag?.offset?.avg || 0) }} msg</div>
+            <div class="metric-subtext-bottom">median: {{ formatNumber(overview?.lag?.offset?.median || 0) }}</div>
+          </div>
+
+          <!-- Max Offset Lag Card -->
+          <div class="metric-card-top">
+            <div class="flex items-center justify-between mb-0.5">
+              <span class="metric-label">MAX OFFSET LAG</span>
+              <div :class="getOffsetLagStatusClass(overview?.lag?.offset?.max)">
+                <svg class="w-4 h-4" fill="currentColor" viewBox="0 0 20 20">
+                  <circle cx="10" cy="10" r="4"/>
+                </svg>
+              </div>
+            </div>
+            <div :class="getOffsetLagValueClass(overview?.lag?.offset?.max)">{{ formatNumber(overview?.lag?.offset?.max || 0) }} msg</div>
+            <div class="metric-subtext-bottom">min: {{ formatNumber(overview?.lag?.offset?.min || 0) }}</div>
+          </div>
         </div>
 
         <!-- Charts Grid -->
@@ -164,6 +220,58 @@ const calculatedPending = computed(() => {
   
   return Math.max(0, pending); // Ensure non-negative
 });
+
+// Format duration in seconds to human-readable string
+function formatDuration(seconds) {
+  if (!seconds || seconds === 0) return '0s';
+  
+  if (seconds < 60) return `${seconds}s`;
+  if (seconds < 3600) {
+    const mins = Math.floor(seconds / 60);
+    const secs = seconds % 60;
+    return secs > 0 ? `${mins}m ${secs}s` : `${mins}m`;
+  }
+  if (seconds < 86400) {
+    const hours = Math.floor(seconds / 3600);
+    const mins = Math.floor((seconds % 3600) / 60);
+    return mins > 0 ? `${hours}h ${mins}m` : `${hours}h`;
+  }
+  const days = Math.floor(seconds / 86400);
+  const hours = Math.floor((seconds % 86400) / 3600);
+  return hours > 0 ? `${days}d ${hours}h` : `${days}d`;
+}
+
+// Get lag status indicator class (time-based)
+function getLagStatusClass(seconds) {
+  if (!seconds || seconds === 0) return 'text-gray-400 dark:text-gray-500';
+  if (seconds < 60) return 'text-emerald-500'; // < 1 min: green
+  if (seconds < 300) return 'text-yellow-500'; // 1-5 min: yellow
+  return 'text-red-500'; // > 5 min: red
+}
+
+// Get lag value class (time-based)
+function getLagValueClass(seconds) {
+  if (!seconds || seconds === 0) return 'metric-value text-gray-600 dark:text-gray-300';
+  if (seconds < 60) return 'metric-value text-emerald-600 dark:text-emerald-400';
+  if (seconds < 300) return 'metric-value text-yellow-600 dark:text-yellow-400';
+  return 'metric-value text-red-600 dark:text-red-400';
+}
+
+// Get offset lag status indicator class
+function getOffsetLagStatusClass(count) {
+  if (!count || count === 0) return 'text-gray-400 dark:text-gray-500';
+  if (count < 10) return 'text-emerald-500'; // < 10 msgs: green
+  if (count < 50) return 'text-yellow-500'; // 10-50 msgs: yellow
+  return 'text-red-500'; // > 50 msgs: red
+}
+
+// Get offset lag value class
+function getOffsetLagValueClass(count) {
+  if (!count || count === 0) return 'metric-value text-gray-600 dark:text-gray-300';
+  if (count < 10) return 'metric-value text-emerald-600 dark:text-emerald-400';
+  if (count < 50) return 'metric-value text-yellow-600 dark:text-yellow-400';
+  return 'metric-value text-red-600 dark:text-red-400';
+}
 
 async function loadData() {
   loading.value = true;

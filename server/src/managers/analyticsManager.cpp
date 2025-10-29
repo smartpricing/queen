@@ -511,6 +511,34 @@ nlohmann::json AnalyticsManager::get_system_overview() {
                 FROM queen.messages m
                 LEFT JOIN queen.partition_consumers pc ON pc.partition_id = m.partition_id
                 LEFT JOIN queen.dead_letter_queue dlq ON dlq.message_id = m.id
+            ),
+            unconsumed_time_lags AS (
+                SELECT
+                    EXTRACT(EPOCH FROM (NOW() - m.created_at))::integer as lag_seconds
+                FROM queen.messages m
+                LEFT JOIN queen.partition_consumers pc ON pc.partition_id = m.partition_id
+                LEFT JOIN queen.dead_letter_queue dlq ON dlq.message_id = m.id
+                WHERE dlq.message_id IS NULL
+                  AND (pc.last_consumed_created_at IS NULL 
+                       OR m.created_at > pc.last_consumed_created_at
+                       OR (DATE_TRUNC('milliseconds', m.created_at) = DATE_TRUNC('milliseconds', pc.last_consumed_created_at) 
+                           AND m.id > pc.last_consumed_id))
+            ),
+            partition_offset_lags AS (
+                SELECT
+                    p.id as partition_id,
+                    COUNT(DISTINCT m.id) as unconsumed_count
+                FROM queen.partitions p
+                LEFT JOIN queen.messages m ON m.partition_id = p.id
+                LEFT JOIN queen.partition_consumers pc ON pc.partition_id = p.id
+                LEFT JOIN queen.dead_letter_queue dlq ON dlq.message_id = m.id
+                WHERE dlq.message_id IS NULL
+                  AND (pc.last_consumed_created_at IS NULL 
+                       OR m.created_at > pc.last_consumed_created_at
+                       OR (DATE_TRUNC('milliseconds', m.created_at) = DATE_TRUNC('milliseconds', pc.last_consumed_created_at) 
+                           AND m.id > pc.last_consumed_id))
+                GROUP BY p.id
+                HAVING COUNT(DISTINCT m.id) > 0
             )
             SELECT
                 (SELECT COUNT(*) FROM queen.queues) as total_queues,
@@ -521,7 +549,17 @@ nlohmann::json AnalyticsManager::get_system_overview() {
                 GREATEST(0, ms.unconsumed_messages - ms.processing_messages) as pending_messages,
                 ms.processing_messages,
                 ms.completed_messages,
-                ms.dead_letter_messages
+                ms.dead_letter_messages,
+                -- Time-based lag metrics
+                COALESCE((SELECT AVG(lag_seconds)::integer FROM unconsumed_time_lags), 0) as avg_time_lag_seconds,
+                COALESCE((SELECT PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY lag_seconds)::integer FROM unconsumed_time_lags), 0) as median_time_lag_seconds,
+                COALESCE((SELECT MIN(lag_seconds)::integer FROM unconsumed_time_lags), 0) as min_time_lag_seconds,
+                COALESCE((SELECT MAX(lag_seconds)::integer FROM unconsumed_time_lags), 0) as max_time_lag_seconds,
+                -- Offset-based lag metrics (per partition)
+                COALESCE((SELECT AVG(unconsumed_count)::integer FROM partition_offset_lags), 0) as avg_offset_lag,
+                COALESCE((SELECT PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY unconsumed_count)::integer FROM partition_offset_lags), 0) as median_offset_lag,
+                COALESCE((SELECT MIN(unconsumed_count)::integer FROM partition_offset_lags), 0) as min_offset_lag,
+                COALESCE((SELECT MAX(unconsumed_count)::integer FROM partition_offset_lags), 0) as max_offset_lag
             FROM message_stats ms
         )";
         
@@ -544,6 +582,20 @@ nlohmann::json AnalyticsManager::get_system_overview() {
                 {"completed", safe_stoi(result.get_value(0, "completed_messages"))},
                 {"failed", 0},
                 {"deadLetter", safe_stoi(result.get_value(0, "dead_letter_messages"))}
+            }},
+            {"lag", {
+                {"time", {
+                    {"avg", safe_stoi(result.get_value(0, "avg_time_lag_seconds"))},
+                    {"median", safe_stoi(result.get_value(0, "median_time_lag_seconds"))},
+                    {"min", safe_stoi(result.get_value(0, "min_time_lag_seconds"))},
+                    {"max", safe_stoi(result.get_value(0, "max_time_lag_seconds"))}
+                }},
+                {"offset", {
+                    {"avg", safe_stoi(result.get_value(0, "avg_offset_lag"))},
+                    {"median", safe_stoi(result.get_value(0, "median_offset_lag"))},
+                    {"min", safe_stoi(result.get_value(0, "min_offset_lag"))},
+                    {"max", safe_stoi(result.get_value(0, "max_offset_lag"))}
+                }}
             }},
             {"timestamp", ss.str()}
         };

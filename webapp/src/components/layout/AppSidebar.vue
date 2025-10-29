@@ -6,7 +6,7 @@
         v-if="!isCollapsed" 
         class="flex items-center gap-3"
       >
-        <img src="/assets/queen-logo-rose.svg" alt="Queen" class="h-8 w-8 flex-shrink-0" />
+        <img src="/assets/queen-logo.svg" alt="Queen" class="h-8 w-8 flex-shrink-0" />
         <div class="min-w-0">
           <h1 class="text-sm font-bold text-gray-900 dark:text-white truncate tracking-tight">Queen</h1>
           <p class="text-xs text-gray-500 dark:text-gray-400 truncate">Message Queue</p>
@@ -16,7 +16,7 @@
         v-else 
         class="flex items-center justify-center"
       >
-        <img src="/assets/queen-logo-rose.svg" alt="Queen" class="h-8 w-8" />
+        <img src="/assets/queen-logo.svg" alt="Queen" class="h-8 w-8" />
       </div>
     </div>
     

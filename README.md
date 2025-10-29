@@ -116,35 +116,34 @@ await queen
 })
 ```
 
-**Key Features:**
-- ✅ Fluent, chainable API
-- ✅ Auto-acknowledgment (or manual control)
-- ✅ Partitions for ordered processing
-- ✅ Consumer groups for scaling
-- ✅ **Subscription modes (new messages only or from timestamp)**
-- ✅ Transactions for atomicity
-- ✅ Client-side buffering for speed
-- ✅ Dead letter queue for failures
-- ✅ Lease renewal for long tasks
-- ✅ **Message tracing for debugging workflows**
-- ✅ Graceful shutdown with buffer flush
+## Webapp
 
-## 📚 Examples
+A modern Vue 3 web interface for managing and monitoring Queen MQ.
 
-### Client
+![Queen MQ Dashboard](./assets/dashboard.png)
 
-See the **[Complete V2 Guide](client-js/client-v2/README.md)** with 14 parts covering everything from basics to advanced features:
-- Queue creation, push, and consume
-- Partitions and consumer groups
-- **Subscription modes (new messages, timestamps)**
-- Transactions and buffering
-- Dead letter queues
-- Lease renewal
-- Message tracing
-- Complete real-world pipeline example
-- And much more!
 
-**Test Files** (94 working examples): [client-js/test-v2/](client-js/test-v2/)
+**Features:**
+- 📊 Real-time dashboard with system metrics
+- 📈 Message throughput visualization
+- 🔍 Queue management and monitoring
+- 👥 Consumer group tracking
+- 💬 Message browser with trace timeline
+- 🔎 **Trace explorer for debugging distributed workflows**
+- 📉 Analytics and insights
+- 🌓 Dark/light theme support
+
+**Quick Start:**
+```bash
+cd webapp
+npm install
+npm run dev
+```
+
+The dashboard will be available at `http://localhost:4000` or at `http://localhost:6632` directly from the server.
+
+See [webapp/README.md](webapp/README.md) for more details.
+
 
 
 ## Architecture
@@ -195,30 +194,7 @@ Queen automatically buffers messages to disk when PostgreSQL is unavailable - **
 FILE_BUFFER_DIR=/custom/path ./bin/queen-server
 ```
 
-## Webapp
 
-A modern Vue 3 web interface for managing and monitoring Queen MQ.
-
-**Features:**
-- 📊 Real-time dashboard with system metrics
-- 📈 Message throughput visualization
-- 🔍 Queue management and monitoring
-- 👥 Consumer group tracking
-- 💬 Message browser with trace timeline
-- 🔎 **Trace explorer for debugging distributed workflows**
-- 📉 Analytics and insights
-- 🌓 Dark/light theme support
-
-**Quick Start:**
-```bash
-cd webapp
-npm install
-npm run dev
-```
-
-The dashboard will be available at `http://localhost:4000`
-
-See [webapp/README.md](webapp/README.md) for more details.
 
 ## Install server and configure it
 
