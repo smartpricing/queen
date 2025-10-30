@@ -28,7 +28,7 @@ void init_long_polling(
     std::shared_ptr<astp::ThreadPool> thread_pool,
     std::shared_ptr<PollIntentionRegistry> registry,
     std::shared_ptr<QueueManager> queue_manager,
-    std::shared_ptr<ResponseQueue> response_queue,
+    std::vector<std::shared_ptr<ResponseQueue>> worker_response_queues,
     int worker_count,
     int poll_worker_interval_ms,
     int poll_db_interval_ms,
@@ -48,7 +48,7 @@ void init_long_polling(
                 registry,
                 queue_manager,
                 thread_pool,
-                response_queue,
+                worker_response_queues,
                 poll_worker_interval_ms,
                 poll_db_interval_ms,
                 backoff_threshold,
@@ -77,7 +77,7 @@ void poll_worker_loop(
     std::shared_ptr<PollIntentionRegistry> registry,
     std::shared_ptr<QueueManager> queue_manager,
     std::shared_ptr<astp::ThreadPool> thread_pool,
-    std::shared_ptr<ResponseQueue> response_queue,
+    std::vector<std::shared_ptr<ResponseQueue>> worker_response_queues,
     int poll_worker_interval_ms,
     int poll_db_interval_ms,
     int backoff_threshold,
@@ -122,9 +122,9 @@ void poll_worker_loop(
                         continue;
                     }
                     
-                    // We got exclusive access - send timeout response
+                    // We got exclusive access - send timeout response to correct worker's queue
                     nlohmann::json empty_response;
-                    response_queue->push(intention.request_id, empty_response, false, 204);
+                    worker_response_queues[intention.worker_id]->push(intention.request_id, empty_response, false, 204);
                     registry->remove_intention(intention.request_id);
                     registry->unmark_group_in_flight(group_key);
                     
@@ -256,7 +256,7 @@ void poll_worker_loop(
                                     }
                                     
                                     // Distribute messages to waiting clients
-                                    auto fulfilled_ids = distribute_to_clients(result, batch_copy, response_queue);
+                                    auto fulfilled_ids = distribute_to_clients(result, batch_copy, worker_response_queues);
                                     
                                     // Remove fulfilled intentions from registry AFTER responses queued
                                     for (const auto& request_id : fulfilled_ids) {
@@ -327,7 +327,7 @@ void poll_worker_loop(
 std::vector<std::string> distribute_to_clients(
     const PopResult& result,
     const std::vector<PollIntention>& batch,
-    std::shared_ptr<ResponseQueue> response_queue
+    std::vector<std::shared_ptr<ResponseQueue>> worker_response_queues
 ) {
     std::vector<std::string> fulfilled;
     
@@ -383,8 +383,8 @@ std::vector<std::string> distribute_to_clients(
             response["messages"].push_back(msg_json);
         }
         
-        // Send response to client
-        response_queue->push(intention.request_id, response, false, 200);
+        // Send response to client's worker queue
+        worker_response_queues[intention.worker_id]->push(intention.request_id, response, false, 200);
         fulfilled.push_back(intention.request_id);
         
         spdlog::debug("Distributed {} messages to intention {}", 

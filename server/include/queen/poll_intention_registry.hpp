@@ -18,6 +18,7 @@ namespace queen {
  */
 struct PollIntention {
     std::string request_id;
+    int worker_id;  // Track which worker owns this request
     
     // Queue-based polling
     std::optional<std::string> queue_name;

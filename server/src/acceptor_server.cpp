@@ -30,7 +30,7 @@
 static std::shared_ptr<astp::ThreadPool> global_db_thread_pool;
 static std::shared_ptr<astp::ThreadPool> global_system_thread_pool;
 static std::shared_ptr<queen::DatabasePool> global_db_pool;
-static std::shared_ptr<queen::ResponseQueue> global_response_queue;
+static std::vector<std::shared_ptr<queen::ResponseQueue>> worker_response_queues;  // Per-worker queues
 static std::shared_ptr<queen::ResponseRegistry> global_response_registry;
 static std::shared_ptr<queen::MetricsCollector> global_metrics_collector;
 static std::shared_ptr<queen::RetentionService> global_retention_service;
@@ -38,6 +38,7 @@ static std::shared_ptr<queen::EvictionService> global_eviction_service;
 static std::shared_ptr<queen::PollIntentionRegistry> global_poll_intention_registry;
 static us_timer_t* global_response_timer = nullptr;
 static std::once_flag global_pool_init_flag;
+static int num_workers_global = 0;  // Track number of workers for queue array sizing
 
 // System information for metrics
 struct SystemInfo {
@@ -615,7 +616,7 @@ static void setup_worker_routes(uWS::App* app,
                     }
                     
                     // Register response in uWebSockets thread - SAFE
-                    std::string request_id = global_response_registry->register_response(res);
+                    std::string request_id = global_response_registry->register_response(res, worker_id);
                     
                     spdlog::info("[Worker {}] PUSH: Registered response {}, submitting to ThreadPool", worker_id, request_id);
                     
@@ -633,7 +634,7 @@ static void setup_worker_routes(uWS::App* app,
                                 if (item_json.contains("partition") && !item_json["partition"].is_string()) {
                                     spdlog::error("[Worker {}] PUSH: Invalid partition type for {}, must be string", worker_id, request_id);
                                     nlohmann::json error_response = {{"error", "Partition must be a string"}};
-                                    global_response_queue->push(request_id, error_response, true, 400);
+                                    worker_response_queues[worker_id]->push(request_id, error_response, true, 400);
                                     return;
                                 }
                                 
@@ -641,7 +642,7 @@ static void setup_worker_routes(uWS::App* app,
                                 if (!item_json.contains("queue") || !item_json["queue"].is_string()) {
                                     spdlog::error("[Worker {}] PUSH: Invalid or missing queue for {}", worker_id, request_id);
                                     nlohmann::json error_response = {{"error", "Queue must be a string"}};
-                                    global_response_queue->push(request_id, error_response, true, 400);
+                                    worker_response_queues[worker_id]->push(request_id, error_response, true, 400);
                                     return;
                                 }
                             }
@@ -671,7 +672,7 @@ static void setup_worker_routes(uWS::App* app,
                                 json_results.push_back(json_result);
                             }
                             
-                            global_response_queue->push(request_id, json_results, false, 201);
+                            worker_response_queues[worker_id]->push(request_id, json_results, false, 201);
                             spdlog::info("[Worker {}] PUSH: Queued failover response for {} ({} items buffered)", worker_id, request_id, body["items"].size());
                             return;
                         }
@@ -684,7 +685,7 @@ static void setup_worker_routes(uWS::App* app,
                                 if (item_json.contains("partition") && !item_json["partition"].is_string()) {
                                     spdlog::error("[Worker {}] PUSH: Invalid partition type for {}, must be string", worker_id, request_id);
                                     nlohmann::json error_response = {{"error", "Partition must be a string"}};
-                                    global_response_queue->push(request_id, error_response, true, 400);
+                                    worker_response_queues[worker_id]->push(request_id, error_response, true, 400);
                                     return;
                                 }
                                 
@@ -692,7 +693,7 @@ static void setup_worker_routes(uWS::App* app,
                                 if (!item_json.contains("queue") || !item_json["queue"].is_string()) {
                                     spdlog::error("[Worker {}] PUSH: Invalid or missing queue for {}", worker_id, request_id);
                                     nlohmann::json error_response = {{"error", "Queue must be a string"}};
-                                    global_response_queue->push(request_id, error_response, true, 400);
+                                    worker_response_queues[worker_id]->push(request_id, error_response, true, 400);
                                     return;
                                 }
                                 
@@ -700,7 +701,7 @@ static void setup_worker_routes(uWS::App* app,
                                 if (item_json.contains("transactionId") && !item_json["transactionId"].is_string()) {
                                     spdlog::error("[Worker {}] PUSH: Invalid transactionId type for {}, must be string", worker_id, request_id);
                                     nlohmann::json error_response = {{"error", "TransactionId must be a string"}};
-                                    global_response_queue->push(request_id, error_response, true, 400);
+                                    worker_response_queues[worker_id]->push(request_id, error_response, true, 400);
                                     return;
                                 }
                                 
@@ -708,7 +709,7 @@ static void setup_worker_routes(uWS::App* app,
                                 if (item_json.contains("traceId") && !item_json["traceId"].is_string()) {
                                     spdlog::error("[Worker {}] PUSH: Invalid traceId type for {}, must be string", worker_id, request_id);
                                     nlohmann::json error_response = {{"error", "TraceId must be a string"}};
-                                    global_response_queue->push(request_id, error_response, true, 400);
+                                    worker_response_queues[worker_id]->push(request_id, error_response, true, 400);
                                     return;
                                 }
                                 
@@ -754,7 +755,7 @@ static void setup_worker_routes(uWS::App* app,
                                     // DB is healthy - this is a real application error
                                     spdlog::warn("[Worker {}] PUSH: Error '{}' detected but DB is healthy - returning error to client", worker_id, error_msg);
                                     nlohmann::json error_response = {{"error", error_msg}};
-                                    global_response_queue->push(request_id, error_response, true, 400);
+                                    worker_response_queues[worker_id]->push(request_id, error_response, true, 400);
                                     return;
                                 }
                             }
@@ -790,14 +791,14 @@ static void setup_worker_routes(uWS::App* app,
                                         json_results.push_back(json_result);
                                     }
                                     
-                                    global_response_queue->push(request_id, json_results, false, 201);
+                                    worker_response_queues[worker_id]->push(request_id, json_results, false, 201);
                                     spdlog::info("[Worker {}] PUSH: Queued failover response for {} ({} items buffered)", worker_id, request_id, body["items"].size());
                                     return;
                                 } else {
                                     // No file buffer available (non-zero worker) - return error
                                     spdlog::error("[Worker {}] PUSH: DB connection failed and no file buffer available for {}", worker_id, request_id);
                                     nlohmann::json error_response = {{"error", "Database unavailable and failover not available on this worker"}};
-                                    global_response_queue->push(request_id, error_response, true, 503);
+                                    worker_response_queues[worker_id]->push(request_id, error_response, true, 503);
                                     return;
                                 }
                             }
@@ -821,7 +822,7 @@ static void setup_worker_routes(uWS::App* app,
                             }
                             
                             // All items succeeded
-                            global_response_queue->push(request_id, json_results, false, 201);
+                            worker_response_queues[worker_id]->push(request_id, json_results, false, 201);
                             spdlog::info("[Worker {}] PUSH: Queued success response for {} ({} items)", worker_id, request_id, results.size());
                             
                         } catch (const nlohmann::json::exception& json_error) {
@@ -829,7 +830,7 @@ static void setup_worker_routes(uWS::App* app,
                             spdlog::error("[Worker {}] PUSH: JSON validation error for {}: {}", 
                                        worker_id, request_id, json_error.what());
                             nlohmann::json error_response = {{"error", std::string("Invalid JSON data: ") + json_error.what()}};
-                            global_response_queue->push(request_id, error_response, true, 400);
+                            worker_response_queues[worker_id]->push(request_id, error_response, true, 400);
                         } catch (const std::exception& db_error) {
                             // FAILOVER: PostgreSQL exception - fallback to file buffer for all items (if available)
                             if (file_buffer) {
@@ -864,14 +865,14 @@ static void setup_worker_routes(uWS::App* app,
                                     json_results.push_back(json_result);
                                 }
                                 
-                                global_response_queue->push(request_id, json_results, false, 201);
+                                worker_response_queues[worker_id]->push(request_id, json_results, false, 201);
                                 spdlog::info("[Worker {}] PUSH: Queued failover response for {} ({} items buffered)", worker_id, request_id, body["items"].size());
                             } else {
                                 // No file buffer available (non-zero worker) - return error
                                 spdlog::error("[Worker {}] PUSH: PostgreSQL unavailable and no file buffer available for {}: {}", 
                                             worker_id, request_id, db_error.what());
                                 nlohmann::json error_response = {{"error", "Database unavailable and failover not available on this worker"}};
-                                global_response_queue->push(request_id, error_response, true, 503);
+                                worker_response_queues[worker_id]->push(request_id, error_response, true, 503);
                             }
                         }
                     });
@@ -919,12 +920,13 @@ static void setup_worker_routes(uWS::App* app,
             }
             
             // Register response in uWebSockets thread - SAFE
-            std::string request_id = global_response_registry->register_response(res);
+            std::string request_id = global_response_registry->register_response(res, worker_id);
             
             if (wait) {
                 // Use Poll Intention Registry for long-polling
                 queen::PollIntention intention{
                     .request_id = request_id,
+                    .worker_id = worker_id,
                     .queue_name = queue_name,
                     .partition_name = partition_name,  // Specific partition
                     .namespace_name = std::nullopt,
@@ -959,7 +961,7 @@ static void setup_worker_routes(uWS::App* app,
                     if (result.messages.empty()) {
                         // No messages - send 204 No Content
                         nlohmann::json empty_response;
-                        global_response_queue->push(request_id, empty_response, false, 204);
+                        worker_response_queues[worker_id]->push(request_id, empty_response, false, 204);
                         spdlog::info("[Worker {}] SPOP: No messages for {} [{}/{}], {}ms", 
                                    worker_id, request_id, queue_name, partition_name, duration_ms);
                         return;
@@ -995,14 +997,14 @@ static void setup_worker_routes(uWS::App* app,
                     }
                     
                     // SAFE: Push to response queue
-                    global_response_queue->push(request_id, response, false, 200);
+                    worker_response_queues[worker_id]->push(request_id, response, false, 200);
                     spdlog::info("[Worker {}] SPOP: Queued response for {} [{}/{}] ({} messages, {}ms)", 
                                worker_id, request_id, queue_name, partition_name, result.messages.size(), duration_ms);
                     
                 } catch (const std::exception& e) {
                     // Error handling - push error to response queue
                     nlohmann::json error_response = {{"error", e.what()}};
-                    global_response_queue->push(request_id, error_response, true, 500);
+                    worker_response_queues[worker_id]->push(request_id, error_response, true, 500);
                     spdlog::error("[Worker {}] SPOP: Error for {} [{}/{}]: {}", worker_id, request_id, queue_name, partition_name, e.what());
                 }
             });
@@ -1062,7 +1064,7 @@ static void setup_worker_routes(uWS::App* app,
                     }
                     
                     // Register response in uWebSockets thread - SAFE
-                    std::string request_id = global_response_registry->register_response(res);
+                    std::string request_id = global_response_registry->register_response(res, worker_id);
                     
                     spdlog::info("[Worker {}] ACK BATCH: Registered response {}, submitting to ThreadPool", worker_id, request_id);
                     
@@ -1093,13 +1095,13 @@ static void setup_worker_routes(uWS::App* app,
                             }
                             
                             // SAFE: Push to response queue
-                            global_response_queue->push(request_id, response, false, 200);
+                            worker_response_queues[worker_id]->push(request_id, response, false, 200);
                             spdlog::info("[Worker {}] ACK BATCH: Queued response for {} ({} items)", worker_id, request_id, results.size());
                             
                         } catch (const std::exception& e) {
                             // Error handling - push error to response queue
                             nlohmann::json error_response = {{"error", e.what()}};
-                            global_response_queue->push(request_id, error_response, true, 500);
+                            worker_response_queues[worker_id]->push(request_id, error_response, true, 500);
                             spdlog::error("[Worker {}] ACK BATCH: Error for {}: {}", worker_id, request_id, e.what());
                         }
                     });
@@ -1166,12 +1168,13 @@ static void setup_worker_routes(uWS::App* app,
             }
             
             // Register response in uWebSockets thread - SAFE
-            std::string request_id = global_response_registry->register_response(res);
+            std::string request_id = global_response_registry->register_response(res, worker_id);
             
             if (wait) {
                 // Use Poll Intention Registry for long-polling
                 queen::PollIntention intention{
                     .request_id = request_id,
+                    .worker_id = worker_id,
                     .queue_name = queue_name,
                     .partition_name = std::nullopt,  // Any partition
                     .namespace_name = std::nullopt,
@@ -1206,7 +1209,7 @@ static void setup_worker_routes(uWS::App* app,
                     if (result.messages.empty()) {
                         // No messages - send 204 No Content
                         nlohmann::json empty_response;
-                        global_response_queue->push(request_id, empty_response, false, 204);
+                        worker_response_queues[worker_id]->push(request_id, empty_response, false, 204);
                         spdlog::info("[Worker {}] QPOP: No messages for {} [{}/*], {}ms", 
                                    worker_id, request_id, queue_name, duration_ms);
                         return;
@@ -1242,14 +1245,14 @@ static void setup_worker_routes(uWS::App* app,
                     }
                     
                     // SAFE: Push to response queue
-                    global_response_queue->push(request_id, response, false, 200);
+                    worker_response_queues[worker_id]->push(request_id, response, false, 200);
                     spdlog::info("[Worker {}] QPOP: Queued response for {} [{}/*] ({} messages, {}ms)", 
                                worker_id, request_id, queue_name, result.messages.size(), duration_ms);
                     
                 } catch (const std::exception& e) {
                     // Error handling - push error to response queue
                     nlohmann::json error_response = {{"error", e.what()}};
-                    global_response_queue->push(request_id, error_response, true, 500);
+                    worker_response_queues[worker_id]->push(request_id, error_response, true, 500);
                     spdlog::error("[Worker {}] QPOP: Error for {} [{}/*]: {}", worker_id, request_id, queue_name, e.what());
                 }
             });
@@ -1303,7 +1306,7 @@ static void setup_worker_routes(uWS::App* app,
                     }
                     
                     // Register response in uWebSockets thread - SAFE
-                    std::string request_id = global_response_registry->register_response(res);
+                    std::string request_id = global_response_registry->register_response(res, worker_id);
                     
                     spdlog::info("[Worker {}] ACK: Registered response {}, submitting to ThreadPool", worker_id, request_id);
                     
@@ -1337,18 +1340,18 @@ static void setup_worker_routes(uWS::App* app,
                                 };
                                 
                                 // SAFE: Push to response queue
-                                global_response_queue->push(request_id, response, false, 200);
+                                worker_response_queues[worker_id]->push(request_id, response, false, 200);
                                 spdlog::info("[Worker {}] ACK: Queued success response for {}", worker_id, request_id);
                             } else {
                                 nlohmann::json error_response = {{"error", "Failed to acknowledge message: " + ack_result.status}};
-                                global_response_queue->push(request_id, error_response, true, 500);
+                                worker_response_queues[worker_id]->push(request_id, error_response, true, 500);
                                 spdlog::warn("[Worker {}] ACK: Queued error response for {}: {}", worker_id, request_id, ack_result.status);
                             }
                             
                         } catch (const std::exception& e) {
                             // Error handling - push error to response queue
                             nlohmann::json error_response = {{"error", e.what()}};
-                            global_response_queue->push(request_id, error_response, true, 500);
+                            worker_response_queues[worker_id]->push(request_id, error_response, true, 500);
                             spdlog::error("[Worker {}] ACK: Error for {}: {}", worker_id, request_id, e.what());
                         }
                     });
@@ -1389,12 +1392,13 @@ static void setup_worker_routes(uWS::App* app,
             if (!sub_from.empty()) options.subscription_from = sub_from;
             
             // Register response in uWebSockets thread - SAFE
-            std::string request_id = global_response_registry->register_response(res);
+            std::string request_id = global_response_registry->register_response(res, worker_id);
             
             if (wait) {
                 // Use Poll Intention Registry for long-polling
                 queen::PollIntention intention{
                     .request_id = request_id,
+                    .worker_id = worker_id,
                     .queue_name = std::nullopt,
                     .partition_name = std::nullopt,
                     .namespace_name = namespace_name,  // Namespace filtering
@@ -1428,7 +1432,7 @@ static void setup_worker_routes(uWS::App* app,
                     if (result.messages.empty()) {
                         // No messages - send 204 No Content
                         nlohmann::json empty_response;
-                        global_response_queue->push(request_id, empty_response, false, 204);
+                        worker_response_queues[worker_id]->push(request_id, empty_response, false, 204);
                         spdlog::debug("[Worker {}] POP: No messages for {}", worker_id, request_id);
                         return;
                     }
@@ -1462,13 +1466,13 @@ static void setup_worker_routes(uWS::App* app,
                     }
                     
                     // SAFE: Push to response queue
-                    global_response_queue->push(request_id, response, false, 200);
+                    worker_response_queues[worker_id]->push(request_id, response, false, 200);
                     spdlog::info("[Worker {}] POP: Queued response for {} ({} messages)", worker_id, request_id, result.messages.size());
                     
                 } catch (const std::exception& e) {
                     // Error handling - push error to response queue
                     nlohmann::json error_response = {{"error", e.what()}};
-                    global_response_queue->push(request_id, error_response, true, 500);
+                    worker_response_queues[worker_id]->push(request_id, error_response, true, 500);
                     spdlog::error("[Worker {}] POP: Error for {}: {}", worker_id, request_id, e.what());
                 }
             });
@@ -1495,7 +1499,7 @@ static void setup_worker_routes(uWS::App* app,
                     }
                     
                     // Register response in uWebSockets thread - SAFE
-                    std::string request_id = global_response_registry->register_response(res);
+                    std::string request_id = global_response_registry->register_response(res, worker_id);
                     
                     spdlog::info("[Worker {}] TRANSACTION: Registered response {}, submitting to ThreadPool", worker_id, request_id);
                     
@@ -1510,7 +1514,7 @@ static void setup_worker_routes(uWS::App* app,
                             for (const auto& op : operations) {
                                 if (!op.contains("type")) {
                                     nlohmann::json error_response = {{"error", "operation type required"}};
-                                    global_response_queue->push(request_id, error_response, true, 400);
+                                    worker_response_queues[worker_id]->push(request_id, error_response, true, 400);
                                     spdlog::error("[Worker {}] TRANSACTION: Missing operation type for {}", worker_id, request_id);
                                     return;
                                 }
@@ -1553,7 +1557,7 @@ static void setup_worker_routes(uWS::App* app,
                                         partition_id = op["partitionId"];
                                     } else {
                                         nlohmann::json error_response = {{"error", "partitionId is required for ack operations to ensure message uniqueness"}};
-                                        global_response_queue->push(request_id, error_response, true, 400);
+                                        worker_response_queues[worker_id]->push(request_id, error_response, true, 400);
                                         spdlog::error("[Worker {}] TRANSACTION: Missing partitionId in ack operation for {}", worker_id, request_id);
                                         return;
                                     }
@@ -1569,7 +1573,7 @@ static void setup_worker_routes(uWS::App* app,
                                 } else {
                                     // Handle unknown operation type
                                     nlohmann::json error_response = {{"error", "Unknown operation type: " + op_type}};
-                                    global_response_queue->push(request_id, error_response, true, 400);
+                                    worker_response_queues[worker_id]->push(request_id, error_response, true, 400);
                                     spdlog::error("[Worker {}] TRANSACTION: Unknown operation type {} for {}", worker_id, op_type, request_id);
                                     return;
                                 }
@@ -1583,13 +1587,13 @@ static void setup_worker_routes(uWS::App* app,
                             };
                             
                             // SAFE: Push to response queue
-                            global_response_queue->push(request_id, response, false, 200);
+                            worker_response_queues[worker_id]->push(request_id, response, false, 200);
                             spdlog::info("[Worker {}] TRANSACTION: Queued response for {} ({} operations)", worker_id, request_id, operations.size());
                             
                         } catch (const std::exception& e) {
                             // Error handling - push error to response queue
                             nlohmann::json error_response = {{"error", e.what()}};
-                            global_response_queue->push(request_id, error_response, true, 500);
+                            worker_response_queues[worker_id]->push(request_id, error_response, true, 500);
                             spdlog::error("[Worker {}] TRANSACTION: Error for {}: {}", worker_id, request_id, e.what());
                         }
                     });
@@ -2168,7 +2172,7 @@ static void worker_thread(const Config& config, int worker_id, int num_workers,
     
     try {
         // Initialize global shared resources (only once)
-        std::call_once(global_pool_init_flag, [&config]() {
+        std::call_once(global_pool_init_flag, [&config, num_workers]() {
             // Calculate global pool sizes with 5% safety buffer
             int total_connections = static_cast<int>(config.database.pool_size * 0.95); // 95% of total
             int total_db_threads = total_connections; // 1:1 ratio
@@ -2178,6 +2182,7 @@ static void worker_thread(const Config& config, int worker_id, int num_workers,
             spdlog::info("  - Total DB connections: {} (95% of {})", total_connections, config.database.pool_size);
             spdlog::info("  - DB ThreadPool threads: {}", total_db_threads);
             spdlog::info("  - System ThreadPool threads: {}", system_threads);
+            spdlog::info("  - Number of workers: {}", num_workers);
             
             // Create global connection pool
             global_db_pool = std::make_shared<DatabasePool>(
@@ -2195,8 +2200,15 @@ static void worker_thread(const Config& config, int worker_id, int num_workers,
             // Create global System operations ThreadPool (for metrics, cleanup, etc.)
             global_system_thread_pool = std::make_shared<astp::ThreadPool>(system_threads);
             
-            // Create global response queue and registry
-            global_response_queue = std::make_shared<queen::ResponseQueue>();
+            // Create per-worker response queues
+            num_workers_global = num_workers;
+            worker_response_queues.resize(num_workers);
+            for (int i = 0; i < num_workers; i++) {
+                worker_response_queues[i] = std::make_shared<queen::ResponseQueue>();
+                spdlog::info("  - Created response queue for worker {}", i);
+            }
+            
+            // Create global response registry (shared across workers)
             global_response_registry = std::make_shared<queen::ResponseRegistry>();
             
             // Create global poll intention registry (shared by all workers)
@@ -2290,7 +2302,7 @@ static void worker_thread(const Config& config, int worker_id, int num_workers,
                 global_db_thread_pool,
                 global_poll_intention_registry,
                 queue_manager,
-                global_response_queue,
+                worker_response_queues,  // All worker queues (poll workers will route to correct one)
                 2,  // 2 poll workers
                 config.queue.poll_worker_interval,
                 config.queue.poll_db_interval,
@@ -2358,15 +2370,15 @@ static void worker_thread(const Config& config, int worker_id, int num_workers,
         spdlog::info("[Worker {}] Creating uWS::App...", worker_id);
         auto worker_app = new uWS::App();
         
-        // Setup response timer for this worker (each worker has its own timer)
+        // Setup response timer for this worker (each worker has its own timer and queue)
         spdlog::info("[Worker {}] Setting up response timer...", worker_id);
         us_timer_t* response_timer = us_create_timer((us_loop_t*)uWS::Loop::get(), 0, sizeof(queen::ResponseQueue*));
-        *(queen::ResponseQueue**)us_timer_ext(response_timer) = global_response_queue.get();
+        *(queen::ResponseQueue**)us_timer_ext(response_timer) = worker_response_queues[worker_id].get();
         
         // Poll using configured interval for good balance between latency and CPU usage
         int timer_interval = config.queue.response_timer_interval_ms;
         us_timer_set(response_timer, response_timer_callback, timer_interval, timer_interval);
-        spdlog::info("[Worker {}] Response timer configured ({}ms interval)", worker_id, timer_interval);
+        spdlog::info("[Worker {}] Response timer configured to process own queue ({}ms interval)", worker_id, timer_interval);
         
         // Setup routes
         spdlog::info("[Worker {}] Setting up routes...", worker_id);

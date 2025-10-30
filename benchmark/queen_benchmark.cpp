@@ -80,6 +80,10 @@ struct BenchmarkStats {
     std::atomic<uint64_t> errors{0};
     std::chrono::steady_clock::time_point start_time;
     std::chrono::steady_clock::time_point end_time;
+    std::chrono::steady_clock::time_point first_message_time;
+    std::chrono::steady_clock::time_point last_message_time;
+    std::atomic<bool> first_message_received{false};
+    std::mutex time_mutex;
     
     void start() {
         start_time = std::chrono::steady_clock::now();
@@ -89,12 +93,29 @@ struct BenchmarkStats {
         end_time = std::chrono::steady_clock::now();
     }
     
+    void mark_message_time() {
+        auto now = std::chrono::steady_clock::now();
+        std::lock_guard<std::mutex> lock(time_mutex);
+        
+        if (!first_message_received) {
+            first_message_time = now;
+            first_message_received = true;
+        }
+        last_message_time = now;
+    }
+    
     double elapsed_seconds() const {
         return std::chrono::duration<double>(end_time - start_time).count();
     }
     
+    double actual_processing_seconds() const {
+        if (!first_message_received) return 0.0;
+        return std::chrono::duration<double>(last_message_time - first_message_time).count();
+    }
+    
     void print_summary() const {
-        double elapsed = elapsed_seconds();
+        double wall_clock_time = elapsed_seconds();
+        double processing_time = actual_processing_seconds();
         uint64_t total_messages = messages_processed.load();
         uint64_t total_bytes = bytes_processed.load();
         uint64_t total_errors = errors.load();
@@ -105,12 +126,27 @@ struct BenchmarkStats {
         std::cout << "Total Messages:     " << total_messages << std::endl;
         std::cout << "Total Bytes:        " << total_bytes << std::endl;
         std::cout << "Errors:             " << total_errors << std::endl;
-        std::cout << "Elapsed Time:       " << std::fixed << std::setprecision(2) 
-                  << elapsed << " seconds" << std::endl;
+        std::cout << "Wall Clock Time:    " << std::fixed << std::setprecision(2) 
+                  << wall_clock_time << " seconds" << std::endl;
         
-        if (elapsed > 0) {
-            double msg_per_sec = total_messages / elapsed;
-            double mb_per_sec = (total_bytes / elapsed) / (1024.0 * 1024.0);
+        if (processing_time > 0) {
+            double idle_time = wall_clock_time - processing_time;
+            std::cout << "Processing Time:    " << std::fixed << std::setprecision(2) 
+                      << processing_time << " seconds (excludes idle)" << std::endl;
+            std::cout << "Idle Time:          " << std::fixed << std::setprecision(2) 
+                      << idle_time << " seconds" << std::endl;
+            
+            double msg_per_sec = total_messages / processing_time;
+            double mb_per_sec = (total_bytes / processing_time) / (1024.0 * 1024.0);
+            
+            std::cout << "Throughput:         " << std::fixed << std::setprecision(0)
+                      << msg_per_sec << " msg/sec (based on processing time)" << std::endl;
+            std::cout << "Bandwidth:          " << std::fixed << std::setprecision(2)
+                      << mb_per_sec << " MB/sec" << std::endl;
+        } else if (wall_clock_time > 0) {
+            // Fallback to wall clock if no processing time tracked
+            double msg_per_sec = total_messages / wall_clock_time;
+            double mb_per_sec = (total_bytes / wall_clock_time) / (1024.0 * 1024.0);
             
             std::cout << "Throughput:         " << std::fixed << std::setprecision(0)
                       << msg_per_sec << " msg/sec" << std::endl;
@@ -186,7 +222,7 @@ void producer_thread(int thread_id, const BenchmarkConfig& config, BenchmarkStat
         
         if (config.queue_mode == "single-queue") {
             queue_name = "benchmark-queue";
-            partition_name = "partition-" + std::to_string(partition_id);
+            partition_name = std::to_string(partition_id);  // Just numeric ID, not "partition-X"
         } else {
             queue_name = "benchmark-queue-" + std::to_string(partition_id);
             partition_name = "Default";
@@ -221,6 +257,7 @@ void producer_thread(int thread_id, const BenchmarkConfig& config, BenchmarkStat
             
             queue_builder.push(batch_messages);
             
+            stats.mark_message_time();  // Track actual processing time
             stats.messages_processed += batch_messages.size();
             stats.bytes_processed += batch_messages.size() * 300;  // Approximate
             
@@ -285,7 +322,7 @@ void consumer_thread(int thread_id, const BenchmarkConfig& config, BenchmarkStat
         
         if (config.queue_mode == "single-queue") {
             queue_name = "benchmark-queue";
-            partition_name = "partition-" + std::to_string(partition_id);
+            partition_name = std::to_string(partition_id);  // Just numeric ID, not "partition-X"
         } else {
             queue_name = "benchmark-queue-" + std::to_string(partition_id);
             partition_name = "Default";
@@ -298,10 +335,12 @@ void consumer_thread(int thread_id, const BenchmarkConfig& config, BenchmarkStat
         
         queue_builder
             .batch(config.batch_size)
-            .wait(true)  // Long polling
+            .wait(false)  // Long polling
             .idle_millis(5000)  // Stop after 5 seconds of no messages
             .auto_ack(true)
             .consume([&](const json& messages) {
+                stats.mark_message_time();  // Track actual processing time
+                
                 int msg_count = messages.is_array() ? messages.size() : 1;
                 stats.messages_processed += msg_count;
                 
@@ -451,9 +490,13 @@ int main(int argc, char** argv) {
     BenchmarkConfig config = parse_args(argc, argv);
     config.print();
     
-    // Setup queues
-    QueenClient setup_client(config.server_url);
-    setup_queues(setup_client, config);
+    // Setup queues ONLY for producer (consumer uses existing queues)
+    if (config.mode == "producer") {
+        QueenClient setup_client(config.server_url);
+        setup_queues(setup_client, config);
+    } else {
+        std::cout << "Consumer mode: Using existing queues (not creating/deleting)\n" << std::endl;
+    }
     
     // Run benchmark
     if (config.mode == "producer") {

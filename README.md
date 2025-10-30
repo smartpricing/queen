@@ -274,6 +274,53 @@ Queen automatically buffers messages to disk when PostgreSQL is unavailable - **
 FILE_BUFFER_DIR=/custom/path ./bin/queen-server
 ```
 
+## Performance Benchmarks
+
+**Preliminary results from C++ client benchmark** (detailed benchmarks on dedicated hardware coming soon)
+
+### Test Environment
+- **Hardware:** Apple M4 Air (all components on same machine, 12 processors available)
+- **Server:** 1 server, 4 workers, 95 total DB connections/threads
+- **Database:** PostgreSQL in Docker
+- **Client:** C++ benchmark tool (`benchmark/bin/benchmark`)
+
+### Results
+
+| Mode | Threads | Messages | Batch Size | Partitions | Queue Mode | Throughput | Bandwidth |
+|------|---------|----------|------------|------------|------------|------------|-----------|
+| **Producer** | 100 | 10K | 1 | 100 | single-queue | **1,431 msg/sec** | 0.41 MB/sec |
+| **Producer** | 100 | 10K | 1 | 100 | multi-queue | 527 msg/sec | 0.15 MB/sec |
+| **Producer** | 10 | 1M | 1,000 | 100 | single-queue | **62,927 msg/sec** | 18.00 MB/sec |
+| **Producer** | 10 | 1M | 1,000 | 100 | multi-queue | 49,663 msg/sec | 14.21 MB/sec |
+| **Producer** | 10 | 1M | 10,000 | 10 | single-queue | 30,351 msg/sec | 8.68 MB/sec |
+| **Consumer** | 10 | 1M | 1,000 | 100 | single-queue | **31,922 msg/sec** | 16.25 MB/sec |
+| **Consumer** | 10 | 1M | 10,000 | 10 | single-queue | **82,974 msg/sec** | 42.25 MB/sec |
+
+### Key Observations
+
+- ✅ **Batch size matters:** Larger batches (1,000-10,000) dramatically improve throughput
+- ✅ **Single-queue mode faster:** Better partition-level parallelism than multi-queue
+- ✅ **Consumer performance:** Scales well with batch size (82K msg/sec with 10K batches)
+- ✅ **Producer peak:** 62K msg/sec with optimal batch size (1,000)
+- ⚠️ **Small batches:** Performance drops significantly with batch=1 (lock contention)
+
+**Note:** All timing metrics exclude idle timeouts and measure actual message processing time (first message → last message).
+
+### Run Your Own Benchmarks
+
+```bash
+cd benchmark
+make
+
+# Producer
+./bin/benchmark producer --threads 10 --count 1000000 --batch 1000 --partitions 100 --mode single-queue
+
+# Consumer
+./bin/benchmark consumer --threads 10 --batch 1000 --partitions 100 --mode single-queue
+```
+
+See [benchmark/README.md](benchmark/README.md) for detailed usage.
+
 ## Install the server and configure it
 
 ### Quick Start

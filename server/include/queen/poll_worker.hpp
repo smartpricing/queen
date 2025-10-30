@@ -31,7 +31,7 @@ void init_long_polling(
     std::shared_ptr<astp::ThreadPool> thread_pool,
     std::shared_ptr<PollIntentionRegistry> registry,
     std::shared_ptr<QueueManager> queue_manager,
-    std::shared_ptr<ResponseQueue> response_queue,
+    std::vector<std::shared_ptr<ResponseQueue>> worker_response_queues,  // All worker queues
     int worker_count = 2,
     int poll_worker_interval_ms = 50,
     int poll_db_interval_ms = 500,
@@ -71,7 +71,7 @@ void poll_worker_loop(
     std::shared_ptr<PollIntentionRegistry> registry,
     std::shared_ptr<QueueManager> queue_manager,
     std::shared_ptr<astp::ThreadPool> thread_pool,
-    std::shared_ptr<ResponseQueue> response_queue,
+    std::vector<std::shared_ptr<ResponseQueue>> worker_response_queues,
     int poll_worker_interval_ms = 50,
     int poll_db_interval_ms = 500,
     int backoff_threshold = 5,
@@ -94,7 +94,7 @@ void poll_worker_loop(
 std::vector<std::string> distribute_to_clients(
     const PopResult& result,
     const std::vector<PollIntention>& batch,
-    std::shared_ptr<ResponseQueue> response_queue
+    std::vector<std::shared_ptr<ResponseQueue>> worker_response_queues
 );
 
 /**

@@ -38,9 +38,9 @@ std::string ResponseRegistry::generate_uuid() const {
     return ss.str();
 }
 
-std::string ResponseRegistry::register_response(uWS::HttpResponse<false>* res) {
+std::string ResponseRegistry::register_response(uWS::HttpResponse<false>* res, int worker_id) {
     std::string request_id = generate_uuid();
-    auto entry = std::make_shared<ResponseEntry>(res);
+    auto entry = std::make_shared<ResponseEntry>(res, worker_id);
     
     // Set up abort handler to mark response as invalid
     res->onAborted([entry]() {
@@ -55,7 +55,7 @@ std::string ResponseRegistry::register_response(uWS::HttpResponse<false>* res) {
         responses_[request_id] = entry;
     }
     
-    spdlog::debug("Registered response with ID: {}", request_id);
+    spdlog::debug("Registered response with ID: {} (worker {})", request_id, worker_id);
     return request_id;
 }
 
