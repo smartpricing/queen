@@ -41,12 +41,13 @@ Here are the main features:
 - A nice webapp for monitoring and managing the system
 - Maintenace mode that allows to continue pushing messages even when the database is down, and to drain the messages to the database when the maintenance mode is disabled
 
-The system consists of a PostgreSQL database, a replicated server that can be scaled horizontally (though it won't be the bottleneck), and a client library for interacting with the server. All client-server communication happens over HTTP, and the client library is written in JavaScript (support for other languages is planned). There's also a modern Vue 3 web app for monitoring and managing the system.
+The system consists of a PostgreSQL database, a replicated server that can be scaled horizontally (though it won't be the bottleneck), and a client library for interacting with the server. All client-server communication happens over HTTP, and the client library are available for JavaScript and C++ (Other languages like Python are planned). There's also a modern Vue 3 web app for monitoring and managing the system.
 
 With proper batching, the system can handle +200k **messages** per second (not req/s) on modest hardware.
 
 Main documentation:
-- [Client Guide](client-js/client-v2/README.md)
+- [Client Guide JS](client-js/client-v2/README.md)
+- [Client Guide C++](client-cpp/README.md)
 - [Server Guide](server/README.md)
 - [API Reference](API.md)
 - [Message Retention & Cleanup](docs/RETENTION.md)

@@ -1,0 +1,135 @@
+# Queen C++ Client - Makefile
+# Builds test suite and examples
+
+CXX = g++
+CXXFLAGS = -std=c++17 -Wall -Wextra -O2 -pthread
+
+# Include paths
+INCLUDES = -I. \
+           -I../server/vendor \
+           -I../server/include
+
+# Check for cpp-httplib installation
+# Try Homebrew path first (macOS), then system paths
+HTTPLIB_PATHS = /opt/homebrew/include \
+                /usr/local/include \
+                /usr/include
+				
+HTTPLIB_FOUND = $(foreach path,$(HTTPLIB_PATHS),$(wildcard $(path)/httplib.h))
+
+ifneq ($(HTTPLIB_FOUND),)
+    INCLUDES += -I$(dir $(firstword $(HTTPLIB_FOUND)))
+    $(info Found cpp-httplib at: $(dir $(firstword $(HTTPLIB_FOUND))))
+else
+    $(warning cpp-httplib not found in system paths. Make sure it's installed or in current directory)
+    $(warning Run: brew install cpp-httplib  (macOS))
+    $(warning Or download: curl -o httplib.h https://raw.githubusercontent.com/yhirose/cpp-httplib/master/httplib.h)
+endif
+
+# Libraries
+LIBS = -lpthread
+
+# SSL support (optional but recommended)
+USE_SSL ?= 1
+ifeq ($(USE_SSL),1)
+    CXXFLAGS += -DCPPHTTPLIB_OPENSSL_SUPPORT
+    
+    # Detect OpenSSL installation
+    OPENSSL_PREFIX := $(shell brew --prefix openssl 2>/dev/null)
+    ifneq ($(OPENSSL_PREFIX),)
+        INCLUDES += -I$(OPENSSL_PREFIX)/include
+        LIBS += -L$(OPENSSL_PREFIX)/lib -lssl -lcrypto
+        $(info SSL support enabled with OpenSSL at: $(OPENSSL_PREFIX))
+    else
+        LIBS += -lssl -lcrypto
+        $(info SSL support enabled (using system OpenSSL))
+    endif
+else
+    $(info SSL support disabled. Set USE_SSL=1 to enable)
+endif
+
+# Targets
+.PHONY: all test clean help
+
+all: test
+
+# Build test suite
+test: bin/test_client
+	@echo "Test suite built successfully!"
+	@echo "Run with: ./bin/test_client [server_url]"
+	@echo "Example: ./bin/test_client http://localhost:6632"
+
+bin/test_client: test_client.cpp queen_client.hpp ../server/vendor/json.hpp ../server/include/threadpool.hpp
+	@mkdir -p bin
+	$(CXX) $(CXXFLAGS) $(INCLUDES) test_client.cpp -o bin/test_client $(LIBS)
+
+# Run tests (requires Queen server running)
+run-test: bin/test_client
+	@echo "========================================" 
+	@echo "Running Queen C++ Client Tests"
+	@echo "========================================"
+	@echo "Note: Ensure Queen server is running on localhost:6632"
+	@echo ""
+	./bin/test_client
+
+# Run tests with custom server URL
+run-test-custom: bin/test_client
+	@echo "Running tests against: $(SERVER_URL)"
+	./bin/test_client $(SERVER_URL)
+
+# Build basic example
+example: bin/example_basic
+	@echo "Example built successfully!"
+	@echo "Run with: ./bin/example_basic"
+
+bin/example_basic: example_basic.cpp queen_client.hpp ../server/vendor/json.hpp ../server/include/threadpool.hpp
+	@mkdir -p bin
+	$(CXX) $(CXXFLAGS) $(INCLUDES) example_basic.cpp -o bin/example_basic $(LIBS)
+	@echo "✓ Example built in bin/example_basic"
+
+# Example programs (for future expansion)
+examples: example_basic example_consumer
+
+example_basic: bin/example_basic
+
+example_consumer: examples/consumer.cpp queen_client.hpp
+	@mkdir -p bin
+	$(CXX) $(CXXFLAGS) $(INCLUDES) examples/consumer.cpp -o bin/example_consumer $(LIBS)
+
+# Clean build artifacts
+clean:
+	rm -f test_client example_basic  # Legacy locations
+	rm -rf bin
+	rm -f *.o
+	@echo "Cleaned build artifacts"
+
+# Help
+help:
+	@echo "Queen C++ Client - Makefile"
+	@echo ""
+	@echo "Targets:"
+	@echo "  make              - Build test suite (default)"
+	@echo "  make test         - Build test suite"
+	@echo "  make run-test     - Build and run tests (server must be running)"
+	@echo "  make clean        - Remove build artifacts"
+	@echo "  make help         - Show this help message"
+	@echo ""
+	@echo "Options:"
+	@echo "  USE_SSL=1         - Enable SSL support (default: 1)"
+	@echo "  SERVER_URL=...    - Custom server URL for tests"
+	@echo ""
+	@echo "Examples:"
+	@echo "  make test"
+	@echo "  make run-test"
+	@echo "  make run-test SERVER_URL=http://my-server:6632"
+	@echo "  make clean"
+	@echo ""
+	@echo "Dependencies:"
+	@echo "  - C++17 compiler (g++ or clang++)"
+	@echo "  - cpp-httplib (header-only HTTP client)"
+	@echo "  - OpenSSL (optional, for HTTPS support)"
+	@echo ""
+	@echo "Install cpp-httplib:"
+	@echo "  macOS:   brew install cpp-httplib"
+	@echo "  Manual:  curl -o httplib.h https://raw.githubusercontent.com/yhirose/cpp-httplib/master/httplib.h"
+

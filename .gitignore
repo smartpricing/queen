@@ -12,5 +12,7 @@ server/vendor
 server/build
 server/bin
 
+client-cpp/bin
+
 helm
 upgrade.sh
