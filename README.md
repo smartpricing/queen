@@ -49,47 +49,47 @@ Main documentation:
 - [API Reference](API.md)
 - [Webapp](webapp/README.md)
 
-## Concepts 
+## Concepts
 
 Although the system is designed to be simple to use, there are some concepts that are important to understand to use the system effectively.
 
-#### Queues
+### Queues
 
 Queues are a way to organize your messages into logical groups. Each queue is like a container for messages. You can have as many queues as you want, and you can configure each queue with different settings, like the lease time, retry limit, encryption, retention, priority, delayed processing, window buffer and retention.
 
-#### Partitions
+### Partitions
 
-Partitions are a way to organize your messages into logical ordered groups. Each partition is like a separate queue, and messages in the same partition are guaranteed to be processed in order. Only one consumer/client can acquire the lock for a partition at a time. When the lock lease expires, the message is released and can be acquired by another consumer/client. You can have as many partitions as you want, and you can have as many consumers/clients as you want. If the lease in not acknowledged in time, the message is released and can be acquired by another consumer/client. Use renewLease() to renew the lease during long-running tasks. Each different consumer group can acquire the lock for a partition independently, so you can have as many consumer groups as you want.
+Partitions are a way to organize your messages into logical ordered groups. Each partition is like a separate queue inside a queue, and messages in the same partition are guaranteed to be processed in order. Only one consumer/client can acquire the lock for a partition at a time. You can have as many partitions as you want, and you can have as many consumers/clients as you want. If the lease in not acknowledged in time, the message is released and can be acquired by another consumer/client. Use renewLease() to renew the lease during long-running tasks. Each different consumer group can acquire the lock for a partition independently, so you can have as many consumer groups as you want.
 
-#### Default partition and consumer group
+### Default partition and consumer group
 
 The default partition (if not specified) is `Default`. If you don't specify a consumer group, the messages are processed in queue mode, that is creating a default consumer group named `__QUEUE_MODE__`. Each queue can be used at the same time by multiple consumer groups, and each consumer group can process messages from multiple partitions.
 
-#### Consumer groups
+### Consumer groups
 
 Consumer groups are a way to process messages for different purposes. Each consumer group is like a separate queue, and messages in the same consumer group partition are guaranteed to be processed in order. Each consumer group tracks its own position in the queue. You can start a consumer group from the beginning of the queue, from a specific timestamp, or only new messages.
 
-#### Subscription modes
+### Subscription modes
 
 Subscription modes are a way to control the message history that is processed. You can choose to process all messages (including historical ones), only new messages, or messages from a specific timestamp. Subscription modes are only available when using consumer groups.
 
-#### Long polling (waiting for messages)
+### Long polling (waiting for messages)
 
 The client works with the pull model for pop operations, meaning that you need to explicitly request messages from the queue. Pop and consume mehtods can "wait" server side for messages to be available. When the method is called with wait=true, the method will block until messages are available or the timeout is reached. When the timeout is reached, the method returns an empty array. Long polling is a very efficient way to wait for messages, and it is the recommended way to consume messages.
 
-#### Lease renewal
+### Lease renewal
 
 Lease renewal is a way to keep the lock for a partition or consumer group alive. You can use lease renewal to prevent the lock from expiring and being acquired by another consumer/client.
 
-#### Ack and Nack
+### Ack and Nack
 
 Ack and Nack are the way to acknowledge or not a message. Ack means that the message has been processed successfully, and Nack means that the message has not been processed successfully. Ack/Nack requires the partitionId, the transactionId and the leaseId to be specified. If the ack is coming from a consumer group, the consumer group name is also required. This logic is handled automatically by the client library, you don't need to worry about it. If the message has already been acknowledged, the ack will be ignored. Based on the configuration, the message can be automatically acknowledged or manually acknowledged.
 
-#### Transactions
+### Transactions
 
 Transactions are a way to ensure that a group of operations are atomic. You can use transactions to ensure that a group of operations are executed together, and if one of the operations fails, the entire transaction is rolled back. Transactions are useful to achieve the exactly-once guarantee. You can process a message on a queue, and forward to the next queue only if the consumer lease is still valid, concatenating ack and push into a single transaction.
 
-#### Dead letter queue
+### Dead letter queue
 
 The dead letter queue is a way to handle messages that are not processed successfully. When a message is not processed successfully, it is moved to the dead letter queue. Messages goes in the DLQ when they are NACK after the retry limit is reached. You configure the retry limit for each queue at queue config.
 
@@ -132,7 +132,7 @@ await queen
   console.error('Error pushing messages:', error)
 })
 
-// Consume messages (auto-ack on success, auto-nack on error)
+// Consume messages
 await queen
 .queue('critical-task')
 // The consumer group name, without this, the messages are processed in queue mode
@@ -152,13 +152,19 @@ await queen
   console.log('Processing:', message.data) 
 })
 // Ack the messages if you processed them successfully
-.onSuccess(async (messages) => {
-  await queen.ack(messages)
+.onSuccess(async (message) => {
+  await queen
+  .transaction()
+  .queue('critical-task-next')
+  .partition('XXX')
+  .push([{ data: { message: 'Final', count: 3 } }])
+  .ack(message)
+  .commit()  
 })
 // Nack the messages if you failed to process them
-.onError(async (messages, error) => {
+.onError(async (message, error) => {
   console.error('Error processing messages:', error)
-  await queen.ack(messages, false)
+  await queen.ack(message, false)
 })
 ```
 
