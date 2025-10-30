@@ -28,8 +28,12 @@ Welcome to Queen client! This is your friendly guide to mastering message queues
 
 First, install and import:
 
+```sh
+npm install queen-mq
+```
+
 ```javascript
-import { Queen } from './client-js/client-v2/index.js'
+import { Queen } from 'queen-mq'
 
 // Connect to your Queen server
 const queen = new Queen('http://localhost:6632')
