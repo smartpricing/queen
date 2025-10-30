@@ -279,7 +279,7 @@ FILE_BUFFER_DIR=/custom/path ./bin/queen-server
 **Preliminary results from C++ client benchmark** (detailed benchmarks on dedicated hardware coming soon)
 
 ### Test Environment
-- **Hardware:** Apple M4 Air (all components on same machine, 12 processors available)
+- **Hardware:** Apple M4 Air (all components on same machine, 10 processors available)
 - **Server:** 1 server, 4 workers, 95 total DB connections/threads
 - **Database:** PostgreSQL in Docker
 - **Client:** C++ benchmark tool (`benchmark/bin/benchmark`)
@@ -375,6 +375,5 @@ You can use Queen directly from HTTP without the JS client.
 
 
 ### Other TODO Items
-- retention jobs
 - auth
 - streaming engine
