@@ -448,6 +448,60 @@ static void setup_worker_routes(uWS::App* app,
         }
     });
     
+    // GET maintenance mode status (always fetch fresh from DB)
+    app->get("/api/v1/system/maintenance", [queue_manager](auto* res, auto* req) {
+        try {
+            // Force fresh check from database (bypass cache for status endpoint)
+            bool current_mode = queue_manager->get_maintenance_mode_fresh();
+            auto buffer_stats = queue_manager->get_buffer_stats();
+            
+            nlohmann::json response = {
+                {"maintenanceMode", current_mode},
+                {"bufferedMessages", queue_manager->get_buffer_pending_count()},
+                {"bufferHealthy", queue_manager->is_buffer_healthy()},
+                {"bufferStats", buffer_stats}
+            };
+            send_json_response(res, response);
+        } catch (const std::exception& e) {
+            send_error_response(res, e.what(), 500);
+        }
+    });
+    
+    // POST toggle maintenance mode
+    app->post("/api/v1/system/maintenance", [queue_manager](auto* res, auto* req) {
+        read_json_body(res,
+            [res, queue_manager](const nlohmann::json& body) {
+                try {
+                    if (!body.contains("enabled") || !body["enabled"].is_boolean()) {
+                        send_error_response(res, "enabled (boolean) is required", 400);
+                        return;
+                    }
+                    
+                    bool enable = body["enabled"];
+                    queue_manager->set_maintenance_mode(enable);
+                    
+                    nlohmann::json response = {
+                        {"maintenanceMode", enable},
+                        {"bufferedMessages", queue_manager->get_buffer_pending_count()},
+                        {"bufferHealthy", queue_manager->is_buffer_healthy()},
+                        {"message", enable ? 
+                            "Maintenance mode ENABLED. All PUSHes routing to file buffer." :
+                            "Maintenance mode DISABLED. Background processor will drain buffer to DB."
+                        }
+                    };
+                    
+                    send_json_response(res, response);
+                    
+                } catch (const std::exception& e) {
+                    send_error_response(res, e.what(), 500);
+                }
+            },
+            [res](const std::string& error) {
+                send_error_response(res, error, 400);
+            }
+        );
+    });
+    
     // Configure queue
     app->post("/api/v1/configure", [queue_manager, worker_id](auto* res, auto* req) {
         read_json_body(res,
@@ -2267,6 +2321,10 @@ static void worker_thread(const Config& config, int worker_id, int num_workers,
             }
             spdlog::info("[Worker {}] Using shared file buffer from Worker 0", worker_id);
         }
+        
+        // Connect file buffer to queue manager for maintenance mode
+        queue_manager->set_file_buffer_manager(file_buffer);
+        spdlog::info("[Worker {}] File buffer connected to queue manager for maintenance mode", worker_id);
         
         // Create worker App
         spdlog::info("[Worker {}] Creating uWS::App...", worker_id);

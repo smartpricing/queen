@@ -404,7 +404,7 @@ void FileBufferManager::background_processor() {
     spdlog::info("Background processor thread started");
     
     int retry_counter = 0;
-    const int RETRY_INTERVAL_CYCLES = 5000 / flush_interval_ms_;  // Try every 5 seconds
+    const int RETRY_INTERVAL_CYCLES = 1000 / flush_interval_ms_;  // Try every 1 second (not 5)
     
     while (running_) {
         std::this_thread::sleep_for(std::chrono::milliseconds(flush_interval_ms_));
@@ -483,13 +483,19 @@ void FileBufferManager::background_processor() {
                 }
             }
             
-            // Always try to process failover events (to detect DB recovery)
-            process_failover_events();
+            // Process failover events - if DB is healthy, process aggressively
+            // Process multiple files per cycle to drain faster (10 files = ~100 events in 100ms)
+            int max_files_per_cycle = db_healthy_ ? 10 : 1;
+            for (int i = 0; i < max_files_per_cycle; i++) {
+                process_failover_events();
+                // Stop if no more files to process
+                if (!has_failover_files()) break;
+            }
             
             // Process QoS 0 events
             process_qos0_events();
             
-            // Retry failed files periodically (every ~5 seconds)
+            // Retry failed files periodically (every ~1 second)
             if (retry_counter >= RETRY_INTERVAL_CYCLES) {
                 retry_counter = 0;
                 
@@ -533,6 +539,12 @@ void FileBufferManager::process_failover_events() {
     
     // Sort by filename (UUIDv7 ensures time ordering)
     std::sort(files_to_process.begin(), files_to_process.end());
+    
+    // If there are many files, log it
+    if (files_to_process.size() > 10) {
+        spdlog::info("Failover: Found {} buffer files to process, processing oldest first", 
+                    files_to_process.size());
+    }
     
     // Process oldest file first (FIFO order)
     std::string file_path = files_to_process[0];
@@ -756,10 +768,16 @@ bool FileBufferManager::flush_batched_to_db(const std::vector<nlohmann::json>& e
         // Use queue_manager's push_messages for proper batch insert
         auto results = queue_manager_->push_messages(items);
         
-        // Check if all succeeded
-        for (const auto& result : results) {
-            if (result.status != "queued") {
+        // Check if all succeeded (or are duplicates, which is OK)
+        for (size_t i = 0; i < results.size(); i++) {
+            const auto& result = results[i];
+            if (result.status != "queued" && result.status != "duplicate") {
+                spdlog::error("FileBuffer drain failed: item[{}] status='{}', error='{}', tx_id='{}'", 
+                             i, result.status, result.error.value_or("none"), result.transaction_id);
                 throw std::runtime_error("Push failed: " + result.error.value_or("unknown error"));
+            }
+            if (result.status == "duplicate") {
+                spdlog::debug("FileBuffer drain: item[{}] already exists in DB (duplicate), skipping", i);
             }
         }
         
@@ -968,16 +986,27 @@ void FileBufferManager::retry_failed_files() {
     // Sort by filename (oldest first)
     std::sort(failed_files.begin(), failed_files.end());
     
-    // Move oldest failed file back to main directory for retry
-    std::string failed_file = failed_files[0];
-    std::string filename = std::filesystem::path(failed_file).filename().string();
-    std::string retry_file = buffer_dir_ + "/" + filename;
+    // If DB is healthy, move ALL failed files back for fast recovery
+    // If DB is unhealthy, move just one to test recovery
+    int files_to_move = db_healthy_ ? failed_files.size() : 1;
     
-    try {
-        std::filesystem::rename(failed_file, retry_file);
-        spdlog::info("Retrying failed buffer: {} (moved back to main directory)", filename);
-    } catch (const std::exception& e) {
-        spdlog::error("Failed to move file for retry: {}", e.what());
+    if (files_to_move > 1) {
+        spdlog::info("DB healthy - moving ALL {} failed buffer files back for processing", files_to_move);
+    }
+    
+    for (int i = 0; i < files_to_move && i < static_cast<int>(failed_files.size()); i++) {
+        std::string failed_file = failed_files[i];
+        std::string filename = std::filesystem::path(failed_file).filename().string();
+        std::string retry_file = buffer_dir_ + "/" + filename;
+        
+        try {
+            std::filesystem::rename(failed_file, retry_file);
+            if (files_to_move == 1) {
+                spdlog::info("Retrying failed buffer: {} (moved back to main directory)", filename);
+            }
+        } catch (const std::exception& e) {
+            spdlog::error("Failed to move file for retry: {}", e.what());
+        }
     }
 }
 
@@ -1058,6 +1087,54 @@ void FileBufferManager::finalize_buffer_file(const std::string& tmp_file) {
     } catch (const std::exception& e) {
         spdlog::error("Failed to finalize buffer file {}: {}", tmp_file, e.what());
     }
+}
+
+bool FileBufferManager::has_failover_files() const {
+    try {
+        for (const auto& entry : std::filesystem::directory_iterator(buffer_dir_)) {
+            std::string filename = entry.path().filename().string();
+            if (filename.find("failover_") == 0 && 
+                filename.find(".buf") != std::string::npos &&
+                filename.find(".buf.tmp") == std::string::npos) {
+                return true;
+            }
+        }
+    } catch (const std::exception& e) {
+        return false;
+    }
+    return false;
+}
+
+FileBufferManager::FailedFilesStats FileBufferManager::get_failed_files_stats() const {
+    FailedFilesStats stats = {0, 0, 0, 0};
+    
+    std::string failed_dir = buffer_dir_ + "/failed";
+    
+    if (!std::filesystem::exists(failed_dir)) {
+        return stats;
+    }
+    
+    try {
+        for (const auto& entry : std::filesystem::directory_iterator(failed_dir)) {
+            if (entry.is_regular_file()) {
+                std::string filename = entry.path().filename().string();
+                size_t file_size = std::filesystem::file_size(entry.path());
+                
+                stats.file_count++;
+                stats.total_bytes += file_size;
+                
+                if (filename.find("failover_") == 0) {
+                    stats.failover_count++;
+                } else if (filename.find("qos0_") == 0) {
+                    stats.qos0_count++;
+                }
+            }
+        }
+    } catch (const std::exception& e) {
+        spdlog::error("Failed to get failed files stats: {}", e.what());
+    }
+    
+    return stats;
 }
 
 void FileBufferManager::cleanup_incomplete_tmp_files() {

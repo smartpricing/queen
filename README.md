@@ -38,6 +38,7 @@ Here are the main features:
 - Message tracing for debugging workflows
 - Encryption of messages at DB level
 - A nice webapp for monitoring and managing the system
+- Maintenace mode that allows to continue pushing messages even when the database is down, and to drain the messages to the database when the maintenance mode is disabled
 
 The system consists of a PostgreSQL database, a replicated server that can be scaled horizontally (though it won't be the bottleneck), and a client library for interacting with the server. All client-server communication happens over HTTP, and the client library is written in JavaScript (support for other languages is planned). There's also a modern Vue 3 web app for monitoring and managing the system.
 
@@ -187,7 +188,7 @@ await queen
 
 ## Webapp
 
-A modern Vue 3 web interface for managing and monitoring Queen MQ.
+A modern Vue 3 web interface for managing and monitoring Queen MQ. 
 
 ![Queen MQ Dashboard](./assets/dashboard.png)
 

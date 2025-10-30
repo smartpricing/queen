@@ -116,6 +116,9 @@
           </div>
         </div>
 
+        <!-- Maintenance Mode Card (full width if there are issues) -->
+        <MaintenanceCard />
+        
         <!-- Charts Grid -->
         <div class="charts-grid">
           <!-- Throughput Chart -->
@@ -191,6 +194,7 @@ import { systemMetricsApi } from '../api/system-metrics';
 import { formatNumber } from '../utils/formatters';
 
 import LoadingSpinner from '../components/common/LoadingSpinner.vue';
+import MaintenanceCard from '../components/MaintenanceCard.vue';
 import ThroughputChart from '../components/dashboard/ThroughputChart.vue';
 import ResourceUsageChart from '../components/dashboard/ResourceUsageChart.vue';
 import QueueMetricsChart from '../components/dashboard/QueueMetricsChart.vue';

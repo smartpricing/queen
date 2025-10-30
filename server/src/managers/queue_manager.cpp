@@ -1,4 +1,5 @@
 #include "queen/queue_manager.hpp"
+#include "queen/file_buffer.hpp"
 #include "queen/encryption.hpp"
 #include <spdlog/spdlog.h>
 #include <random>
@@ -395,6 +396,39 @@ PushResult QueueManager::push_single_message(const PushItem& item) {
     PushResult result;
     result.transaction_id = item.transaction_id.value_or(generate_transaction_id());
     
+    // MAINTENANCE MODE: Route to file buffer (checks DB with cache)
+    if (check_maintenance_mode_with_cache() && file_buffer_manager_) {
+        try {
+            nlohmann::json event = {
+                {"queue", item.queue},
+                {"partition", item.partition},
+                {"payload", item.payload},
+                {"transactionId", result.transaction_id},
+                {"failover", true}  // Use failover buffer (FIFO ordering)
+            };
+            
+            if (item.trace_id.has_value() && !item.trace_id->empty()) {
+                event["traceId"] = *item.trace_id;
+            }
+            
+            if (file_buffer_manager_->write_event(event)) {
+                result.status = "buffered";
+                result.message_id = std::nullopt;
+                result.trace_id = item.trace_id;
+                return result;
+            } else {
+                result.status = "failed";
+                result.error = "File buffer write failed";
+                return result;
+            }
+        } catch (const std::exception& e) {
+            spdlog::error("Failed to write to file buffer during maintenance mode: {}", e.what());
+            result.status = "failed";
+            result.error = std::string("Buffer write error: ") + e.what();
+            return result;
+        }
+    }
+    
     try {
         // Check if queue exists (don't create it automatically)
         ScopedConnection check_conn(db_pool_.get());
@@ -490,6 +524,64 @@ PushResult QueueManager::push_single_message(const PushItem& item) {
 std::vector<PushResult> QueueManager::push_messages(const std::vector<PushItem>& items) {
     if (items.empty()) {
         return {};
+    }
+    
+    // MAINTENANCE MODE: Route all items to file buffer (checks DB with cache)
+    bool is_maintenance = check_maintenance_mode_with_cache();
+    spdlog::debug("push_messages: maintenance_mode_check={}, has_file_buffer={}", 
+                  is_maintenance, file_buffer_manager_ != nullptr);
+    
+    if (is_maintenance && file_buffer_manager_) {
+        spdlog::info("push_messages: Routing {} messages to file buffer (maintenance mode enabled)", items.size());
+        std::vector<PushResult> results;
+        results.reserve(items.size());
+        
+        for (const auto& item : items) {
+            try {
+                std::string transaction_id = item.transaction_id.value_or(generate_transaction_id());
+                
+                nlohmann::json event = {
+                    {"queue", item.queue},
+                    {"partition", item.partition},
+                    {"payload", item.payload},
+                    {"transactionId", transaction_id},
+                    {"failover", true}  // Use failover buffer (FIFO ordering)
+                };
+                
+                if (item.trace_id.has_value() && !item.trace_id->empty()) {
+                    event["traceId"] = *item.trace_id;
+                }
+                
+                if (file_buffer_manager_->write_event(event)) {
+                    results.push_back({
+                        transaction_id,
+                        "buffered",
+                        std::nullopt,
+                        std::nullopt,
+                        item.trace_id
+                    });
+                } else {
+                    results.push_back({
+                        transaction_id,
+                        "failed",
+                        "File buffer write failed",
+                        std::nullopt,
+                        std::nullopt
+                    });
+                }
+            } catch (const std::exception& e) {
+                spdlog::error("Failed to write to file buffer during maintenance mode: {}", e.what());
+                results.push_back({
+                    item.transaction_id.value_or(generate_transaction_id()),
+                    "failed",
+                    std::string("Buffer write error: ") + e.what(),
+                    std::nullopt,
+                    std::nullopt
+                });
+            }
+        }
+        
+        return results;
     }
     
     // Group items by queue and partition while PRESERVING ORDER
@@ -2767,6 +2859,13 @@ bool QueueManager::initialize_schema() {
                 trace_name TEXT NOT NULL,
                 PRIMARY KEY (trace_id, trace_name)
             );
+            
+            -- System state table for shared configuration across instances
+            CREATE TABLE IF NOT EXISTS queen.system_state (
+                key TEXT PRIMARY KEY,
+                value JSONB NOT NULL,
+                updated_at TIMESTAMPTZ DEFAULT NOW()
+            );
         )";
         
         auto result2 = QueryResult(conn->exec(create_tables_sql));
@@ -2814,6 +2913,7 @@ bool QueueManager::initialize_schema() {
             CREATE INDEX IF NOT EXISTS idx_message_traces_created_at ON queen.message_traces(created_at DESC);
             CREATE INDEX IF NOT EXISTS idx_message_trace_names_name ON queen.message_trace_names(trace_name);
             CREATE INDEX IF NOT EXISTS idx_message_trace_names_trace_id ON queen.message_trace_names(trace_id);
+            CREATE INDEX IF NOT EXISTS idx_system_state_key ON queen.system_state(key);
         )";
         
         auto result3 = QueryResult(conn->exec(create_indexes_sql));
@@ -2864,6 +2964,20 @@ bool QueueManager::initialize_schema() {
             spdlog::warn("Some triggers may not have been created: {}", result4.error_message());
         } else {
             spdlog::info("Database triggers created successfully");
+        }
+        
+        // Initialize system state (maintenance mode default value)
+        std::string init_system_state = R"(
+            INSERT INTO queen.system_state (key, value, updated_at)
+            VALUES ('maintenance_mode', '{"enabled": false}'::jsonb, NOW())
+            ON CONFLICT (key) DO NOTHING;
+        )";
+        
+        auto result5 = QueryResult(conn->exec(init_system_state));
+        if (!result5.is_success()) {
+            spdlog::warn("Failed to initialize system state: {}", result5.error_message());
+        } else {
+            spdlog::info("System state initialized (maintenance_mode: false)");
         }
         
         spdlog::info("Database schema V3 initialized successfully (tables, indexes, triggers)");
@@ -3151,6 +3265,155 @@ nlohmann::json QueueManager::get_available_trace_names(
         spdlog::error("Failed to get available trace names: {}", e.what());
         throw;
     }
+}
+
+// Maintenance mode methods (multi-instance support via database)
+
+bool QueueManager::check_maintenance_mode_with_cache() {
+    // Get current time in milliseconds
+    auto now_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::system_clock::now().time_since_epoch()
+    ).count();
+    
+    uint64_t last_check = last_maintenance_check_ms_.load();
+    
+    // Check if cache is still valid (within TTL)
+    if (now_ms - last_check < MAINTENANCE_CACHE_TTL_MS) {
+        bool cached = maintenance_mode_cached_.load();
+        spdlog::trace("check_maintenance_mode: using cache, value={}", cached);
+        return cached;
+    }
+    
+    // Cache expired - check database
+    try {
+        ScopedConnection conn(db_pool_.get());
+        
+        std::string sql = R"(
+            SELECT value->>'enabled' as enabled
+            FROM queen.system_state
+            WHERE key = 'maintenance_mode'
+        )";
+        
+        auto result = QueryResult(conn->exec(sql));
+        
+        if (result.num_rows() > 0) {
+            std::string enabled_str = result.get_value(0, "enabled");
+            bool enabled = enabled_str == "true";
+            
+            spdlog::info("check_maintenance_mode: DB query returned enabled_str='{}', enabled={}", 
+                        enabled_str, enabled);
+            
+            // Update cache
+            maintenance_mode_cached_.store(enabled);
+            last_maintenance_check_ms_.store(now_ms);
+            
+            return enabled;
+        }
+        
+        // If row doesn't exist, assume maintenance mode is off
+        spdlog::warn("check_maintenance_mode: No row found in system_state, assuming false");
+        maintenance_mode_cached_.store(false);
+        last_maintenance_check_ms_.store(now_ms);
+        return false;
+        
+    } catch (const std::exception& e) {
+        spdlog::warn("Failed to check maintenance mode from database: {}", e.what());
+        // On error, return cached value (fail-safe - use last known state)
+        bool cached = maintenance_mode_cached_.load();
+        spdlog::warn("check_maintenance_mode: Using cached value due to error: {}", cached);
+        return cached;
+    }
+}
+
+bool QueueManager::get_maintenance_mode_fresh() {
+    // Force cache invalidation by setting last_check to 0
+    last_maintenance_check_ms_.store(0);
+    return check_maintenance_mode_with_cache();
+}
+
+void QueueManager::set_maintenance_mode(bool enabled) {
+    try {
+        ScopedConnection conn(db_pool_.get());
+        
+        // Persist to database for multi-instance support
+        std::string sql = R"(
+            INSERT INTO queen.system_state (key, value, updated_at)
+            VALUES ('maintenance_mode', $1::jsonb, NOW())
+            ON CONFLICT (key) DO UPDATE
+            SET value = EXCLUDED.value,
+                updated_at = NOW()
+        )";
+        
+        nlohmann::json value = {{"enabled", enabled}};
+        conn->exec_params(sql, {value.dump()});
+        
+        // Update cache immediately on this instance
+        maintenance_mode_cached_.store(enabled);
+        last_maintenance_check_ms_.store(
+            std::chrono::duration_cast<std::chrono::milliseconds>(
+                std::chrono::system_clock::now().time_since_epoch()
+            ).count()
+        );
+        
+        spdlog::info("Maintenance mode {} (persisted to database for all instances)", 
+                    enabled ? "ENABLED - routing PUSHes to file buffer" : "DISABLED - resuming normal operations");
+        
+        if (!enabled && file_buffer_manager_) {
+            spdlog::info("File buffer will drain {} pending messages to database", 
+                        file_buffer_manager_->get_pending_count());
+        }
+        
+    } catch (const std::exception& e) {
+        spdlog::error("Failed to persist maintenance mode to database: {}", e.what());
+        throw std::runtime_error(std::string("Failed to set maintenance mode: ") + e.what());
+    }
+}
+
+size_t QueueManager::get_buffer_pending_count() const {
+    if (!file_buffer_manager_) {
+        return 0;
+    }
+    return file_buffer_manager_->get_pending_count();
+}
+
+bool QueueManager::is_buffer_healthy() const {
+    if (!file_buffer_manager_) {
+        return true;  // No buffer = healthy by default
+    }
+    return file_buffer_manager_->is_db_healthy();
+}
+
+nlohmann::json QueueManager::get_buffer_stats() const {
+    if (!file_buffer_manager_) {
+        return {
+            {"pendingCount", 0},
+            {"failedCount", 0},
+            {"dbHealthy", true},
+            {"failedFiles", {
+                {"count", 0},
+                {"totalBytes", 0},
+                {"totalMB", 0.0},
+                {"failoverCount", 0},
+                {"qos0Count", 0}
+            }}
+        };
+    }
+    
+    auto failed_stats = file_buffer_manager_->get_failed_files_stats();
+    double total_mb = failed_stats.total_bytes / (1024.0 * 1024.0);
+    
+    return {
+        {"pendingCount", file_buffer_manager_->get_pending_count()},
+        {"failedCount", file_buffer_manager_->get_failed_count()},
+        {"dbHealthy", file_buffer_manager_->is_db_healthy()},
+        {"failedFiles", {
+            {"count", failed_stats.file_count},
+            {"totalBytes", failed_stats.total_bytes},
+            {"totalMB", total_mb},
+            {"failoverCount", failed_stats.failover_count},
+            {"qos0Count", failed_stats.qos0_count}
+        }}
+    };
 }
 
 } // namespace queen

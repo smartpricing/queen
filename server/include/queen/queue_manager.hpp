@@ -8,8 +8,12 @@
 #include <memory>
 #include <optional>
 #include <chrono>
+#include <atomic>
 
 namespace queen {
+
+// Forward declarations
+class FileBufferManager;
 
 struct Message {
     std::string id;
@@ -36,7 +40,7 @@ struct PushItem {
 
 struct PushResult {
     std::string transaction_id;
-    std::string status; // "queued", "failed"
+    std::string status; // "queued", "buffered", "failed"
     std::optional<std::string> error;
     std::optional<std::string> message_id;
     std::optional<std::string> trace_id;
@@ -83,10 +87,17 @@ public:
     
 private:
     std::shared_ptr<DatabasePool> db_pool_;
+    std::shared_ptr<FileBufferManager> file_buffer_manager_;
     QueueConfig config_;
+    
+    // Maintenance mode (cached from database for multi-instance support)
+    std::atomic<bool> maintenance_mode_cached_{false};
+    std::atomic<uint64_t> last_maintenance_check_ms_{0};
+    static constexpr int MAINTENANCE_CACHE_TTL_MS = 5000;  // 5 seconds cache TTL
     
     // Internal helper methods
     std::string generate_transaction_id();
+    bool check_maintenance_mode_with_cache();
     
     // Queue operations
     bool ensure_queue_exists(const std::string& queue_name, 
@@ -127,6 +138,19 @@ private:
 public:
     explicit QueueManager(std::shared_ptr<DatabasePool> db_pool, 
                          const QueueConfig& config = QueueConfig{});
+    
+    // Set file buffer manager (for maintenance mode)
+    void set_file_buffer_manager(std::shared_ptr<FileBufferManager> fbm) {
+        file_buffer_manager_ = fbm;
+    }
+    
+    // Maintenance mode (multi-instance support via database)
+    void set_maintenance_mode(bool enabled);
+    bool get_maintenance_mode() const { return maintenance_mode_cached_.load(); }
+    bool get_maintenance_mode_fresh();  // Force fresh check from DB
+    size_t get_buffer_pending_count() const;
+    bool is_buffer_healthy() const;
+    nlohmann::json get_buffer_stats() const;
     
     // Queue configuration
     struct QueueOptions {

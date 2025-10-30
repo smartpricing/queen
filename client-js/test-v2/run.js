@@ -9,6 +9,7 @@ import * as dlqTests from './dlq.js'
 import * as completeTests from './complete.js'
 import * as transactionTests from './transaction.js'
 import * as subscriptionTests from './subscription.js'
+import * as maintenanceTests from './maintenance.js'
 import * as errorHandlingTests from './ai_error_handling.js'
 import * as leaseRenewalTests from './ai_lease_renewal.js'
 import * as resourcesTests from './ai_resources.js'
@@ -92,7 +93,8 @@ async function main() {
         dlqTests,
         completeTests,
         transactionTests,
-        subscriptionTests
+        subscriptionTests,
+        maintenanceTests
     ]
     
     const aiTests = [

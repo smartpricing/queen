@@ -55,6 +55,15 @@ public:
     size_t get_pending_count() const { return pending_count_.load(); }
     size_t get_failed_count() const { return failed_count_.load(); }
     bool is_db_healthy() const { return db_healthy_.load(); }
+    
+    // Failed files stats
+    struct FailedFilesStats {
+        size_t file_count;
+        size_t total_bytes;
+        size_t failover_count;
+        size_t qos0_count;
+    };
+    FailedFilesStats get_failed_files_stats() const;
 
 private:
     // Startup recovery (blocking)
@@ -78,6 +87,7 @@ private:
     
     // Helper to read events from file
     std::vector<nlohmann::json> read_events_from_file(const std::string& file_path, size_t max_count = 0);
+    bool has_failover_files() const;
     
     std::shared_ptr<QueueManager> queue_manager_;
     std::string buffer_dir_;
