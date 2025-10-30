@@ -37,6 +37,7 @@ Here are the main features:
 - Lease renewal for long-running tasks
 - Message tracing for debugging workflows
 - Encryption of messages at DB level
+- Automatic message retention and cleanup - Configurable per-queue retention policies
 - A nice webapp for monitoring and managing the system
 - Maintenace mode that allows to continue pushing messages even when the database is down, and to drain the messages to the database when the maintenance mode is disabled
 
@@ -48,8 +49,9 @@ Main documentation:
 - [Client Guide](client-js/client-v2/README.md)
 - [Server Guide](server/README.md)
 - [API Reference](API.md)
+- [Message Retention & Cleanup](docs/RETENTION.md)
 - [Webapp](webapp/README.md)
-
+- [docs](docs/RETENTION.md)
 ## Concepts
 
 Although the system is designed to be simple to use (not really), there are some concepts that are important to understand to use the system effectively.

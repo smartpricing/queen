@@ -6,6 +6,8 @@
 #include "queen/file_buffer.hpp"
 #include "queen/response_queue.hpp"
 #include "queen/metrics_collector.hpp"
+#include "queen/retention_service.hpp"
+#include "queen/eviction_service.hpp"
 #include "queen/poll_intention_registry.hpp"
 #include "queen/poll_worker.hpp"
 #include "threadpool.hpp"
@@ -31,6 +33,8 @@ static std::shared_ptr<queen::DatabasePool> global_db_pool;
 static std::shared_ptr<queen::ResponseQueue> global_response_queue;
 static std::shared_ptr<queen::ResponseRegistry> global_response_registry;
 static std::shared_ptr<queen::MetricsCollector> global_metrics_collector;
+static std::shared_ptr<queen::RetentionService> global_retention_service;
+static std::shared_ptr<queen::EvictionService> global_eviction_service;
 static std::shared_ptr<queen::PollIntentionRegistry> global_poll_intention_registry;
 static us_timer_t* global_response_timer = nullptr;
 static std::once_flag global_pool_init_flag;
@@ -2248,6 +2252,30 @@ static void worker_thread(const Config& config, int worker_id, int num_workers,
                     60     // Aggregate and save every 60 seconds
                 );
                 global_metrics_collector->start();
+                
+                // Start retention service (cleanup old messages, partitions, metrics)
+                spdlog::info("[Worker 0] Starting background retention service...");
+                global_retention_service = std::make_shared<queen::RetentionService>(
+                    global_db_pool,
+                    global_db_thread_pool,
+                    global_system_thread_pool,
+                    config.jobs.retention_interval,
+                    config.jobs.retention_batch_size,
+                    config.jobs.partition_cleanup_days,
+                    config.jobs.metrics_retention_days
+                );
+                global_retention_service->start();
+                
+                // Start eviction service (evict messages exceeding max_wait_time)
+                spdlog::info("[Worker 0] Starting background eviction service...");
+                global_eviction_service = std::make_shared<queen::EvictionService>(
+                    global_db_pool,
+                    global_db_thread_pool,
+                    global_system_thread_pool,
+                    config.jobs.eviction_interval,
+                    config.jobs.eviction_batch_size
+                );
+                global_eviction_service->start();
             }
         } else {
             spdlog::warn("[Worker {}] Database connection: UNAVAILABLE (Pool: 0/{}) - Will use file buffer for failover", 

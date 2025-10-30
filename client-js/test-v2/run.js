@@ -10,6 +10,7 @@ import * as completeTests from './complete.js'
 import * as transactionTests from './transaction.js'
 import * as subscriptionTests from './subscription.js'
 import * as maintenanceTests from './maintenance.js'
+import * as retentionTests from './retention.js'
 import * as errorHandlingTests from './ai_error_handling.js'
 import * as leaseRenewalTests from './ai_lease_renewal.js'
 import * as resourcesTests from './ai_resources.js'
@@ -17,6 +18,7 @@ import * as bufferingTests from './ai_buffering.js'
 import * as priorityTests from './ai_priority.js'
 import * as ttlRetentionTests from './ai_ttl_retention.js'
 import * as mixedScenariosTests from './ai_mixed_scenarios.js'
+
 
 // Test configuration
 export const TEST_CONFIG = {
@@ -94,6 +96,7 @@ async function main() {
         completeTests,
         transactionTests,
         subscriptionTests,
+        retentionTests,
         maintenanceTests
     ]
     
