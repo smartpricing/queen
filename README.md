@@ -51,7 +51,7 @@ Main documentation:
 
 ## Concepts
 
-Although the system is designed to be simple to use, there are some concepts that are important to understand to use the system effectively.
+Although the system is designed to be simple to use (not really), there are some concepts that are important to understand to use the system effectively.
 
 ### Queues
 
@@ -191,6 +191,15 @@ A modern Vue 3 web interface for managing and monitoring Queen MQ.
 
 ![Queen MQ Dashboard](./assets/dashboard.png)
 
+![Queen MQ Queues](./assets/queues.png) 
+
+![Queen MQ Messages](./assets/messages.png) 
+
+![Queen MQ Traces](./assets/traces.png) 
+
+![Queen MQ Analytics](./assets/analytics.png) 
+
+![Queen MQ System Metrics](./assets/systemmetrics.png) 
 
 **Features:**
 - 📊 Real-time dashboard with system metrics
