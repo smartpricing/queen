@@ -93,6 +93,139 @@ Transactions are a way to ensure that a group of operations are atomic. You can 
 
 The dead letter queue is a way to handle messages that are not processed successfully. When a message is not processed successfully, it is moved to the dead letter queue. Messages goes in the DLQ when they are NACK after the retry limit is reached. You configure the retry limit for each queue at queue config.
 
+## Comparison with RabbitMQ, Kafka, and NATS
+
+For users familiar with existing message queue systems, here's how Queen's semantics and usage patterns compare:
+
+### Conceptual Mapping
+
+| Queen Concept | RabbitMQ Equivalent | Kafka Equivalent | NATS Equivalent |
+|---------------|---------------------|------------------|-----------------|
+| Queue | Queue | Topic | Stream (JetStream) |
+| Partition | N/A (queues are single-consumer by default) | Partition | N/A |
+| Consumer Group | Competing Consumers pattern | Consumer Group | Queue Group |
+| Queue Mode (no group) | Exclusive consumer | N/A (always uses groups) | Single subscriber |
+| Lease | Message TTL / Visibility timeout | N/A (commit-based) | Ack wait / nak delay |
+| Ack/Nack | Ack/Nack | Commit offset | Ack/Nak |
+| Transaction | Publisher confirms + consumer acks | Transactional producer/consumer | N/A |
+| Dead Letter Queue | Dead Letter Exchange | N/A (manual) | N/A (manual) |
+
+### Semantic Differences
+
+**Message Consumption Model:**
+
+**RabbitMQ**: Messages are **deleted** after acknowledgment. Each message is delivered to one consumer (competing consumers). No message replay - once acked, it's gone.
+
+**Kafka**: Messages are **never deleted** by consumption. Consumer groups track their offset in the log. Multiple groups can independently consume the same messages. Replay is core to the model.
+
+**NATS**: Core NATS has **no persistence** (fire-and-forget). JetStream adds persistence with consumer-tracked positions similar to Kafka, but simpler.
+
+**Queen**: **Hybrid approach** - supports BOTH semantics on the same queue:
+- **Queue mode** (default, no consumer group): RabbitMQ-style - messages are locked per partition, one consumer at a time, no replay
+- **Consumer group mode**: Kafka-style - multiple groups can independently consume with replay from timestamp/beginning
+
+```javascript
+// Queue mode - RabbitMQ semantics (exclusive lock, no replay)
+await queen.queue('tasks').partition('user-123').pop()
+
+// Consumer group mode - Kafka semantics (shared log, replay, multiple groups)
+await queen.queue('tasks').group('analytics').from('beginning').consume(handler)
+await queen.queue('tasks').group('billing').from('beginning').consume(handler)
+// Both groups process the same messages independently
+```
+
+**Partition Ordering:**
+
+**RabbitMQ**: **No ordering guarantees** across the queue. Single-consumer queues maintain order, but scaling requires splitting queues manually.
+
+**Kafka**: **Strict ordering per partition**. Partitions are the unit of parallelism. You explicitly assign partition keys.
+
+**Queen**: **Strict ordering per partition**, like Kafka. Partitions are user-defined strings (not numeric):
+```javascript
+// Each customer gets their own ordered stream
+.partition(`customer-${customerId}`)
+
+// Kafka-style numeric partitions also work
+.partition('0'), .partition('1'), etc.
+```
+
+**Consumer Concurrency:**
+
+**RabbitMQ**: Concurrency via **multiple consumers** on the same queue (competing consumers). Each consumer is independent.
+
+**Kafka**: Concurrency via **partition assignment**. One consumer per partition in a group. Rebalancing required to add consumers.
+
+**Queen**: Concurrency via **partitions** (Kafka-style) OR **client-side workers**:
+```javascript
+// Kafka-style: spread across partitions, one consumer per partition
+await queen.queue('tasks').group('workers').concurrency(10).consume(handler)
+
+// RabbitMQ-style: one partition, parallel workers on client
+await queen.queue('tasks').partition('default').concurrency(10).each().consume(handler)
+```
+
+**Message Acknowledgment:**
+
+**RabbitMQ**: **Per-message ack/nack**. Nack returns message to queue immediately or to DLQ.
+
+**Kafka**: **Offset commits**. Committing offset N means "all messages up to N are done." No per-message granularity.
+
+**NATS JetStream**: **Per-message ack/nak**. Nak can delay redelivery.
+
+**Queen**: **Per-message ack/nack with lease**, similar to RabbitMQ but with additional guarantees:
+- Messages are locked with a lease when popped
+- Must ack/nack within lease time or message auto-releases
+- Nack increments retry count, moves to DLQ after limit
+- Lease can be renewed during processing
+
+```javascript
+// Long-running task with lease renewal
+await queen
+  .queue('tasks')
+  .renewLease(true, 2000) // Auto-renew every 2s
+  .consume(async (msg) => {
+    // Process for 30 seconds - lease kept alive automatically
+  })
+```
+
+**Transactions:**
+
+**RabbitMQ**: **Publisher confirms + consumer acks**. Not atomic across operations. No native support for "consume from A, produce to B" atomically.
+
+**Kafka**: **Transactional producer** for atomic multi-partition writes. **Transactional consumer** for exactly-once via offset commits + writes. Complex to implement correctly.
+
+**Queen**: **Atomic ack + push** - PostgreSQL ACID transactions enable true atomicity:
+```javascript
+// Atomic: ack from queue A, push to queue B
+// If either fails, both rollback
+await queen
+  .transaction()
+  .ack(messageFromA)
+  .queue('queueB').push([newMessage])
+  .commit()
+```
+
+This is simpler than Kafka's transactional API and more powerful than RabbitMQ's confirms.
+
+**Message Replay:**
+
+**RabbitMQ**: **No replay**. Messages are removed after ack. Plugins like message history exist but aren't core.
+
+**Kafka**: **Full replay**. Consumers can reset offsets to any point. Core use case for event sourcing.
+
+**NATS JetStream**: **Replay supported**. Can reset consumer position.
+
+**Queen**: **Replay via consumer groups**:
+```javascript
+// Start from beginning (Kafka-style)
+.group('new-processor').from('beginning')
+
+// Start from timestamp
+.group('backfill').from(new Date('2024-01-01'))
+
+// Only new messages (default)
+.group('realtime').from('new')
+```
 
 ## One single example
 
