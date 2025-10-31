@@ -53,7 +53,8 @@ Main documentation:
 - [API Reference](API.md)
 - [Message Retention & Cleanup](docs/RETENTION.md)
 - [Webapp](webapp/README.md)
-- [docs](docs/RETENTION.md)
+- [Expose the Webapp behind a proxy](proxy/README.md)
+
 ## Concepts
 
 Although the system is designed to be simple to use (not really), there are some concepts that are important to understand to use the system effectively.
