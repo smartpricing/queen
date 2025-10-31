@@ -377,5 +377,7 @@ You can use Queen directly from HTTP without the JS client.
 
 
 ### Other TODO Items
-- auth
-- streaming engine
+- Mini streaming engine
+- Proper concurrency on clients 
+- Check client failover
+- Py client
