@@ -52,13 +52,19 @@ std::string Predicate::to_sql() const {
         
         // Convert field path to SQL (e.g., "payload.userId" -> "m.payload->>'userId'")
         std::string sql_field = field;
+        bool needs_numeric_cast = false;
+        
         if (sql_field.find("payload.") == 0) {
             std::string json_field = sql_field.substr(8); // Remove "payload."
             sql_field = "(m.payload->>" + quote_literal(json_field) + ")";
             
-            // Add type cast for numeric comparisons
-            if (operator_str == ">" || operator_str == "<" || 
-                operator_str == ">=" || operator_str == "<=") {
+            // Check if value is numeric to determine if we need casting
+            if (value.is_number_integer() || value.is_number_float()) {
+                needs_numeric_cast = true;
+            }
+            
+            // Add type cast for numeric comparisons or when value is numeric
+            if (needs_numeric_cast) {
                 sql_field += "::numeric";
             }
         } else if (sql_field == "created_at") {
@@ -180,6 +186,15 @@ ExecutionPlan ExecutionPlan::from_json(const nlohmann::json& j) {
     plan.batch_size = j.value("batchSize", 100);
     plan.auto_ack = j.value("autoAck", true);
     
+    // Time filtering
+    if (j.contains("from") && !j["from"].is_null()) {
+        plan.from_time = j["from"].get<std::string>();
+    }
+    
+    if (j.contains("to") && !j["to"].is_null()) {
+        plan.to_time = j["to"].get<std::string>();
+    }
+    
     return plan;
 }
 
@@ -259,6 +274,20 @@ CompiledQuery SQLCompiler::compile(const ExecutionPlan& plan) {
         }
         sql << "AND " << compile_consumer_filter(plan);
         
+        // Add time range filters
+        if (plan.from_time.has_value()) {
+            std::string from = plan.from_time.value();
+            if (from == "latest") {
+                sql << "AND m.created_at >= NOW() ";
+            } else {
+                sql << "AND m.created_at >= '" << escape_identifier(from) << "' ";
+            }
+        }
+        
+        if (plan.to_time.has_value()) {
+            sql << "AND m.created_at <= '" << escape_identifier(plan.to_time.value()) << "' ";
+        }
+        
         auto op_where = compile_where_clauses(plan.operations);
         for (const auto& clause : op_where) {
             sql << "AND " << clause << " ";
@@ -306,6 +335,22 @@ CompiledQuery SQLCompiler::compile(const ExecutionPlan& plan) {
         
         // Add consumer filter (only unconsumed messages)
         sql << "AND " << compile_consumer_filter(plan);
+        
+        // Add time range filters if specified
+        if (plan.from_time.has_value()) {
+            std::string from = plan.from_time.value();
+            if (from == "latest") {
+                // Latest means only messages from now onwards
+                sql << "AND m.created_at >= NOW() ";
+            } else {
+                // ISO timestamp
+                sql << "AND m.created_at >= '" << escape_identifier(from) << "' ";
+            }
+        }
+        
+        if (plan.to_time.has_value()) {
+            sql << "AND m.created_at <= '" << escape_identifier(plan.to_time.value()) << "' ";
+        }
         
         // Add operation-specific filters
         auto op_where = compile_where_clauses(plan.operations);

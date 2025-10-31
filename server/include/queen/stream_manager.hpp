@@ -78,6 +78,10 @@ struct ExecutionPlan {
     int batch_size = 100;
     bool auto_ack = true;
     
+    // Time filtering
+    std::optional<std::string> from_time;  // 'latest' or ISO timestamp
+    std::optional<std::string> to_time;    // ISO timestamp
+    
     static ExecutionPlan from_json(const nlohmann::json& j);
     void validate() const;
 };

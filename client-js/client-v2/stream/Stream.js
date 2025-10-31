@@ -305,13 +305,17 @@ export class Stream {
       outputTable: output.outputTable || null,
       outputMode: output.outputMode || 'append',
       batchSize: this.#options.batchSize || 100,
-      autoAck: this.#options.autoAck !== false
+      autoAck: this.#options.autoAck !== false,
+      from: this.#options.from || null,  // Time filter: 'latest', ISO timestamp, or Date
+      to: this.#options.to || null        // End time filter (optional)
     }
 
     logger.log('Stream.buildExecutionPlan', { 
       queue, 
       consumerGroup: plan.consumerGroup, 
-      operationCount: this.#operations.length 
+      operationCount: this.#operations.length,
+      from: plan.from,
+      to: plan.to
     })
 
     return plan

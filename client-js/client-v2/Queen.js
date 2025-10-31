@@ -152,6 +152,10 @@ export class Queen {
    * Create a stream from a queue
    * @param {string} source - Queue source (queue@group or queue@group/partition)
    * @param {Object} options - Stream options
+   * @param {string|Date} options.from - Start time ('latest', ISO timestamp, or Date object)
+   * @param {string|Date} options.to - End time (ISO timestamp or Date object)
+   * @param {number} options.batchSize - Batch size for results (default: 100)
+   * @param {boolean} options.autoAck - Auto-acknowledge messages (default: true)
    * @returns {Stream}
    */
   stream(source, options = {}) {
