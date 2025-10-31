@@ -2,7 +2,7 @@
 
 <div align="center">
 
-**A modern, high-performance message queue system built on PostgreSQL**
+**A modern, performant message queue system built on PostgreSQL**
 
 [![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE.md)
 [![Node](https://img.shields.io/badge/node-%3E%3D22.0.0-brightgreen.svg)](https://nodejs.org/)
