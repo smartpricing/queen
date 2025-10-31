@@ -50,7 +50,7 @@ Main documentation:
 - [Client Guide JS](client-js/client-v2/README.md)
 - [Client Guide C++](client-cpp/README.md)
 - [Server Guide](server/README.md)
-- [API Reference](API.md)
+- [API Reference](server/API.md)
 - [Message Retention & Cleanup](docs/RETENTION.md)
 - [Webapp](webapp/README.md)
 - [Expose the Webapp behind a proxy](proxy/README.md)
