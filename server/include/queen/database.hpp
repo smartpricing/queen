@@ -141,6 +141,8 @@ public:
         return result_ && PQgetisnull(result_, row, col);
     }
     
+    PGresult* get_result() const { return result_; }
+    
     std::string error_message() const {
         return result_ ? PQresultErrorMessage(result_) : "No result";
     }

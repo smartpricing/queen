@@ -1,6 +1,7 @@
 #include "queen/database.hpp"
 #include "queen/queue_manager.hpp"
 #include "queen/analytics_manager.hpp"
+#include "queen/stream_manager.hpp"
 #include "queen/config.hpp"
 #include "queen/encryption.hpp"
 #include "queen/file_buffer.hpp"
@@ -423,6 +424,7 @@ static bool serve_static_file(uWS::HttpResponse<false>* res,
 static void setup_worker_routes(uWS::App* app, 
                                 std::shared_ptr<QueueManager> queue_manager,
                                 std::shared_ptr<AnalyticsManager> analytics_manager,
+                                std::shared_ptr<StreamManager> stream_manager,
                                 std::shared_ptr<FileBufferManager> file_buffer,
                                 const Config& config,
                                 int worker_id,
@@ -1641,6 +1643,60 @@ static void setup_worker_routes(uWS::App* app,
     });
     
     // ============================================================================
+    // Stream Processing Routes (Phase 1)
+    // ============================================================================
+    
+    // POST /api/v1/stream/query - Execute stream query (one-shot)
+    app->post("/api/v1/stream/query", [stream_manager, worker_id](auto* res, auto* req) {
+        read_json_body(res,
+            [res, stream_manager, worker_id](const nlohmann::json& body) {
+                try {
+                    spdlog::debug("[Worker {}] STREAM QUERY: Received request", worker_id);
+                    
+                    // Execute stream query
+                    auto result = stream_manager->execute_query(body);
+                    
+                    send_json_response(res, result);
+                    
+                } catch (const std::exception& e) {
+                    spdlog::error("[Worker {}] STREAM QUERY: Error: {}", worker_id, e.what());
+                    send_error_response(res, e.what(), 500);
+                }
+            },
+            [res](const std::string& error) {
+                send_error_response(res, error, 400);
+            }
+        );
+    });
+    
+    // POST /api/v1/stream/consume - Execute stream query (streaming results)
+    // Note: For Phase 1, we'll return the same as /query
+    // Full streaming implementation will come in later phases
+    app->post("/api/v1/stream/consume", [stream_manager, worker_id](auto* res, auto* req) {
+        read_json_body(res,
+            [res, stream_manager, worker_id](const nlohmann::json& body) {
+                try {
+                    spdlog::debug("[Worker {}] STREAM CONSUME: Received request", worker_id);
+                    
+                    // Execute stream query
+                    auto result = stream_manager->execute_query(body);
+                    
+                    // For Phase 1, send as regular JSON
+                    // TODO: Implement NDJSON streaming in future phases
+                    send_json_response(res, result);
+                    
+                } catch (const std::exception& e) {
+                    spdlog::error("[Worker {}] STREAM CONSUME: Error: {}", worker_id, e.what());
+                    send_error_response(res, e.what(), 500);
+                }
+            },
+            [res](const std::string& error) {
+                send_error_response(res, error, 400);
+            }
+        );
+    });
+    
+    // ============================================================================
     // Metrics & Resources Routes
     // ============================================================================
     
@@ -2233,6 +2289,9 @@ static void worker_thread(const Config& config, int worker_id, int num_workers,
         // Thread-local analytics manager (uses shared pool)
         auto analytics_manager = std::make_shared<AnalyticsManager>(db_pool);
         
+        // Thread-local stream manager (uses shared pool)
+        auto stream_manager = std::make_shared<StreamManager>(db_pool);
+        
         spdlog::info("[Worker {}] Using GLOBAL shared ThreadPool and DatabasePool", worker_id);
         
         // Test database connection and log pool stats
@@ -2381,7 +2440,7 @@ static void worker_thread(const Config& config, int worker_id, int num_workers,
         
         // Setup routes
         spdlog::info("[Worker {}] Setting up routes...", worker_id);
-        setup_worker_routes(worker_app, queue_manager, analytics_manager, file_buffer, config, worker_id, db_thread_pool);
+        setup_worker_routes(worker_app, queue_manager, analytics_manager, stream_manager, file_buffer, config, worker_id, db_thread_pool);
         spdlog::info("[Worker {}] Routes configured", worker_id);
         
         // Register this worker app with the acceptor (thread-safe)

@@ -8,6 +8,7 @@ import { LoadBalancer } from './http/LoadBalancer.js'
 import { BufferManager } from './buffer/BufferManager.js'
 import { QueueBuilder } from './builders/QueueBuilder.js'
 import { TransactionBuilder } from './builders/TransactionBuilder.js'
+import { Stream } from './stream/Stream.js'
 import { CLIENT_DEFAULTS } from './utils/defaults.js'
 import { validateUrl, validateUrls } from './utils/validation.js'
 import * as logger from './utils/logger.js'
@@ -141,6 +142,21 @@ export class Queen {
 
   transaction() {
     return new TransactionBuilder(this.#httpClient)
+  }
+
+  // ===========================
+  // Stream Processing API
+  // ===========================
+
+  /**
+   * Create a stream from a queue
+   * @param {string} source - Queue source (queue@group or queue@group/partition)
+   * @param {Object} options - Stream options
+   * @returns {Stream}
+   */
+  stream(source, options = {}) {
+    logger.log('Queen.stream', { source, options })
+    return new Stream(this, this.#httpClient, source, [], options)
   }
 
   // ===========================
