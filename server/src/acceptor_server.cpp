@@ -405,10 +405,9 @@ static bool serve_static_file(uWS::HttpResponse<false>* res,
         // Send response
         setup_cors_headers(res);
         res->writeHeader("Content-Type", mime_type);
-        res->writeHeader("Content-Length", std::to_string(file_size));
         res->writeHeader("Cache-Control", cache_control);
         res->writeStatus("200");
-        res->end(content);
+        res->end(content);  // uWebSockets automatically sets Content-Length
         
         return true;
         

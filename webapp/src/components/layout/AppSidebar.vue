@@ -149,6 +149,24 @@
           </div>
         </div>
         
+        <!-- Logout Button (only shown when behind proxy) -->
+        <button
+          v-if="isProxied"
+          @click="logout"
+          :title="isCollapsed ? 'Logout' : ''"
+          class="utility-btn group text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-900/20"
+          :class="isCollapsed ? 'utility-btn-collapsed' : 'utility-btn-expanded'"
+        >
+          <svg class="utility-icon" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="1.5">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M15.75 9V5.25A2.25 2.25 0 0013.5 3h-6a2.25 2.25 0 00-2.25 2.25v13.5A2.25 2.25 0 007.5 21h6a2.25 2.25 0 002.25-2.25V15M12 9l-3 3m0 0l3 3m-3-3h12.75" />
+          </svg>
+          <span v-if="!isCollapsed" class="utility-label">Logout</span>
+          
+          <div v-if="isCollapsed" class="nav-tooltip">
+            Logout {{ proxyUser?.username ? `(${proxyUser.username})` : '' }}
+          </div>
+        </button>
+        
         <!-- Collapse Button -->
         <button 
           @click="$emit('toggle-collapse')"
@@ -200,6 +218,7 @@ import { ref, inject, computed, onMounted } from 'vue';
 import { useRoute } from 'vue-router';
 import { healthApi } from '../../api/health';
 import { systemApi } from '../../api/system';
+import { useProxy } from '../../composables/useProxy';
 
 defineProps({
   isCollapsed: {
@@ -212,6 +231,9 @@ const emit = defineEmits(['close', 'toggle-collapse', 'toggle-sidebar-mobile']);
 
 const route = useRoute();
 const { isDark, toggleTheme } = inject('theme');
+
+// Proxy detection
+const { isProxied, proxyUser, logout } = useProxy();
 
 // Health check
 const health = ref(null);

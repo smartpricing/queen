@@ -70,4 +70,3 @@ EXPOSE 6632
 
 # Run the C++ server
 CMD ["./bin/queen-server"]
-
