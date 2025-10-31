@@ -25,6 +25,10 @@ app.get('/health', (req, res) => {
   res.json({ status: 'ok' });
 });
 
+app.get('/health/ready', (req, res) => {
+  res.json({ status: 'ok' });
+});
+
 // Login page - serve only if not authenticated
 app.get('/login', (req, res) => {
   res.sendFile(path.join(__dirname, '..', 'public', 'login.html'));
@@ -124,6 +128,11 @@ app.use('/',
     ws: true,
     logLevel: 'silent',
     onProxyReq: (proxyReq, req, res) => {
+      // Remove large/unnecessary headers that can cause "Request Header Fields Too Large" errors
+      proxyReq.removeHeader('cookie');
+      proxyReq.removeHeader('referer');
+      
+      // Add user info for Queen server
       proxyReq.setHeader('X-Proxy-User', req.user.username);
       proxyReq.setHeader('X-Proxy-Role', req.user.role);
     },
