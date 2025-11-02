@@ -8,6 +8,8 @@ import { LoadBalancer } from './http/LoadBalancer.js'
 import { BufferManager } from './buffer/BufferManager.js'
 import { QueueBuilder } from './builders/QueueBuilder.js'
 import { TransactionBuilder } from './builders/TransactionBuilder.js'
+import { StreamBuilder } from './stream/StreamBuilder.js'
+import { StreamConsumer } from './stream/StreamConsumer.js'
 import { CLIENT_DEFAULTS } from './utils/defaults.js'
 import { validateUrl, validateUrls } from './utils/validation.js'
 import * as logger from './utils/logger.js'
@@ -353,6 +355,32 @@ export class Queen {
     const stats = this.#bufferManager.getStats()
     logger.log('Queen.getBufferStats', stats)
     return stats
+  }
+
+  // ===========================
+  // Streaming API
+  // ===========================
+
+  /**
+   * Define a stream for windowed processing
+   * @param {string} name - Stream name
+   * @param {string} namespace - Stream namespace
+   * @returns {StreamBuilder}
+   */
+  stream(name, namespace) {
+    logger.log('Queen.stream', { name, namespace })
+    return new StreamBuilder(this.#httpClient, this, name, namespace)
+  }
+
+  /**
+   * Create a consumer for a stream
+   * @param {string} streamName - Stream name
+   * @param {string} consumerGroup - Consumer group
+   * @returns {StreamConsumer}
+   */
+  consumer(streamName, consumerGroup) {
+    logger.log('Queen.consumer', { streamName, consumerGroup })
+    return new StreamConsumer(this.#httpClient, this, streamName, consumerGroup)
   }
 
   // ===========================

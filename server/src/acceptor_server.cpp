@@ -10,6 +10,8 @@
 #include "queen/eviction_service.hpp"
 #include "queen/poll_intention_registry.hpp"
 #include "queen/poll_worker.hpp"
+#include "queen/stream_poll_intention_registry.hpp"
+#include "queen/stream_manager.hpp"
 #include "threadpool.hpp"
 #include <App.h>
 #include <json.hpp>
@@ -36,8 +38,11 @@ static std::shared_ptr<queen::MetricsCollector> global_metrics_collector;
 static std::shared_ptr<queen::RetentionService> global_retention_service;
 static std::shared_ptr<queen::EvictionService> global_eviction_service;
 static std::shared_ptr<queen::PollIntentionRegistry> global_poll_intention_registry;
+static std::shared_ptr<queen::StreamPollIntentionRegistry> global_stream_poll_registry;
+static std::shared_ptr<queen::StreamManager> global_stream_manager;
 static us_timer_t* global_response_timer = nullptr;
 static std::once_flag global_pool_init_flag;
+static std::once_flag global_stream_registry_init_flag;
 static int num_workers_global = 0;  // Track number of workers for queue array sizing
 
 // System information for metrics
@@ -1896,6 +1901,35 @@ static void setup_worker_routes(uWS::App* app,
     });
     
     // ============================================================================
+    // Streaming Routes
+    // ============================================================================
+    
+    // POST /api/v1/stream/define - Define a stream
+    app->post("/api/v1/stream/define", [worker_id](auto* res, auto* req) {
+        global_stream_manager->handle_define(res, req, worker_id);
+    });
+    
+    // POST /api/v1/stream/poll - Poll for a window
+    app->post("/api/v1/stream/poll", [worker_id](auto* res, auto* req) {
+        global_stream_manager->handle_poll(res, req, worker_id);
+    });
+    
+    // POST /api/v1/stream/ack - Acknowledge a window
+    app->post("/api/v1/stream/ack", [worker_id](auto* res, auto* req) {
+        global_stream_manager->handle_ack(res, req, worker_id);
+    });
+    
+    // POST /api/v1/stream/renew-lease - Renew a lease
+    app->post("/api/v1/stream/renew-lease", [worker_id](auto* res, auto* req) {
+        global_stream_manager->handle_renew(res, req, worker_id);
+    });
+    
+    // POST /api/v1/stream/seek - Seek to a timestamp
+    app->post("/api/v1/stream/seek", [worker_id](auto* res, auto* req) {
+        global_stream_manager->handle_seek(res, req, worker_id);
+    });
+    
+    // ============================================================================
     // Status/Dashboard Routes
     // ============================================================================
     
@@ -2212,6 +2246,18 @@ static void worker_thread(const Config& config, int worker_id, int num_workers,
             
             // Create global poll intention registry (shared by all workers)
             global_poll_intention_registry = std::make_shared<queen::PollIntentionRegistry>();
+            
+            // Create global stream poll registry (shared by all workers)
+            global_stream_poll_registry = std::make_shared<queen::StreamPollIntentionRegistry>();
+            
+            // Create global stream manager (shared by all workers)
+            global_stream_manager = std::make_shared<queen::StreamManager>(
+                global_db_pool,
+                global_db_thread_pool,
+                worker_response_queues,
+                global_stream_poll_registry,
+                global_response_registry
+            );
             
             // Get system info for metrics
             global_system_info = SystemInfo::get_current();

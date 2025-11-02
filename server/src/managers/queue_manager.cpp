@@ -2866,6 +2866,94 @@ bool QueueManager::initialize_schema() {
                 value JSONB NOT NULL,
                 updated_at TIMESTAMPTZ DEFAULT NOW()
             );
+            
+            -- ============================================================================
+            -- Queen Streaming Schema V3
+            -- ============================================================================
+            
+            -- 1. Stream Definitions
+            CREATE TABLE IF NOT EXISTS queen.streams (
+                id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+                name VARCHAR(255) UNIQUE NOT NULL,
+                namespace VARCHAR(255) NOT NULL,
+                
+                -- TRUE = group by partition_id
+                -- FALSE = process all partitions as one global stream
+                partitioned BOOLEAN NOT NULL DEFAULT FALSE,
+
+                -- Static Window Configuration
+                window_type VARCHAR(50) NOT NULL, -- 'tumbling'
+                
+                -- For TIME windows
+                window_duration_ms BIGINT, 
+                
+                -- For COUNT windows
+                window_size_count INT,
+                
+                -- For SLIDING windows
+                window_slide_ms BIGINT,
+                window_slide_count INT,
+
+                -- Common settings
+                window_grace_period_ms BIGINT NOT NULL DEFAULT 30000,
+                window_lease_timeout_ms BIGINT NOT NULL DEFAULT 30000,
+
+                created_at TIMESTAMPTZ DEFAULT NOW(),
+                updated_at TIMESTAMPTZ DEFAULT NOW()
+            );
+
+            -- 2. Junction table for stream sources (many-to-many)
+            CREATE TABLE IF NOT EXISTS queen.stream_sources (
+                stream_id UUID NOT NULL REFERENCES queen.streams(id) ON DELETE CASCADE,
+                queue_id UUID NOT NULL REFERENCES queen.queues(id) ON DELETE CASCADE,
+                PRIMARY KEY (stream_id, queue_id)
+            );
+
+            -- 3. Consumer Offsets (The "Bookmark" table)
+            CREATE TABLE IF NOT EXISTS queen.stream_consumer_offsets (
+                stream_id UUID REFERENCES queen.streams(id) ON DELETE CASCADE,
+                consumer_group VARCHAR(255) NOT NULL,
+                
+                -- KEY FIX: Stores partition_id::TEXT or '__GLOBAL__'
+                stream_key TEXT NOT NULL,
+
+                -- 'bookmark' for TIME-based windows
+                last_acked_window_end TIMESTAMPTZ,
+                -- 'bookmark' for COUNT-based windows
+                last_acked_message_id UUID,
+
+                total_windows_consumed BIGINT DEFAULT 0,
+                last_consumed_at TIMESTAMPTZ,
+                
+                PRIMARY KEY (stream_id, consumer_group, stream_key)
+            );
+
+            -- 4. Active Leases (The "In-Flight" table)
+            CREATE TABLE IF NOT EXISTS queen.stream_leases (
+                id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+                stream_id UUID REFERENCES queen.streams(id) ON DELETE CASCADE,
+                consumer_group VARCHAR(255) NOT NULL,
+
+                -- KEY FIX: Stores partition_id::TEXT or '__GLOBAL__'
+                stream_key TEXT NOT NULL, 
+                
+                window_start TIMESTAMPTZ NOT NULL,
+                window_end TIMESTAMPTZ NOT NULL,
+                
+                lease_id UUID NOT NULL UNIQUE,
+                lease_consumer_id VARCHAR(255),
+                lease_expires_at TIMESTAMPTZ NOT NULL,
+                
+                UNIQUE(stream_id, consumer_group, stream_key, window_start, window_end)
+            );
+
+            -- 5. Watermark Table (CRITICAL)
+            CREATE TABLE IF NOT EXISTS queen.queue_watermarks (
+                queue_id UUID PRIMARY KEY REFERENCES queen.queues(id) ON DELETE CASCADE,
+                queue_name VARCHAR(255) NOT NULL,
+                max_created_at TIMESTAMPTZ NOT NULL DEFAULT '-infinity'::timestamptz,
+                updated_at TIMESTAMPTZ DEFAULT NOW()
+            );
         )";
         
         auto result2 = QueryResult(conn->exec(create_tables_sql));
@@ -2914,6 +3002,12 @@ bool QueueManager::initialize_schema() {
             CREATE INDEX IF NOT EXISTS idx_message_trace_names_name ON queen.message_trace_names(trace_name);
             CREATE INDEX IF NOT EXISTS idx_message_trace_names_trace_id ON queen.message_trace_names(trace_id);
             CREATE INDEX IF NOT EXISTS idx_system_state_key ON queen.system_state(key);
+            
+            -- Streaming indexes
+            CREATE INDEX IF NOT EXISTS idx_queue_watermarks_name ON queen.queue_watermarks(queue_name);
+            CREATE INDEX IF NOT EXISTS idx_stream_leases_lookup ON queen.stream_leases(stream_id, consumer_group, stream_key, window_start);
+            CREATE INDEX IF NOT EXISTS idx_stream_leases_expires ON queen.stream_leases(lease_expires_at);
+            CREATE INDEX IF NOT EXISTS idx_stream_consumer_offsets_lookup ON queen.stream_consumer_offsets(stream_id, consumer_group, stream_key);
         )";
         
         auto result3 = QueryResult(conn->exec(create_indexes_sql));
@@ -2957,6 +3051,32 @@ bool QueueManager::initialize_schema() {
             AFTER INSERT ON queen.messages
             FOR EACH ROW
             EXECUTE FUNCTION update_pending_on_push();
+
+            -- Streaming watermark trigger function
+            CREATE OR REPLACE FUNCTION update_queue_watermark()
+            RETURNS TRIGGER AS $$
+            BEGIN
+                INSERT INTO queen.queue_watermarks (queue_id, queue_name, max_created_at)
+                SELECT 
+                    q.id,
+                    q.name,
+                    NEW.created_at
+                FROM queen.partitions p
+                JOIN queen.queues q ON p.queue_id = q.id
+                WHERE p.id = NEW.partition_id
+                ON CONFLICT (queue_id)
+                DO UPDATE SET
+                    max_created_at = GREATEST(queue_watermarks.max_created_at, EXCLUDED.max_created_at),
+                    updated_at = NOW();
+                RETURN NEW;
+            END;
+            $$ LANGUAGE plpgsql;
+
+            DROP TRIGGER IF EXISTS trigger_update_watermark ON queen.messages;
+            CREATE TRIGGER trigger_update_watermark
+            AFTER INSERT ON queen.messages
+            FOR EACH ROW
+            EXECUTE FUNCTION update_queue_watermark();
         )";
         
         auto result4 = QueryResult(conn->exec(create_triggers_sql));
