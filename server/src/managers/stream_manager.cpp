@@ -358,23 +358,24 @@ CompiledQuery SQLCompiler::compile(const ExecutionPlan& plan) {
             sql << "AND " << clause << " ";
         }
         
-        // Build GROUP BY clause
-        if (has_group_by) {
-            std::string group_by = compile_group_by(plan.operations);
-            if (!group_by.empty()) {
-                sql << "GROUP BY " << group_by << " ";
-            }
+    // Build GROUP BY clause
+    if (has_group_by) {
+        std::string group_by = compile_group_by(plan.operations);
+        if (!group_by.empty()) {
+            sql << "GROUP BY " << group_by << " ";
         }
-        
-        // Build ORDER BY clause (for consistent results)
-        if (!has_aggregations) {
-            if (!distinct_field.empty()) {
-                // DISTINCT ON requires ORDER BY the same field
-                sql << "ORDER BY " << jsonb_path_to_sql(distinct_field) << ", m.created_at, m.id ";
-            } else {
-                sql << compile_order_by();
-            }
+    }
+    
+    // Build ORDER BY clause (for consistent results)
+    // Don't add ORDER BY when we have GROUP BY or aggregations
+    if (!has_aggregations && !has_group_by) {
+        if (!distinct_field.empty()) {
+            // DISTINCT ON requires ORDER BY the same field
+            sql << "ORDER BY " << jsonb_path_to_sql(distinct_field) << ", m.created_at, m.id ";
+        } else {
+            sql << compile_order_by();
         }
+    }
         
         // Build LIMIT clause
         std::string limit = compile_limit(plan.operations);

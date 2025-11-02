@@ -198,6 +198,7 @@ export class Stream {
 
   /**
    * Async iterator for streaming results
+   * Continuously polls for new messages
    * @yields {Object} Stream messages
    */
   async *[Symbol.asyncIterator]() {
@@ -205,52 +206,51 @@ export class Stream {
     
     const plan = this.#buildExecutionPlan()
     
-    // Use streaming endpoint
-    const response = await this.#httpClient.fetch('/api/v1/stream/consume', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(plan)
-    })
-
-    if (!response.ok) {
-      const error = await response.text()
-      throw new Error(`Stream consume failed: ${error}`)
-    }
-
-    // Read response as NDJSON
-    const reader = response.body.getReader()
-    const decoder = new TextDecoder()
-    let buffer = ''
-
-    try {
-      while (true) {
-        const { done, value } = await reader.read()
+    console.log('[Stream] Starting continuous iteration...')
+    console.log('[Stream] Source:', this.#source)
+    console.log('[Stream] Options:', { from: plan.from, to: plan.to })
+    
+    // Phase 1: Poll-based streaming (true streaming in future phases)
+    // Continuously execute query and yield new results
+    let pollCount = 0
+    
+    while (true) {
+      try {
+        pollCount++
+        console.log(`[Stream] Poll #${pollCount}...`)
         
-        if (done) break
-
-        buffer += decoder.decode(value, { stream: true })
-        const lines = buffer.split('\n')
-        buffer = lines.pop() // Keep incomplete line in buffer
-
-        for (const line of lines) {
-          if (!line.trim()) continue
-          
-          try {
-            const message = JSON.parse(line)
+        const result = await this.#httpClient.post('/api/v1/stream/query', plan)
+        
+        console.log(`[Stream] Poll #${pollCount} result:`, {
+          messageCount: result?.messages?.length || 0,
+          hasMore: result?.hasMore,
+          hasError: !!result?.error
+        })
+        
+        if (result && result.messages && result.messages.length > 0) {
+          // Yield each message
+          for (const message of result.messages) {
+            console.log('[Stream] Yielding message:', message)
             yield message
-          } catch (err) {
-            logger.error('Stream.asyncIterator', { error: 'Failed to parse line', line })
           }
+          
+          logger.log('Stream.asyncIterator', { yielded: result.messages.length })
+        } else {
+          console.log('[Stream] No messages, waiting 1 second...')
         }
+        
+        // If no more messages, wait a bit before polling again
+        if (!result || !result.hasMore || result.messages.length === 0) {
+          await new Promise(resolve => setTimeout(resolve, 1000))
+        }
+        
+      } catch (error) {
+        console.error('[Stream] Error:', error.message)
+        logger.error('Stream.asyncIterator', { error: error.message })
+        
+        // Wait before retrying on error
+        await new Promise(resolve => setTimeout(resolve, 5000))
       }
-
-      // Process remaining buffer
-      if (buffer.trim()) {
-        const message = JSON.parse(buffer)
-        yield message
-      }
-    } finally {
-      reader.releaseLock()
     }
   }
 

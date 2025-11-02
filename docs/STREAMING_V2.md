@@ -2043,68 +2043,771 @@ export class Queen {
 
 ---
 
-## Implementation Phases
+## Implementation Phases (REVISED ARCHITECTURE)
 
-### Phase 1: Foundation (Core Infrastructure)
+### Phase 1: Foundation ✅ COMPLETE
 
 **Goal**: Basic stream processing with filter, map, groupBy, aggregate
 
-**Server:**
-1. Create database schema (stream_executions, stream_state)
-2. Implement ExecutionPlan data structures
-3. Implement basic SQLCompiler (filter, map, groupBy, aggregate)
-4. Implement StreamExecutor (simple query execution)
-5. Add HTTP endpoints (/api/v1/stream/query, /api/v1/stream/consume)
+**Implemented**:
+- ✅ ExecutionPlan parsing and validation
+- ✅ SQLCompiler (filter, map, groupBy, aggregate, distinct, limit)
+- ✅ StreamExecutor (query execution)
+- ✅ HTTP endpoints (/api/v1/stream/query)
+- ✅ Client Stream API with fluent interface
+- ✅ Automatic type casting for JSONB fields
+- ✅ Time filtering (from/to options)
+- ✅ Subquery support for map + groupBy chains
+- ✅ Async iterator for continuous polling
+- ✅ 9 comprehensive tests
 
-**Client:**
-1. Create Stream class with filter(), map(), groupBy()
-2. Create GroupedStream with aggregate functions
-3. Implement OperationBuilder
-4. Implement PredicateBuilder
-5. Implement Serializer (basic function parsing)
-6. Add integration to Queen client
+**What works**:
+```javascript
+await queen.stream('events@analytics', { from: 'latest' })
+  .filter({ 'payload.amount': { $gt: 1000 } })
+  .map({ user: 'payload.userId', amount: 'payload.amount' })
+  .groupBy('user')
+  .aggregate({ count: { $count: '*' }, total: { $sum: 'amount' } })
+  .execute()
 
-**Tests:**
-1. Filter by single condition
-2. Filter by multiple conditions
-3. Map to new fields
-4. GroupBy + count
-5. GroupBy + sum/avg/min/max
-6. Chain operations: filter → map → groupBy → aggregate
+// Continuous polling
+for await (const msg of queen.stream('events@live', { from: 'latest' })) {
+  await processMessage(msg)  // Custom client-side logic
+}
+```
 
-**Deliverable**: Working stream API for basic queries
+**Status**: ✅ **Working in production**
 
 ---
 
-### Phase 2: Windows
+### Phase 2: Client-Side Windowing (NEXT)
 
-**Goal**: Time and count-based windowing
+**Goal**: Time/count windows tracked server-side, consumed client-side with custom processing
 
-**Server:**
-1. Create stream_windows table
-2. Implement WindowManager
-3. Implement tumbling time windows
-4. Implement tumbling count windows
-5. Implement sliding time windows
-6. Implement session windows
-7. Update SQLCompiler to handle windows
-8. Update StreamExecutor for windowed queries
+**Key Architecture Decision**: 
+- ✅ **Reuse PollIntentionRegistry pattern** (proven, simple, non-blocking)
+- ✅ WindowIntentionRegistry + Window Workers (like poll workers)
+- ✅ ThreadPool for DB aggregations (like POP operations)
+- ✅ ResponseQueue for async delivery (like long polling)
+- ✅ Client polls for windows with custom processing
 
-**Client:**
-1. Create WindowedStream class
-2. Add window() method to GroupedStream
-3. Support all window types in API
-4. Add window-specific operations
+**Architecture** (Mirrors Long-Polling):
+```
+Client Window Request
+    ↓
+Register in WindowIntentionRegistry
+    ↓
+Window Workers (2 threads) check registry every 100ms
+    ↓
+Check if window ready (time passed? count reached?)
+    ↓
+If ready → Submit aggregation job to ThreadPool
+    ↓
+ThreadPool executes window aggregation query
+    ↓
+Push result to ResponseQueue[worker_id]
+    ↓
+Response Timer drains queue → Send to client
+    ↓
+Mark window as consumed
+```
+
+**Flow**:
+```
+1. Client defines window: .window({ type: 'tumbling', duration: 60 })
+2. Client polls: POST /api/v1/stream/window/next
+3. Request registered in WindowIntentionRegistry (non-blocking)
+4. Window Workers check every 100ms: "Is window ready for this request?"
+5. When ready: Submit aggregation to ThreadPool
+6. ThreadPool: Query messages + aggregate → result
+7. Push to ResponseQueue[worker_id]
+8. Response Timer: Drain queue → send to client
+9. Update window state: Mark consumed
+10. Client receives window, processes with custom code
+11. Repeat: Client polls for next window
+```
+
+**Database Schema**:
+```sql
+-- Window metadata - tracks which windows have been consumed
+CREATE TABLE IF NOT EXISTS queen.stream_windows (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    consumer_group VARCHAR NOT NULL,
+    queue_name VARCHAR NOT NULL,
+    partition_name VARCHAR,
+    
+    window_id VARCHAR UNIQUE NOT NULL,  -- "events@group:tumbling:2025-10-31T15:00-15:01"
+    window_type VARCHAR NOT NULL,       -- tumblingTime, tumblingCount, session, sliding
+    
+    -- Time bounds
+    window_start TIMESTAMPTZ,
+    window_end TIMESTAMPTZ,
+    grace_period_seconds INT DEFAULT 0,
+    
+    -- Count bounds
+    window_count_start BIGINT,
+    window_count_end BIGINT,
+    window_size INT,                    -- For count windows
+    
+    -- Session-specific
+    session_gap_seconds INT,
+    session_max_duration_seconds INT,
+    last_event_at TIMESTAMPTZ,
+    
+    -- State
+    status VARCHAR DEFAULT 'open',      -- open, ready, consumed
+    message_count INT DEFAULT 0,
+    result_data JSONB,                  -- Pre-computed aggregation result
+    
+    -- Timestamps
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    closed_at TIMESTAMPTZ,              -- When became ready
+    consumed_at TIMESTAMPTZ,            -- When client consumed
+    
+    UNIQUE(consumer_group, queue_name, COALESCE(partition_name, ''), window_id)
+);
+
+CREATE INDEX idx_stream_windows_ready ON queen.stream_windows(consumer_group, queue_name, status)
+  WHERE status = 'ready' AND consumed_at IS NULL;
+
+CREATE INDEX idx_stream_windows_consumer ON queen.stream_windows(consumer_group, queue_name, consumed_at);
+
+-- Window state tracking per consumer group
+-- Tracks last consumed window to determine what to return next
+CREATE TABLE IF NOT EXISTS queen.stream_window_state (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    consumer_group VARCHAR NOT NULL,
+    queue_name VARCHAR NOT NULL,
+    partition_name VARCHAR,
+    
+    window_type VARCHAR NOT NULL,
+    window_config JSONB NOT NULL,       -- Full window configuration
+    
+    last_window_id_consumed VARCHAR,    -- Last window returned to client
+    last_window_end TIMESTAMPTZ,        -- For time-based windows
+    last_window_count BIGINT,           -- For count-based windows
+    
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    updated_at TIMESTAMPTZ DEFAULT NOW(),
+    
+    UNIQUE(consumer_group, queue_name, COALESCE(partition_name, ''))
+);
+```
+
+**Server Implementation**:
+
+**Files to Create**:
+```
+server/include/queen/
+├── window_intention_registry.hpp    (NEW)
+└── window_worker.hpp                (NEW)
+
+server/src/services/
+├── window_intention_registry.cpp    (NEW)
+└── window_worker.cpp                (NEW)
+```
+
+**1. Window Intention Registry** (`window_intention_registry.hpp`):
+
+```cpp
+#pragma once
+
+#include <string>
+#include <vector>
+#include <mutex>
+#include <chrono>
+#include <json.hpp>
+
+namespace queen {
+
+struct WindowIntention {
+    std::string request_id;
+    int worker_id;
+    
+    // Stream config
+    std::string queue_name;
+    std::string consumer_group;
+    std::optional<std::string> partition_name;
+    
+    // Window config
+    std::string window_type;      // tumblingTime, tumblingCount, session, sliding
+    int duration_seconds = 0;     // For time windows
+    int count = 0;                // For count windows
+    int grace_seconds = 0;
+    int gap_seconds = 0;          // For session windows
+    
+    // Aggregation config (from execution plan)
+    std::vector<std::string> group_by_keys;
+    nlohmann::json aggregations;
+    std::vector<std::string> filters;  // Pre-compiled WHERE clauses
+    
+    // Timing
+    std::chrono::steady_clock::time_point registered_at;
+    std::chrono::steady_clock::time_point timeout_at;
+    
+    // State tracking
+    std::string last_window_id_consumed;
+};
+
+class WindowIntentionRegistry {
+public:
+    void register_intention(const WindowIntention& intention);
+    std::vector<WindowIntention> get_active_intentions();
+    void remove_intention(const std::string& request_id);
+    void update_last_consumed(const std::string& request_id, const std::string& window_id);
+    
+private:
+    std::vector<WindowIntention> intentions_;
+    std::mutex mutex_;
+    void cleanup_expired();
+};
+
+} // namespace queen
+```
+
+**2. Window Worker** (`window_worker.hpp`):
+
+```cpp
+#pragma once
+
+#include "queen/database.hpp"
+#include "queen/window_intention_registry.hpp"
+#include "queen/response_queue.hpp"
+#include <threadpool.hpp>
+#include <memory>
+#include <atomic>
+#include <thread>
+
+namespace queen {
+
+struct WindowResult {
+    std::string window_id;
+    std::string window_start;
+    std::string window_end;
+    nlohmann::json data;  // Aggregated results
+    int message_count;
+};
+
+class WindowWorker {
+public:
+    WindowWorker(
+        int worker_id,
+        std::shared_ptr<astp::ThreadPool> db_thread_pool,
+        std::shared_ptr<WindowIntentionRegistry> registry,
+        std::shared_ptr<DatabasePool> db_pool,
+        std::vector<std::shared_ptr<ResponseQueue>>& worker_response_queues,
+        int check_interval_ms = 100
+    );
+    
+    void start();
+    void stop();
+    
+private:
+    void run();
+    void check_intentions();
+    
+    // Window type handlers (run in ThreadPool)
+    void check_tumbling_time_window(const WindowIntention& intention);
+    void check_tumbling_count_window(const WindowIntention& intention);
+    void check_session_window(const WindowIntention& intention);
+    
+    // Helpers
+    std::optional<WindowResult> get_or_create_window(const WindowIntention& intention);
+    std::string calculate_window_id(const WindowIntention& intention, 
+                                    const std::string& start, const std::string& end);
+    
+    int worker_id_;
+    std::shared_ptr<astp::ThreadPool> db_thread_pool_;
+    std::shared_ptr<WindowIntentionRegistry> registry_;
+    std::shared_ptr<DatabasePool> db_pool_;
+    std::vector<std::shared_ptr<ResponseQueue>>& worker_response_queues_;
+    int check_interval_ms_;
+    
+    std::atomic<bool> shutdown_{false};
+    std::thread worker_thread_;
+};
+
+// Initialize window workers (called at server startup)
+void init_window_workers(
+    std::shared_ptr<astp::ThreadPool> db_thread_pool,
+    std::shared_ptr<WindowIntentionRegistry> registry,
+    std::shared_ptr<DatabasePool> db_pool,
+    std::vector<std::shared_ptr<ResponseQueue>>& worker_response_queues,
+    int num_workers = 2,
+    int check_interval_ms = 100
+);
+
+} // namespace queen
+```
+
+**Implementation** (`window_worker.cpp`):
+
+```cpp
+void WindowWorker::run() {
+    spdlog::info("[Window Worker {}] Started, checking every {}ms", worker_id_, check_interval_ms_);
+    
+    while (!shutdown_) {
+        try {
+            check_intentions();
+        } catch (const std::exception& e) {
+            spdlog::error("[Window Worker {}] Error: {}", worker_id_, e.what());
+        }
+        
+        std::this_thread::sleep_for(std::chrono::milliseconds(check_interval_ms_));
+    }
+    
+    spdlog::info("[Window Worker {}] Stopped", worker_id_);
+}
+
+void WindowWorker::check_intentions() {
+    auto intentions = registry_->get_active_intentions();
+    
+    if (intentions.empty()) return;
+    
+    spdlog::debug("[Window Worker {}] Checking {} active window intentions", 
+                  worker_id_, intentions.size());
+    
+    for (const auto& intention : intentions) {
+        // Submit window check to ThreadPool (non-blocking!)
+        db_thread_pool_->push([this, intention]() {
+            try {
+                // Route to appropriate window type handler
+                if (intention.window_type == "tumblingTime") {
+                    check_tumbling_time_window(intention);
+                } else if (intention.window_type == "tumblingCount") {
+                    check_tumbling_count_window(intention);
+                } else if (intention.window_type == "session") {
+                    check_session_window(intention);
+                }
+                
+            } catch (const std::exception& e) {
+                spdlog::error("[Window Worker {}] Error processing intention: {}", 
+                             worker_id_, e.what());
+                
+                // Send error response
+                nlohmann::json error_response = {{"error", e.what()}};
+                worker_response_queues_[intention.worker_id]->push(
+                    intention.request_id, error_response, true, 500
+                );
+                registry_->remove_intention(intention.request_id);
+            }
+        });
+    }
+}
+
+void WindowWorker::check_tumbling_time_window(const WindowIntention& intention) {
+    ScopedConnection conn(db_pool_.get());
+    
+    // 1. Calculate current window bounds
+    std::string sql = R"(
+        WITH window_bounds AS (
+            SELECT 
+                DATE_TRUNC('second', NOW() - INTERVAL '1 second' * $1 - INTERVAL '1 second' * $2) as window_start,
+                DATE_TRUNC('second', NOW() - INTERVAL '1 second' * $2) as window_end
+        )
+        SELECT 
+            window_start::text,
+            window_end::text,
+            (window_end + INTERVAL '1 second' * $2 < NOW()) as is_ready
+        FROM window_bounds
+    )";
+    
+    auto bounds_result = QueryResult(conn->exec_params(sql, {
+        std::to_string(intention.duration_seconds),
+        std::to_string(intention.grace_seconds)
+    }));
+    
+    if (bounds_result.num_rows() == 0) return;
+    
+    bool is_ready = bounds_result.get_value(0, "is_ready") == "t";
+    if (!is_ready) {
+        // Window not ready yet, check again later
+        return;
+    }
+    
+    std::string window_start = bounds_result.get_value(0, "window_start");
+    std::string window_end = bounds_result.get_value(0, "window_end");
+    std::string window_id = calculate_window_id(intention, window_start, window_end);
+    
+    // 2. Check if this window has already been consumed
+    std::string check_consumed_sql = R"(
+        SELECT consumed_at FROM queen.stream_windows
+        WHERE window_id = $1 AND consumer_group = $2
+    )";
+    
+    auto consumed_check = QueryResult(conn->exec_params(check_consumed_sql, {
+        window_id, intention.consumer_group
+    }));
+    
+    if (consumed_check.num_rows() > 0 && !consumed_check.get_value(0, 0).empty()) {
+        // Already consumed, remove intention
+        registry_->remove_intention(intention.request_id);
+        
+        // Send "no window available" response
+        nlohmann::json response = {
+            {"window", nullptr},
+            {"nextCheckIn", 1000}
+        };
+        worker_response_queues_[intention.worker_id]->push(
+            intention.request_id, response, false, 200
+        );
+        return;
+    }
+    
+    // 3. Build aggregation query for this window
+    std::stringstream agg_sql;
+    agg_sql << "SELECT ";
+    
+    // Add group by fields
+    for (size_t i = 0; i < intention.group_by_keys.size(); i++) {
+        if (i > 0) agg_sql << ", ";
+        agg_sql << "(m.payload->>'" << intention.group_by_keys[i] << "') AS " 
+                << intention.group_by_keys[i];
+    }
+    
+    // Add aggregations
+    if (!intention.aggregations.empty()) {
+        for (auto it = intention.aggregations.begin(); it != intention.aggregations.end(); ++it) {
+            agg_sql << ", ";
+            std::string name = it.key();
+            auto& spec = it.value();
+            
+            if (spec.contains("$count")) {
+                agg_sql << "COUNT(*) AS " << name;
+            } else if (spec.contains("$sum")) {
+                std::string field = spec["$sum"].get<std::string>();
+                agg_sql << "SUM((m.payload->>'" << field << "')::numeric) AS " << name;
+            }
+            // ... other aggregations
+        }
+    }
+    
+    agg_sql << " FROM queen.messages m ";
+    agg_sql << "JOIN queen.partitions p ON p.id = m.partition_id ";
+    agg_sql << "JOIN queen.queues q ON q.id = p.queue_id ";
+    agg_sql << "WHERE q.name = '" << intention.queue_name << "' ";
+    agg_sql << "AND m.created_at >= '" << window_start << "' ";
+    agg_sql << "AND m.created_at < '" << window_end << "' ";
+    
+    // Add filters from intention
+    for (const auto& filter : intention.filters) {
+        agg_sql << "AND " << filter << " ";
+    }
+    
+    // GROUP BY
+    if (!intention.group_by_keys.empty()) {
+        agg_sql << "GROUP BY ";
+        for (size_t i = 0; i < intention.group_by_keys.size(); i++) {
+            if (i > 0) agg_sql << ", ";
+            agg_sql << "(m.payload->>'" << intention.group_by_keys[i] << "')";
+        }
+    }
+    
+    // 4. Execute aggregation
+    auto result = QueryResult(conn->exec(agg_sql.str()));
+    
+    if (result.num_rows() == 0) {
+        // No messages in window, return null
+        nlohmann::json response = {
+            {"window", nullptr},
+            {"nextCheckIn", intention.duration_seconds * 1000}
+        };
+        worker_response_queues_[intention.worker_id]->push(
+            intention.request_id, response, false, 200
+        );
+        registry_->remove_intention(intention.request_id);
+        return;
+    }
+    
+    // 5. Format result
+    nlohmann::json window_data = nlohmann::json::array();
+    for (int i = 0; i < result.num_rows(); i++) {
+        nlohmann::json row;
+        for (int j = 0; j < result.num_fields(); j++) {
+            const char* col_name = PQfname(result.get_result(), j);
+            std::string value = result.get_value(i, j);
+            
+            // Parse value
+            try {
+                row[col_name] = std::stod(value);
+            } catch (...) {
+                row[col_name] = value;
+            }
+        }
+        window_data.push_back(row);
+    }
+    
+    // 6. Store window in database
+    std::string insert_window_sql = R"(
+        INSERT INTO queen.stream_windows 
+        (window_id, consumer_group, queue_name, window_type,
+         window_start, window_end, status, result_data, consumed_at)
+        VALUES ($1, $2, $3, $4, $5::timestamptz, $6::timestamptz, 'ready', $7, NOW())
+        ON CONFLICT (consumer_group, queue_name, window_id) DO NOTHING
+    )";
+    
+    conn->exec_params(insert_window_sql, {
+        window_id,
+        intention.consumer_group,
+        intention.queue_name,
+        intention.window_type,
+        window_start,
+        window_end,
+        window_data.dump()
+    });
+    
+    // 7. Send response to client
+    nlohmann::json response = {
+        {"window", window_data},
+        {"_windowId", window_id},
+        {"_windowStart", window_start},
+        {"_windowEnd", window_end},
+        {"_messageCount", result.num_rows()}
+    };
+    
+    worker_response_queues_[intention.worker_id]->push(
+        intention.request_id, response, false, 200
+    );
+    
+    // Remove intention
+    registry_->remove_intention(intention.request_id);
+    
+    spdlog::info("[Window Worker {}] Window ready: {} ({} results)", 
+                 worker_id_, window_id, result.num_rows());
+}
+```
+
+**3. HTTP Endpoint** (`acceptor_server.cpp`):
+
+```cpp
+// POST /api/v1/stream/window/next
+app->post("/api/v1/stream/window/next", [window_registry, worker_id](auto* res, auto* req) {
+    read_json_body(res,
+        [res, window_registry, worker_id](const nlohmann::json& body) {
+            try {
+                // Parse window intention
+                WindowIntention intention;
+                intention.request_id = global_response_registry->register_response(res, worker_id);
+                intention.worker_id = worker_id;
+                intention.queue_name = body["source"];
+                intention.consumer_group = body["consumerGroup"];
+                
+                auto window_config = body["window"];
+                intention.window_type = window_config["type"];
+                intention.duration_seconds = window_config.value("duration", 0);
+                intention.count = window_config.value("count", 0);
+                intention.grace_seconds = window_config.value("grace", 0);
+                intention.gap_seconds = window_config.value("gap", 0);
+                
+                // Copy aggregation config
+                if (body.contains("operations")) {
+                    // Parse groupBy and aggregate from operations
+                    for (const auto& op : body["operations"]) {
+                        if (op["type"] == "groupBy") {
+                            intention.group_by_keys = op["keys"].get<std::vector<std::string>>();
+                        } else if (op["type"] == "aggregate") {
+                            intention.aggregations = op["aggregations"];
+                        } else if (op["type"] == "filter") {
+                            // Pre-compile filters
+                            intention.filters.push_back(compile_filter(op["predicate"]));
+                        }
+                    }
+                }
+                
+                intention.timeout_at = std::chrono::steady_clock::now() + 
+                                      std::chrono::seconds(30);
+                
+                // Register intention (non-blocking!)
+                window_registry->register_intention(intention);
+                
+                spdlog::info("[Worker {}] Window intention registered: {}", 
+                            worker_id, intention.request_id);
+                
+                // Response will come through ResponseQueue when window is ready
+                
+            } catch (const std::exception& e) {
+                send_error_response(res, e.what(), 500);
+            }
+        },
+        [res](const std::string& error) {
+            send_error_response(res, error, 400);
+        }
+    );
+});
+```
+
+**4. Initialization** (`acceptor_server.cpp` in worker startup):
+
+```cpp
+// Initialize window workers (Worker 0 only)
+static std::shared_ptr<WindowIntentionRegistry> global_window_intention_registry;
+static std::vector<std::unique_ptr<WindowWorker>> global_window_workers;
+
+if (worker_id == 0) {
+    spdlog::info("[Worker 0] Initializing window processing...");
+    
+    global_window_intention_registry = std::make_shared<WindowIntentionRegistry>();
+    
+    // Start 2 window workers
+    init_window_workers(
+        global_db_thread_pool,
+        global_window_intention_registry,
+        global_db_pool,
+        worker_response_queues,
+        2,    // 2 window workers
+        100   // Check every 100ms
+    );
+    
+    spdlog::info("[Worker 0] Window workers started");
+}
+```
+
+**Client Implementation**:
+
+**Update `Stream.js`**:
+```javascript
+class Stream {
+  // Add window() method
+  window(config) {
+    // config = { type: 'tumbling', duration: 60, grace: 5 }
+    const operation = OperationBuilder.window(config)
+    
+    return new WindowedStream(
+      this.#queen,
+      this.#httpClient,
+      this.#source,
+      [...this.#operations, operation],
+      this.#options
+    )
+  }
+}
+```
+
+**Create `WindowedStream.js`**:
+```javascript
+class WindowedStream {
+  // After window(), still need groupBy + aggregate
+  groupBy(key) {
+    const operation = OperationBuilder.groupBy(Array.isArray(key) ? key : [key])
+    return new GroupedWindowedStream(/* ... */, [...this._operations, operation])
+  }
+}
+
+class GroupedWindowedStream {
+  // Can aggregate
+  count() { return this.aggregate({ count: { $count: '*' } }) }
+  
+  aggregate(aggs) {
+    const operation = OperationBuilder.aggregate(aggs)
+    // Return WindowedStream (can iterate to get windows)
+    return new WindowedStream(/* ... */, [...this._operations, operation])
+  }
+  
+  // Async iterator polls /api/v1/stream/window/next
+  async *[Symbol.asyncIterator]() {
+    while (true) {
+      const plan = this.#buildWindowPlan()
+      const result = await this.#httpClient.post('/api/v1/stream/window/next', plan)
+      
+      if (result.window) {
+        // Got a window! Yield it
+        yield result.window
+      } else {
+        // No window ready, wait as suggested
+        await new Promise(r => setTimeout(r, result.nextCheckIn || 1000))
+      }
+    }
+  }
+}
+```
+
+**Client API**:
+```javascript
+// Tumbling time - 1 minute windows
+for await (const window of queen
+  .stream('events@processor', { from: 'latest' })
+  .window({ type: 'tumbling', duration: 60, grace: 5 })
+  .groupBy('payload.userId')
+  .count()
+) {
+  // window = { userId: 'alice', count: 50, _windowStart: '...', _windowEnd: '...' }
+  
+  // Custom processing
+  console.log(`Window ${window._windowStart} - ${window._windowEnd}:`)
+  console.log(`  User ${window.userId}: ${window.count} events`)
+  
+  if (window.count > 100) {
+    await sendAlert(`High activity: ${window.count} events`)
+  }
+  
+  await saveToTimeSeries(window)
+  await updateDashboard(window)
+}
+
+// Tumbling count - every 100 messages
+for await (const batch of queen
+  .stream('events@processor')
+  .window({ type: 'tumbling', count: 100 })
+  .groupBy('payload.type')
+  .count()
+) {
+  console.log('Batch of 100 messages:', batch)
+}
+
+// Session windows - user activity sessions
+for await (const session of queen
+  .stream('activity@sessions')
+  .window({ type: 'session', gap: 1800, maxDuration: 14400 })  // 30min gap, 4h max
+  .groupBy('payload.userId')
+  .aggregate({ 
+    events: { $count: '*' },
+    avgDuration: { $avg: 'payload.duration' }
+  })
+) {
+  console.log(`Session for ${session.userId}:`, session.events, 'events')
+  await analyzeUserSession(session)
+}
+```
+
+**Benefits**:
+- ✅ **Reuses PollIntentionRegistry pattern** (proven architecture)
+- ✅ **Non-blocking** - uses ThreadPool for DB queries
+- ✅ **Async responses** - via ResponseQueue (like long polling)
+- ✅ **Client gets each window exactly once**
+- ✅ **Client has full flexibility** for custom processing
+- ✅ **Multiple clients** can consume (different windows)
+- ✅ **Survives crashes** - windows stay in database
+- ✅ **Simple to debug** - same patterns as existing code
 
 **Tests:**
-1. Tumbling time window (5 minute buckets)
+1. Tumbling time window (1 minute)
 2. Tumbling count window (100 messages)
-3. Sliding time window (10m window, 1m slide)
-4. Session window (30m gap)
-5. Window with aggregations
-6. Grace period handling
+3. Session window (30 min timeout)
+4. Window consumed only once
+5. Multiple clients get different windows
+6. Client disconnect/reconnect continues from next window
+7. Grace period handling
+8. Empty windows
 
-**Deliverable**: Full windowing support
+**Deliverable**: Production-ready windowing with proven Queen architecture
+
+---
+
+## Implementation Steps for Phase 2
+
+1. ✅ Update database schema (add tables)
+2. ✅ Create `WindowIntentionRegistry` (copy from PollIntentionRegistry pattern)
+3. ✅ Create `WindowWorker` (copy from poll_worker pattern)
+4. ✅ Add endpoint `/api/v1/stream/window/next`
+5. ✅ Initialize window workers at startup (like poll workers)
+6. ✅ Client: Create `WindowedStream` class
+7. ✅ Client: Update async iterator to poll for windows
+8. ✅ Add window() method to Stream
+9. ✅ Comprehensive tests
+
+**Estimated LOC**: ~1,500 lines (similar to Phase 1)
+**Complexity**: Low (reuses existing patterns)
+**Risk**: Low (proven architecture)
 
 ---
 
@@ -2113,159 +2816,104 @@ export class Queen {
 **Goal**: Stream-stream and stream-table joins
 
 **Server:**
-1. Create stream_joins table
-2. Implement JoinProcessor
-3. Implement inner join
-4. Implement left/right/outer joins
-5. Implement stream-table joins (PostgreSQL tables)
-6. Update SQLCompiler for joins
-7. Add join state management
+1. Create stream_joins table (time-windowed join buffer)
+2. Implement join logic (match left/right within time window)
+3. Support inner/left/right/outer joins
+4. Support stream-table joins (any PostgreSQL table)
+5. Expire old join state (outside window)
 
 **Client:**
-1. Add join(), leftJoin(), rightJoin(), outerJoin() methods
-2. Add joinTable() method
-3. Create JoinedStream class
-4. Support join window specifications
+1. Add join(), leftJoin(), rightJoin(), outerJoin()
+2. Add joinTable() for enrichment
+3. Support join time windows
 
-**Tests:**
-1. Inner join (orders + payments)
-2. Left join (orders + optional payments)
-3. Stream-table join (enrich with user data)
-4. Join with time window
-5. Multi-way join (3+ streams)
+**API**:
+```javascript
+// Join orders with payments
+const orders = queen.stream('orders@processor')
+const payments = queen.stream('payments@processor')
 
-**Deliverable**: Complete join functionality
+for await (const joined of orders.join(payments, {
+  leftKey: 'payload.orderId',
+  rightKey: 'payload.orderId',
+  window: 300  // Match within 5 minutes
+})) {
+  console.log('Order matched with payment:', joined)
+}
+
+// Enrich stream with PostgreSQL table
+for await (const enriched of queen
+  .stream('events@processor')
+  .joinTable('public.users', {
+    streamKey: 'payload.userId',
+    tableKey: 'id'
+  })
+) {
+  // enriched has both stream data + user table data
+  console.log(enriched.userName, enriched.payload)
+}
+```
+
+**Deliverable**: Stream joins
 
 ---
 
-### Phase 4: State Management
+### Phase 4: Stateful Operations
 
-**Goal**: Stateful operations and exactly-once processing
+**Goal**: Maintain state across messages within a consumer group
 
 **Server:**
-1. Implement StateStore with caching
-2. Implement stateful map/reduce operations
-3. Add state checkpointing
-4. Add TTL-based state expiration
-5. Add deduplication support
+1. stream_state table (key-value store)
+2. Get/put state operations
+3. State TTL and cleanup
+4. State scoped to consumer group
 
 **Client:**
-1. Add statefulMap() method
-2. Add reduce() method
-3. Add scan() method
-4. Add deduplicate() method
-5. Support state configuration
+1. statefulMap() - transform with state
+2. reduce() - accumulate
+3. scan() - running aggregation
+4. deduplicate() - with TTL
 
-**Tests:**
-1. Stateful map (running totals)
-2. Reduce with state
-3. Deduplication by field
-4. State expiration (TTL)
-5. State recovery after restart
-
-**Deliverable**: Stateful stream processing
+**Deliverable**: Stateful processing
 
 ---
 
-### Phase 5: Output & Materialization
+### Phase 5: Advanced Operations & Optimization
 
-**Goal**: Multiple output modes and materialized views
+**Goal**: Additional utilities and performance
 
-**Server:**
-1. Create stream_materialized_views table
-2. Implement output to queue
-3. Implement output to table (upsert mode)
-4. Implement output to table (append mode)
-5. Implement output to table (replace mode)
-6. Add background workers for continuous streams
+1. branch() - split streams
+2. sample() - probabilistic sampling
+3. Query optimization and caching
+4. Performance monitoring
+5. Error handling improvements
 
-**Client:**
-1. Add outputTo() method
-2. Add toTable() method
-3. Support output modes
-4. Add start/stop stream management
-
-**Tests:**
-1. Output to queue
-2. Materialize to table (upsert)
-3. Materialize to table (append)
-4. Continuous stream execution
-5. Start/stop/restart stream
-
-**Deliverable**: Complete output functionality
+**Deliverable**: Complete feature set
 
 ---
 
-### Phase 6: Advanced Operations
+## Summary of New Approach
 
-**Goal**: Additional stream operations
+**OLD Plan** (Complex):
+- Phase 5: Server-side background workers
+- Server runs pipelines continuously
+- Output to queues/tables automatically
+- Hard to debug, complex state management
 
-**Server & Client:**
-1. Implement distinct()
-2. Implement limit() / skip()
-3. Implement sample()
-4. Implement branch()
-5. Implement foreach()
-6. Implement debounce()
-7. Implement throttle()
+**NEW Plan** (Simple):
+- Phase 2: Windows tracked server-side, consumed client-side
+- Server detects windows + pre-computes aggregations
+- Client polls for new windows (gets each once)
+- Client processes with custom code
+- Much simpler, more flexible, easier to debug
 
-**Tests:**
-1. Distinct by field
-2. Limit and skip
-3. Probabilistic sampling
-4. Stream branching
-5. Side effects (foreach)
+**This matches Queen's philosophy**: 
+- Simple infrastructure
+- PostgreSQL does the heavy lifting
+- Client has flexibility
+- Easy to understand and operate
 
-**Deliverable**: Full operation set
-
----
-
-### Phase 7: Error Handling & Reliability
-
-**Goal**: Production-ready error handling
-
-**Server & Client:**
-1. Add retry logic
-2. Add circuit breaker
-3. Add DLQ integration
-4. Add error callbacks
-5. Implement graceful degradation
-6. Add health checks
-
-**Tests:**
-1. Retry on transient errors
-2. Circuit breaker trips
-3. Failed messages to DLQ
-4. Recovery from errors
-
-**Deliverable**: Production-ready reliability
-
----
-
-### Phase 8: Performance & Optimization
-
-**Goal**: Production performance
-
-**Server:**
-1. Query optimization and caching
-2. State store optimization
-3. Connection pooling tuning
-4. Index recommendations
-5. Batch processing optimization
-
-**Client:**
-1. Request batching
-2. Response streaming optimization
-3. Memory management
-
-**Tests:**
-1. Benchmark filter operations
-2. Benchmark aggregations
-3. Benchmark joins
-4. Benchmark stateful operations
-5. Load testing (1M+ messages)
-
-**Deliverable**: Optimized performance
+🎯 **Phase 2 is the next big value add - time-based analytics with incremental processing!**
 
 ---
 
