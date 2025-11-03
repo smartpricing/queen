@@ -10,6 +10,7 @@
 #include "queen/eviction_service.hpp"
 #include "queen/poll_intention_registry.hpp"
 #include "queen/poll_worker.hpp"
+#include "queen/stream_poll_worker.hpp"
 #include "queen/stream_poll_intention_registry.hpp"
 #include "queen/stream_manager.hpp"
 #include "threadpool.hpp"
@@ -2354,6 +2355,21 @@ static void worker_thread(const Config& config, int worker_id, int num_workers,
                 config.queue.backoff_threshold,
                 config.queue.backoff_multiplier,
                 config.queue.max_poll_interval
+            );
+            
+            // Initialize stream long-polling poll workers
+            spdlog::info("[Worker 0] Starting stream long-polling poll workers...");
+            queen::init_stream_long_polling(
+                global_db_thread_pool,
+                global_stream_poll_registry,
+                global_stream_manager,
+                worker_response_queues,
+                2,  // 2 stream poll workers
+                100,   // poll_worker_interval_ms (how often to check registry)
+                1000,  // poll_stream_interval_ms (min time between stream checks per group)
+                5,     // backoff_threshold (consecutive empty checks before backoff)
+                2.0,   // backoff_multiplier
+                5000   // max_poll_interval_ms
             );
         }
         

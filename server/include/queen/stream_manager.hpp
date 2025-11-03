@@ -68,6 +68,14 @@ public:
     void handle_renew(uWS::HttpResponse<false>* res, uWS::HttpRequest* req, int worker_id);
     void handle_seek(uWS::HttpResponse<false>* res, uWS::HttpRequest* req, int worker_id);
     
+    // Poll worker support
+    bool check_and_deliver_window_for_poll(
+        const std::string& stream_name,
+        const std::string& consumer_group,
+        const std::vector<StreamPollIntention>& intentions,
+        std::vector<std::shared_ptr<ResponseQueue>> worker_response_queues
+    );
+    
 private:
     std::shared_ptr<DatabasePool> db_pool_;
     std::shared_ptr<astp::ThreadPool> db_thread_pool_;

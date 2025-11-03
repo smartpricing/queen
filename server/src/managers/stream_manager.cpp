@@ -157,7 +157,7 @@ void StreamManager::handle_poll(uWS::HttpResponse<false>* res, uWS::HttpRequest*
                          worker_id, request_id, stream_name, consumer_group, timeout);
             
             // Try to find a window immediately
-            db_thread_pool_->push([this, request_id, worker_id, stream_name, consumer_group]() {
+            db_thread_pool_->push([this, request_id, worker_id, stream_name, consumer_group, timeout]() {
                 ScopedConnection conn(db_pool_.get());
                 
                 try {
@@ -264,9 +264,23 @@ void StreamManager::handle_poll(uWS::HttpResponse<false>* res, uWS::HttpRequest*
                     }
                 }
                 
-                // No window ready - send 204 No Content
-                spdlog::debug("[Worker {}] No windows ready for stream={}, group={}", worker_id, stream_name, consumer_group);
-                worker_response_queues_[worker_id]->push(request_id, nlohmann::json{}, false, 204);
+                // No window ready immediately - register long-poll intention
+                spdlog::debug("[Worker {}] No windows ready immediately for stream={}, group={} - registering long-poll intention", 
+                             worker_id, stream_name, consumer_group);
+                
+                StreamPollIntention intention{
+                    .request_id = request_id,
+                    .worker_id = worker_id,
+                    .stream_name = stream_name,
+                    .consumer_group = consumer_group,
+                    .deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(timeout),
+                    .created_at = std::chrono::steady_clock::now()
+                };
+                
+                stream_intention_registry_->register_intention(intention);
+                
+                spdlog::debug("[Worker {}] Registered stream poll intention {} for stream={}, group={}, timeout={}ms",
+                             worker_id, request_id, stream_name, consumer_group, timeout);
                 
             } catch (const std::exception& e) {
                 spdlog::error("[Worker {}] Error in poll handler: {}", worker_id, e.what());
@@ -958,6 +972,133 @@ void StreamManager::read_json_body(
     res->onAborted([completed]() {
         *completed = true;
     });
+}
+
+// Poll worker support - check for ready windows and deliver to waiting intentions
+bool StreamManager::check_and_deliver_window_for_poll(
+    const std::string& stream_name,
+    const std::string& consumer_group,
+    const std::vector<StreamPollIntention>& intentions,
+    std::vector<std::shared_ptr<ResponseQueue>> worker_response_queues
+) {
+    if (intentions.empty()) {
+        return false;
+    }
+    
+    ScopedConnection conn(db_pool_.get());
+    
+    try {
+        // Get stream
+        auto stream_opt = get_stream(conn.operator->(), stream_name);
+        if (!stream_opt.has_value()) {
+            // Stream not found - this shouldn't happen, but send error to first intention
+            spdlog::error("Stream not found in poll worker: stream={}", stream_name);
+            return false;
+        }
+        
+        auto stream = stream_opt.value();
+        std::string watermark_str = get_watermark(conn.operator->(), stream.id);
+        auto partitions = get_partitions_and_offsets(conn.operator->(), stream.id, consumer_group, stream.partitioned);
+        
+        // Try to find a ready window (same logic as handle_poll immediate check)
+        for (const auto& partition : partitions) {
+            auto stream_key = partition.stream_key;
+            auto partition_name = partition.partition_name;
+            auto last_end_str = partition.last_acked_window_end;
+            
+            std::string window_start_str;
+            
+            if (last_end_str == "-infinity") {
+                auto first_time_opt = get_first_message_time(conn.operator->(), stream.id, stream_key, stream.partitioned);
+                if (!first_time_opt.has_value()) {
+                    continue; // No messages yet for this partition
+                }
+                window_start_str = align_to_boundary(first_time_opt.value(), stream.window_duration_ms);
+            } else {
+                window_start_str = last_end_str;
+            }
+            
+            auto window_start = parse_timestamp(window_start_str);
+            auto window_end = window_start + std::chrono::milliseconds(stream.window_duration_ms);
+            std::string window_end_str = format_timestamp(window_end);
+            
+            auto watermark = parse_timestamp(watermark_str);
+            auto grace_boundary = window_end + std::chrono::milliseconds(stream.window_grace_period_ms);
+            
+            if (watermark < grace_boundary) {
+                continue; // Window not ready yet
+            }
+            
+            // Delete any expired leases for this window first
+            std::string cleanup_sql = R"(
+                DELETE FROM queen.stream_leases
+                WHERE stream_id = $1::UUID
+                  AND consumer_group = $2
+                  AND stream_key = $3
+                  AND window_start = $4::TIMESTAMPTZ
+                  AND lease_expires_at < NOW()
+            )";
+            QueryResult(conn->exec_params(cleanup_sql, {stream.id, consumer_group, stream_key, window_start_str}));
+            
+            // Check if there's a valid (non-expired) lease
+            if (check_lease_exists(conn.operator->(), stream.id, consumer_group, stream_key, window_start_str)) {
+                continue; // Window already leased
+            }
+            
+            // Found a ready window! Try to create lease and deliver to FIRST intention
+            try {
+                std::string lease_id = create_lease(conn.operator->(), stream.id, consumer_group, stream_key,
+                                                    window_start_str, window_end_str, stream.window_lease_timeout_ms);
+                
+                auto messages = get_messages(conn.operator->(), stream.id, stream_key, stream.partitioned, 
+                                             window_start_str, window_end_str);
+                
+                nlohmann::json window_json = {
+                    {"id", generate_window_id(stream.id, partition_name, window_start_str, window_end_str)},
+                    {"leaseId", lease_id},
+                    {"key", partition_name},
+                    {"start", window_start_str},
+                    {"end", window_end_str},
+                    {"messages", messages}
+                };
+                
+                nlohmann::json response = {{"window", window_json}};
+                
+                // Deliver to FIRST intention only (one window per poll worker check)
+                const auto& first_intention = intentions[0];
+                worker_response_queues[first_intention.worker_id]->push(
+                    first_intention.request_id, 
+                    response, 
+                    false, 
+                    200
+                );
+                
+                spdlog::info("Delivered window {}: stream={}, group={}, key={}, messages={}", 
+                             first_intention.request_id, stream_name, consumer_group, partition_name, messages.size());
+                
+                return true; // Window was delivered
+                
+            } catch (const std::runtime_error& e) {
+                // Check if it's a duplicate key error (race condition)
+                std::string error_msg = e.what();
+                if (error_msg.find("duplicate key") != std::string::npos || 
+                    error_msg.find("unique constraint") != std::string::npos) {
+                    continue; // Try next partition
+                }
+                // Other errors - log and continue
+                spdlog::error("Error creating lease/delivering window in poll worker: {}", e.what());
+                continue;
+            }
+        }
+        
+        // No ready window found
+        return false;
+        
+    } catch (const std::exception& e) {
+        spdlog::error("Error in check_and_deliver_window_for_poll: stream={}, group={}, error={}", 
+                     stream_name, consumer_group, e.what());
+        return false;
+    }
 }
 
 } // namespace queen
