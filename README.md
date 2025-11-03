@@ -51,7 +51,7 @@ Main documentation:
 - [Client Guide JS](client-js/client-v2/README.md)
 - [Client Guide C++](client-cpp/README.md)
 - [Server Guide](server/README.md)
-- [Streaming Guide](docs/STREAMING_V3_USAGE.md)
+- [Streaming Guide](docs/STREAMING_USAGE.md)
 - [API Reference](server/API.md)
 - [Message Retention & Cleanup](docs/RETENTION.md)
 - [Webapp](webapp/README.md)
