@@ -2656,16 +2656,6 @@ static void worker_thread(const Config& config, int worker_id, int num_workers,
         spdlog::info("[Worker {}] Creating uWS::App...", worker_id);
         auto worker_app = new uWS::App();
         
-        // Setup response timer for this worker (each worker has its own timer and queue)
-        spdlog::info("[Worker {}] Setting up response timer...", worker_id);
-        us_timer_t* response_timer = us_create_timer((us_loop_t*)uWS::Loop::get(), 0, sizeof(queen::ResponseQueue*));
-        *(queen::ResponseQueue**)us_timer_ext(response_timer) = worker_response_queues[worker_id].get();
-        
-        // Poll using configured interval for good balance between latency and CPU usage
-        int timer_interval = config.queue.response_timer_interval_ms;
-        us_timer_set(response_timer, response_timer_callback, timer_interval, timer_interval);
-        spdlog::info("[Worker {}] Response timer configured to process own queue ({}ms interval)", worker_id, timer_interval);
-        
         // Setup routes
         spdlog::info("[Worker {}] Setting up routes...", worker_id);
         setup_worker_routes(worker_app, queue_manager, analytics_manager, file_buffer, config, worker_id, db_thread_pool);
@@ -2691,6 +2681,17 @@ static void worker_thread(const Config& config, int worker_id, int num_workers,
         });
         
         spdlog::info("[Worker {}] Event loop ready to receive adopted sockets from acceptor", worker_id);
+        
+        // Setup response timer for this worker (each worker has its own timer and queue)
+        // CRITICAL: Timer must be created AFTER listen() to ensure event loop is properly initialized
+        spdlog::info("[Worker {}] Setting up response timer...", worker_id);
+        us_timer_t* response_timer = us_create_timer((us_loop_t*)uWS::Loop::get(), 0, sizeof(queen::ResponseQueue*));
+        *(queen::ResponseQueue**)us_timer_ext(response_timer) = worker_response_queues[worker_id].get();
+        
+        // Poll using configured interval for good balance between latency and CPU usage
+        int timer_interval = config.queue.response_timer_interval_ms;
+        us_timer_set(response_timer, response_timer_callback, timer_interval, timer_interval);
+        spdlog::info("[Worker {}] Response timer configured to process own queue ({}ms interval)", worker_id, timer_interval);
         
         // Run worker event loop (blocks forever)
         // Will receive sockets adopted from the acceptor

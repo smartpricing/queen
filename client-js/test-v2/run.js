@@ -160,6 +160,7 @@ async function main() {
     
     for (const test of testsToRun) {
         try {
+            console.log('Running test:', test.name)
             const result = await test(client)
             const message = result.message || 'Test completed successfully'
             addRestResult(result.success, test.name, message)

@@ -190,6 +190,7 @@ export async function testConsumerOrdering(client) {
         await client
         .queue('test-queue-v2-consume-batch')
         .push([{ data: { id: i } }])
+        console.log(new Date().toISOString(), 'Pushed message:', i)
     }
 
     

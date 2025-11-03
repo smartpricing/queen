@@ -916,16 +916,21 @@ std::vector<PushResult> QueueManager::push_messages_batch(const std::vector<Push
 std::vector<PushResult> QueueManager::push_messages_chunk(const std::vector<PushItem>& items,
                                                           const std::string& queue_name,
                                                           const std::string& partition_name) {
+    auto chunk_start = std::chrono::steady_clock::now();
     std::vector<PushResult> results;
     results.reserve(items.size());
     
     try {
         // Check if queue exists (don't create automatically)
+        auto queue_check_start = std::chrono::steady_clock::now();
         ScopedConnection check_conn(db_pool_.get());
         auto queue_check = QueryResult(check_conn->exec_params(
             "SELECT id FROM queen.queues WHERE name = $1", 
             {queue_name}
         ));
+        auto queue_check_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::steady_clock::now() - queue_check_start).count();
+        spdlog::debug("TIMING: Queue check took {}ms", queue_check_ms);
         
         if (queue_check.num_rows() == 0) {
             // All messages in batch fail if queue doesn't exist
@@ -942,6 +947,7 @@ std::vector<PushResult> QueueManager::push_messages_chunk(const std::vector<Push
         // NOTE: Capacity check is now done in batch at push_messages() level for better performance
         
         // Ensure partition exists
+        auto partition_check_start = std::chrono::steady_clock::now();
         if (!ensure_partition_exists(queue_name, partition_name)) {
             // All messages fail if partition creation fails
             for (const auto& item : items) {
@@ -953,8 +959,12 @@ std::vector<PushResult> QueueManager::push_messages_chunk(const std::vector<Push
             }
             return results;
         }
+        auto partition_check_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::steady_clock::now() - partition_check_start).count();
+        spdlog::debug("TIMING: Partition check took {}ms", partition_check_ms);
         
         // Check if queue has encryption enabled
+        auto encryption_check_start = std::chrono::steady_clock::now();
         std::string encryption_check_sql = "SELECT encryption_enabled FROM queen.queues WHERE name = $1";
         auto encryption_result = QueryResult(check_conn->exec_params(encryption_check_sql, {queue_name}));
         
@@ -990,13 +1000,18 @@ std::vector<PushResult> QueueManager::push_messages_chunk(const std::vector<Push
         }
         
         std::string partition_id = partition_result.get_value(0, "id");
+        auto encryption_check_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::steady_clock::now() - encryption_check_start).count();
+        spdlog::debug("TIMING: Encryption check + partition ID lookup took {}ms", encryption_check_ms);
         
         // Start transaction
+        auto txn_start = std::chrono::steady_clock::now();
         if (!conn->begin_transaction()) {
             throw std::runtime_error("Failed to begin transaction");
         }
         
         try {
+            auto build_arrays_start = std::chrono::steady_clock::now();
             // Build arrays for batch insert
             std::vector<std::string> message_ids;
             std::vector<std::string> transaction_ids;
@@ -1044,11 +1059,15 @@ std::vector<PushResult> QueueManager::push_messages_chunk(const std::vector<Push
                 encrypted_flags.push_back(is_encrypted);
                 results.push_back(result);
             }
+            auto build_arrays_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+                std::chrono::steady_clock::now() - build_arrays_start).count();
+            spdlog::debug("TIMING: Building arrays took {}ms", build_arrays_ms);
             
             // ═══════════════════════════════════════════════════════════════════════════
             // OPTIMIZATION: Proactive duplicate detection with batch LEFT JOIN
             // Check for existing transaction IDs before attempting INSERT
             // ═══════════════════════════════════════════════════════════════════════════
+            auto dup_check_start = std::chrono::steady_clock::now();
             std::map<std::string, std::string> existing_txn_map; // txn_id -> message_id
             
             // Check if any items have explicit transaction IDs (vs generated ones)
@@ -1103,8 +1122,12 @@ std::vector<PushResult> QueueManager::push_messages_chunk(const std::vector<Push
                     }
                 }
             }
+            auto dup_check_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+                std::chrono::steady_clock::now() - dup_check_start).count();
+            spdlog::debug("TIMING: Duplicate check took {}ms (found {} duplicates)", dup_check_ms, existing_txn_map.size());
             
             // Filter out duplicates and rebuild arrays for INSERT
+            auto filter_start = std::chrono::steady_clock::now();
             std::vector<std::string> filtered_message_ids;
             std::vector<std::string> filtered_transaction_ids;
             std::vector<std::string> filtered_partition_ids;
@@ -1188,9 +1211,13 @@ std::vector<PushResult> QueueManager::push_messages_chunk(const std::vector<Push
             std::string payload_array = build_pg_array(filtered_payloads);
             std::string trace_array = build_pg_array_with_nulls(filtered_trace_ids);
             std::string encrypted_array = build_bool_array(filtered_encrypted_flags);
+            auto filter_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+                std::chrono::steady_clock::now() - filter_start).count();
+            spdlog::debug("TIMING: Filtering and building PG arrays took {}ms ({} items to insert)", filter_ms, filtered_message_ids.size());
             
             // Only INSERT if we have non-duplicate messages
             if (!filtered_message_ids.empty()) {
+                auto insert_start = std::chrono::steady_clock::now();
                 // UNNEST preserves array order - critical for message ordering!
                 std::string sql = R"(
                     INSERT INTO queen.messages (id, transaction_id, partition_id, payload, trace_id, is_encrypted)
@@ -1216,6 +1243,10 @@ std::vector<PushResult> QueueManager::push_messages_chunk(const std::vector<Push
                 
                 // Batch INSERT via UNNEST (preserves order)
                 auto insert_result = QueryResult(conn->exec_params(sql, unnest_params));
+                auto insert_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+                    std::chrono::steady_clock::now() - insert_start).count();
+                spdlog::debug("TIMING: INSERT took {}ms ({} items)", insert_ms, filtered_message_ids.size());
+                
                 if (!insert_result.is_success()) {
                     throw std::runtime_error("Batch insert failed: " + insert_result.error_message());
                 }
@@ -1233,9 +1264,17 @@ std::vector<PushResult> QueueManager::push_messages_chunk(const std::vector<Push
             }
             
             // Commit transaction
+            auto commit_start = std::chrono::steady_clock::now();
             if (!conn->commit_transaction()) {
                 throw std::runtime_error("Failed to commit transaction");
             }
+            auto commit_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+                std::chrono::steady_clock::now() - commit_start).count();
+            spdlog::debug("TIMING: COMMIT took {}ms", commit_ms);
+            
+            auto txn_total_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+                std::chrono::steady_clock::now() - txn_start).count();
+            spdlog::debug("TIMING: Total transaction took {}ms", txn_total_ms);
             
         } catch (const std::exception& e) {
             conn->rollback_transaction();
@@ -1250,6 +1289,10 @@ std::vector<PushResult> QueueManager::push_messages_chunk(const std::vector<Push
         }
         spdlog::error("Batch push failed: {}", e.what());
     }
+    
+    auto chunk_total_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::steady_clock::now() - chunk_start).count();
+    spdlog::debug("TIMING: Total chunk processing took {}ms ({} items)", chunk_total_ms, items.size());
     
     return results;
 }
@@ -3019,63 +3062,77 @@ bool QueueManager::initialize_schema() {
         
         // Create triggers
         std::string create_triggers_sql = R"(
+            -- Statement-level trigger for partition last_activity (batch-efficient)
             CREATE OR REPLACE FUNCTION update_partition_last_activity()
             RETURNS TRIGGER AS $$
             BEGIN
+                -- Update last_activity for all affected partitions in the batch
                 UPDATE queen.partitions 
                 SET last_activity = NOW() 
-                WHERE id = NEW.partition_id;
-                RETURN NEW;
+                WHERE id IN (SELECT DISTINCT partition_id FROM new_messages);
+                RETURN NULL;
             END;
             $$ LANGUAGE plpgsql;
 
             DROP TRIGGER IF EXISTS trigger_update_partition_activity ON queen.messages;
             CREATE TRIGGER trigger_update_partition_activity
             AFTER INSERT ON queen.messages
-            FOR EACH ROW
+            REFERENCING NEW TABLE AS new_messages
+            FOR EACH STATEMENT
             EXECUTE FUNCTION update_partition_last_activity();
 
+            -- Statement-level trigger for pending estimate (batch-efficient)
             CREATE OR REPLACE FUNCTION update_pending_on_push()
             RETURNS TRIGGER AS $$
             BEGIN
-                UPDATE queen.partition_consumers
-                SET pending_estimate = pending_estimate + 1,
+                -- Increment pending_estimate by the count of messages per partition
+                UPDATE queen.partition_consumers pc
+                SET pending_estimate = pc.pending_estimate + msg_counts.count,
                     last_stats_update = NOW()
-                WHERE partition_id = NEW.partition_id;
-                RETURN NEW;
+                FROM (
+                    SELECT partition_id, COUNT(*) as count
+                    FROM new_messages
+                    GROUP BY partition_id
+                ) msg_counts
+                WHERE pc.partition_id = msg_counts.partition_id;
+                RETURN NULL;
             END;
             $$ LANGUAGE plpgsql;
 
             DROP TRIGGER IF EXISTS trigger_update_pending_on_push ON queen.messages;
             CREATE TRIGGER trigger_update_pending_on_push
             AFTER INSERT ON queen.messages
-            FOR EACH ROW
+            REFERENCING NEW TABLE AS new_messages
+            FOR EACH STATEMENT
             EXECUTE FUNCTION update_pending_on_push();
 
-            -- Streaming watermark trigger function
+            -- Streaming watermark trigger function (statement-level for batch efficiency)
             CREATE OR REPLACE FUNCTION update_queue_watermark()
             RETURNS TRIGGER AS $$
             BEGIN
+                -- Process all inserted rows in the batch at once
                 INSERT INTO queen.queue_watermarks (queue_id, queue_name, max_created_at)
                 SELECT 
                     q.id,
                     q.name,
-                    NEW.created_at
-                FROM queen.partitions p
+                    MAX(nm.created_at) as max_created_at
+                FROM new_messages nm
+                JOIN queen.partitions p ON p.id = nm.partition_id
                 JOIN queen.queues q ON p.queue_id = q.id
-                WHERE p.id = NEW.partition_id
+                GROUP BY q.id, q.name
                 ON CONFLICT (queue_id)
                 DO UPDATE SET
                     max_created_at = GREATEST(queue_watermarks.max_created_at, EXCLUDED.max_created_at),
                     updated_at = NOW();
-                RETURN NEW;
+                RETURN NULL;
             END;
             $$ LANGUAGE plpgsql;
 
             DROP TRIGGER IF EXISTS trigger_update_watermark ON queen.messages;
             CREATE TRIGGER trigger_update_watermark
             AFTER INSERT ON queen.messages
-            FOR EACH ROW
+            REFERENCING NEW TABLE AS new_messages
+            FOR EACH STATEMENT
             EXECUTE FUNCTION update_queue_watermark();
         )";
         

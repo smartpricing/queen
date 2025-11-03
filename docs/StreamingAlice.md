@@ -101,31 +101,34 @@ CREATE TABLE IF NOT EXISTS queen.queue_watermarks (
 
 CREATE INDEX IF NOT EXISTS idx_queue_watermarks_name ON queen.queue_watermarks(queue_name);
 
--- 6. Watermark Trigger Function (CRITICAL)
+-- 6. Watermark Trigger Function (CRITICAL - Statement-level for batch efficiency)
 CREATE OR REPLACE FUNCTION update_queue_watermark()
 RETURNS TRIGGER AS $$
 BEGIN
+    -- Process all inserted rows in the batch at once
     INSERT INTO queen.queue_watermarks (queue_id, queue_name, max_created_at)
     SELECT 
         q.id,
         q.name,
-        NEW.created_at
-    FROM queen.partitions p
+        MAX(nm.created_at) as max_created_at
+    FROM new_messages nm
+    JOIN queen.partitions p ON p.id = nm.partition_id
     JOIN queen.queues q ON p.queue_id = q.id
-    WHERE p.id = NEW.partition_id
+    GROUP BY q.id, q.name
     ON CONFLICT (queue_id)
     DO UPDATE SET
         max_created_at = GREATEST(queue_watermarks.max_created_at, EXCLUDED.max_created_at),
         updated_at = NOW();
-    RETURN NEW;
+    RETURN NULL;
 END;
 $$ LANGUAGE plpgsql;
 
--- 7. Watermark Trigger (CRITICAL)
+-- 7. Watermark Trigger (CRITICAL - Statement-level with transition table)
 DROP TRIGGER IF EXISTS trigger_update_watermark ON queen.messages;
 CREATE TRIGGER trigger_update_watermark
 AFTER INSERT ON queen.messages
-FOR EACH ROW
+REFERENCING NEW TABLE AS new_messages
+FOR EACH STATEMENT
 EXECUTE FUNCTION update_queue_watermark();
 ```
 
