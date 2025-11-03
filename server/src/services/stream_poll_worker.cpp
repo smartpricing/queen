@@ -18,10 +18,11 @@ void init_stream_long_polling(
     int poll_stream_interval_ms,
     int backoff_threshold,
     double backoff_multiplier,
-    int max_poll_interval_ms
+    int max_poll_interval_ms,
+    int backoff_cleanup_inactive_threshold
 ) {
-    spdlog::info("Initializing stream long-polling with {} poll workers (worker_interval={}ms, stream_interval={}ms, backoff: {}x after {} empty)", 
-                worker_count, poll_worker_interval_ms, poll_stream_interval_ms, backoff_multiplier, backoff_threshold);
+    spdlog::info("Initializing stream long-polling with {} poll workers (worker_interval={}ms, stream_interval={}ms, backoff: {}x after {} empty, cleanup_threshold={}s)", 
+                worker_count, poll_worker_interval_ms, poll_stream_interval_ms, backoff_multiplier, backoff_threshold, backoff_cleanup_inactive_threshold);
     
     // Push never-returning jobs to ThreadPool to reserve worker threads
     for (int worker_id = 0; worker_id < worker_count; worker_id++) {
@@ -37,7 +38,8 @@ void init_stream_long_polling(
                 poll_stream_interval_ms,
                 backoff_threshold,
                 backoff_multiplier,
-                max_poll_interval_ms
+                max_poll_interval_ms,
+                backoff_cleanup_inactive_threshold
             );
         });
     }
@@ -49,9 +51,13 @@ void init_stream_long_polling(
 struct StreamGroupBackoffState {
     int consecutive_empty_checks = 0;
     int current_interval_ms;
+    std::chrono::steady_clock::time_point last_accessed;
     
-    StreamGroupBackoffState() : consecutive_empty_checks(0), current_interval_ms(1000) {}
-    StreamGroupBackoffState(int base_interval) : consecutive_empty_checks(0), current_interval_ms(base_interval) {}
+    StreamGroupBackoffState() : consecutive_empty_checks(0), current_interval_ms(1000),
+                               last_accessed(std::chrono::steady_clock::now()) {}
+    StreamGroupBackoffState(int base_interval) : consecutive_empty_checks(0), 
+                                                 current_interval_ms(base_interval),
+                                                 last_accessed(std::chrono::steady_clock::now()) {}
 };
 
 void stream_poll_worker_loop(
@@ -65,11 +71,12 @@ void stream_poll_worker_loop(
     int poll_stream_interval_ms,
     int backoff_threshold,
     double backoff_multiplier,
-    int max_poll_interval_ms
+    int max_poll_interval_ms,
+    int backoff_cleanup_inactive_threshold
 ) {
-    spdlog::info("Stream poll worker {} started (1 of {}) - worker_interval={}ms, stream_interval={}ms, backoff={}x@{}, max={}ms", 
+    spdlog::info("Stream poll worker {} started (1 of {}) - worker_interval={}ms, stream_interval={}ms, backoff={}x@{}, max={}ms, cleanup_threshold={}s", 
                 worker_id, total_workers, poll_worker_interval_ms, poll_stream_interval_ms, 
-                backoff_multiplier, backoff_threshold, max_poll_interval_ms);
+                backoff_multiplier, backoff_threshold, max_poll_interval_ms, backoff_cleanup_inactive_threshold);
     
     int loop_count = 0;
     
@@ -80,10 +87,59 @@ void stream_poll_worker_loop(
     auto backoff_states = std::make_shared<std::unordered_map<std::string, StreamGroupBackoffState>>();
     auto backoff_mutex = std::make_shared<std::mutex>();
     
+    // Cleanup configuration
+    constexpr int CLEANUP_INTERVAL_LOOPS = 600;  // Clean every 600 loops (~60 seconds at 100ms interval)
+    
     while (registry->is_running()) {
         loop_count++;
         
         try {
+            // PERIODIC CLEANUP: Remove old backoff state entries
+            if (loop_count % CLEANUP_INTERVAL_LOOPS == 0) {
+                auto now = std::chrono::steady_clock::now();
+                std::lock_guard<std::mutex> lock(*backoff_mutex);
+                
+                size_t initial_backoff_size = backoff_states->size();
+                size_t initial_check_size = last_check_times.size();
+                
+                // Cleanup backoff_states
+                for (auto it = backoff_states->begin(); it != backoff_states->end();) {
+                    auto age_seconds = std::chrono::duration_cast<std::chrono::seconds>(
+                        now - it->second.last_accessed
+                    ).count();
+                    
+                    if (age_seconds > backoff_cleanup_inactive_threshold) {
+                        it = backoff_states->erase(it);
+                    } else {
+                        ++it;
+                    }
+                }
+                
+                // Cleanup last_check_times
+                for (auto it = last_check_times.begin(); it != last_check_times.end();) {
+                    auto age_seconds = std::chrono::duration_cast<std::chrono::seconds>(
+                        now - it->second
+                    ).count();
+                    
+                    if (age_seconds > backoff_cleanup_inactive_threshold) {
+                        it = last_check_times.erase(it);
+                    } else {
+                        ++it;
+                    }
+                }
+                
+                size_t final_backoff_size = backoff_states->size();
+                size_t final_check_size = last_check_times.size();
+                size_t cleaned_backoff = initial_backoff_size - final_backoff_size;
+                size_t cleaned_check = initial_check_size - final_check_size;
+                
+                if (cleaned_backoff > 0 || cleaned_check > 0) {
+                    spdlog::info("[Stream Worker {}] Backoff cleanup: removed {} backoff states ({} -> {}), {} check times ({} -> {})",
+                                worker_id, cleaned_backoff, initial_backoff_size, final_backoff_size,
+                                cleaned_check, initial_check_size, final_check_size);
+                }
+            }
+            
             // Get all active intentions
             auto all_intentions = registry->get_active_intentions();
             
@@ -151,6 +207,7 @@ void stream_poll_worker_loop(
                             backoff_states->emplace(group_key, StreamGroupBackoffState(poll_stream_interval_ms));
                         }
                         auto& backoff_state = (*backoff_states)[group_key];
+                        backoff_state.last_accessed = std::chrono::steady_clock::now(); // Update access time
                         current_interval_ms = backoff_state.current_interval_ms;
                         current_empty_count = backoff_state.consecutive_empty_checks;
                     }
@@ -217,6 +274,7 @@ void stream_poll_worker_loop(
                                         }
                                         it->second.consecutive_empty_checks = 0;
                                         it->second.current_interval_ms = poll_stream_interval_ms;
+                                        it->second.last_accessed = std::chrono::steady_clock::now(); // Update access time
                                     }
                                 }
                                 
@@ -234,6 +292,7 @@ void stream_poll_worker_loop(
                                     auto it = backoff_states->find(group_key);
                                     if (it != backoff_states->end()) {
                                         it->second.consecutive_empty_checks++;
+                                        it->second.last_accessed = std::chrono::steady_clock::now(); // Update access time
                                         
                                         // Apply exponential backoff if threshold reached
                                         if (it->second.consecutive_empty_checks >= backoff_threshold) {

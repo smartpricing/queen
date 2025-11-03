@@ -141,6 +141,7 @@ struct QueueConfig {
     int backoff_threshold = 1;           // Number of consecutive empty pops before backoff starts (1 = immediate backoff)
     double backoff_multiplier = 2.0;     // Exponential backoff multiplier (interval *= multiplier each time)
     int max_poll_interval = 2000;        // 2000ms - Maximum poll interval after backoff
+    int backoff_cleanup_inactive_threshold = 3600; // 3600s (1 hour) - Remove backoff state entries inactive for N seconds
     
     // Legacy long polling settings (reserved for future use)
     int poll_interval = 100;             // 100ms - Reserved
@@ -201,6 +202,7 @@ struct QueueConfig {
         config.backoff_threshold = get_env_int("QUEUE_BACKOFF_THRESHOLD", 1);
         config.backoff_multiplier = get_env_double("QUEUE_BACKOFF_MULTIPLIER", 2.0);
         config.max_poll_interval = get_env_int("QUEUE_MAX_POLL_INTERVAL", 2000);
+        config.backoff_cleanup_inactive_threshold = get_env_int("QUEUE_BACKOFF_CLEANUP_THRESHOLD", 3600);
         
         // Legacy long polling (reserved)
         config.poll_interval = get_env_int("QUEUE_POLL_INTERVAL", 100);

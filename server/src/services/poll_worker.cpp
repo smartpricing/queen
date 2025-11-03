@@ -34,10 +34,11 @@ void init_long_polling(
     int poll_db_interval_ms,
     int backoff_threshold,
     double backoff_multiplier,
-    int max_poll_interval_ms
+    int max_poll_interval_ms,
+    int backoff_cleanup_inactive_threshold
 ) {
-    spdlog::info("Initializing long-polling with {} poll workers (worker_interval={}ms, db_interval={}ms, backoff: {}x after {} empty)", 
-                worker_count, poll_worker_interval_ms, poll_db_interval_ms, backoff_multiplier, backoff_threshold);
+    spdlog::info("Initializing long-polling with {} poll workers (worker_interval={}ms, db_interval={}ms, backoff: {}x after {} empty, cleanup_threshold={}s)", 
+                worker_count, poll_worker_interval_ms, poll_db_interval_ms, backoff_multiplier, backoff_threshold, backoff_cleanup_inactive_threshold);
     
     // Push never-returning jobs to ThreadPool to reserve worker threads
     for (int worker_id = 0; worker_id < worker_count; worker_id++) {
@@ -53,7 +54,8 @@ void init_long_polling(
                 poll_db_interval_ms,
                 backoff_threshold,
                 backoff_multiplier,
-                max_poll_interval_ms
+                max_poll_interval_ms,
+                backoff_cleanup_inactive_threshold
             );
         });
     }
@@ -66,9 +68,13 @@ void init_long_polling(
 struct GroupBackoffState {
     int consecutive_empty_pops = 0;
     int current_interval_ms;
+    std::chrono::steady_clock::time_point last_accessed;
     
-    GroupBackoffState() : consecutive_empty_pops(0), current_interval_ms(100) {}
-    GroupBackoffState(int base_interval) : consecutive_empty_pops(0), current_interval_ms(base_interval) {}
+    GroupBackoffState() : consecutive_empty_pops(0), current_interval_ms(100), 
+                          last_accessed(std::chrono::steady_clock::now()) {}
+    GroupBackoffState(int base_interval) : consecutive_empty_pops(0), 
+                                           current_interval_ms(base_interval),
+                                           last_accessed(std::chrono::steady_clock::now()) {}
 };
 
 void poll_worker_loop(
@@ -82,11 +88,12 @@ void poll_worker_loop(
     int poll_db_interval_ms,
     int backoff_threshold,
     double backoff_multiplier,
-    int max_poll_interval_ms
+    int max_poll_interval_ms,
+    int backoff_cleanup_inactive_threshold
 ) {
-    spdlog::info("Poll worker {} started (1 of {}) - worker_interval={}ms, db_interval={}ms, backoff={}x@{}, max={}ms", 
+    spdlog::info("Poll worker {} started (1 of {}) - worker_interval={}ms, db_interval={}ms, backoff={}x@{}, max={}ms, cleanup_threshold={}s", 
                 worker_id, total_workers, poll_worker_interval_ms, poll_db_interval_ms, 
-                backoff_multiplier, backoff_threshold, max_poll_interval_ms);
+                backoff_multiplier, backoff_threshold, max_poll_interval_ms, backoff_cleanup_inactive_threshold);
     
     int loop_count = 0;
     
@@ -97,10 +104,59 @@ void poll_worker_loop(
     auto backoff_states = std::make_shared<std::unordered_map<std::string, GroupBackoffState>>();
     auto backoff_mutex = std::make_shared<std::mutex>();
     
+    // Cleanup configuration
+    constexpr int CLEANUP_INTERVAL_LOOPS = 600;  // Clean every 600 loops (~60 seconds at 100ms interval)
+    
     while (registry->is_running()) {
         loop_count++;
         
         try {
+            // PERIODIC CLEANUP: Remove old backoff state entries
+            if (loop_count % CLEANUP_INTERVAL_LOOPS == 0) {
+                auto now = std::chrono::steady_clock::now();
+                std::lock_guard<std::mutex> lock(*backoff_mutex);
+                
+                size_t initial_backoff_size = backoff_states->size();
+                size_t initial_query_size = last_query_times.size();
+                
+                // Cleanup backoff_states
+                for (auto it = backoff_states->begin(); it != backoff_states->end();) {
+                    auto age_seconds = std::chrono::duration_cast<std::chrono::seconds>(
+                        now - it->second.last_accessed
+                    ).count();
+                    
+                    if (age_seconds > backoff_cleanup_inactive_threshold) {
+                        it = backoff_states->erase(it);
+                    } else {
+                        ++it;
+                    }
+                }
+                
+                // Cleanup last_query_times (outside the lock - it's not shared)
+                for (auto it = last_query_times.begin(); it != last_query_times.end();) {
+                    auto age_seconds = std::chrono::duration_cast<std::chrono::seconds>(
+                        now - it->second
+                    ).count();
+                    
+                    if (age_seconds > backoff_cleanup_inactive_threshold) {
+                        it = last_query_times.erase(it);
+                    } else {
+                        ++it;
+                    }
+                }
+                
+                size_t final_backoff_size = backoff_states->size();
+                size_t final_query_size = last_query_times.size();
+                size_t cleaned_backoff = initial_backoff_size - final_backoff_size;
+                size_t cleaned_query = initial_query_size - final_query_size;
+                
+                if (cleaned_backoff > 0 || cleaned_query > 0) {
+                    spdlog::info("[Worker {}] Backoff cleanup: removed {} backoff states ({} -> {}), {} query times ({} -> {})",
+                                worker_id, cleaned_backoff, initial_backoff_size, final_backoff_size,
+                                cleaned_query, initial_query_size, final_query_size);
+                }
+            }
+            
             // Get all active intentions
             auto all_intentions = registry->get_active_intentions();
             
@@ -173,6 +229,7 @@ void poll_worker_loop(
                             backoff_states->emplace(key, GroupBackoffState(poll_db_interval_ms));
                         }
                         auto& backoff_state = (*backoff_states)[key];
+                        backoff_state.last_accessed = std::chrono::steady_clock::now(); // Update access time
                         current_interval_ms = backoff_state.current_interval_ms;
                         current_empty_count = backoff_state.consecutive_empty_pops;
                     }
@@ -252,6 +309,7 @@ void poll_worker_loop(
                                             }
                                             it->second.consecutive_empty_pops = 0;
                                             it->second.current_interval_ms = poll_db_interval_ms; // Reset to base
+                                            it->second.last_accessed = std::chrono::steady_clock::now(); // Update access time
                                         }
                                     }
                                     
@@ -272,6 +330,7 @@ void poll_worker_loop(
                                         auto it = backoff_states->find(group_key);
                                         if (it != backoff_states->end()) {
                                             it->second.consecutive_empty_pops++;
+                                            it->second.last_accessed = std::chrono::steady_clock::now(); // Update access time
                                             
                                             // Apply exponential backoff if threshold reached
                                             if (it->second.consecutive_empty_pops >= backoff_threshold) {

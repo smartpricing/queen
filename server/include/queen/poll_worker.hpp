@@ -37,7 +37,8 @@ void init_long_polling(
     int poll_db_interval_ms = 500,
     int backoff_threshold = 5,
     double backoff_multiplier = 2.0,
-    int max_poll_interval_ms = 2000
+    int max_poll_interval_ms = 2000,
+    int backoff_cleanup_inactive_threshold = 3600
 );
 
 /**
@@ -76,7 +77,8 @@ void poll_worker_loop(
     int poll_db_interval_ms = 500,
     int backoff_threshold = 5,
     double backoff_multiplier = 2.0,
-    int max_poll_interval_ms = 2000
+    int max_poll_interval_ms = 2000,
+    int backoff_cleanup_inactive_threshold = 3600
 );
 
 /**

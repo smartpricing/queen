@@ -40,7 +40,8 @@ void init_stream_long_polling(
     int poll_stream_interval_ms = 1000,
     int backoff_threshold = 5,
     double backoff_multiplier = 2.0,
-    int max_poll_interval_ms = 5000
+    int max_poll_interval_ms = 5000,
+    int backoff_cleanup_inactive_threshold = 3600
 );
 
 /**
@@ -79,7 +80,8 @@ void stream_poll_worker_loop(
     int poll_stream_interval_ms = 1000,
     int backoff_threshold = 5,
     double backoff_multiplier = 2.0,
-    int max_poll_interval_ms = 5000
+    int max_poll_interval_ms = 5000,
+    int backoff_cleanup_inactive_threshold = 3600
 );
 
 } // namespace queen

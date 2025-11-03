@@ -2577,7 +2577,8 @@ static void worker_thread(const Config& config, int worker_id, int num_workers,
                 config.queue.poll_db_interval,
                 config.queue.backoff_threshold,
                 config.queue.backoff_multiplier,
-                config.queue.max_poll_interval
+                config.queue.max_poll_interval,
+                config.queue.backoff_cleanup_inactive_threshold
             );
             
             // Initialize stream long-polling poll workers
@@ -2592,7 +2593,8 @@ static void worker_thread(const Config& config, int worker_id, int num_workers,
                 1000,  // poll_stream_interval_ms (min time between stream checks per group)
                 5,     // backoff_threshold (consecutive empty checks before backoff)
                 2.0,   // backoff_multiplier
-                5000   // max_poll_interval_ms
+                5000,  // max_poll_interval_ms
+                config.queue.backoff_cleanup_inactive_threshold
             );
         }
         
