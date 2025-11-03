@@ -95,12 +95,12 @@ int RetentionService::cleanup_expired_messages() {
         
         // Delete messages older than retention_seconds (for queues with retention enabled)
         std::string sql = R"(
-            DELETE FROM queen.messages
+            DELETE FROM messages
             WHERE id IN (
                 SELECT m.id 
-                FROM queen.messages m
-                JOIN queen.partitions p ON m.partition_id = p.id
-                JOIN queen.queues q ON p.queue_id = q.id
+                FROM messages m
+                JOIN partitions p ON m.partition_id = p.id
+                JOIN queues q ON p.queue_id = q.id
                 WHERE q.retention_enabled = true
                   AND q.retention_seconds > 0
                   AND m.created_at < NOW() - (q.retention_seconds || ' seconds')::INTERVAL
@@ -133,17 +133,17 @@ int RetentionService::cleanup_completed_messages() {
         std::string sql = R"(
             WITH messages_to_delete AS (
                 SELECT DISTINCT m.id, p.id as partition_id
-                FROM queen.messages m
-                JOIN queen.partitions p ON m.partition_id = p.id
-                JOIN queen.partition_consumers pc ON p.id = pc.partition_id
-                JOIN queen.queues q ON p.queue_id = q.id
+                FROM messages m
+                JOIN partitions p ON m.partition_id = p.id
+                JOIN partition_consumers pc ON p.id = pc.partition_id
+                JOIN queues q ON p.queue_id = q.id
                 WHERE q.retention_enabled = true
                   AND q.completed_retention_seconds > 0
                   AND m.id <= pc.last_consumed_id
                   AND m.created_at < NOW() - (q.completed_retention_seconds || ' seconds')::INTERVAL
                 LIMIT $1
             )
-            DELETE FROM queen.messages
+            DELETE FROM messages
             WHERE id IN (SELECT id FROM messages_to_delete)
             RETURNING (SELECT partition_id FROM messages_to_delete LIMIT 1) as partition_id
         )";
@@ -161,7 +161,7 @@ int RetentionService::cleanup_completed_messages() {
                 try {
                     std::string partition_id = result.get_value(0, "partition_id");
                     std::string insert_history = R"(
-                        INSERT INTO queen.retention_history (partition_id, messages_deleted, retention_type)
+                        INSERT INTO retention_history (partition_id, messages_deleted, retention_type)
                         VALUES ($1::uuid, $2, 'completed_retention')
                     )";
                     conn->exec_params(insert_history, {partition_id, std::to_string(deleted)});
@@ -188,9 +188,9 @@ int RetentionService::cleanup_inactive_partitions() {
         // 1. Have no activity for partition_cleanup_days
         // 2. Have no messages
         std::string sql = R"(
-            DELETE FROM queen.partitions
+            DELETE FROM partitions
             WHERE last_activity < NOW() - ($1 || ' days')::INTERVAL
-              AND id NOT IN (SELECT DISTINCT partition_id FROM queen.messages WHERE partition_id IS NOT NULL)
+              AND id NOT IN (SELECT DISTINCT partition_id FROM messages WHERE partition_id IS NOT NULL)
         )";
         
         auto result = QueryResult(conn->exec_params(sql, {
@@ -217,7 +217,7 @@ int RetentionService::cleanup_old_metrics() {
         
         // Clean messages_consumed metrics
         std::string sql1 = R"(
-            DELETE FROM queen.messages_consumed
+            DELETE FROM messages_consumed
             WHERE acked_at < NOW() - ($1 || ' days')::INTERVAL
         )";
         
@@ -232,7 +232,7 @@ int RetentionService::cleanup_old_metrics() {
         
         // Clean system_metrics
         std::string sql2 = R"(
-            DELETE FROM queen.system_metrics
+            DELETE FROM system_metrics
             WHERE timestamp < NOW() - ($1 || ' days')::INTERVAL
         )";
         
@@ -247,7 +247,7 @@ int RetentionService::cleanup_old_metrics() {
         
         // Clean retention_history itself (older than metrics_retention_days)
         std::string sql3 = R"(
-            DELETE FROM queen.retention_history
+            DELETE FROM retention_history
             WHERE executed_at < NOW() - ($1 || ' days')::INTERVAL
         )";
         

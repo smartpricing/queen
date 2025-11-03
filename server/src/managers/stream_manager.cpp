@@ -66,7 +66,7 @@ void StreamManager::handle_define(uWS::HttpResponse<false>* res, uWS::HttpReques
                     
                     // Q1: Create/Update Stream
                     std::string create_stream_sql = R"(
-                        INSERT INTO queen.streams (
+                        INSERT INTO streams (
                             name, namespace, partitioned, window_type, 
                             window_duration_ms, window_grace_period_ms, window_lease_timeout_ms
                         )
@@ -101,8 +101,8 @@ void StreamManager::handle_define(uWS::HttpResponse<false>* res, uWS::HttpReques
                     // Q2: Link Stream to Queues
                     for (const auto& queue_name : source_queue_names) {
                         std::string link_sql = R"(
-                            INSERT INTO queen.stream_sources (stream_id, queue_id)
-                            SELECT $1, q.id FROM queen.queues q WHERE q.name = $2
+                            INSERT INTO stream_sources (stream_id, queue_id)
+                            SELECT $1, q.id FROM queues q WHERE q.name = $2
                             ON CONFLICT (stream_id, queue_id) DO NOTHING
                         )";
                         auto link_result = QueryResult(conn->exec_params(link_sql, {stream_id, queue_name}));
@@ -210,7 +210,7 @@ void StreamManager::handle_poll(uWS::HttpResponse<false>* res, uWS::HttpRequest*
                         
                     // Delete any expired leases for this window first (cleanup)
                     std::string cleanup_sql = R"(
-                        DELETE FROM queen.stream_leases
+                        DELETE FROM stream_leases
                         WHERE stream_id = $1::UUID
                           AND consumer_group = $2
                           AND stream_key = $3
@@ -320,7 +320,7 @@ void StreamManager::handle_ack(uWS::HttpResponse<false>* res, uWS::HttpRequest* 
                     // Q9: Validate Lease
                     std::string validate_sql = R"(
                         SELECT stream_id, consumer_group, stream_key, window_start, window_end
-                        FROM queen.stream_leases
+                        FROM stream_leases
                         WHERE lease_id = $1::UUID AND lease_expires_at > NOW()
                     )";
                     
@@ -340,7 +340,7 @@ void StreamManager::handle_ack(uWS::HttpResponse<false>* res, uWS::HttpRequest* 
                     if (success) {
                         // Q10: ACK Window
                         std::string ack_sql = R"(
-                            INSERT INTO queen.stream_consumer_offsets (
+                            INSERT INTO stream_consumer_offsets (
                                 stream_id, consumer_group, stream_key,
                                 last_acked_window_end, 
                                 total_windows_consumed, last_consumed_at
@@ -362,7 +362,7 @@ void StreamManager::handle_ack(uWS::HttpResponse<false>* res, uWS::HttpRequest* 
                     }
                     
                     // Q11: Delete Lease
-                    std::string delete_lease_sql = "DELETE FROM queen.stream_leases WHERE lease_id = $1::UUID";
+                    std::string delete_lease_sql = "DELETE FROM stream_leases WHERE lease_id = $1::UUID";
                     auto delete_result = QueryResult(conn->exec_params(delete_lease_sql, {lease_id}));
                     
                     if (!conn->commit_transaction()) {
@@ -411,7 +411,7 @@ void StreamManager::handle_renew(uWS::HttpResponse<false>* res, uWS::HttpRequest
                     
                     // Q12: Renew Lease
                     std::string renew_sql = R"(
-                        UPDATE queen.stream_leases
+                        UPDATE stream_leases
                         SET lease_expires_at = NOW() + ($2 || ' milliseconds')::interval
                         WHERE lease_id = $1::UUID AND lease_expires_at > NOW()
                         RETURNING lease_expires_at
@@ -477,14 +477,14 @@ void StreamManager::handle_seek(uWS::HttpResponse<false>* res, uWS::HttpRequest*
                     
                     // Q13: Seek Offset
                     std::string seek_sql = R"(
-                        INSERT INTO queen.stream_consumer_offsets (
+                        INSERT INTO stream_consumer_offsets (
                             stream_id, consumer_group, stream_key,
                             last_acked_window_end
                         )
                         SELECT 
                             ss.stream_id, $2, p.id::TEXT, $3::TIMESTAMPTZ
-                        FROM queen.stream_sources ss
-                        JOIN queen.partitions p ON ss.queue_id = p.queue_id
+                        FROM stream_sources ss
+                        JOIN partitions p ON ss.queue_id = p.queue_id
                         WHERE ss.stream_id = $1::UUID
                         UNION
                         SELECT $1::UUID, $2, '__GLOBAL__', $3::TIMESTAMPTZ
@@ -535,7 +535,7 @@ void StreamManager::handle_seek(uWS::HttpResponse<false>* res, uWS::HttpRequest*
 
 std::optional<StreamDefinition> StreamManager::get_stream(DatabaseConnection* conn, const std::string& stream_name) {
     try {
-        auto result = QueryResult(conn->exec_params("SELECT * FROM queen.streams WHERE name = $1", {stream_name}));
+        auto result = QueryResult(conn->exec_params("SELECT * FROM streams WHERE name = $1", {stream_name}));
         
         if (!result.is_success() || result.num_rows() == 0) {
             return std::nullopt;
@@ -579,9 +579,9 @@ std::vector<StreamPartitionOffset> StreamManager::get_partitions_and_offsets(
                         o.last_acked_window_end::TEXT, 
                         '-infinity'
                     ) as last_acked_window_end
-                FROM queen.partitions p
-                JOIN queen.stream_sources ss ON p.queue_id = ss.queue_id
-                LEFT JOIN queen.stream_consumer_offsets o 
+                FROM partitions p
+                JOIN stream_sources ss ON p.queue_id = ss.queue_id
+                LEFT JOIN stream_consumer_offsets o 
                     ON ss.stream_id = o.stream_id
                     AND p.name = o.stream_key
                     AND o.consumer_group = $2
@@ -609,7 +609,7 @@ std::vector<StreamPartitionOffset> StreamManager::get_partitions_and_offsets(
                         o.last_acked_window_end::TEXT, 
                         '-infinity'
                     ) as last_acked_window_end
-                FROM queen.stream_consumer_offsets o
+                FROM stream_consumer_offsets o
                 WHERE o.stream_id = $1::UUID
                   AND o.consumer_group = $2
                   AND o.stream_key = '__GLOBAL__'
@@ -646,8 +646,8 @@ std::string StreamManager::get_watermark(DatabaseConnection* conn, const std::st
         std::string sql = R"(
             SELECT 
                 MIN(w.max_created_at)::TEXT as current_watermark
-            FROM queen.queue_watermarks w
-            JOIN queen.stream_sources ss ON w.queue_id = ss.queue_id
+            FROM queue_watermarks w
+            JOIN stream_sources ss ON w.queue_id = ss.queue_id
             WHERE ss.stream_id = $1::UUID
         )";
         
@@ -675,7 +675,7 @@ bool StreamManager::check_lease_exists(
     try {
         // Q6: Check for Active Lease
         std::string sql = R"(
-            SELECT 1 FROM queen.stream_leases
+            SELECT 1 FROM stream_leases
             WHERE stream_id = $1::UUID
               AND consumer_group = $2
               AND stream_key = $3
@@ -706,7 +706,7 @@ std::string StreamManager::create_lease(
     try {
         // Q7: Create Lease
         std::string sql = R"(
-            INSERT INTO queen.stream_leases (
+            INSERT INTO stream_leases (
                 stream_id, consumer_group, stream_key,
                 window_start, window_end, 
                 lease_id, lease_expires_at
@@ -753,9 +753,9 @@ nlohmann::json StreamManager::get_messages(
             // Q8: Partitioned query - Query by partition NAME across all source queues
             std::string sql = R"(
                 SELECT m.id, m.payload, m.created_at
-                FROM queen.messages m
-                JOIN queen.partitions p ON m.partition_id = p.id
-                JOIN queen.stream_sources ss ON p.queue_id = ss.queue_id
+                FROM messages m
+                JOIN partitions p ON m.partition_id = p.id
+                JOIN stream_sources ss ON p.queue_id = ss.queue_id
                 WHERE ss.stream_id = $1::UUID
                   AND p.name = $2
                   AND m.created_at >= $3::TIMESTAMPTZ
@@ -779,9 +779,9 @@ nlohmann::json StreamManager::get_messages(
             // Q8: Global query
             std::string sql = R"(
                 SELECT m.id, m.payload, m.created_at
-                FROM queen.messages m
-                JOIN queen.partitions p ON m.partition_id = p.id
-                JOIN queen.stream_sources ss ON p.queue_id = ss.queue_id
+                FROM messages m
+                JOIN partitions p ON m.partition_id = p.id
+                JOIN stream_sources ss ON p.queue_id = ss.queue_id
                 WHERE ss.stream_id = $1::UUID
                   AND m.created_at >= $2::TIMESTAMPTZ
                   AND m.created_at < $3::TIMESTAMPTZ
@@ -820,9 +820,9 @@ std::optional<std::string> StreamManager::get_first_message_time(
             // Q15: Partitioned query - Query by partition NAME across all source queues
             std::string sql = R"(
                 SELECT MIN(m.created_at)::TEXT as first_time
-                FROM queen.messages m
-                JOIN queen.partitions p ON m.partition_id = p.id
-                JOIN queen.stream_sources ss ON p.queue_id = ss.queue_id
+                FROM messages m
+                JOIN partitions p ON m.partition_id = p.id
+                JOIN stream_sources ss ON p.queue_id = ss.queue_id
                 WHERE ss.stream_id = $1::UUID
                   AND p.name = $2
             )";
@@ -838,9 +838,9 @@ std::optional<std::string> StreamManager::get_first_message_time(
             // Q15: Global query
             std::string sql = R"(
                 SELECT MIN(m.created_at)::TEXT as first_time
-                FROM queen.messages m
-                JOIN queen.partitions p ON m.partition_id = p.id
-                JOIN queen.stream_sources ss ON p.queue_id = ss.queue_id
+                FROM messages m
+                JOIN partitions p ON m.partition_id = p.id
+                JOIN stream_sources ss ON p.queue_id = ss.queue_id
                 WHERE ss.stream_id = $1::UUID
             )";
             
@@ -1038,7 +1038,7 @@ bool StreamManager::check_and_deliver_window_for_poll(
             
             // Delete any expired leases for this window first
             std::string cleanup_sql = R"(
-                DELETE FROM queen.stream_leases
+                DELETE FROM stream_leases
                 WHERE stream_id = $1::UUID
                   AND consumer_group = $2
                   AND stream_key = $3

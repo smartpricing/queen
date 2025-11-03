@@ -23,6 +23,7 @@ This document lists all environment variables supported by the Queen C++ server.
 | `PG_DB` | string | postgres | PostgreSQL database name |
 | `PG_PASSWORD` | string | postgres | PostgreSQL password |
 | `PG_PORT` | string | 5432 | PostgreSQL port |
+| `PG_SCHEMA` | string | queen | PostgreSQL schema name (uses search_path for dynamic schema support) |
 
 ### SSL Configuration
 | Variable | Type | Default | Description |
@@ -363,6 +364,21 @@ export PG_USER=postgres
 export PG_PASSWORD=postgres
 export PG_DB=queen_dev
 export LOG_LEVEL=debug
+```
+
+### Multi-Tenant / Custom Schema
+```bash
+# Use custom schema for multi-tenant deployments
+export PG_SCHEMA=tenant_acme
+export PG_DB=queen_shared
+export PG_HOST=localhost
+
+# Or separate schemas per environment
+export PG_SCHEMA=queen_staging  # Staging
+export PG_SCHEMA=queen_production  # Production
+
+# Note: Schema must exist before starting server
+# CREATE SCHEMA tenant_acme;
 ```
 
 ### Production Environment

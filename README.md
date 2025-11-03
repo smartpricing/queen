@@ -296,14 +296,14 @@ FILE_BUFFER_DIR=/custom/path ./bin/queen-server
 | **Producer** | 100 | 10K | 1 | 100 | multi-queue | 527 msg/sec | 0.15 MB/sec |
 | **Producer** | 10 | 1M | 1,000 | 100 | single-queue | **62,927 msg/sec** | 18.00 MB/sec |
 | **Producer** | 10 | 1M | 1,000 | 100 | multi-queue | 49,663 msg/sec | 14.21 MB/sec |
-| **Producer** | 10 | 1M | 10,000 | 10 | single-queue | 30,351 msg/sec | 8.68 MB/sec |
+| **Producer** | 10 | 1M | 1,000 | 10 | multi-queue | 42,663 msg/sec | 12.29 MB/sec |
+| **Producer** | 10 | 1M | 10,000 | 10 | single-queue | 70,351 msg/sec | 19.68 MB/sec |
 | **Consumer** | 10 | 1M | 1,000 | 100 | single-queue | **31,922 msg/sec** | 16.25 MB/sec |
-| **Consumer** | 10 | 1M | 10,000 | 10 | single-queue | **82,974 msg/sec** | 42.25 MB/sec |
+| **Consumer** | 10 | 1M | 10,000 | 10 | single-queue | **105,974 msg/sec** | 53.70 MB/sec |
 
 ### Key Observations
 
 - ✅ **Batch size matters:** Larger batches (1,000-10,000) dramatically improve throughput
-- ✅ **Single-queue mode faster:** Better partition-level parallelism than multi-queue
 - ✅ **Consumer performance:** Scales well with batch size (82K msg/sec with 10K batches)
 - ✅ **Producer peak:** 62K msg/sec with optimal batch size (1,000)
 - ⚠️ **Small batches:** Performance drops significantly with batch=1 (lock contention)
@@ -379,7 +379,6 @@ You can use Queen directly from HTTP without the JS client.
 
 
 ### Other TODO Items
-- Mini streaming engine
 - Proper concurrency on clients 
 - Check client failover
 - Py client

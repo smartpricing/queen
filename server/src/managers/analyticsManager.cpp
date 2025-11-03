@@ -158,11 +158,11 @@ nlohmann::json AnalyticsManager::get_queues() {
                         THEN m.id 
                         ELSE NULL 
                     END) as processing_count
-                FROM queen.queues q
-                LEFT JOIN queen.partitions p ON p.queue_id = q.id
-                LEFT JOIN queen.messages m ON m.partition_id = p.id
-                LEFT JOIN queen.partition_consumers pc ON pc.partition_id = p.id
-                LEFT JOIN queen.dead_letter_queue dlq ON dlq.message_id = m.id
+                FROM queues q
+                LEFT JOIN partitions p ON p.queue_id = q.id
+                LEFT JOIN messages m ON m.partition_id = p.id
+                LEFT JOIN partition_consumers pc ON pc.partition_id = p.id
+                LEFT JOIN dead_letter_queue dlq ON dlq.message_id = m.id
                 GROUP BY q.id, q.name, q.namespace, q.task, q.created_at
             )
             SELECT
@@ -219,7 +219,7 @@ nlohmann::json AnalyticsManager::get_queue(const std::string& queue_name) {
                 q.namespace,
                 q.task,
                 q.created_at
-            FROM queen.queues q
+            FROM queues q
             WHERE q.name = $1
         )";
         
@@ -242,14 +242,14 @@ nlohmann::json AnalyticsManager::get_queue(const std::string& queue_name) {
                 CASE WHEN pc.lease_expires_at IS NOT NULL AND pc.lease_expires_at > NOW() THEN 1 ELSE 0 END as processing,
                 COALESCE(pc.total_messages_consumed, 0) as completed,
                 0 as failed,
-                (SELECT COUNT(*) FROM queen.dead_letter_queue dlq 
+                (SELECT COUNT(*) FROM dead_letter_queue dlq 
                  WHERE dlq.partition_id = p.id 
                  AND (dlq.consumer_group IS NULL OR dlq.consumer_group = '__QUEUE_MODE__')) as dead_letter,
                 MIN(m.created_at) as oldest_message,
                 MAX(m.created_at) as newest_message
-            FROM queen.partitions p
-            LEFT JOIN queen.messages m ON m.partition_id = p.id
-            LEFT JOIN queen.partition_consumers pc ON pc.partition_id = p.id AND pc.consumer_group = '__QUEUE_MODE__'
+            FROM partitions p
+            LEFT JOIN messages m ON m.partition_id = p.id
+            LEFT JOIN partition_consumers pc ON pc.partition_id = p.id AND pc.consumer_group = '__QUEUE_MODE__'
             WHERE p.queue_id = $1
             GROUP BY p.id, p.name, p.created_at, pc.pending_estimate, pc.lease_expires_at, pc.total_messages_consumed
             ORDER BY p.name
@@ -354,11 +354,11 @@ nlohmann::json AnalyticsManager::get_namespaces() {
                         THEN m.id 
                         ELSE NULL 
                     END) as processing_count
-                FROM queen.queues q
-                LEFT JOIN queen.partitions p ON p.queue_id = q.id
-                LEFT JOIN queen.messages m ON m.partition_id = p.id
-                LEFT JOIN queen.partition_consumers pc ON pc.partition_id = p.id
-                LEFT JOIN queen.dead_letter_queue dlq ON dlq.message_id = m.id
+                FROM queues q
+                LEFT JOIN partitions p ON p.queue_id = q.id
+                LEFT JOIN messages m ON m.partition_id = p.id
+                LEFT JOIN partition_consumers pc ON pc.partition_id = p.id
+                LEFT JOIN dead_letter_queue dlq ON dlq.message_id = m.id
                 WHERE q.namespace IS NOT NULL
                 GROUP BY q.namespace
             )
@@ -426,11 +426,11 @@ nlohmann::json AnalyticsManager::get_tasks() {
                         THEN m.id 
                         ELSE NULL 
                     END) as processing_count
-                FROM queen.queues q
-                LEFT JOIN queen.partitions p ON p.queue_id = q.id
-                LEFT JOIN queen.messages m ON m.partition_id = p.id
-                LEFT JOIN queen.partition_consumers pc ON pc.partition_id = p.id
-                LEFT JOIN queen.dead_letter_queue dlq ON dlq.message_id = m.id
+                FROM queues q
+                LEFT JOIN partitions p ON p.queue_id = q.id
+                LEFT JOIN messages m ON m.partition_id = p.id
+                LEFT JOIN partition_consumers pc ON pc.partition_id = p.id
+                LEFT JOIN dead_letter_queue dlq ON dlq.message_id = m.id
                 WHERE q.task IS NOT NULL
                 GROUP BY q.task
             )
@@ -508,16 +508,16 @@ nlohmann::json AnalyticsManager::get_system_overview() {
                         THEN m.id
                         ELSE NULL
                     END) as completed_messages
-                FROM queen.messages m
-                LEFT JOIN queen.partition_consumers pc ON pc.partition_id = m.partition_id
-                LEFT JOIN queen.dead_letter_queue dlq ON dlq.message_id = m.id
+                FROM messages m
+                LEFT JOIN partition_consumers pc ON pc.partition_id = m.partition_id
+                LEFT JOIN dead_letter_queue dlq ON dlq.message_id = m.id
             ),
             unconsumed_time_lags AS (
                 SELECT
                     EXTRACT(EPOCH FROM (NOW() - m.created_at))::integer as lag_seconds
-                FROM queen.messages m
-                LEFT JOIN queen.partition_consumers pc ON pc.partition_id = m.partition_id
-                LEFT JOIN queen.dead_letter_queue dlq ON dlq.message_id = m.id
+                FROM messages m
+                LEFT JOIN partition_consumers pc ON pc.partition_id = m.partition_id
+                LEFT JOIN dead_letter_queue dlq ON dlq.message_id = m.id
                 WHERE dlq.message_id IS NULL
                   AND (pc.last_consumed_created_at IS NULL 
                        OR m.created_at > pc.last_consumed_created_at
@@ -528,10 +528,10 @@ nlohmann::json AnalyticsManager::get_system_overview() {
                 SELECT
                     p.id as partition_id,
                     COUNT(DISTINCT m.id) as unconsumed_count
-                FROM queen.partitions p
-                LEFT JOIN queen.messages m ON m.partition_id = p.id
-                LEFT JOIN queen.partition_consumers pc ON pc.partition_id = p.id
-                LEFT JOIN queen.dead_letter_queue dlq ON dlq.message_id = m.id
+                FROM partitions p
+                LEFT JOIN messages m ON m.partition_id = p.id
+                LEFT JOIN partition_consumers pc ON pc.partition_id = p.id
+                LEFT JOIN dead_letter_queue dlq ON dlq.message_id = m.id
                 WHERE dlq.message_id IS NULL
                   AND (pc.last_consumed_created_at IS NULL 
                        OR m.created_at > pc.last_consumed_created_at
@@ -541,10 +541,10 @@ nlohmann::json AnalyticsManager::get_system_overview() {
                 HAVING COUNT(DISTINCT m.id) > 0
             )
             SELECT
-                (SELECT COUNT(*) FROM queen.queues) as total_queues,
-                (SELECT COUNT(*) FROM queen.partitions) as total_partitions,
-                (SELECT COUNT(DISTINCT namespace) FROM queen.queues WHERE namespace IS NOT NULL) as namespaces,
-                (SELECT COUNT(DISTINCT task) FROM queen.queues WHERE task IS NOT NULL) as tasks,
+                (SELECT COUNT(*) FROM queues) as total_queues,
+                (SELECT COUNT(*) FROM partitions) as total_partitions,
+                (SELECT COUNT(DISTINCT namespace) FROM queues WHERE namespace IS NOT NULL) as namespaces,
+                (SELECT COUNT(DISTINCT task) FROM queues WHERE task IS NOT NULL) as tasks,
                 ms.total_messages,
                 GREATEST(0, ms.unconsumed_messages - ms.processing_messages) as pending_messages,
                 ms.processing_messages,
@@ -620,10 +620,10 @@ nlohmann::json AnalyticsManager::list_messages(const MessageFilters& filters) {
             SELECT 
                 bool_or(pc.consumer_group = '__QUEUE_MODE__') as has_queue_mode,
                 COUNT(DISTINCT pc.consumer_group) FILTER (WHERE pc.consumer_group != '__QUEUE_MODE__') as bus_groups_count
-            FROM queen.messages m
-            JOIN queen.partitions p ON p.id = m.partition_id
-            JOIN queen.queues q ON q.id = p.queue_id
-            LEFT JOIN queen.partition_consumers pc ON pc.partition_id = p.id
+            FROM messages m
+            JOIN partitions p ON p.id = m.partition_id
+            JOIN queues q ON q.id = p.queue_id
+            LEFT JOIN partition_consumers pc ON pc.partition_id = p.id
             WHERE m.created_at >= $1 AND m.created_at <= $2
         )";
         
@@ -671,7 +671,7 @@ nlohmann::json AnalyticsManager::list_messages(const MessageFilters& filters) {
                 -- Bus mode: count of consumer groups that consumed this message
                 (
                     SELECT COUNT(*)::integer
-                    FROM queen.partition_consumers pc
+                    FROM partition_consumers pc
                     WHERE pc.partition_id = m.partition_id
                       AND pc.consumer_group != '__QUEUE_MODE__'
                       AND pc.last_consumed_created_at IS NOT NULL
@@ -682,15 +682,15 @@ nlohmann::json AnalyticsManager::list_messages(const MessageFilters& filters) {
                 (pc_queue.consumer_group IS NOT NULL) as partition_has_queue_mode,
                 (
                     SELECT COUNT(*)::integer
-                    FROM queen.partition_consumers pc
+                    FROM partition_consumers pc
                     WHERE pc.partition_id = m.partition_id
                       AND pc.consumer_group != '__QUEUE_MODE__'
                 ) as partition_bus_groups_count
-            FROM queen.messages m
-            JOIN queen.partitions p ON p.id = m.partition_id
-            JOIN queen.queues q ON q.id = p.queue_id
-            LEFT JOIN queen.partition_consumers pc_queue ON pc_queue.partition_id = p.id AND pc_queue.consumer_group = '__QUEUE_MODE__'
-            LEFT JOIN queen.dead_letter_queue dlq ON dlq.message_id = m.id
+            FROM messages m
+            JOIN partitions p ON p.id = m.partition_id
+            JOIN queues q ON q.id = p.queue_id
+            LEFT JOIN partition_consumers pc_queue ON pc_queue.partition_id = p.id AND pc_queue.consumer_group = '__QUEUE_MODE__'
+            LEFT JOIN dead_letter_queue dlq ON dlq.message_id = m.id
             WHERE m.created_at >= $1 AND m.created_at <= $2
         )";
         
@@ -720,7 +720,7 @@ nlohmann::json AnalyticsManager::list_messages(const MessageFilters& filters) {
                 if (filters.status == "completed") {
                     query += R"( AND (
                         SELECT COUNT(*)::integer
-                        FROM queen.partition_consumers pc
+                        FROM partition_consumers pc
                         WHERE pc.partition_id = m.partition_id
                           AND pc.consumer_group != '__QUEUE_MODE__'
                           AND pc.last_consumed_created_at IS NOT NULL
@@ -730,7 +730,7 @@ nlohmann::json AnalyticsManager::list_messages(const MessageFilters& filters) {
                 } else if (filters.status == "pending") {
                     query += R"( AND (
                         SELECT COUNT(*)::integer
-                        FROM queen.partition_consumers pc
+                        FROM partition_consumers pc
                         WHERE pc.partition_id = m.partition_id
                           AND pc.consumer_group != '__QUEUE_MODE__'
                           AND pc.last_consumed_created_at IS NOT NULL
@@ -878,7 +878,7 @@ nlohmann::json AnalyticsManager::get_message(const std::string& partition_id, co
                 -- Bus mode: count of consumer groups that consumed this message
                 (
                     SELECT COUNT(*)::integer
-                    FROM queen.partition_consumers pc
+                    FROM partition_consumers pc
                     WHERE pc.partition_id = m.partition_id
                       AND pc.consumer_group != '__QUEUE_MODE__'
                       AND pc.last_consumed_created_at IS NOT NULL
@@ -888,17 +888,17 @@ nlohmann::json AnalyticsManager::get_message(const std::string& partition_id, co
                 -- Total bus mode consumer groups
                 (
                     SELECT COUNT(*)::integer
-                    FROM queen.partition_consumers pc
+                    FROM partition_consumers pc
                     WHERE pc.partition_id = m.partition_id
                       AND pc.consumer_group != '__QUEUE_MODE__'
                 ) as total_bus_groups,
                 -- Check if __QUEUE_MODE__ consumer exists
                 (pc_queue.consumer_group IS NOT NULL) as has_queue_mode
-            FROM queen.messages m
-            JOIN queen.partitions p ON p.id = m.partition_id
-            JOIN queen.queues q ON q.id = p.queue_id
-            LEFT JOIN queen.partition_consumers pc_queue ON pc_queue.partition_id = p.id AND pc_queue.consumer_group = '__QUEUE_MODE__'
-            LEFT JOIN queen.dead_letter_queue dlq ON dlq.message_id = m.id
+            FROM messages m
+            JOIN partitions p ON p.id = m.partition_id
+            JOIN queues q ON q.id = p.queue_id
+            LEFT JOIN partition_consumers pc_queue ON pc_queue.partition_id = p.id AND pc_queue.consumer_group = '__QUEUE_MODE__'
+            LEFT JOIN dead_letter_queue dlq ON dlq.message_id = m.id
             WHERE m.partition_id = $1::uuid AND m.transaction_id = $2
         )";
         
@@ -1020,7 +1020,7 @@ bool AnalyticsManager::delete_message(const std::string& partition_id, const std
         
         // Delete the message - cascading deletes will handle DLQ entries
         std::string delete_sql = R"(
-            DELETE FROM queen.messages
+            DELETE FROM messages
             WHERE partition_id = $1::uuid AND transaction_id = $2
         )";
         
@@ -1105,10 +1105,10 @@ nlohmann::json AnalyticsManager::get_dlq_messages(const DLQFilters& filters) {
                 q.namespace,
                 q.task,
                 p.name as partition_name
-            FROM queen.dead_letter_queue dlq
-            JOIN queen.messages m ON dlq.message_id = m.id
-            JOIN queen.partitions p ON m.partition_id = p.id
-            JOIN queen.queues q ON p.queue_id = q.id
+            FROM dead_letter_queue dlq
+            JOIN messages m ON dlq.message_id = m.id
+            JOIN partitions p ON m.partition_id = p.id
+            JOIN queues q ON p.queue_id = q.id
         )" + where_clause + R"(
             ORDER BY dlq.failed_at DESC
             LIMIT $)" + std::to_string(param_num++) + R"(
@@ -1195,10 +1195,10 @@ nlohmann::json AnalyticsManager::get_dlq_messages(const DLQFilters& filters) {
         // Get total count for pagination
         std::string count_query = R"(
             SELECT COUNT(*) as total
-            FROM queen.dead_letter_queue dlq
-            JOIN queen.messages m ON dlq.message_id = m.id
-            JOIN queen.partitions p ON m.partition_id = p.id
-            JOIN queen.queues q ON p.queue_id = q.id
+            FROM dead_letter_queue dlq
+            JOIN messages m ON dlq.message_id = m.id
+            JOIN partitions p ON m.partition_id = p.id
+            JOIN queues q ON p.queue_id = q.id
         )" + where_clause;
         
         // Remove limit and offset params for count query
@@ -1247,9 +1247,9 @@ nlohmann::json AnalyticsManager::get_status(const StatusFilters& filters) {
                 SELECT 
                     DATE_TRUNC('minute', m.created_at) as minute,
                     COUNT(DISTINCT m.id) as messages_ingested
-                FROM queen.messages m
-                JOIN queen.partitions p ON p.id = m.partition_id
-                JOIN queen.queues q ON q.id = p.queue_id
+                FROM messages m
+                JOIN partitions p ON p.id = m.partition_id
+                JOIN queues q ON q.id = p.queue_id
                 WHERE m.created_at >= $1::timestamptz
                     AND m.created_at <= $2::timestamptz )" + filter_clause + R"(
                 GROUP BY DATE_TRUNC('minute', m.created_at)
@@ -1258,9 +1258,9 @@ nlohmann::json AnalyticsManager::get_status(const StatusFilters& filters) {
                 SELECT 
                     DATE_TRUNC('minute', mc.acked_at) as minute,
                     SUM(mc.messages_completed) as messages_processed
-                FROM queen.messages_consumed mc
-                JOIN queen.partitions p ON p.id = mc.partition_id
-                JOIN queen.queues q ON q.id = p.queue_id
+                FROM messages_consumed mc
+                JOIN partitions p ON p.id = mc.partition_id
+                JOIN queues q ON q.id = p.queue_id
                 WHERE mc.acked_at >= $1::timestamptz
                     AND mc.acked_at <= $2::timestamptz )" + filter_clause + R"(
                 GROUP BY DATE_TRUNC('minute', mc.acked_at)
@@ -1296,10 +1296,10 @@ nlohmann::json AnalyticsManager::get_status(const StatusFilters& filters) {
                 q.id, q.name, q.namespace, q.task,
                 COUNT(DISTINCT p.id) as partition_count,
                 COALESCE(SUM(pc.total_messages_consumed), 0) as total_consumed
-            FROM queen.queues q
-            LEFT JOIN queen.partitions p ON p.queue_id = q.id
-            LEFT JOIN queen.partition_consumers pc ON pc.partition_id = p.id
-            LEFT JOIN queen.messages m ON m.partition_id = p.id
+            FROM queues q
+            LEFT JOIN partitions p ON p.queue_id = q.id
+            LEFT JOIN partition_consumers pc ON pc.partition_id = p.id
+            LEFT JOIN messages m ON m.partition_id = p.id
                 AND m.created_at >= $1 AND m.created_at <= $2
             WHERE 1=1 )" + filter_clause + R"(
             GROUP BY q.id, q.name, q.namespace, q.task
@@ -1327,9 +1327,9 @@ nlohmann::json AnalyticsManager::get_status(const StatusFilters& filters) {
         std::string counts_query = R"(
             WITH time_filtered_messages AS (
                 SELECT DISTINCT m.id, m.partition_id, m.created_at
-                FROM queen.messages m
-                LEFT JOIN queen.partitions p ON p.id = m.partition_id
-                LEFT JOIN queen.queues q ON q.id = p.queue_id
+                FROM messages m
+                LEFT JOIN partitions p ON p.id = m.partition_id
+                LEFT JOIN queues q ON q.id = p.queue_id
                 WHERE m.created_at >= $1 AND m.created_at <= $2 )" + filter_clause + R"(
             )
             SELECT 
@@ -1369,8 +1369,8 @@ nlohmann::json AnalyticsManager::get_status(const StatusFilters& filters) {
                     ELSE NULL 
                 END) as dead_letter
             FROM time_filtered_messages tfm
-            LEFT JOIN queen.partition_consumers pc ON pc.partition_id = tfm.partition_id
-            LEFT JOIN queen.dead_letter_queue dlq ON dlq.message_id = tfm.id
+            LEFT JOIN partition_consumers pc ON pc.partition_id = tfm.partition_id
+            LEFT JOIN dead_letter_queue dlq ON dlq.message_id = tfm.id
         )";
         
         auto counts_result = QueryResult(conn->exec_params(counts_query, {from_iso, to_iso}));
@@ -1396,7 +1396,7 @@ nlohmann::json AnalyticsManager::get_status(const StatusFilters& filters) {
                 COUNT(DISTINCT partition_id) as partitions_with_leases,
                 SUM(batch_size) as total_batch_size,
                 SUM(acked_count) as total_acked
-            FROM queen.partition_consumers
+            FROM partition_consumers
             WHERE lease_expires_at IS NOT NULL AND lease_expires_at > NOW()
         )";
         
@@ -1416,9 +1416,9 @@ nlohmann::json AnalyticsManager::get_status(const StatusFilters& filters) {
                 COUNT(DISTINCT partition_id) as affected_partitions,
                 error_message,
                 COUNT(*) as error_count
-            FROM queen.dead_letter_queue dlq
-            LEFT JOIN queen.partitions p ON p.id = dlq.partition_id
-            LEFT JOIN queen.queues q ON q.id = p.queue_id
+            FROM dead_letter_queue dlq
+            LEFT JOIN partitions p ON p.id = dlq.partition_id
+            LEFT JOIN queues q ON q.id = p.queue_id
             WHERE dlq.failed_at >= $1 AND dlq.failed_at <= $2 )" + filter_clause + R"(
             GROUP BY error_message
             ORDER BY error_count DESC
@@ -1485,14 +1485,14 @@ nlohmann::json AnalyticsManager::get_status_queues(const StatusFilters& filters,
                 q.id, q.name, q.namespace, q.task, q.priority, q.created_at,
                 COUNT(DISTINCT p.id) as partition_count,
                 (SELECT COUNT(DISTINCT m2.id)
-                 FROM queen.messages m2
-                 JOIN queen.partitions p2 ON p2.id = m2.partition_id
+                 FROM messages m2
+                 JOIN partitions p2 ON p2.id = m2.partition_id
                  WHERE p2.queue_id = q.id) as total_messages,
                 COUNT(DISTINCT CASE WHEN pc.lease_expires_at IS NOT NULL AND pc.lease_expires_at > NOW() THEN p.id END) as processing,
                 COALESCE(SUM(DISTINCT pc.total_messages_consumed), 0) as completed
-            FROM queen.queues q
-            LEFT JOIN queen.partitions p ON p.queue_id = q.id
-            LEFT JOIN queen.partition_consumers pc ON pc.partition_id = p.id
+            FROM queues q
+            LEFT JOIN partitions p ON p.queue_id = q.id
+            LEFT JOIN partition_consumers pc ON pc.partition_id = p.id
                 AND pc.consumer_group = '__QUEUE_MODE__'
             WHERE 1=1 )" + filter_clause + R"(
             GROUP BY q.id, q.name, q.namespace, q.task, q.priority, q.created_at
@@ -1562,10 +1562,10 @@ nlohmann::json AnalyticsManager::get_queue_detail(const std::string& queue_name)
                 COALESCE(pc.total_messages_consumed, 0) as partition_completed,
                 pc.total_messages_consumed, pc.total_batches_consumed,
                 pc.last_consumed_at
-            FROM queen.queues q
-            LEFT JOIN queen.partitions p ON p.queue_id = q.id
-            LEFT JOIN queen.messages m ON m.partition_id = p.id
-            LEFT JOIN queen.partition_consumers pc ON pc.partition_id = p.id 
+            FROM queues q
+            LEFT JOIN partitions p ON p.queue_id = q.id
+            LEFT JOIN messages m ON m.partition_id = p.id
+            LEFT JOIN partition_consumers pc ON pc.partition_id = p.id 
                 AND pc.consumer_group = '__QUEUE_MODE__'
             WHERE q.name = $1
             GROUP BY q.id, q.name, q.namespace, q.task, q.priority, q.lease_time, 
@@ -1679,7 +1679,7 @@ nlohmann::json AnalyticsManager::get_queue_messages(const std::string& queue_nam
                 m.id, m.transaction_id, m.trace_id, m.created_at,
                 p.name as partition,
                 CASE 
-                    WHEN EXISTS (SELECT 1 FROM queen.dead_letter_queue dlq WHERE dlq.message_id = m.id) THEN 'failed'
+                    WHEN EXISTS (SELECT 1 FROM dead_letter_queue dlq WHERE dlq.message_id = m.id) THEN 'failed'
                     WHEN (m.created_at < COALESCE(pc.last_consumed_created_at, '1970-01-01'::timestamptz) 
                           OR (DATE_TRUNC('milliseconds', m.created_at) = DATE_TRUNC('milliseconds', COALESCE(pc.last_consumed_created_at, '1970-01-01'::timestamptz)) 
                               AND m.id <= COALESCE(pc.last_consumed_id, '00000000-0000-0000-0000-000000000000'::uuid))) THEN 'completed'
@@ -1687,10 +1687,10 @@ nlohmann::json AnalyticsManager::get_queue_messages(const std::string& queue_nam
                     ELSE 'pending'
                 END as status,
                 EXTRACT(EPOCH FROM (NOW() - m.created_at)) as age_seconds
-            FROM queen.messages m
-            JOIN queen.partitions p ON p.id = m.partition_id
-            JOIN queen.queues q ON q.id = p.queue_id
-            LEFT JOIN queen.partition_consumers pc ON pc.partition_id = p.id 
+            FROM messages m
+            JOIN partitions p ON p.id = m.partition_id
+            JOIN queues q ON q.id = p.queue_id
+            LEFT JOIN partition_consumers pc ON pc.partition_id = p.id 
                 AND pc.consumer_group = '__QUEUE_MODE__'
             WHERE q.name = $1
                 AND m.created_at >= $2 AND m.created_at <= $3
@@ -1770,9 +1770,9 @@ nlohmann::json AnalyticsManager::get_analytics(const AnalyticsFilters& filters) 
                 SELECT 
                     DATE_TRUNC(')" + interval + R"(', m.created_at) as bucket,
                     COUNT(DISTINCT m.id) as ingested
-                FROM queen.messages m
-                JOIN queen.partitions p ON p.id = m.partition_id
-                JOIN queen.queues q ON q.id = p.queue_id
+                FROM messages m
+                JOIN partitions p ON p.id = m.partition_id
+                JOIN queues q ON q.id = p.queue_id
                 WHERE m.created_at >= $1 AND m.created_at <= $2 )" + filter_clause + R"(
                 GROUP BY DATE_TRUNC(')" + interval + R"(', m.created_at)
             ),
@@ -1780,9 +1780,9 @@ nlohmann::json AnalyticsManager::get_analytics(const AnalyticsFilters& filters) 
                 SELECT 
                     DATE_TRUNC(')" + interval + R"(', mc.acked_at) as bucket,
                     SUM(mc.messages_completed) as processed
-                FROM queen.messages_consumed mc
-                JOIN queen.partitions p ON p.id = mc.partition_id
-                JOIN queen.queues q ON q.id = p.queue_id
+                FROM messages_consumed mc
+                JOIN partitions p ON p.id = mc.partition_id
+                JOIN queues q ON q.id = p.queue_id
                 WHERE mc.acked_at >= $1::timestamptz AND mc.acked_at <= $2::timestamptz )" + filter_clause + R"(
                 GROUP BY DATE_TRUNC(')" + interval + R"(', mc.acked_at)
             )
@@ -1829,7 +1829,7 @@ nlohmann::json AnalyticsManager::get_analytics(const AnalyticsFilters& filters) 
             SELECT 
                 COALESCE(SUM(pc.pending_estimate), 0) as pending,
                 COALESCE(SUM(CASE WHEN pc.lease_expires_at IS NOT NULL AND pc.lease_expires_at > NOW() THEN pc.batch_size ELSE 0 END), 0) as processing
-            FROM queen.partition_consumers pc
+            FROM partition_consumers pc
             WHERE pc.consumer_group = '__QUEUE_MODE__'
         )";
         
@@ -1912,7 +1912,7 @@ nlohmann::json AnalyticsManager::get_system_metrics(const SystemMetricsFilters& 
                 worker_id,
                 sample_count,
                 metrics
-            FROM queen.system_metrics
+            FROM system_metrics
             WHERE timestamp >= $1::timestamptz
                 AND timestamp <= $2::timestamptz )" + where_clause + R"(
             ORDER BY hostname, port, timestamp ASC
@@ -1996,7 +1996,7 @@ nlohmann::json AnalyticsManager::get_consumer_groups() {
                 -- Calculate lag: count messages after last consumed
                 (
                     SELECT COUNT(*)
-                    FROM queen.messages m
+                    FROM messages m
                     WHERE m.partition_id = pc.partition_id
                       AND (
                           pc.last_consumed_created_at IS NULL
@@ -2008,7 +2008,7 @@ nlohmann::json AnalyticsManager::get_consumer_groups() {
                 -- Calculate time lag: age of oldest unprocessed message
                 (
                     SELECT EXTRACT(EPOCH FROM (NOW() - m.created_at))::integer
-                    FROM queen.messages m
+                    FROM messages m
                     WHERE m.partition_id = pc.partition_id
                       AND (
                           pc.last_consumed_created_at IS NULL
@@ -2019,9 +2019,9 @@ nlohmann::json AnalyticsManager::get_consumer_groups() {
                     ORDER BY m.created_at ASC
                     LIMIT 1
                 )::integer as time_lag_seconds
-            FROM queen.partition_consumers pc
-            JOIN queen.partitions p ON p.id = pc.partition_id
-            JOIN queen.queues q ON q.id = p.queue_id
+            FROM partition_consumers pc
+            JOIN partitions p ON p.id = pc.partition_id
+            JOIN queues q ON q.id = p.queue_id
             ORDER BY pc.consumer_group, q.name, p.name
         )";
         

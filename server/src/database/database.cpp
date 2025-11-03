@@ -10,7 +10,8 @@ namespace queen {
 DatabaseConnection::DatabaseConnection(const std::string& connection_string,
                                      int statement_timeout_ms,
                                      int lock_timeout_ms,
-                                     int idle_in_transaction_timeout_ms) 
+                                     int idle_in_transaction_timeout_ms,
+                                     const std::string& schema) 
     : conn_(nullptr), in_use_(false) {
     conn_ = PQconnectdb(connection_string.c_str());
     
@@ -24,20 +25,22 @@ DatabaseConnection::DatabaseConnection(const std::string& connection_string,
     // Set client encoding to UTF8
     PQsetClientEncoding(conn_, "UTF8");
     
-    // CRITICAL: Set timeout parameters via SET commands (works with PgBouncer)
+    // CRITICAL: Set timeout parameters and search_path via SET commands (works with PgBouncer)
     // These prevent connections from being killed by server-side timeouts
-    std::string set_timeouts = 
+    // search_path allows using custom schema without changing SQL queries
+    std::string set_params = 
         "SET statement_timeout = " + std::to_string(statement_timeout_ms) + "; " +
         "SET lock_timeout = " + std::to_string(lock_timeout_ms) + "; " +
-        "SET idle_in_transaction_session_timeout = " + std::to_string(idle_in_transaction_timeout_ms) + ";";
+        "SET idle_in_transaction_session_timeout = " + std::to_string(idle_in_transaction_timeout_ms) + "; " +
+        "SET search_path TO " + schema + ", public;";
     
-    PGresult* result = PQexec(conn_, set_timeouts.c_str());
+    PGresult* result = PQexec(conn_, set_params.c_str());
     if (PQresultStatus(result) != PGRES_COMMAND_OK) {
         std::string error = PQerrorMessage(conn_);
         PQclear(result);
         PQfinish(conn_);
         conn_ = nullptr;
-        throw std::runtime_error("Failed to set timeout parameters: " + error);
+        throw std::runtime_error("Failed to set connection parameters: " + error);
     }
     PQclear(result);
 }
@@ -109,7 +112,8 @@ DatabasePool::DatabasePool(const std::string& connection_string,
                          int acquisition_timeout_ms,
                          int statement_timeout_ms,
                          int lock_timeout_ms,
-                         int idle_in_transaction_timeout_ms)
+                         int idle_in_transaction_timeout_ms,
+                         const std::string& schema)
     : available_connections_(), mutex_(), condition_(), 
       connection_string_(connection_string), 
       pool_size_(pool_size), 
@@ -117,7 +121,8 @@ DatabasePool::DatabasePool(const std::string& connection_string,
       acquisition_timeout_ms_(acquisition_timeout_ms),
       statement_timeout_ms_(statement_timeout_ms),
       lock_timeout_ms_(lock_timeout_ms),
-      idle_in_transaction_timeout_ms_(idle_in_transaction_timeout_ms) {
+      idle_in_transaction_timeout_ms_(idle_in_transaction_timeout_ms),
+      schema_(schema) {
     
     // Pre-populate the pool
     for (size_t i = 0; i < pool_size_; ++i) {
@@ -154,7 +159,8 @@ std::unique_ptr<DatabaseConnection> DatabasePool::create_connection() {
     return std::make_unique<DatabaseConnection>(connection_string_,
                                                 statement_timeout_ms_,
                                                 lock_timeout_ms_,
-                                                idle_in_transaction_timeout_ms_);
+                                                idle_in_transaction_timeout_ms_,
+                                                schema_);
 }
 
 std::unique_ptr<DatabaseConnection> DatabasePool::get_connection() {

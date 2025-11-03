@@ -87,16 +87,16 @@ int EvictionService::evict_expired_waiting_messages() {
         std::string sql = R"(
             WITH messages_to_evict AS (
                 SELECT DISTINCT m.id, p.id as partition_id
-                FROM queen.messages m
-                JOIN queen.partitions p ON m.partition_id = p.id
-                JOIN queen.queues q ON p.queue_id = q.id
-                LEFT JOIN queen.partition_consumers pc ON p.id = pc.partition_id
+                FROM messages m
+                JOIN partitions p ON m.partition_id = p.id
+                JOIN queues q ON p.queue_id = q.id
+                LEFT JOIN partition_consumers pc ON p.id = pc.partition_id
                 WHERE q.max_wait_time_seconds > 0
                   AND m.created_at < NOW() - (q.max_wait_time_seconds || ' seconds')::INTERVAL
                   AND (pc.last_consumed_id IS NULL OR m.id > pc.last_consumed_id)
                 LIMIT $1
             )
-            DELETE FROM queen.messages
+            DELETE FROM messages
             WHERE id IN (SELECT id FROM messages_to_evict)
             RETURNING (SELECT partition_id FROM messages_to_evict LIMIT 1) as partition_id
         )";
@@ -114,7 +114,7 @@ int EvictionService::evict_expired_waiting_messages() {
                 try {
                     std::string partition_id = result.get_value(0, "partition_id");
                     std::string insert_history = R"(
-                        INSERT INTO queen.retention_history (partition_id, messages_deleted, retention_type)
+                        INSERT INTO retention_history (partition_id, messages_deleted, retention_type)
                         VALUES ($1::uuid, $2, 'max_wait_time_eviction')
                     )";
                     conn->exec_params(insert_history, {partition_id, std::to_string(evicted)});

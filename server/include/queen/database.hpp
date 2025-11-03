@@ -21,7 +21,8 @@ public:
     explicit DatabaseConnection(const std::string& connection_string, 
                                int statement_timeout_ms = 30000,
                                int lock_timeout_ms = 10000,
-                               int idle_in_transaction_timeout_ms = 30000);
+                               int idle_in_transaction_timeout_ms = 30000,
+                               const std::string& schema = "queen");
     ~DatabaseConnection();
     
     // Non-copyable, movable
@@ -55,6 +56,7 @@ private:
     int statement_timeout_ms_;
     int lock_timeout_ms_;
     int idle_in_transaction_timeout_ms_;
+    std::string schema_;
     
     std::unique_ptr<DatabaseConnection> create_connection();
     
@@ -64,7 +66,8 @@ public:
                          int acquisition_timeout_ms = 10000,
                          int statement_timeout_ms = 30000,
                          int lock_timeout_ms = 10000,
-                         int idle_in_transaction_timeout_ms = 30000);
+                         int idle_in_transaction_timeout_ms = 30000,
+                         const std::string& schema = "queen");
     ~DatabasePool();
     
     std::unique_ptr<DatabaseConnection> get_connection();

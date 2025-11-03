@@ -1934,7 +1934,7 @@ static void setup_worker_routes(uWS::App* app,
     app->get("/api/v1/resources/streams", [](auto* res, auto* req) {
         try {
             ScopedConnection conn(global_db_pool.get());
-            auto result = QueryResult(conn->exec("SELECT * FROM queen.streams ORDER BY created_at DESC"));
+            auto result = QueryResult(conn->exec("SELECT * FROM streams ORDER BY created_at DESC"));
             
             nlohmann::json streams = nlohmann::json::array();
             for (int i = 0; i < result.num_rows(); i++) {
@@ -1953,7 +1953,7 @@ static void setup_worker_routes(uWS::App* app,
                 
                 // Get source queues for this stream
                 auto sources_result = QueryResult(conn->exec_params(
-                    "SELECT q.name FROM queen.stream_sources ss JOIN queen.queues q ON ss.queue_id = q.id WHERE ss.stream_id = $1::UUID",
+                    "SELECT q.name FROM stream_sources ss JOIN queues q ON ss.queue_id = q.id WHERE ss.stream_id = $1::UUID",
                     {result.get_value(i, "id")}
                 ));
                 nlohmann::json source_queues = nlohmann::json::array();
@@ -1964,14 +1964,14 @@ static void setup_worker_routes(uWS::App* app,
                 
                 // Get active leases count
                 auto leases_result = QueryResult(conn->exec_params(
-                    "SELECT COUNT(*) as count FROM queen.stream_leases WHERE stream_id = $1::UUID AND lease_expires_at > NOW()",
+                    "SELECT COUNT(*) as count FROM stream_leases WHERE stream_id = $1::UUID AND lease_expires_at > NOW()",
                     {result.get_value(i, "id")}
                 ));
                 stream["activeLeases"] = leases_result.num_rows() > 0 ? std::stoi(leases_result.get_value(0, "count")) : 0;
                 
                 // Get consumer groups count
                 auto consumers_result = QueryResult(conn->exec_params(
-                    "SELECT COUNT(DISTINCT consumer_group) as count FROM queen.stream_consumer_offsets WHERE stream_id = $1::UUID",
+                    "SELECT COUNT(DISTINCT consumer_group) as count FROM stream_consumer_offsets WHERE stream_id = $1::UUID",
                     {result.get_value(i, "id")}
                 ));
                 stream["consumerGroups"] = consumers_result.num_rows() > 0 ? std::stoi(consumers_result.get_value(0, "count")) : 0;
@@ -1994,35 +1994,35 @@ static void setup_worker_routes(uWS::App* app,
             ScopedConnection conn(global_db_pool.get());
             
             // Total streams
-            auto streams_result = QueryResult(conn->exec("SELECT COUNT(*) as count FROM queen.streams"));
+            auto streams_result = QueryResult(conn->exec("SELECT COUNT(*) as count FROM streams"));
             int total_streams = streams_result.num_rows() > 0 ? std::stoi(streams_result.get_value(0, "count")) : 0;
             
             // Partitioned streams count
-            auto partitioned_result = QueryResult(conn->exec("SELECT COUNT(*) as count FROM queen.streams WHERE partitioned = true"));
+            auto partitioned_result = QueryResult(conn->exec("SELECT COUNT(*) as count FROM streams WHERE partitioned = true"));
             int partitioned_streams = partitioned_result.num_rows() > 0 ? std::stoi(partitioned_result.get_value(0, "count")) : 0;
             
             // Active leases (windows being processed)
-            auto leases_result = QueryResult(conn->exec("SELECT COUNT(*) as count FROM queen.stream_leases WHERE lease_expires_at > NOW()"));
+            auto leases_result = QueryResult(conn->exec("SELECT COUNT(*) as count FROM stream_leases WHERE lease_expires_at > NOW()"));
             int active_leases = leases_result.num_rows() > 0 ? std::stoi(leases_result.get_value(0, "count")) : 0;
             
             // Total unique consumer groups across all streams
-            auto consumer_groups_result = QueryResult(conn->exec("SELECT COUNT(DISTINCT consumer_group) as count FROM queen.stream_consumer_offsets"));
+            auto consumer_groups_result = QueryResult(conn->exec("SELECT COUNT(DISTINCT consumer_group) as count FROM stream_consumer_offsets"));
             int total_consumer_groups = consumer_groups_result.num_rows() > 0 ? std::stoi(consumer_groups_result.get_value(0, "count")) : 0;
             
             // Active consumers (consumer groups that consumed in last hour)
             auto active_consumers_result = QueryResult(conn->exec(
-                "SELECT COUNT(DISTINCT consumer_group) as count FROM queen.stream_consumer_offsets "
+                "SELECT COUNT(DISTINCT consumer_group) as count FROM stream_consumer_offsets "
                 "WHERE last_consumed_at > NOW() - INTERVAL '1 hour'"
             ));
             int active_consumers = active_consumers_result.num_rows() > 0 ? std::stoi(active_consumers_result.get_value(0, "count")) : 0;
             
             // Total windows processed (sum of all consumer groups)
-            auto windows_processed_result = QueryResult(conn->exec("SELECT COALESCE(SUM(total_windows_consumed), 0) as total FROM queen.stream_consumer_offsets"));
+            auto windows_processed_result = QueryResult(conn->exec("SELECT COALESCE(SUM(total_windows_consumed), 0) as total FROM stream_consumer_offsets"));
             long long total_windows_processed = windows_processed_result.num_rows() > 0 ? std::stoll(windows_processed_result.get_value(0, "total")) : 0;
             
             // Windows processed in last hour
             auto windows_hour_result = QueryResult(conn->exec(
-                "SELECT COUNT(*) as count FROM queen.stream_consumer_offsets "
+                "SELECT COUNT(*) as count FROM stream_consumer_offsets "
                 "WHERE last_consumed_at > NOW() - INTERVAL '1 hour'"
             ));
             int windows_last_hour = windows_hour_result.num_rows() > 0 ? std::stoi(windows_hour_result.get_value(0, "count")) : 0;
@@ -2030,7 +2030,7 @@ static void setup_worker_routes(uWS::App* app,
             // Average lease time (in seconds)
             auto avg_lease_result = QueryResult(conn->exec(
                 "SELECT COALESCE(AVG(EXTRACT(EPOCH FROM (lease_expires_at - CURRENT_TIMESTAMP))), 0) as avg_seconds "
-                "FROM queen.stream_leases WHERE lease_expires_at > NOW()"
+                "FROM stream_leases WHERE lease_expires_at > NOW()"
             ));
             int avg_lease_time = avg_lease_result.num_rows() > 0 ? static_cast<int>(std::stod(avg_lease_result.get_value(0, "avg_seconds"))) : 0;
             
@@ -2056,7 +2056,7 @@ static void setup_worker_routes(uWS::App* app,
             std::string stream_name = std::string(req->getParameter(0));
             ScopedConnection conn(global_db_pool.get());
             
-            auto result = QueryResult(conn->exec_params("SELECT * FROM queen.streams WHERE name = $1", {stream_name}));
+            auto result = QueryResult(conn->exec_params("SELECT * FROM streams WHERE name = $1", {stream_name}));
             
             if (result.num_rows() == 0) {
                 send_error_response(res, "Stream not found", 404);
@@ -2089,7 +2089,7 @@ static void setup_worker_routes(uWS::App* app,
             ScopedConnection conn(global_db_pool.get());
             
             // Get stream ID
-            auto stream_result = QueryResult(conn->exec_params("SELECT id FROM queen.streams WHERE name = $1", {stream_name}));
+            auto stream_result = QueryResult(conn->exec_params("SELECT id FROM streams WHERE name = $1", {stream_name}));
             if (stream_result.num_rows() == 0) {
                 send_error_response(res, "Stream not found", 404);
                 return;
@@ -2102,7 +2102,7 @@ static void setup_worker_routes(uWS::App* app,
                 "last_acked_window_end::TEXT, "
                 "COALESCE(total_windows_consumed, 0) as total_windows_consumed, "
                 "last_consumed_at::TEXT "
-                "FROM queen.stream_consumer_offsets WHERE stream_id = $1::UUID ORDER BY consumer_group, stream_key",
+                "FROM stream_consumer_offsets WHERE stream_id = $1::UUID ORDER BY consumer_group, stream_key",
                 {stream_id}
             ));
             
@@ -2136,7 +2136,7 @@ static void setup_worker_routes(uWS::App* app,
             std::string stream_name = std::string(req->getParameter(0));
             ScopedConnection conn(global_db_pool.get());
             
-            auto result = QueryResult(conn->exec_params("DELETE FROM queen.streams WHERE name = $1 RETURNING id", {stream_name}));
+            auto result = QueryResult(conn->exec_params("DELETE FROM streams WHERE name = $1 RETURNING id", {stream_name}));
             
             if (result.num_rows() == 0) {
                 send_error_response(res, "Stream not found", 404);
@@ -2448,7 +2448,8 @@ static void worker_thread(const Config& config, int worker_id, int num_workers,
                 config.database.pool_acquisition_timeout,
                 config.database.statement_timeout,
                 config.database.lock_timeout,
-                config.database.idle_timeout
+                config.database.idle_timeout,
+                config.database.schema
             );
             
             // Create global DB operations ThreadPool
@@ -2498,7 +2499,7 @@ static void worker_thread(const Config& config, int worker_id, int num_workers,
         auto db_thread_pool = global_db_thread_pool;
         
         // Thread-local queue manager (uses shared pool)
-        auto queue_manager = std::make_shared<QueueManager>(db_pool, config.queue);
+        auto queue_manager = std::make_shared<QueueManager>(db_pool, config.queue, config.database.schema);
         
         // Thread-local analytics manager (uses shared pool)
         auto analytics_manager = std::make_shared<AnalyticsManager>(db_pool);

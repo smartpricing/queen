@@ -12,8 +12,8 @@
 
 namespace queen {
 
-QueueManager::QueueManager(std::shared_ptr<DatabasePool> db_pool, const QueueConfig& config)
-    : db_pool_(db_pool), config_(config) {
+QueueManager::QueueManager(std::shared_ptr<DatabasePool> db_pool, const QueueConfig& config, const std::string& schema_name)
+    : db_pool_(db_pool), config_(config), schema_name_(schema_name) {
     if (!db_pool_) {
         throw std::invalid_argument("Database pool cannot be null");
     }
@@ -162,7 +162,7 @@ void QueueManager::push_single_message(
     // Get next sequence number
     auto seq_result = QueryResult(conn->exec_params(R"(
         SELECT COALESCE(MAX(sequence), 0) + 1 as next_seq
-        FROM queen.messages
+        FROM messages
         WHERE queue_name = $1 AND partition_name = $2
     )", {queue_name, partition_name}));
     
@@ -180,7 +180,7 @@ void QueueManager::push_single_message(
     
     // Insert message
     auto insert_sql = R"(
-        INSERT INTO queen.messages 
+        INSERT INTO messages 
         (queue_name, partition_name, payload, transaction_id, trace_id, 
          namespace, task, status, sequence, created_at)
         VALUES ($1, $2, $3, $4, $5, $6, $7, 'pending', $8, NOW())
@@ -211,7 +211,7 @@ bool QueueManager::ensure_queue_exists(const std::string& queue_name,
         ScopedConnection conn(db_pool_.get());
         
         std::string sql = R"(
-            INSERT INTO queen.queues (name, namespace, task, priority, lease_time, retry_limit, retry_delay, max_queue_size, ttl)
+            INSERT INTO queues (name, namespace, task, priority, lease_time, retry_limit, retry_delay, max_queue_size, ttl)
             VALUES ($1, $2, $3, 0, 300, 3, 1000, 0, 3600)
             ON CONFLICT (name) DO NOTHING
         )";
@@ -239,8 +239,8 @@ bool QueueManager::ensure_partition_exists(const std::string& queue_name,
         ScopedConnection conn(db_pool_.get());
         
         std::string sql = R"(
-            INSERT INTO queen.partitions (queue_id, name)
-            SELECT id, $2 FROM queen.queues WHERE name = $1
+            INSERT INTO partitions (queue_id, name)
+            SELECT id, $2 FROM queues WHERE name = $1
             ON CONFLICT (queue_id, name) DO NOTHING
             RETURNING id, name
         )";
@@ -288,10 +288,10 @@ bool QueueManager::delete_queue(const std::string& queue_name) {
         
         // First, delete consumer state for all partitions in this queue
         std::string delete_consumers_sql = R"(
-            DELETE FROM queen.partition_consumers
+            DELETE FROM partition_consumers
             WHERE partition_id IN (
-                SELECT p.id FROM queen.partitions p
-                JOIN queen.queues q ON p.queue_id = q.id
+                SELECT p.id FROM partitions p
+                JOIN queues q ON p.queue_id = q.id
                 WHERE q.name = $1
             )
         )";
@@ -303,7 +303,7 @@ bool QueueManager::delete_queue(const std::string& queue_name) {
         }
         
         // Delete the queue (cascading deletes will handle partitions, messages, etc.)
-        std::string sql = "DELETE FROM queen.queues WHERE name = $1 RETURNING id";
+        std::string sql = "DELETE FROM queues WHERE name = $1 RETURNING id";
         auto result = QueryResult(conn->exec_params(sql, {queue_name}));
         
         if (result.is_success() && result.num_rows() > 0) {
@@ -328,7 +328,7 @@ bool QueueManager::configure_queue(const std::string& queue_name,
         ScopedConnection conn(db_pool_.get());
         
         std::string sql = R"(
-            INSERT INTO queen.queues (
+            INSERT INTO queues (
                 name, namespace, task, priority, lease_time, retry_limit, retry_delay,
                 max_queue_size, ttl, dead_letter_queue, dlq_after_max_retries, delayed_processing,
                 window_buffer, retention_seconds, completed_retention_seconds, 
@@ -433,7 +433,7 @@ PushResult QueueManager::push_single_message(const PushItem& item) {
         // Check if queue exists (don't create it automatically)
         ScopedConnection check_conn(db_pool_.get());
         auto queue_check = QueryResult(check_conn->exec_params(
-            "SELECT id FROM queen.queues WHERE name = $1", 
+            "SELECT id FROM queues WHERE name = $1", 
             {item.queue}
         ));
         
@@ -460,12 +460,12 @@ PushResult QueueManager::push_single_message(const PushItem& item) {
         
         if (item.trace_id.has_value() && !item.trace_id->empty()) {
             sql = R"(
-                INSERT INTO queen.messages (
+                INSERT INTO messages (
                     id, transaction_id, partition_id, payload, trace_id, created_at
                 )
                 SELECT $1, $2, p.id, $3, $4, NOW()
-                FROM queen.partitions p
-                JOIN queen.queues q ON q.id = p.queue_id
+                FROM partitions p
+                JOIN queues q ON q.id = p.queue_id
                 WHERE q.name = $5 AND p.name = $6
                 RETURNING id, trace_id
             )";
@@ -480,12 +480,12 @@ PushResult QueueManager::push_single_message(const PushItem& item) {
             };
         } else {
             sql = R"(
-                INSERT INTO queen.messages (
+                INSERT INTO messages (
                     id, transaction_id, partition_id, payload, created_at
                 )
                 SELECT $1, $2, p.id, $3, NOW()
-                FROM queen.partitions p
-                JOIN queen.queues q ON q.id = p.queue_id
+                FROM partitions p
+                JOIN queues q ON q.id = p.queue_id
                 WHERE q.name = $4 AND p.name = $5
                 RETURNING id, trace_id
             )";
@@ -651,16 +651,16 @@ std::vector<PushResult> QueueManager::push_messages(const std::vector<PushItem>&
                   q.max_queue_size,
                   (
                     SELECT COUNT(m.id)::integer
-                    FROM queen.messages m
-                    JOIN queen.partitions p ON p.id = m.partition_id
-                    LEFT JOIN queen.partition_consumers pc ON pc.partition_id = p.id
+                    FROM messages m
+                    JOIN partitions p ON p.id = m.partition_id
+                    LEFT JOIN partition_consumers pc ON pc.partition_id = p.id
                       AND pc.consumer_group = '__QUEUE_MODE__'
                     WHERE p.queue_id = q.id
                       AND (pc.last_consumed_created_at IS NULL 
                            OR m.created_at > pc.last_consumed_created_at
                            OR (m.created_at = pc.last_consumed_created_at AND m.id > pc.last_consumed_id))
                   ) as current_depth
-                FROM queen.queues q
+                FROM queues q
                 WHERE q.name = ANY($1::varchar[])
                   AND q.max_queue_size > 0
             )";
@@ -806,7 +806,7 @@ std::vector<PushResult> QueueManager::push_messages_batch(const std::vector<Push
         try {
             ScopedConnection check_conn(db_pool_.get());
             auto encryption_result = QueryResult(check_conn->exec_params(
-                "SELECT encryption_enabled FROM queen.queues WHERE name = $1", 
+                "SELECT encryption_enabled FROM queues WHERE name = $1", 
                 {queue_name}
             ));
             
@@ -925,7 +925,7 @@ std::vector<PushResult> QueueManager::push_messages_chunk(const std::vector<Push
         auto queue_check_start = std::chrono::steady_clock::now();
         ScopedConnection check_conn(db_pool_.get());
         auto queue_check = QueryResult(check_conn->exec_params(
-            "SELECT id FROM queen.queues WHERE name = $1", 
+            "SELECT id FROM queues WHERE name = $1", 
             {queue_name}
         ));
         auto queue_check_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
@@ -965,7 +965,7 @@ std::vector<PushResult> QueueManager::push_messages_chunk(const std::vector<Push
         
         // Check if queue has encryption enabled
         auto encryption_check_start = std::chrono::steady_clock::now();
-        std::string encryption_check_sql = "SELECT encryption_enabled FROM queen.queues WHERE name = $1";
+        std::string encryption_check_sql = "SELECT encryption_enabled FROM queues WHERE name = $1";
         auto encryption_result = QueryResult(check_conn->exec_params(encryption_check_sql, {queue_name}));
         
         bool encryption_enabled = false;
@@ -981,8 +981,8 @@ std::vector<PushResult> QueueManager::push_messages_chunk(const std::vector<Push
         ScopedConnection conn(db_pool_.get());
         
         std::string partition_id_sql = R"(
-            SELECT p.id FROM queen.partitions p
-            JOIN queen.queues q ON p.queue_id = q.id
+            SELECT p.id FROM partitions p
+            JOIN queues q ON p.queue_id = q.id
             WHERE q.name = $1 AND p.name = $2
         )";
         auto partition_result = QueryResult(conn->exec_params(partition_id_sql, {queue_name, partition_name}));
@@ -1102,7 +1102,7 @@ std::vector<PushResult> QueueManager::push_messages_chunk(const std::vector<Push
                 std::string dup_check_sql = R"(
                     SELECT t.txn_id as transaction_id, m.id as message_id
                     FROM UNNEST($1::varchar[]) AS t(txn_id)
-                    LEFT JOIN queen.messages m ON m.transaction_id = t.txn_id 
+                    LEFT JOIN messages m ON m.transaction_id = t.txn_id 
                         AND m.partition_id = $2::uuid
                     WHERE m.id IS NOT NULL
                 )";
@@ -1220,7 +1220,7 @@ std::vector<PushResult> QueueManager::push_messages_chunk(const std::vector<Push
                 auto insert_start = std::chrono::steady_clock::now();
                 // UNNEST preserves array order - critical for message ordering!
                 std::string sql = R"(
-                    INSERT INTO queen.messages (id, transaction_id, partition_id, payload, trace_id, is_encrypted)
+                    INSERT INTO messages (id, transaction_id, partition_id, payload, trace_id, is_encrypted)
                     SELECT * FROM UNNEST(
                         $1::uuid[],
                         $2::varchar[],
@@ -1308,7 +1308,7 @@ std::string QueueManager::acquire_partition_lease(DatabaseConnection* conn,
         
         // Reclaim expired leases FIRST - this makes messages with expired leases available again
         std::string reclaim_sql = R"(
-            UPDATE queen.partition_consumers
+            UPDATE partition_consumers
             SET lease_expires_at = NULL,
                 lease_acquired_at = NULL,
                 message_batch = NULL,
@@ -1341,9 +1341,9 @@ std::string QueueManager::acquire_partition_lease(DatabaseConnection* conn,
                 // Get latest message in this partition
                 std::string latest_sql = R"(
                     SELECT m.id, m.created_at
-                    FROM queen.messages m
-                    JOIN queen.partitions p ON m.partition_id = p.id
-                    JOIN queen.queues q ON p.queue_id = q.id
+                    FROM messages m
+                    JOIN partitions p ON m.partition_id = p.id
+                    JOIN queues q ON p.queue_id = q.id
                     WHERE q.name = $1 AND p.name = $2
                     ORDER BY m.created_at DESC, m.id DESC
                     LIMIT 1
@@ -1361,9 +1361,9 @@ std::string QueueManager::acquire_partition_lease(DatabaseConnection* conn,
         
         // First, check if this consumer group already exists
         std::string check_sql = R"(
-            SELECT pc.id FROM queen.partition_consumers pc
-            JOIN queen.partitions p ON pc.partition_id = p.id
-            JOIN queen.queues q ON p.queue_id = q.id
+            SELECT pc.id FROM partition_consumers pc
+            JOIN partitions p ON pc.partition_id = p.id
+            JOIN queues q ON p.queue_id = q.id
             WHERE q.name = $1 AND p.name = $2 AND pc.consumer_group = $3
         )";
         
@@ -1381,14 +1381,14 @@ std::string QueueManager::acquire_partition_lease(DatabaseConnection* conn,
             spdlog::debug("Creating new consumer group '{}' with cursor at: {}", consumer_group, initial_cursor_id);
             
             sql = R"(
-                INSERT INTO queen.partition_consumers (
+                INSERT INTO partition_consumers (
                     partition_id, consumer_group, lease_expires_at, lease_acquired_at, worker_id,
                     last_consumed_id, last_consumed_created_at
                 )
                 SELECT p.id, $1, NOW() + INTERVAL '1 second' * $2, NOW(), $3, 
                        $6::uuid, )" + initial_cursor_timestamp_sql + R"(
-                FROM queen.partitions p
-                JOIN queen.queues q ON q.id = p.queue_id
+                FROM partitions p
+                JOIN queues q ON q.id = p.queue_id
                 WHERE q.name = $4 AND p.name = $5
                 ON CONFLICT (partition_id, consumer_group) DO NOTHING
                 RETURNING worker_id
@@ -1396,12 +1396,12 @@ std::string QueueManager::acquire_partition_lease(DatabaseConnection* conn,
         } else {
             // Existing consumer or no subscription preference - just update lease
             sql = R"(
-                INSERT INTO queen.partition_consumers (
+                INSERT INTO partition_consumers (
                     partition_id, consumer_group, lease_expires_at, lease_acquired_at, worker_id
                 )
                 SELECT p.id, $1, NOW() + INTERVAL '1 second' * $2, NOW(), $3
-                FROM queen.partitions p
-                JOIN queen.queues q ON q.id = p.queue_id
+                FROM partitions p
+                JOIN queues q ON q.id = p.queue_id
                 WHERE q.name = $4 AND p.name = $5
                 ON CONFLICT (partition_id, consumer_group) DO UPDATE SET
                     lease_expires_at = NOW() + INTERVAL '1 second' * $2,
@@ -1487,11 +1487,11 @@ PopResult QueueManager::pop_from_queue_partition(const std::string& queue_name,
         // Check if partition is accessible considering window_buffer
         std::string window_check_sql = R"(
             SELECT p.id, q.window_buffer
-            FROM queen.partitions p
-            JOIN queen.queues q ON p.queue_id = q.id
+            FROM partitions p
+            JOIN queues q ON p.queue_id = q.id
             WHERE q.name = $1 AND p.name = $2
               AND (q.window_buffer = 0 OR NOT EXISTS (
-                SELECT 1 FROM queen.messages m
+                SELECT 1 FROM messages m
                 WHERE m.partition_id = p.id
                   AND m.created_at > NOW() - INTERVAL '1 second' * q.window_buffer
               ))
@@ -1509,7 +1509,7 @@ PopResult QueueManager::pop_from_queue_partition(const std::string& queue_name,
         // CRITICAL: Must read lease_time BEFORE acquiring lease!
         std::string config_sql = R"(
             SELECT q.delayed_processing, q.max_wait_time_seconds, q.lease_time
-            FROM queen.queues q
+            FROM queues q
             WHERE q.name = $1
         )";
         
@@ -1574,10 +1574,10 @@ PopResult QueueManager::pop_from_queue_partition(const std::string& queue_name,
         std::string sql = R"(
             SELECT m.id, m.transaction_id, m.partition_id, m.payload, m.trace_id, m.created_at, m.is_encrypted,
                    q.name as queue_name, p.name as partition_name, q.priority as queue_priority
-            FROM queen.messages m
-            JOIN queen.partitions p ON p.id = m.partition_id
-            JOIN queen.queues q ON q.id = p.queue_id
-            JOIN queen.partition_consumers pc ON pc.partition_id = p.id
+            FROM messages m
+            JOIN partitions p ON p.id = m.partition_id
+            JOIN queues q ON q.id = p.queue_id
+            JOIN partition_consumers pc ON pc.partition_id = p.id
             )" + where_clause + R"(
             ORDER BY m.created_at ASC, m.id ASC
             LIMIT )" + limit_param + R"(
@@ -1600,12 +1600,12 @@ PopResult QueueManager::pop_from_queue_partition(const std::string& queue_name,
             // Update batch_size to track how many messages were popped
             int num_messages = query_result.num_rows();
             std::string update_batch_size = R"(
-                UPDATE queen.partition_consumers
+                UPDATE partition_consumers
                 SET batch_size = $1,
                     acked_count = 0
                 WHERE partition_id = (
-                    SELECT p.id FROM queen.partitions p
-                    JOIN queen.queues q ON p.queue_id = q.id
+                    SELECT p.id FROM partitions p
+                    JOIN queues q ON p.queue_id = q.id
                     WHERE q.name = $2 AND p.name = $3
                 )
                 AND consumer_group = $4
@@ -1632,13 +1632,13 @@ PopResult QueueManager::pop_from_queue_partition(const std::string& queue_name,
                 spdlog::debug("No messages found - releasing lease for partition: {}", partition_name);
                 
                 std::string release_sql = R"(
-                    UPDATE queen.partition_consumers
+                    UPDATE partition_consumers
                     SET lease_expires_at = NULL,
                         lease_acquired_at = NULL,
                         worker_id = NULL
                     WHERE partition_id = (
-                        SELECT p.id FROM queen.partitions p
-                        JOIN queen.queues q ON p.queue_id = q.id
+                        SELECT p.id FROM partitions p
+                        JOIN queues q ON p.queue_id = q.id
                         WHERE q.name = $1 AND p.name = $2
                     )
                     AND consumer_group = $3
@@ -1752,9 +1752,9 @@ PopResult QueueManager::pop_from_queue_partition(const std::string& queue_name,
                 const auto& last_msg = result.messages.back();
                 
                 std::string auto_ack_sql = R"(
-                    UPDATE queen.partition_consumers
+                    UPDATE partition_consumers
                     SET last_consumed_id = $1,
-                        last_consumed_created_at = (SELECT created_at FROM queen.messages WHERE id = $1),
+                        last_consumed_created_at = (SELECT created_at FROM messages WHERE id = $1),
                         last_consumed_at = NOW(),
                         total_messages_consumed = total_messages_consumed + $2,
                         lease_expires_at = NULL,
@@ -1762,8 +1762,8 @@ PopResult QueueManager::pop_from_queue_partition(const std::string& queue_name,
                         batch_size = 0,
                         acked_count = 0
                     WHERE partition_id = (
-                        SELECT p.id FROM queen.partitions p
-                        JOIN queen.queues q ON p.queue_id = q.id
+                        SELECT p.id FROM partitions p
+                        JOIN queues q ON p.queue_id = q.id
                         WHERE q.name = $3 AND p.name = $4
                     )
                     AND consumer_group = $5
@@ -1784,10 +1784,10 @@ PopResult QueueManager::pop_from_queue_partition(const std::string& queue_name,
                     
                     // Insert into messages_consumed for analytics
                     std::string consumed_sql = R"(
-                        INSERT INTO queen.messages_consumed (partition_id, consumer_group, messages_completed, messages_failed, acked_at)
+                        INSERT INTO messages_consumed (partition_id, consumer_group, messages_completed, messages_failed, acked_at)
                         SELECT p.id, $2, $3, 0, NOW()
-                        FROM queen.partitions p
-                        JOIN queen.queues q ON p.queue_id = q.id
+                        FROM partitions p
+                        JOIN queues q ON p.queue_id = q.id
                         WHERE q.name = $4 AND p.name = $5
                     )";
                     
@@ -1833,7 +1833,7 @@ PopResult QueueManager::pop_from_any_partition(const std::string& queue_name,
         ScopedConnection conn(db_pool_.get());
         
         // Get queue configuration for window_buffer
-        std::string config_sql = "SELECT window_buffer FROM queen.queues WHERE name = $1";
+        std::string config_sql = "SELECT window_buffer FROM queues WHERE name = $1";
         auto config_result = QueryResult(conn->exec_params(config_sql, {queue_name}));
         int window_buffer = 0;
         
@@ -1850,17 +1850,17 @@ PopResult QueueManager::pop_from_any_partition(const std::string& queue_name,
             // Exclude partitions with recent message activity (window buffer)
             sql = R"(
                 SELECT p.id, p.name, COUNT(m.id) as message_count
-                FROM queen.partitions p
-                JOIN queen.queues q ON p.queue_id = q.id
-                LEFT JOIN queen.messages m ON m.partition_id = p.id
-                LEFT JOIN queen.partition_consumers pc ON pc.partition_id = p.id 
+                FROM partitions p
+                JOIN queues q ON p.queue_id = q.id
+                LEFT JOIN messages m ON m.partition_id = p.id
+                LEFT JOIN partition_consumers pc ON pc.partition_id = p.id 
                     AND pc.consumer_group = $2
                 WHERE q.name = $1
                   AND (pc.lease_expires_at IS NULL OR pc.lease_expires_at <= NOW())
                   AND m.id IS NOT NULL
                   -- Window buffer: exclude partitions with recent activity
                   AND NOT EXISTS (
-                      SELECT 1 FROM queen.messages m2
+                      SELECT 1 FROM messages m2
                       WHERE m2.partition_id = p.id
                         AND m2.created_at > NOW() - INTERVAL '1 second' * $3
                   )
@@ -1878,10 +1878,10 @@ PopResult QueueManager::pop_from_any_partition(const std::string& queue_name,
             // No window buffer - standard query
             sql = R"(
                 SELECT p.id, p.name, COUNT(m.id) as message_count
-                FROM queen.partitions p
-                JOIN queen.queues q ON p.queue_id = q.id
-                LEFT JOIN queen.messages m ON m.partition_id = p.id
-                LEFT JOIN queen.partition_consumers pc ON pc.partition_id = p.id 
+                FROM partitions p
+                JOIN queues q ON p.queue_id = q.id
+                LEFT JOIN messages m ON m.partition_id = p.id
+                LEFT JOIN partition_consumers pc ON pc.partition_id = p.id 
                     AND pc.consumer_group = $2
                 WHERE q.name = $1
                   AND (pc.lease_expires_at IS NULL OR pc.lease_expires_at <= NOW())
@@ -1940,8 +1940,8 @@ PopResult QueueManager::pop_with_namespace_task(const std::optional<std::string>
                 q.name as queue_name,
                 p.name as partition_name,
                 q.window_buffer
-            FROM queen.queues q
-            JOIN queen.partitions p ON p.queue_id = q.id
+            FROM queues q
+            JOIN partitions p ON p.queue_id = q.id
             WHERE 1=1
         )";
         
@@ -1960,7 +1960,7 @@ PopResult QueueManager::pop_with_namespace_task(const std::optional<std::string>
         // Add window buffer check
         sql += R"(
               AND (q.window_buffer = 0 OR NOT EXISTS (
-                SELECT 1 FROM queen.messages m
+                SELECT 1 FROM messages m
                 WHERE m.partition_id = p.id
                   AND m.created_at > NOW() - INTERVAL '1 second' * q.window_buffer
               ))
@@ -2006,10 +2006,10 @@ int QueueManager::count_available_messages(const std::optional<std::string>& que
         // Check if there are messages newer than what this consumer group has consumed
         std::string sql = R"(
             SELECT COUNT(*) as message_count
-            FROM queen.messages m
-            JOIN queen.partitions p ON p.id = m.partition_id
-            JOIN queen.queues q ON q.id = p.queue_id
-            LEFT JOIN queen.partition_consumers pc ON pc.partition_id = p.id AND pc.consumer_group = $1
+            FROM messages m
+            JOIN partitions p ON p.id = m.partition_id
+            JOIN queues q ON q.id = p.queue_id
+            LEFT JOIN partition_consumers pc ON pc.partition_id = p.id AND pc.consumer_group = $1
             WHERE 1=1
               AND (pc.last_consumed_created_at IS NULL 
                    OR m.created_at > pc.last_consumed_created_at
@@ -2064,10 +2064,10 @@ int QueueManager::count_available_messages_namespace(const std::optional<std::st
         // Check if there are messages newer than what this consumer group has consumed
         std::string sql = R"(
             SELECT COUNT(*) as message_count
-            FROM queen.messages m
-            JOIN queen.partitions p ON p.id = m.partition_id
-            JOIN queen.queues q ON q.id = p.queue_id
-            LEFT JOIN queen.partition_consumers pc ON pc.partition_id = p.id AND pc.consumer_group = $1
+            FROM messages m
+            JOIN partitions p ON p.id = m.partition_id
+            JOIN queues q ON q.id = p.queue_id
+            LEFT JOIN partition_consumers pc ON pc.partition_id = p.id AND pc.consumer_group = $1
             WHERE 1=1
               AND (pc.last_consumed_created_at IS NULL 
                    OR m.created_at > pc.last_consumed_created_at
@@ -2137,7 +2137,7 @@ QueueManager::AckResult QueueManager::acknowledge_message(const std::string& tra
         if (lease_id.has_value()) {
             spdlog::debug("Validating lease {} for transaction {}", *lease_id, transaction_id);
             std::string validate_sql = R"(
-                SELECT 1 FROM queen.partition_consumers pc
+                SELECT 1 FROM partition_consumers pc
                 WHERE pc.partition_id = $1::uuid
                   AND pc.worker_id = $2
                   AND pc.lease_expires_at > NOW()
@@ -2157,7 +2157,7 @@ QueueManager::AckResult QueueManager::acknowledge_message(const std::string& tra
             // Update cursor and release lease if all messages in batch are ACKed
             // CRITICAL: Now scoped by partition_id to handle duplicate transaction_ids across partitions
             std::string sql = R"(
-                UPDATE queen.partition_consumers 
+                UPDATE partition_consumers 
                 SET last_consumed_id = m.id,
                     last_consumed_created_at = m.created_at,
                     last_consumed_at = NOW(),
@@ -2188,7 +2188,7 @@ QueueManager::AckResult QueueManager::acknowledge_message(const std::string& tra
                         THEN NULL 
                         ELSE worker_id 
                     END
-                FROM queen.messages m
+                FROM messages m
                 WHERE partition_consumers.partition_id = $1::uuid
                   AND partition_consumers.consumer_group = $2
                   AND m.partition_id = $1::uuid
@@ -2210,7 +2210,7 @@ QueueManager::AckResult QueueManager::acknowledge_message(const std::string& tra
                     // Use partition_id from RETURNING clause (no separate query needed!)
                     std::string partition_id = query_result.get_value(0, "partition_id");
                     std::string insert_consumed_sql = R"(
-                        INSERT INTO queen.messages_consumed (partition_id, consumer_group, messages_completed, messages_failed, acked_at)
+                        INSERT INTO messages_consumed (partition_id, consumer_group, messages_completed, messages_failed, acked_at)
                         VALUES ($1, $2, 1, 0, NOW())
                     )";
                     conn->exec_params(insert_consumed_sql, {partition_id, consumer_group});
@@ -2225,16 +2225,16 @@ QueueManager::AckResult QueueManager::acknowledge_message(const std::string& tra
             // Insert into Dead Letter Queue for this consumer group
             // CRITICAL: Now scoped by partition_id to handle duplicate transaction_ids across partitions
             std::string dlq_sql = R"(
-                INSERT INTO queen.dead_letter_queue (
+                INSERT INTO dead_letter_queue (
                     message_id, partition_id, consumer_group, error_message, 
                     retry_count, original_created_at
                 )
                 SELECT m.id, m.partition_id, $1::varchar, $2::text, 0, m.created_at
-                FROM queen.messages m
+                FROM messages m
                 WHERE m.partition_id = $3::uuid
                   AND m.transaction_id = $4
                   AND NOT EXISTS (
-                      SELECT 1 FROM queen.dead_letter_queue dlq
+                      SELECT 1 FROM dead_letter_queue dlq
                       WHERE dlq.message_id = m.id AND dlq.consumer_group = $1::varchar
                   )
             )";
@@ -2256,7 +2256,7 @@ QueueManager::AckResult QueueManager::acknowledge_message(const std::string& tra
             // Still advance cursor for failed messages (they are "consumed")
             // CRITICAL: Now scoped by partition_id to handle duplicate transaction_ids across partitions
             std::string cursor_sql = R"(
-                UPDATE queen.partition_consumers 
+                UPDATE partition_consumers 
                 SET last_consumed_id = m.id,
                     last_consumed_created_at = m.created_at,
                     last_consumed_at = NOW(),
@@ -2287,7 +2287,7 @@ QueueManager::AckResult QueueManager::acknowledge_message(const std::string& tra
                         THEN NULL 
                         ELSE worker_id 
                     END
-                FROM queen.messages m
+                FROM messages m
                 WHERE partition_consumers.partition_id = $1::uuid
                   AND partition_consumers.consumer_group = $2
                   AND m.partition_id = $1::uuid
@@ -2378,7 +2378,7 @@ std::vector<QueueManager::AckResult> QueueManager::acknowledge_messages(const st
             // Get batch size for the partition
             std::string batch_size_sql = R"(
                 SELECT pc.batch_size
-                FROM queen.partition_consumers pc
+                FROM partition_consumers pc
                 WHERE pc.partition_id = $1::uuid
                   AND pc.consumer_group = $2
                 LIMIT 1
@@ -2404,10 +2404,10 @@ std::vector<QueueManager::AckResult> QueueManager::acknowledge_messages(const st
                         pc.batch_retry_count,
                         pc.partition_id,
                         p.name as partition_name
-                    FROM queen.messages m
-                    JOIN queen.partitions p ON p.id = m.partition_id
-                    JOIN queen.queues q ON q.id = p.queue_id
-                    JOIN queen.partition_consumers pc ON pc.partition_id = m.partition_id 
+                    FROM messages m
+                    JOIN partitions p ON p.id = m.partition_id
+                    JOIN queues q ON q.id = p.queue_id
+                    JOIN partition_consumers pc ON pc.partition_id = m.partition_id 
                       AND pc.consumer_group = $2
                     WHERE m.partition_id = $3::uuid
                       AND m.transaction_id = ANY($1::varchar[])
@@ -2436,14 +2436,14 @@ std::vector<QueueManager::AckResult> QueueManager::acknowledge_messages(const st
                     
                     std::string error_array = build_txn_array(error_msgs);
                     std::string dlq_sql = R"(
-                        INSERT INTO queen.dead_letter_queue (message_id, partition_id, consumer_group, error_message, original_created_at)
+                        INSERT INTO dead_letter_queue (message_id, partition_id, consumer_group, error_message, original_created_at)
                         SELECT 
                             m.id,
                             m.partition_id,
                             $2,
                             e.error_message,
                             m.created_at
-                        FROM queen.messages m
+                        FROM messages m
                         CROSS JOIN LATERAL UNNEST($1::varchar[], $4::text[]) AS e(txn_id, error_message)
                         WHERE m.partition_id = $3::uuid
                           AND m.transaction_id = e.txn_id
@@ -2456,7 +2456,7 @@ std::vector<QueueManager::AckResult> QueueManager::acknowledge_messages(const st
                     // CRITICAL: Scoped by partition_id
                     std::string last_msg_sql = R"(
                         SELECT id, created_at
-                        FROM queen.messages m
+                        FROM messages m
                         WHERE m.partition_id = $1::uuid
                           AND m.transaction_id = ANY($2::varchar[])
                         ORDER BY m.created_at DESC, m.id DESC
@@ -2469,7 +2469,7 @@ std::vector<QueueManager::AckResult> QueueManager::acknowledge_messages(const st
                     
                     // Advance cursor and reset retry count
                     std::string cursor_sql = R"(
-                        UPDATE queen.partition_consumers
+                        UPDATE partition_consumers
                         SET 
                             last_consumed_created_at = $1,
                             last_consumed_id = $2,
@@ -2491,7 +2491,7 @@ std::vector<QueueManager::AckResult> QueueManager::acknowledge_messages(const st
                     
                     // CRITICAL: Insert into messages_consumed for analytics/throughput tracking
                     std::string insert_consumed_sql = R"(
-                        INSERT INTO queen.messages_consumed (partition_id, consumer_group, messages_completed, messages_failed, acked_at)
+                        INSERT INTO messages_consumed (partition_id, consumer_group, messages_completed, messages_failed, acked_at)
                         VALUES ($1, $2, 0, $3, NOW())
                     )";
                     conn->exec_params(insert_consumed_sql, {partition_id, actual_consumer_group, std::to_string(failed_count)});
@@ -2509,7 +2509,7 @@ std::vector<QueueManager::AckResult> QueueManager::acknowledge_messages(const st
                     spdlog::info("Total batch failure - retry {}/{}", current_retry_count + 1, retry_limit);
                     
                     std::string retry_sql = R"(
-                        UPDATE queen.partition_consumers pc
+                        UPDATE partition_consumers pc
                         SET lease_expires_at = NULL,
                             lease_acquired_at = NULL,
                             message_batch = NULL,
@@ -2542,8 +2542,8 @@ std::vector<QueueManager::AckResult> QueueManager::acknowledge_messages(const st
                         m.created_at,
                         m.partition_id,
                         p.name as partition_name
-                    FROM queen.messages m
-                    JOIN queen.partitions p ON p.id = m.partition_id
+                    FROM messages m
+                    JOIN partitions p ON p.id = m.partition_id
                     WHERE m.partition_id = $1::uuid
                       AND m.transaction_id = ANY($2::varchar[])
                     ORDER BY m.created_at DESC, m.id DESC
@@ -2562,7 +2562,7 @@ std::vector<QueueManager::AckResult> QueueManager::acknowledge_messages(const st
                 // Advance cursor atomically
                 // CRITICAL FIX: Use subquery to ensure acked_count comparison uses the NEW value
                 std::string cursor_sql = R"(
-                    UPDATE queen.partition_consumers
+                    UPDATE partition_consumers
                     SET 
                         last_consumed_created_at = $1,
                         last_consumed_id = $2,
@@ -2631,14 +2631,14 @@ std::vector<QueueManager::AckResult> QueueManager::acknowledge_messages(const st
                     
                     // CRITICAL: Scoped by partition_id to handle duplicate transaction_ids across partitions
                     std::string dlq_sql = R"(
-                        INSERT INTO queen.dead_letter_queue (message_id, partition_id, consumer_group, error_message, original_created_at)
+                        INSERT INTO dead_letter_queue (message_id, partition_id, consumer_group, error_message, original_created_at)
                         SELECT 
                             m.id,
                             m.partition_id,
                             $2,
                             e.error_message,
                             m.created_at
-                        FROM queen.messages m
+                        FROM messages m
                         CROSS JOIN LATERAL UNNEST($1::varchar[], $4::text[]) AS e(txn_id, error_message)
                         WHERE m.partition_id = $3::uuid
                           AND m.transaction_id = e.txn_id
@@ -2652,7 +2652,7 @@ std::vector<QueueManager::AckResult> QueueManager::acknowledge_messages(const st
                 
                 // CRITICAL: Insert into messages_consumed for analytics/throughput tracking
                 std::string insert_consumed_sql = R"(
-                    INSERT INTO queen.messages_consumed (partition_id, consumer_group, messages_completed, messages_failed, acked_at)
+                    INSERT INTO messages_consumed (partition_id, consumer_group, messages_completed, messages_failed, acked_at)
                     VALUES ($1, $2, $3, $4, NOW())
                 )";
                 conn->exec_params(insert_consumed_sql, {
@@ -2717,7 +2717,7 @@ bool QueueManager::extend_message_lease(const std::string& lease_id, int seconds
         ScopedConnection conn(db_pool_.get());
         
         std::string sql = R"(
-            UPDATE queen.partition_consumers
+            UPDATE partition_consumers
             SET lease_expires_at = GREATEST(lease_expires_at, NOW() + INTERVAL '1 second' * $1)
             WHERE worker_id = $2 AND lease_expires_at > NOW()
             RETURNING lease_expires_at
@@ -2761,16 +2761,20 @@ bool QueueManager::initialize_schema() {
     try {
         ScopedConnection conn(db_pool_.get());
         
+        spdlog::info("Initializing schema: {}", schema_name_);
+        
         // Create schema if it doesn't exist
-        auto result1 = QueryResult(conn->exec("CREATE SCHEMA IF NOT EXISTS queen"));
+        std::string create_schema_sql = "CREATE SCHEMA IF NOT EXISTS " + schema_name_;
+        auto result1 = QueryResult(conn->exec(create_schema_sql));
         if (!result1.is_success()) {
-            spdlog::error("Failed to create schema: {}", result1.error_message());
+            spdlog::error("Failed to create schema {}: {}", schema_name_, result1.error_message());
             return false;
         }
         
         // Create tables - Queen Message Queue Schema V3
+        // Tables will be created in the schema specified by search_path
         std::string create_tables_sql = R"(
-            CREATE TABLE IF NOT EXISTS queen.queues (
+            CREATE TABLE IF NOT EXISTS queues (
                 id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
                 name VARCHAR(255) UNIQUE NOT NULL,
                 namespace VARCHAR(255),
@@ -2793,20 +2797,20 @@ bool QueueManager::initialize_schema() {
                 created_at TIMESTAMPTZ DEFAULT NOW()
             );
             
-            CREATE TABLE IF NOT EXISTS queen.partitions (
+            CREATE TABLE IF NOT EXISTS partitions (
                 id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-                queue_id UUID REFERENCES queen.queues(id) ON DELETE CASCADE,
+                queue_id UUID REFERENCES queues(id) ON DELETE CASCADE,
                 name VARCHAR(255) NOT NULL DEFAULT 'Default',
                 created_at TIMESTAMPTZ DEFAULT NOW(),
                 last_activity TIMESTAMPTZ DEFAULT NOW(),
                 UNIQUE(queue_id, name)
             );
             
-            CREATE TABLE IF NOT EXISTS queen.messages (
+            CREATE TABLE IF NOT EXISTS messages (
                 id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
                 transaction_id VARCHAR(255) NOT NULL,
                 trace_id UUID DEFAULT gen_random_uuid(),
-                partition_id UUID REFERENCES queen.partitions(id) ON DELETE CASCADE,
+                partition_id UUID REFERENCES partitions(id) ON DELETE CASCADE,
                 payload JSONB NOT NULL,
                 created_at TIMESTAMPTZ DEFAULT NOW(),
                 is_encrypted BOOLEAN DEFAULT FALSE
@@ -2814,11 +2818,11 @@ bool QueueManager::initialize_schema() {
             
             -- Unique constraint scoped to partition (not global)
             CREATE UNIQUE INDEX IF NOT EXISTS messages_partition_transaction_unique 
-                ON queen.messages(partition_id, transaction_id);
+                ON messages(partition_id, transaction_id);
             
-            CREATE TABLE IF NOT EXISTS queen.partition_consumers (
+            CREATE TABLE IF NOT EXISTS partition_consumers (
                 id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-                partition_id UUID REFERENCES queen.partitions(id) ON DELETE CASCADE,
+                partition_id UUID REFERENCES partitions(id) ON DELETE CASCADE,
                 consumer_group VARCHAR(255) DEFAULT '__QUEUE_MODE__',
                 last_consumed_id UUID DEFAULT '00000000-0000-0000-0000-000000000000',
                 last_consumed_created_at TIMESTAMPTZ,
@@ -2845,19 +2849,19 @@ bool QueueManager::initialize_schema() {
                 )
             );
             
-            CREATE TABLE IF NOT EXISTS queen.messages_consumed (
+            CREATE TABLE IF NOT EXISTS messages_consumed (
                 id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-                partition_id UUID REFERENCES queen.partitions(id) ON DELETE CASCADE,
+                partition_id UUID REFERENCES partitions(id) ON DELETE CASCADE,
                 consumer_group VARCHAR(255) NOT NULL,
                 messages_completed INTEGER DEFAULT 0,
                 messages_failed INTEGER DEFAULT 0,
                 acked_at TIMESTAMPTZ DEFAULT NOW()
             );
             
-            CREATE TABLE IF NOT EXISTS queen.dead_letter_queue (
+            CREATE TABLE IF NOT EXISTS dead_letter_queue (
                 id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-                message_id UUID REFERENCES queen.messages(id) ON DELETE CASCADE,
-                partition_id UUID REFERENCES queen.partitions(id) ON DELETE CASCADE,
+                message_id UUID REFERENCES messages(id) ON DELETE CASCADE,
+                partition_id UUID REFERENCES partitions(id) ON DELETE CASCADE,
                 consumer_group VARCHAR(255),
                 error_message TEXT,
                 retry_count INTEGER DEFAULT 0,
@@ -2865,15 +2869,15 @@ bool QueueManager::initialize_schema() {
                 failed_at TIMESTAMPTZ DEFAULT NOW()
             );
             
-            CREATE TABLE IF NOT EXISTS queen.retention_history (
+            CREATE TABLE IF NOT EXISTS retention_history (
                 id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-                partition_id UUID REFERENCES queen.partitions(id) ON DELETE CASCADE,
+                partition_id UUID REFERENCES partitions(id) ON DELETE CASCADE,
                 messages_deleted INTEGER DEFAULT 0,
                 retention_type VARCHAR(50),
                 executed_at TIMESTAMPTZ DEFAULT NOW()
             );
             
-            CREATE TABLE IF NOT EXISTS queen.system_metrics (
+            CREATE TABLE IF NOT EXISTS system_metrics (
                 id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
                 timestamp TIMESTAMPTZ NOT NULL,
                 hostname TEXT NOT NULL,
@@ -2885,10 +2889,10 @@ bool QueueManager::initialize_schema() {
                     UNIQUE (timestamp, hostname, port, worker_id)
             );
             
-            CREATE TABLE IF NOT EXISTS queen.message_traces (
+            CREATE TABLE IF NOT EXISTS message_traces (
                 id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-                message_id UUID REFERENCES queen.messages(id) ON DELETE CASCADE,
-                partition_id UUID REFERENCES queen.partitions(id) ON DELETE CASCADE,
+                message_id UUID REFERENCES messages(id) ON DELETE CASCADE,
+                partition_id UUID REFERENCES partitions(id) ON DELETE CASCADE,
                 transaction_id VARCHAR(255) NOT NULL,
                 consumer_group VARCHAR(255),
                 event_type VARCHAR(100),
@@ -2897,14 +2901,14 @@ bool QueueManager::initialize_schema() {
                 worker_id VARCHAR(255)
             );
             
-            CREATE TABLE IF NOT EXISTS queen.message_trace_names (
-                trace_id UUID REFERENCES queen.message_traces(id) ON DELETE CASCADE,
+            CREATE TABLE IF NOT EXISTS message_trace_names (
+                trace_id UUID REFERENCES message_traces(id) ON DELETE CASCADE,
                 trace_name TEXT NOT NULL,
                 PRIMARY KEY (trace_id, trace_name)
             );
             
             -- System state table for shared configuration across instances
-            CREATE TABLE IF NOT EXISTS queen.system_state (
+            CREATE TABLE IF NOT EXISTS system_state (
                 key TEXT PRIMARY KEY,
                 value JSONB NOT NULL,
                 updated_at TIMESTAMPTZ DEFAULT NOW()
@@ -2915,7 +2919,7 @@ bool QueueManager::initialize_schema() {
             -- ============================================================================
             
             -- 1. Stream Definitions
-            CREATE TABLE IF NOT EXISTS queen.streams (
+            CREATE TABLE IF NOT EXISTS streams (
                 id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
                 name VARCHAR(255) UNIQUE NOT NULL,
                 namespace VARCHAR(255) NOT NULL,
@@ -2946,15 +2950,15 @@ bool QueueManager::initialize_schema() {
             );
 
             -- 2. Junction table for stream sources (many-to-many)
-            CREATE TABLE IF NOT EXISTS queen.stream_sources (
-                stream_id UUID NOT NULL REFERENCES queen.streams(id) ON DELETE CASCADE,
-                queue_id UUID NOT NULL REFERENCES queen.queues(id) ON DELETE CASCADE,
+            CREATE TABLE IF NOT EXISTS stream_sources (
+                stream_id UUID NOT NULL REFERENCES streams(id) ON DELETE CASCADE,
+                queue_id UUID NOT NULL REFERENCES queues(id) ON DELETE CASCADE,
                 PRIMARY KEY (stream_id, queue_id)
             );
 
             -- 3. Consumer Offsets (The "Bookmark" table)
-            CREATE TABLE IF NOT EXISTS queen.stream_consumer_offsets (
-                stream_id UUID REFERENCES queen.streams(id) ON DELETE CASCADE,
+            CREATE TABLE IF NOT EXISTS stream_consumer_offsets (
+                stream_id UUID REFERENCES streams(id) ON DELETE CASCADE,
                 consumer_group VARCHAR(255) NOT NULL,
                 
                 -- KEY FIX: Stores partition_id::TEXT or '__GLOBAL__'
@@ -2972,9 +2976,9 @@ bool QueueManager::initialize_schema() {
             );
 
             -- 4. Active Leases (The "In-Flight" table)
-            CREATE TABLE IF NOT EXISTS queen.stream_leases (
+            CREATE TABLE IF NOT EXISTS stream_leases (
                 id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-                stream_id UUID REFERENCES queen.streams(id) ON DELETE CASCADE,
+                stream_id UUID REFERENCES streams(id) ON DELETE CASCADE,
                 consumer_group VARCHAR(255) NOT NULL,
 
                 -- KEY FIX: Stores partition_id::TEXT or '__GLOBAL__'
@@ -2991,8 +2995,8 @@ bool QueueManager::initialize_schema() {
             );
 
             -- 5. Watermark Table (CRITICAL)
-            CREATE TABLE IF NOT EXISTS queen.queue_watermarks (
-                queue_id UUID PRIMARY KEY REFERENCES queen.queues(id) ON DELETE CASCADE,
+            CREATE TABLE IF NOT EXISTS queue_watermarks (
+                queue_id UUID PRIMARY KEY REFERENCES queues(id) ON DELETE CASCADE,
                 queue_name VARCHAR(255) NOT NULL,
                 max_created_at TIMESTAMPTZ NOT NULL DEFAULT '-infinity'::timestamptz,
                 updated_at TIMESTAMPTZ DEFAULT NOW()
@@ -3007,50 +3011,50 @@ bool QueueManager::initialize_schema() {
         
         // Create indexes for optimal query performance
         std::string create_indexes_sql = R"(
-            CREATE INDEX IF NOT EXISTS idx_queues_name ON queen.queues(name);
-            CREATE INDEX IF NOT EXISTS idx_queues_priority ON queen.queues(priority DESC);
-            CREATE INDEX IF NOT EXISTS idx_queues_namespace ON queen.queues(namespace) WHERE namespace IS NOT NULL;
-            CREATE INDEX IF NOT EXISTS idx_queues_task ON queen.queues(task) WHERE task IS NOT NULL;
-            CREATE INDEX IF NOT EXISTS idx_queues_namespace_task ON queen.queues(namespace, task) WHERE namespace IS NOT NULL AND task IS NOT NULL;
-            CREATE INDEX IF NOT EXISTS idx_queues_retention_enabled ON queen.queues(retention_enabled) WHERE retention_enabled = true;
-            CREATE INDEX IF NOT EXISTS idx_partitions_queue_name ON queen.partitions(queue_id, name);
-            CREATE INDEX IF NOT EXISTS idx_partitions_last_activity ON queen.partitions(last_activity);
-            CREATE INDEX IF NOT EXISTS idx_messages_partition_created_id ON queen.messages(partition_id, created_at, id);
-            CREATE INDEX IF NOT EXISTS idx_messages_transaction_id ON queen.messages(transaction_id);
-            CREATE INDEX IF NOT EXISTS idx_messages_trace_id ON queen.messages(trace_id);
-            CREATE INDEX IF NOT EXISTS idx_messages_created_at ON queen.messages(created_at);
-            CREATE INDEX IF NOT EXISTS idx_partition_consumers_lookup ON queen.partition_consumers(partition_id, consumer_group);
-            CREATE INDEX IF NOT EXISTS idx_partition_consumers_active_leases ON queen.partition_consumers(partition_id, consumer_group, lease_expires_at) WHERE lease_expires_at IS NOT NULL;
-            CREATE INDEX IF NOT EXISTS idx_partition_consumers_expired_leases ON queen.partition_consumers(lease_expires_at) WHERE lease_expires_at IS NOT NULL;
-            CREATE INDEX IF NOT EXISTS idx_partition_consumers_progress ON queen.partition_consumers(last_consumed_at DESC);
-            CREATE INDEX IF NOT EXISTS idx_partition_consumers_idle ON queen.partition_consumers(partition_id, consumer_group) WHERE lease_expires_at IS NULL;
-            CREATE INDEX IF NOT EXISTS idx_partition_consumers_consumer_group ON queen.partition_consumers(consumer_group);
-            CREATE INDEX IF NOT EXISTS idx_messages_consumed_acked_at ON queen.messages_consumed(acked_at DESC);
-            CREATE INDEX IF NOT EXISTS idx_messages_consumed_partition_acked ON queen.messages_consumed(partition_id, acked_at DESC);
-            CREATE INDEX IF NOT EXISTS idx_messages_consumed_consumer_acked ON queen.messages_consumed(consumer_group, acked_at DESC);
-            CREATE INDEX IF NOT EXISTS idx_messages_consumed_partition_id ON queen.messages_consumed(partition_id);
-            CREATE INDEX IF NOT EXISTS idx_dlq_partition ON queen.dead_letter_queue(partition_id);
-            CREATE INDEX IF NOT EXISTS idx_dlq_consumer_group ON queen.dead_letter_queue(consumer_group);
-            CREATE INDEX IF NOT EXISTS idx_dlq_failed_at ON queen.dead_letter_queue(failed_at DESC);
-            CREATE INDEX IF NOT EXISTS idx_dlq_message_consumer ON queen.dead_letter_queue(message_id, consumer_group);
-            CREATE INDEX IF NOT EXISTS idx_retention_history_partition ON queen.retention_history(partition_id);
-            CREATE INDEX IF NOT EXISTS idx_retention_history_executed ON queen.retention_history(executed_at);
-            CREATE INDEX IF NOT EXISTS idx_system_metrics_timestamp ON queen.system_metrics(timestamp DESC);
-            CREATE INDEX IF NOT EXISTS idx_system_metrics_replica ON queen.system_metrics(hostname, port);
-            CREATE INDEX IF NOT EXISTS idx_system_metrics_worker ON queen.system_metrics(worker_id);
-            CREATE INDEX IF NOT EXISTS idx_system_metrics_metrics ON queen.system_metrics USING GIN (metrics);
-            CREATE INDEX IF NOT EXISTS idx_message_traces_message_id ON queen.message_traces(message_id);
-            CREATE INDEX IF NOT EXISTS idx_message_traces_transaction_partition ON queen.message_traces(transaction_id, partition_id);
-            CREATE INDEX IF NOT EXISTS idx_message_traces_created_at ON queen.message_traces(created_at DESC);
-            CREATE INDEX IF NOT EXISTS idx_message_trace_names_name ON queen.message_trace_names(trace_name);
-            CREATE INDEX IF NOT EXISTS idx_message_trace_names_trace_id ON queen.message_trace_names(trace_id);
-            CREATE INDEX IF NOT EXISTS idx_system_state_key ON queen.system_state(key);
+            CREATE INDEX IF NOT EXISTS idx_queues_name ON queues(name);
+            CREATE INDEX IF NOT EXISTS idx_queues_priority ON queues(priority DESC);
+            CREATE INDEX IF NOT EXISTS idx_queues_namespace ON queues(namespace) WHERE namespace IS NOT NULL;
+            CREATE INDEX IF NOT EXISTS idx_queues_task ON queues(task) WHERE task IS NOT NULL;
+            CREATE INDEX IF NOT EXISTS idx_queues_namespace_task ON queues(namespace, task) WHERE namespace IS NOT NULL AND task IS NOT NULL;
+            CREATE INDEX IF NOT EXISTS idx_queues_retention_enabled ON queues(retention_enabled) WHERE retention_enabled = true;
+            CREATE INDEX IF NOT EXISTS idx_partitions_queue_name ON partitions(queue_id, name);
+            CREATE INDEX IF NOT EXISTS idx_partitions_last_activity ON partitions(last_activity);
+            CREATE INDEX IF NOT EXISTS idx_messages_partition_created_id ON messages(partition_id, created_at, id);
+            CREATE INDEX IF NOT EXISTS idx_messages_transaction_id ON messages(transaction_id);
+            CREATE INDEX IF NOT EXISTS idx_messages_trace_id ON messages(trace_id);
+            CREATE INDEX IF NOT EXISTS idx_messages_created_at ON messages(created_at);
+            CREATE INDEX IF NOT EXISTS idx_partition_consumers_lookup ON partition_consumers(partition_id, consumer_group);
+            CREATE INDEX IF NOT EXISTS idx_partition_consumers_active_leases ON partition_consumers(partition_id, consumer_group, lease_expires_at) WHERE lease_expires_at IS NOT NULL;
+            CREATE INDEX IF NOT EXISTS idx_partition_consumers_expired_leases ON partition_consumers(lease_expires_at) WHERE lease_expires_at IS NOT NULL;
+            CREATE INDEX IF NOT EXISTS idx_partition_consumers_progress ON partition_consumers(last_consumed_at DESC);
+            CREATE INDEX IF NOT EXISTS idx_partition_consumers_idle ON partition_consumers(partition_id, consumer_group) WHERE lease_expires_at IS NULL;
+            CREATE INDEX IF NOT EXISTS idx_partition_consumers_consumer_group ON partition_consumers(consumer_group);
+            CREATE INDEX IF NOT EXISTS idx_messages_consumed_acked_at ON messages_consumed(acked_at DESC);
+            CREATE INDEX IF NOT EXISTS idx_messages_consumed_partition_acked ON messages_consumed(partition_id, acked_at DESC);
+            CREATE INDEX IF NOT EXISTS idx_messages_consumed_consumer_acked ON messages_consumed(consumer_group, acked_at DESC);
+            CREATE INDEX IF NOT EXISTS idx_messages_consumed_partition_id ON messages_consumed(partition_id);
+            CREATE INDEX IF NOT EXISTS idx_dlq_partition ON dead_letter_queue(partition_id);
+            CREATE INDEX IF NOT EXISTS idx_dlq_consumer_group ON dead_letter_queue(consumer_group);
+            CREATE INDEX IF NOT EXISTS idx_dlq_failed_at ON dead_letter_queue(failed_at DESC);
+            CREATE INDEX IF NOT EXISTS idx_dlq_message_consumer ON dead_letter_queue(message_id, consumer_group);
+            CREATE INDEX IF NOT EXISTS idx_retention_history_partition ON retention_history(partition_id);
+            CREATE INDEX IF NOT EXISTS idx_retention_history_executed ON retention_history(executed_at);
+            CREATE INDEX IF NOT EXISTS idx_system_metrics_timestamp ON system_metrics(timestamp DESC);
+            CREATE INDEX IF NOT EXISTS idx_system_metrics_replica ON system_metrics(hostname, port);
+            CREATE INDEX IF NOT EXISTS idx_system_metrics_worker ON system_metrics(worker_id);
+            CREATE INDEX IF NOT EXISTS idx_system_metrics_metrics ON system_metrics USING GIN (metrics);
+            CREATE INDEX IF NOT EXISTS idx_message_traces_message_id ON message_traces(message_id);
+            CREATE INDEX IF NOT EXISTS idx_message_traces_transaction_partition ON message_traces(transaction_id, partition_id);
+            CREATE INDEX IF NOT EXISTS idx_message_traces_created_at ON message_traces(created_at DESC);
+            CREATE INDEX IF NOT EXISTS idx_message_trace_names_name ON message_trace_names(trace_name);
+            CREATE INDEX IF NOT EXISTS idx_message_trace_names_trace_id ON message_trace_names(trace_id);
+            CREATE INDEX IF NOT EXISTS idx_system_state_key ON system_state(key);
             
             -- Streaming indexes
-            CREATE INDEX IF NOT EXISTS idx_queue_watermarks_name ON queen.queue_watermarks(queue_name);
-            CREATE INDEX IF NOT EXISTS idx_stream_leases_lookup ON queen.stream_leases(stream_id, consumer_group, stream_key, window_start);
-            CREATE INDEX IF NOT EXISTS idx_stream_leases_expires ON queen.stream_leases(lease_expires_at);
-            CREATE INDEX IF NOT EXISTS idx_stream_consumer_offsets_lookup ON queen.stream_consumer_offsets(stream_id, consumer_group, stream_key);
+            CREATE INDEX IF NOT EXISTS idx_queue_watermarks_name ON queue_watermarks(queue_name);
+            CREATE INDEX IF NOT EXISTS idx_stream_leases_lookup ON stream_leases(stream_id, consumer_group, stream_key, window_start);
+            CREATE INDEX IF NOT EXISTS idx_stream_leases_expires ON stream_leases(lease_expires_at);
+            CREATE INDEX IF NOT EXISTS idx_stream_consumer_offsets_lookup ON stream_consumer_offsets(stream_id, consumer_group, stream_key);
         )";
         
         auto result3 = QueryResult(conn->exec(create_indexes_sql));
@@ -3067,16 +3071,16 @@ bool QueueManager::initialize_schema() {
             RETURNS TRIGGER AS $$
             BEGIN
                 -- Update last_activity for all affected partitions in the batch
-                UPDATE queen.partitions 
+                UPDATE partitions 
                 SET last_activity = NOW() 
                 WHERE id IN (SELECT DISTINCT partition_id FROM new_messages);
                 RETURN NULL;
             END;
             $$ LANGUAGE plpgsql;
 
-            DROP TRIGGER IF EXISTS trigger_update_partition_activity ON queen.messages;
+            DROP TRIGGER IF EXISTS trigger_update_partition_activity ON messages;
             CREATE TRIGGER trigger_update_partition_activity
-            AFTER INSERT ON queen.messages
+            AFTER INSERT ON messages
             REFERENCING NEW TABLE AS new_messages
             FOR EACH STATEMENT
             EXECUTE FUNCTION update_partition_last_activity();
@@ -3086,7 +3090,7 @@ bool QueueManager::initialize_schema() {
             RETURNS TRIGGER AS $$
             BEGIN
                 -- Increment pending_estimate by the count of messages per partition
-                UPDATE queen.partition_consumers pc
+                UPDATE partition_consumers pc
                 SET pending_estimate = pc.pending_estimate + msg_counts.count,
                     last_stats_update = NOW()
                 FROM (
@@ -3099,9 +3103,9 @@ bool QueueManager::initialize_schema() {
             END;
             $$ LANGUAGE plpgsql;
 
-            DROP TRIGGER IF EXISTS trigger_update_pending_on_push ON queen.messages;
+            DROP TRIGGER IF EXISTS trigger_update_pending_on_push ON messages;
             CREATE TRIGGER trigger_update_pending_on_push
-            AFTER INSERT ON queen.messages
+            AFTER INSERT ON messages
             REFERENCING NEW TABLE AS new_messages
             FOR EACH STATEMENT
             EXECUTE FUNCTION update_pending_on_push();
@@ -3111,14 +3115,14 @@ bool QueueManager::initialize_schema() {
             RETURNS TRIGGER AS $$
             BEGIN
                 -- Process all inserted rows in the batch at once
-                INSERT INTO queen.queue_watermarks (queue_id, queue_name, max_created_at)
+                INSERT INTO queue_watermarks (queue_id, queue_name, max_created_at)
                 SELECT 
                     q.id,
                     q.name,
                     MAX(nm.created_at) as max_created_at
                 FROM new_messages nm
-                JOIN queen.partitions p ON p.id = nm.partition_id
-                JOIN queen.queues q ON p.queue_id = q.id
+                JOIN partitions p ON p.id = nm.partition_id
+                JOIN queues q ON p.queue_id = q.id
                 GROUP BY q.id, q.name
                 ON CONFLICT (queue_id)
                 DO UPDATE SET
@@ -3128,9 +3132,9 @@ bool QueueManager::initialize_schema() {
             END;
             $$ LANGUAGE plpgsql;
 
-            DROP TRIGGER IF EXISTS trigger_update_watermark ON queen.messages;
+            DROP TRIGGER IF EXISTS trigger_update_watermark ON messages;
             CREATE TRIGGER trigger_update_watermark
-            AFTER INSERT ON queen.messages
+            AFTER INSERT ON messages
             REFERENCING NEW TABLE AS new_messages
             FOR EACH STATEMENT
             EXECUTE FUNCTION update_queue_watermark();
@@ -3145,7 +3149,7 @@ bool QueueManager::initialize_schema() {
         
         // Initialize system state (maintenance mode default value)
         std::string init_system_state = R"(
-            INSERT INTO queen.system_state (key, value, updated_at)
+            INSERT INTO system_state (key, value, updated_at)
             VALUES ('maintenance_mode', '{"enabled": false}'::jsonb, NOW())
             ON CONFLICT (key) DO NOTHING;
         )";
@@ -3190,7 +3194,7 @@ bool QueueManager::record_trace(
         
         // Get message_id from transaction_id + partition_id
         std::string query = R"(
-            SELECT id FROM queen.messages 
+            SELECT id FROM messages 
             WHERE transaction_id = $1 AND partition_id = $2
             LIMIT 1
         )";
@@ -3207,7 +3211,7 @@ bool QueueManager::record_trace(
         
         // Insert main trace record
         std::string insert_query = R"(
-            INSERT INTO queen.message_traces 
+            INSERT INTO message_traces 
             (message_id, partition_id, transaction_id, consumer_group, event_type, data, worker_id)
             VALUES ($1, $2, $3, $4, $5, $6, $7)
             RETURNING id
@@ -3235,7 +3239,7 @@ bool QueueManager::record_trace(
         if (!trace_names.empty()) {
             for (const auto& name : trace_names) {
                 std::string name_query = R"(
-                    INSERT INTO queen.message_trace_names (trace_id, trace_name)
+                    INSERT INTO message_trace_names (trace_id, trace_name)
                     VALUES ($1, $2)
                     ON CONFLICT DO NOTHING
                 )";
@@ -3291,8 +3295,8 @@ nlohmann::json QueueManager::get_message_traces(
                     FILTER (WHERE mtn.trace_name IS NOT NULL),
                     '[]'::json
                 ) as trace_names
-            FROM queen.message_traces mt
-            LEFT JOIN queen.message_trace_names mtn ON mt.id = mtn.trace_id
+            FROM message_traces mt
+            LEFT JOIN message_trace_names mtn ON mt.id = mtn.trace_id
             WHERE mt.partition_id = $1 AND mt.transaction_id = $2
             GROUP BY mt.id, mt.event_type, mt.data, mt.consumer_group, mt.worker_id, mt.created_at
             ORDER BY mt.created_at ASC
@@ -3342,12 +3346,12 @@ nlohmann::json QueueManager::get_traces_by_name(
                     FILTER (WHERE mtn2.trace_name IS NOT NULL),
                     '[]'::json
                 ) as trace_names
-            FROM queen.message_trace_names mtn
-            JOIN queen.message_traces mt ON mtn.trace_id = mt.id
-            LEFT JOIN queen.message_trace_names mtn2 ON mt.id = mtn2.trace_id
-            LEFT JOIN queen.messages m ON mt.message_id = m.id
-            LEFT JOIN queen.partitions p ON mt.partition_id = p.id
-            LEFT JOIN queen.queues q ON p.queue_id = q.id
+            FROM message_trace_names mtn
+            JOIN message_traces mt ON mtn.trace_id = mt.id
+            LEFT JOIN message_trace_names mtn2 ON mt.id = mtn2.trace_id
+            LEFT JOIN messages m ON mt.message_id = m.id
+            LEFT JOIN partitions p ON mt.partition_id = p.id
+            LEFT JOIN queues q ON p.queue_id = q.id
             WHERE mtn.trace_name = $1
             GROUP BY mt.id, mt.transaction_id, mt.partition_id, mt.event_type, 
                      mt.data, mt.consumer_group, mt.worker_id, mt.created_at,
@@ -3370,8 +3374,8 @@ nlohmann::json QueueManager::get_traces_by_name(
         // Get total count
         std::string count_query = R"(
             SELECT COUNT(DISTINCT mt.id)
-            FROM queen.message_trace_names mtn
-            JOIN queen.message_traces mt ON mtn.trace_id = mt.id
+            FROM message_trace_names mtn
+            JOIN message_traces mt ON mtn.trace_id = mt.id
             WHERE mtn.trace_name = $1
         )";
         
@@ -3405,8 +3409,8 @@ nlohmann::json QueueManager::get_available_trace_names(
                 COUNT(DISTINCT trace_id) as trace_count,
                 COUNT(DISTINCT mt.transaction_id) as message_count,
                 MAX(mt.created_at) as last_seen
-            FROM queen.message_trace_names mtn
-            JOIN queen.message_traces mt ON mtn.trace_id = mt.id
+            FROM message_trace_names mtn
+            JOIN message_traces mt ON mtn.trace_id = mt.id
             GROUP BY trace_name
             ORDER BY last_seen DESC
             LIMIT $1 OFFSET $2
@@ -3425,7 +3429,7 @@ nlohmann::json QueueManager::get_available_trace_names(
         // Get total count
         std::string count_query = R"(
             SELECT COUNT(DISTINCT trace_name) as total
-            FROM queen.message_trace_names
+            FROM message_trace_names
         )";
         
         auto count_result = QueryResult(conn->exec(count_query));
@@ -3467,7 +3471,7 @@ bool QueueManager::check_maintenance_mode_with_cache() {
         
         std::string sql = R"(
             SELECT value->>'enabled' as enabled
-            FROM queen.system_state
+            FROM system_state
             WHERE key = 'maintenance_mode'
         )";
         
@@ -3514,7 +3518,7 @@ void QueueManager::set_maintenance_mode(bool enabled) {
         
         // Persist to database for multi-instance support
         std::string sql = R"(
-            INSERT INTO queen.system_state (key, value, updated_at)
+            INSERT INTO system_state (key, value, updated_at)
             VALUES ('maintenance_mode', $1::jsonb, NOW())
             ON CONFLICT (key) DO UPDATE
             SET value = EXCLUDED.value,

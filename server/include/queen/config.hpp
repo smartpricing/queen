@@ -57,6 +57,7 @@ struct DatabaseConfig {
     std::string database = "postgres";
     std::string password = "postgres";
     std::string port = "5432";
+    std::string schema = "queen";
     
     // SSL configuration
     bool use_ssl = false;
@@ -81,6 +82,7 @@ struct DatabaseConfig {
         config.database = get_env_string("PG_DB", "postgres");
         config.password = get_env_string("PG_PASSWORD", "postgres");
         config.port = get_env_string("PG_PORT", "5432");
+        config.schema = get_env_string("PG_SCHEMA", "queen");
         
         config.use_ssl = get_env_bool("PG_USE_SSL", false);
         config.ssl_reject_unauthorized = get_env_bool("PG_SSL_REJECT_UNAUTHORIZED", true);

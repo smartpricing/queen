@@ -89,6 +89,7 @@ private:
     std::shared_ptr<DatabasePool> db_pool_;
     std::shared_ptr<FileBufferManager> file_buffer_manager_;
     QueueConfig config_;
+    std::string schema_name_;
     
     // Maintenance mode (cached from database for multi-instance support)
     std::atomic<bool> maintenance_mode_cached_{false};
@@ -137,7 +138,8 @@ private:
     
 public:
     explicit QueueManager(std::shared_ptr<DatabasePool> db_pool, 
-                         const QueueConfig& config = QueueConfig{});
+                         const QueueConfig& config = QueueConfig{},
+                         const std::string& schema_name = "queen");
     
     // Set file buffer manager (for maintenance mode)
     void set_file_buffer_manager(std::shared_ptr<FileBufferManager> fbm) {
