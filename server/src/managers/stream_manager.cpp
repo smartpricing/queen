@@ -569,10 +569,11 @@ std::vector<StreamPartitionOffset> StreamManager::get_partitions_and_offsets(
     
     try {
         if (partitioned) {
-            // Q4: Partitioned query
+            // Q4: Partitioned query - GROUP BY partition NAME (not UUID)
+            // This allows multiple queues with same partition names to be grouped together
             std::string sql = R"(
-                SELECT 
-                    p.id::TEXT as stream_key,
+                SELECT DISTINCT
+                    p.name as stream_key,
                     p.name as partition_name,
                     COALESCE(
                         o.last_acked_window_end::TEXT, 
@@ -582,7 +583,7 @@ std::vector<StreamPartitionOffset> StreamManager::get_partitions_and_offsets(
                 JOIN queen.stream_sources ss ON p.queue_id = ss.queue_id
                 LEFT JOIN queen.stream_consumer_offsets o 
                     ON ss.stream_id = o.stream_id
-                    AND p.id::TEXT = o.stream_key
+                    AND p.name = o.stream_key
                     AND o.consumer_group = $2
                 WHERE ss.stream_id = $1::UUID
             )";
@@ -749,17 +750,20 @@ nlohmann::json StreamManager::get_messages(
     
     try {
         if (partitioned) {
-            // Q8: Partitioned query
+            // Q8: Partitioned query - Query by partition NAME across all source queues
             std::string sql = R"(
                 SELECT m.id, m.payload, m.created_at
                 FROM queen.messages m
-                WHERE m.partition_id = $1::UUID
-                  AND m.created_at >= $2::TIMESTAMPTZ
-                  AND m.created_at < $3::TIMESTAMPTZ
+                JOIN queen.partitions p ON m.partition_id = p.id
+                JOIN queen.stream_sources ss ON p.queue_id = ss.queue_id
+                WHERE ss.stream_id = $1::UUID
+                  AND p.name = $2
+                  AND m.created_at >= $3::TIMESTAMPTZ
+                  AND m.created_at < $4::TIMESTAMPTZ
                 ORDER BY m.created_at, m.id
             )";
             
-            auto result = QueryResult(conn->exec_params(sql, {stream_key, window_start, window_end}));
+            auto result = QueryResult(conn->exec_params(sql, {stream_id, stream_key, window_start, window_end}));
             
             if (result.is_success()) {
                 for (int i = 0; i < result.num_rows(); i++) {
@@ -813,14 +817,17 @@ std::optional<std::string> StreamManager::get_first_message_time(
 ) {
     try {
         if (partitioned) {
-            // Q15: Partitioned query
+            // Q15: Partitioned query - Query by partition NAME across all source queues
             std::string sql = R"(
-                SELECT MIN(m.created_at)::TEXT as first_time 
-                FROM queen.messages m 
-                WHERE m.partition_id = $1::UUID
+                SELECT MIN(m.created_at)::TEXT as first_time
+                FROM queen.messages m
+                JOIN queen.partitions p ON m.partition_id = p.id
+                JOIN queen.stream_sources ss ON p.queue_id = ss.queue_id
+                WHERE ss.stream_id = $1::UUID
+                  AND p.name = $2
             )";
             
-            auto result = QueryResult(conn->exec_params(sql, {stream_key}));
+            auto result = QueryResult(conn->exec_params(sql, {stream_id, stream_key}));
             
             if (!result.is_success() || result.num_rows() == 0 || result.is_null(0, 0)) {
                 return std::nullopt;
