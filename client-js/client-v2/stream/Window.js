@@ -31,7 +31,7 @@ export class Window {
 
   /**
    * Group messages by a key path (dot notation supported)
-   * @param {string} keyPath - Path to key in message payload (e.g., 'payload.userId')
+   * @param {string} keyPath - Path to key in message data (e.g., 'data.userId')
    * @returns {Object} Object with keys as group names and values as arrays of messages
    */
   groupBy(keyPath) {

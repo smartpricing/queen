@@ -225,8 +225,8 @@ void stream_poll_worker_loop(
                                     registry->remove_intention(intention.request_id);
                                 }
                                 
-                                spdlog::info("Stream poll fulfilled {} intentions for group '{}'",
-                                           batch_copy.size(), group_key);
+                                spdlog::info("[Worker {}] Stream poll fulfilled {} intentions for group '{}'",
+                                           worker_id, batch_copy.size(), group_key);
                             } else {
                                 // No window ready - increment backoff counter
                                 {

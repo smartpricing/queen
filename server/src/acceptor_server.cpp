@@ -1930,6 +1930,229 @@ static void setup_worker_routes(uWS::App* app,
         global_stream_manager->handle_seek(res, req, worker_id);
     });
     
+    // GET /api/v1/resources/streams - List all streams
+    app->get("/api/v1/resources/streams", [](auto* res, auto* req) {
+        try {
+            ScopedConnection conn(global_db_pool.get());
+            auto result = QueryResult(conn->exec("SELECT * FROM queen.streams ORDER BY created_at DESC"));
+            
+            nlohmann::json streams = nlohmann::json::array();
+            for (int i = 0; i < result.num_rows(); i++) {
+                nlohmann::json stream = {
+                    {"id", result.get_value(i, "id")},
+                    {"name", result.get_value(i, "name")},
+                    {"namespace", result.get_value(i, "namespace")},
+                    {"partitioned", result.get_value(i, "partitioned") == "t"},
+                    {"windowType", result.get_value(i, "window_type")},
+                    {"windowDurationMs", std::stoll(result.get_value(i, "window_duration_ms"))},
+                    {"windowGracePeriodMs", std::stoll(result.get_value(i, "window_grace_period_ms"))},
+                    {"windowLeaseTimeoutMs", std::stoll(result.get_value(i, "window_lease_timeout_ms"))},
+                    {"createdAt", result.get_value(i, "created_at")},
+                    {"updatedAt", result.get_value(i, "updated_at")}
+                };
+                
+                // Get source queues for this stream
+                auto sources_result = QueryResult(conn->exec_params(
+                    "SELECT q.name FROM queen.stream_sources ss JOIN queen.queues q ON ss.queue_id = q.id WHERE ss.stream_id = $1::UUID",
+                    {result.get_value(i, "id")}
+                ));
+                nlohmann::json source_queues = nlohmann::json::array();
+                for (int j = 0; j < sources_result.num_rows(); j++) {
+                    source_queues.push_back(sources_result.get_value(j, "name"));
+                }
+                stream["sourceQueues"] = source_queues;
+                
+                // Get active leases count
+                auto leases_result = QueryResult(conn->exec_params(
+                    "SELECT COUNT(*) as count FROM queen.stream_leases WHERE stream_id = $1::UUID AND lease_expires_at > NOW()",
+                    {result.get_value(i, "id")}
+                ));
+                stream["activeLeases"] = leases_result.num_rows() > 0 ? std::stoi(leases_result.get_value(0, "count")) : 0;
+                
+                // Get consumer groups count
+                auto consumers_result = QueryResult(conn->exec_params(
+                    "SELECT COUNT(DISTINCT consumer_group) as count FROM queen.stream_consumer_offsets WHERE stream_id = $1::UUID",
+                    {result.get_value(i, "id")}
+                ));
+                stream["consumerGroups"] = consumers_result.num_rows() > 0 ? std::stoi(consumers_result.get_value(0, "count")) : 0;
+                
+                streams.push_back(stream);
+            }
+            
+            nlohmann::json response = {
+                {"streams", streams}
+            };
+            send_json_response(res, response);
+        } catch (const std::exception& e) {
+            send_error_response(res, e.what(), 500);
+        }
+    });
+    
+    // GET /api/v1/resources/streams/stats - Get stream statistics
+    app->get("/api/v1/resources/streams/stats", [](auto* res, auto* req) {
+        try {
+            ScopedConnection conn(global_db_pool.get());
+            
+            // Total streams
+            auto streams_result = QueryResult(conn->exec("SELECT COUNT(*) as count FROM queen.streams"));
+            int total_streams = streams_result.num_rows() > 0 ? std::stoi(streams_result.get_value(0, "count")) : 0;
+            
+            // Partitioned streams count
+            auto partitioned_result = QueryResult(conn->exec("SELECT COUNT(*) as count FROM queen.streams WHERE partitioned = true"));
+            int partitioned_streams = partitioned_result.num_rows() > 0 ? std::stoi(partitioned_result.get_value(0, "count")) : 0;
+            
+            // Active leases (windows being processed)
+            auto leases_result = QueryResult(conn->exec("SELECT COUNT(*) as count FROM queen.stream_leases WHERE lease_expires_at > NOW()"));
+            int active_leases = leases_result.num_rows() > 0 ? std::stoi(leases_result.get_value(0, "count")) : 0;
+            
+            // Total unique consumer groups across all streams
+            auto consumer_groups_result = QueryResult(conn->exec("SELECT COUNT(DISTINCT consumer_group) as count FROM queen.stream_consumer_offsets"));
+            int total_consumer_groups = consumer_groups_result.num_rows() > 0 ? std::stoi(consumer_groups_result.get_value(0, "count")) : 0;
+            
+            // Active consumers (consumer groups that consumed in last hour)
+            auto active_consumers_result = QueryResult(conn->exec(
+                "SELECT COUNT(DISTINCT consumer_group) as count FROM queen.stream_consumer_offsets "
+                "WHERE last_consumed_at > NOW() - INTERVAL '1 hour'"
+            ));
+            int active_consumers = active_consumers_result.num_rows() > 0 ? std::stoi(active_consumers_result.get_value(0, "count")) : 0;
+            
+            // Total windows processed (sum of all consumer groups)
+            auto windows_processed_result = QueryResult(conn->exec("SELECT COALESCE(SUM(total_windows_consumed), 0) as total FROM queen.stream_consumer_offsets"));
+            long long total_windows_processed = windows_processed_result.num_rows() > 0 ? std::stoll(windows_processed_result.get_value(0, "total")) : 0;
+            
+            // Windows processed in last hour
+            auto windows_hour_result = QueryResult(conn->exec(
+                "SELECT COUNT(*) as count FROM queen.stream_consumer_offsets "
+                "WHERE last_consumed_at > NOW() - INTERVAL '1 hour'"
+            ));
+            int windows_last_hour = windows_hour_result.num_rows() > 0 ? std::stoi(windows_hour_result.get_value(0, "count")) : 0;
+            
+            // Average lease time (in seconds)
+            auto avg_lease_result = QueryResult(conn->exec(
+                "SELECT COALESCE(AVG(EXTRACT(EPOCH FROM (lease_expires_at - CURRENT_TIMESTAMP))), 0) as avg_seconds "
+                "FROM queen.stream_leases WHERE lease_expires_at > NOW()"
+            ));
+            int avg_lease_time = avg_lease_result.num_rows() > 0 ? static_cast<int>(std::stod(avg_lease_result.get_value(0, "avg_seconds"))) : 0;
+            
+            nlohmann::json response = {
+                {"totalStreams", total_streams},
+                {"partitionedStreams", partitioned_streams},
+                {"activeLeases", active_leases},
+                {"totalConsumerGroups", total_consumer_groups},
+                {"activeConsumers", active_consumers},
+                {"totalWindowsProcessed", total_windows_processed},
+                {"windowsLastHour", windows_last_hour},
+                {"avgLeaseTime", avg_lease_time}
+            };
+            send_json_response(res, response);
+        } catch (const std::exception& e) {
+            send_error_response(res, e.what(), 500);
+        }
+    });
+    
+    // GET /api/v1/resources/streams/:streamName - Get stream details
+    app->get("/api/v1/resources/streams/:streamName", [](auto* res, auto* req) {
+        try {
+            std::string stream_name = std::string(req->getParameter(0));
+            ScopedConnection conn(global_db_pool.get());
+            
+            auto result = QueryResult(conn->exec_params("SELECT * FROM queen.streams WHERE name = $1", {stream_name}));
+            
+            if (result.num_rows() == 0) {
+                send_error_response(res, "Stream not found", 404);
+                return;
+            }
+            
+            nlohmann::json stream = {
+                {"id", result.get_value(0, "id")},
+                {"name", result.get_value(0, "name")},
+                {"namespace", result.get_value(0, "namespace")},
+                {"partitioned", result.get_value(0, "partitioned") == "t"},
+                {"windowType", result.get_value(0, "window_type")},
+                {"windowDurationMs", std::stoll(result.get_value(0, "window_duration_ms"))},
+                {"windowGracePeriodMs", std::stoll(result.get_value(0, "window_grace_period_ms"))},
+                {"windowLeaseTimeoutMs", std::stoll(result.get_value(0, "window_lease_timeout_ms"))},
+                {"createdAt", result.get_value(0, "created_at")},
+                {"updatedAt", result.get_value(0, "updated_at")}
+            };
+            
+            send_json_response(res, stream);
+        } catch (const std::exception& e) {
+            send_error_response(res, e.what(), 500);
+        }
+    });
+    
+    // GET /api/v1/resources/streams/:streamName/consumers - Get consumer groups for a stream
+    app->get("/api/v1/resources/streams/:streamName/consumers", [](auto* res, auto* req) {
+        try {
+            std::string stream_name = std::string(req->getParameter(0));
+            ScopedConnection conn(global_db_pool.get());
+            
+            // Get stream ID
+            auto stream_result = QueryResult(conn->exec_params("SELECT id FROM queen.streams WHERE name = $1", {stream_name}));
+            if (stream_result.num_rows() == 0) {
+                send_error_response(res, "Stream not found", 404);
+                return;
+            }
+            std::string stream_id = stream_result.get_value(0, "id");
+            
+            // Get consumer groups
+            auto result = QueryResult(conn->exec_params(
+                "SELECT consumer_group, stream_key, "
+                "last_acked_window_end::TEXT, "
+                "COALESCE(total_windows_consumed, 0) as total_windows_consumed, "
+                "last_consumed_at::TEXT "
+                "FROM queen.stream_consumer_offsets WHERE stream_id = $1::UUID ORDER BY consumer_group, stream_key",
+                {stream_id}
+            ));
+            
+            nlohmann::json consumers = nlohmann::json::array();
+            for (int i = 0; i < result.num_rows(); i++) {
+                std::string last_acked = result.get_value(i, "last_acked_window_end");
+                std::string last_consumed = result.get_value(i, "last_consumed_at");
+                
+                nlohmann::json consumer = {
+                    {"consumerGroup", result.get_value(i, "consumer_group")},
+                    {"streamKey", result.get_value(i, "stream_key")},
+                    {"lastAckedWindowEnd", last_acked.empty() ? nullptr : nlohmann::json(last_acked)},
+                    {"totalWindowsConsumed", std::stoll(result.get_value(i, "total_windows_consumed"))},
+                    {"lastConsumedAt", last_consumed.empty() ? nullptr : nlohmann::json(last_consumed)}
+                };
+                consumers.push_back(consumer);
+            }
+            
+            nlohmann::json response = {
+                {"consumers", consumers}
+            };
+            send_json_response(res, response);
+        } catch (const std::exception& e) {
+            send_error_response(res, e.what(), 500);
+        }
+    });
+    
+    // DELETE /api/v1/resources/streams/:streamName - Delete a stream
+    app->del("/api/v1/resources/streams/:streamName", [](auto* res, auto* req) {
+        try {
+            std::string stream_name = std::string(req->getParameter(0));
+            ScopedConnection conn(global_db_pool.get());
+            
+            auto result = QueryResult(conn->exec_params("DELETE FROM queen.streams WHERE name = $1 RETURNING id", {stream_name}));
+            
+            if (result.num_rows() == 0) {
+                send_error_response(res, "Stream not found", 404);
+                return;
+            }
+            
+            nlohmann::json response = {
+                {"success", true},
+                {"message", "Stream deleted successfully"}
+            };
+            send_json_response(res, response);
+        } catch (const std::exception& e) {
+            send_error_response(res, e.what(), 500);
+        }
+    });
+    
     // ============================================================================
     // Status/Dashboard Routes
     // ============================================================================

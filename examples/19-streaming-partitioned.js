@@ -15,8 +15,9 @@ async function main() {
   await queen.queue('test-chat-agent').namespace('test').task('stream').create();
   
 
-  await queen.stream('test-chat-stream', 'test')
+  await queen.stream('test-chat-stream-partitioned', 'test')
     .sources(['test-chat-translations','test-chat-agent'])
+    .partitioned()
     .tumblingTime(5)
     .gracePeriod(1)
     .define();
@@ -57,7 +58,7 @@ async function main() {
   }
   firstConsumer();
   
-  const consumer = queen.consumer('test-chat-stream', 'test-chat-consumer');
+  const consumer = queen.consumer('test-chat-stream-partitioned', 'test-chat-consumer-partitioned');
   let windowsProcessed = 0;
   
   

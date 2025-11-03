@@ -765,7 +765,7 @@ nlohmann::json StreamManager::get_messages(
                 for (int i = 0; i < result.num_rows(); i++) {
                     nlohmann::json msg = {
                         {"id", result.get_value(i, "id")},
-                        {"payload", nlohmann::json::parse(result.get_value(i, "payload"))},
+                        {"data", nlohmann::json::parse(result.get_value(i, "payload"))},
                         {"created_at", result.get_value(i, "created_at")}
                     };
                     messages.push_back(msg);
@@ -790,7 +790,7 @@ nlohmann::json StreamManager::get_messages(
                 for (int i = 0; i < result.num_rows(); i++) {
                     nlohmann::json msg = {
                         {"id", result.get_value(i, "id")},
-                        {"payload", nlohmann::json::parse(result.get_value(i, "payload"))},
+                        {"data", nlohmann::json::parse(result.get_value(i, "payload"))},
                         {"created_at", result.get_value(i, "created_at")}
                     };
                     messages.push_back(msg);
@@ -1073,8 +1073,8 @@ bool StreamManager::check_and_deliver_window_for_poll(
                     200
                 );
                 
-                spdlog::info("Delivered window {}: stream={}, group={}, key={}, messages={}", 
-                             first_intention.request_id, stream_name, consumer_group, partition_name, messages.size());
+                spdlog::info("[Worker {}] Delivered window {}: stream={}, group={}, key={}, messages={}", 
+                             first_intention.worker_id, first_intention.request_id, stream_name, consumer_group, partition_name, messages.size());
                 
                 return true; // Window was delivered
                 

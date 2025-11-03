@@ -48,12 +48,19 @@ export class TransactionBuilder {
   }
 
   queue(queueName) {
-    // Return a sub-builder for push operations
-    return {
+    // Return a sub-builder for push operations with partition support
+    let partition = null
+    
+    const subBuilder = {
+      partition: (partitionKey) => {
+        partition = partitionKey
+        return subBuilder
+      },
+      
       push: (items) => {
         const itemArray = Array.isArray(items) ? items : [items]
         
-        logger.log('TransactionBuilder.queue.push', { queue: queueName, count: itemArray.length })
+        logger.log('TransactionBuilder.queue.push', { queue: queueName, partition, count: itemArray.length })
 
         this.#operations.push({
           type: 'push',
@@ -68,16 +75,25 @@ export class TransactionBuilder {
               payloadValue = item
             }
 
-            return {
+            const result = {
               queue: queueName,
               payload: payloadValue
             }
+            
+            // Add partition if set
+            if (partition !== null) {
+              result.partition = partition
+            }
+
+            return result
           })
         })
 
         return this
       }
     }
+    
+    return subBuilder
   }
 
   async commit() {

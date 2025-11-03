@@ -87,7 +87,7 @@ async function produceTestData() {
       messages.push({
         queue: 'user-purchases',
         partition,
-        payload: {
+        data: {
           type: 'purchase',
           userId,
           productId: `product-${Math.floor(Math.random() * 10)}`,
@@ -100,7 +100,7 @@ async function produceTestData() {
       messages.push({
         queue: 'user-clicks',
         partition,
-        payload: {
+        data: {
           type: 'click',
           userId,
           page: `/page-${Math.floor(Math.random() * 5)}`,
@@ -119,7 +119,7 @@ async function produceTestData() {
     if (!messagesByQueueAndPartition[key]) {
       messagesByQueueAndPartition[key] = [];
     }
-    messagesByQueueAndPartition[key].push({ data: msg.payload });
+    messagesByQueueAndPartition[key].push({ data: msg.data });
   }
   
   // Push to each queue/partition combination
@@ -175,18 +175,18 @@ async function consumeGlobalStream() {
     // Client-side aggregation
     const stats = window.aggregate({
       count: true,
-      sum: ['payload.amount']
+      sum: ['data.amount']
     });
     console.log(window.messages);
-    const purchases = window.messages.filter(m => m.payload.type === 'purchase').length;
-    const clicks = window.messages.filter(m => m.payload.type === 'click').length;
+    const purchases = window.messages.filter(m => m.data.type === 'purchase').length;
+    const clicks = window.messages.filter(m => m.data.type === 'click').length;
     
     console.log(`   Clicks: ${clicks}`);
     console.log(`   Purchases: ${purchases}`);
-    console.log(`   Total Revenue: $${stats.sum['payload.amount'] || 0}`);
+    console.log(`   Total Revenue: $${stats.sum['data.amount'] || 0}`);
     
     // Group by user
-    const byUser = window.groupBy('payload.userId');
+    const byUser = window.groupBy('data.userId');
     console.log(`   Active Users: ${Object.keys(byUser).length}`);
     
     // Stop after processing some windows
@@ -222,20 +222,20 @@ async function consumePartitionedStream() {
     
     // Filter and aggregate
     const clickCount = window
-      .filter(m => m.payload.type === 'click')
+      .filter(m => m.data.type === 'click')
       .aggregate({ count: true });
     
     const purchaseStats = window
       .reset()  // Reset to original messages
-      .filter(m => m.payload.type === 'purchase')
+      .filter(m => m.data.type === 'purchase')
       .aggregate({ 
         count: true,
-        sum: ['payload.amount']
+        sum: ['data.amount']
       });
     
     console.log(`   Clicks in partition: ${clickCount.count}`);
     console.log(`   Purchases in partition: ${purchaseStats.count}`);
-    console.log(`   Revenue in partition: $${purchaseStats.sum?.['payload.amount'] || 0}`);
+    console.log(`   Revenue in partition: $${purchaseStats.sum?.['data.amount'] || 0}`);
     
     // Stop after processing some windows
     if (windowCount >= maxWindows) {
@@ -263,7 +263,7 @@ async function advancedProcessing() {
     console.log(`\n🔬 Advanced Window ${windowCount}:`);
     
     // Complex aggregation: revenue per user
-    const byUser = window.groupBy('payload.userId');
+    const byUser = window.groupBy('data.userId');
     const userStats = {};
     
     for (const [userId, messages] of Object.entries(byUser)) {
@@ -274,14 +274,14 @@ async function advancedProcessing() {
       
       const stats = userWindow.aggregate({
         count: true,
-        sum: ['payload.amount']
+        sum: ['data.amount']
       });
       
       userStats[userId] = {
         events: stats.count,
-        revenue: stats.sum?.['payload.amount'] || 0,
-        purchases: messages.filter(m => m.payload.type === 'purchase').length,
-        clicks: messages.filter(m => m.payload.type === 'click').length
+        revenue: stats.sum?.['data.amount'] || 0,
+        purchases: messages.filter(m => m.data.type === 'purchase').length,
+        clicks: messages.filter(m => m.data.type === 'click').length
       };
     }
     

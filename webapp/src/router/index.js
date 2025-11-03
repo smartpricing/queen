@@ -22,6 +22,11 @@ const routes = [
     component: () => import('../views/ConsumerGroups.vue'),
   },
   {
+    path: '/streams',
+    name: 'Streams',
+    component: () => import('../views/Streams.vue'),
+  },
+  {
     path: '/messages',
     name: 'Messages',
     component: () => import('../views/Messages.vue'),

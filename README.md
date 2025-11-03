@@ -39,6 +39,7 @@ Here are the main features:
 - Message tracing for debugging workflows
 - Encryption of messages at DB level
 - Automatic message retention and cleanup - Configurable per-queue retention policies
+- Streaming capabilities for real-time aggregation and processing of messages
 - A nice webapp for monitoring and managing the system
 - Maintenace mode that allows to continue pushing messages even when the database is down, and to drain the messages to the database when the maintenance mode is disabled
 
@@ -50,6 +51,7 @@ Main documentation:
 - [Client Guide JS](client-js/client-v2/README.md)
 - [Client Guide C++](client-cpp/README.md)
 - [Server Guide](server/README.md)
+- [Streaming Guide](docs/STREAMING_V3_USAGE.md)
 - [API Reference](server/API.md)
 - [Message Retention & Cleanup](docs/RETENTION.md)
 - [Webapp](webapp/README.md)

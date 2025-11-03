@@ -9,7 +9,12 @@
       </div>
 
       <template v-else>
-        <!-- Metric Cards - Professional -->
+        <!-- Queue Metrics Section -->
+        <div class="section-header">
+          <h2 class="section-title">Queue Metrics</h2>
+        </div>
+        
+        <!-- Queue Metric Cards -->
         <div class="metrics-grid">
           <!-- Queues Card -->
           <div class="metric-card-top metric-card-clickable" @click="navigateToQueues">
@@ -116,6 +121,66 @@
           </div>
         </div>
 
+        <!-- Streaming Metrics Section -->
+        <div class="section-header">
+          <h2 class="section-title">Streaming Metrics</h2>
+        </div>
+        
+        <!-- Streaming Metric Cards -->
+        <div class="metrics-grid">
+          <!-- Streams Card -->
+          <div class="metric-card-top metric-card-clickable" @click="navigateToStreams">
+            <div class="flex items-center justify-between mb-0.5">
+              <span class="metric-label">STREAMS</span>
+              <svg class="w-4 h-4 text-gray-400 dark:text-gray-500 card-arrow" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2">
+                <path stroke-linecap="round" stroke-linejoin="round" d="M9 5l7 7-7 7" />
+              </svg>
+            </div>
+            <div class="metric-value text-purple-600 dark:text-purple-400">{{ formatNumber(streamStats?.totalStreams || 0) }}</div>
+            <div class="metric-subtext-bottom">{{ formatNumber(streamStats?.partitionedStreams || 0) }} partitioned</div>
+          </div>
+
+          <!-- Consumer Groups (Streaming) Card -->
+          <div class="metric-card-top metric-card-clickable" @click="navigateToStreams">
+            <div class="flex items-center justify-between mb-0.5">
+              <span class="metric-label">CONSUMER GROUPS</span>
+              <svg class="w-4 h-4 text-gray-400 dark:text-gray-500 card-arrow" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2">
+                <path stroke-linecap="round" stroke-linejoin="round" d="M9 5l7 7-7 7" />
+              </svg>
+            </div>
+            <div class="metric-value text-teal-600 dark:text-teal-400">{{ formatNumber(streamStats?.totalConsumerGroups || 0) }}</div>
+            <div class="metric-subtext-bottom">{{ formatNumber(streamStats?.activeConsumers || 0) }} active</div>
+          </div>
+
+          <!-- Windows Processed Card -->
+          <div class="metric-card-top">
+            <div class="flex items-center justify-between mb-0.5">
+              <span class="metric-label">WINDOWS PROCESSED</span>
+              <div class="text-emerald-500">
+                <svg class="w-4 h-4" fill="currentColor" viewBox="0 0 20 20">
+                  <circle cx="10" cy="10" r="4"/>
+                </svg>
+              </div>
+            </div>
+            <div class="metric-value text-emerald-600 dark:text-emerald-400">{{ formatNumber(streamStats?.totalWindowsProcessed || 0) }}</div>
+            <div class="metric-subtext-bottom">{{ formatNumber(streamStats?.windowsLastHour || 0) }} last hour</div>
+          </div>
+
+          <!-- Active Windows Card -->
+          <div class="metric-card-top">
+            <div class="flex items-center justify-between mb-0.5">
+              <span class="metric-label">ACTIVE WINDOWS</span>
+              <div :class="streamStats?.activeLeases > 0 ? 'text-blue-500' : 'text-gray-400 dark:text-gray-500'">
+                <svg class="w-4 h-4" fill="currentColor" viewBox="0 0 20 20">
+                  <circle cx="10" cy="10" r="4"/>
+                </svg>
+              </div>
+            </div>
+            <div class="metric-value text-blue-600 dark:text-blue-400">{{ formatNumber(streamStats?.activeLeases || 0) }}</div>
+            <div class="metric-subtext-bottom">{{ formatNumber(streamStats?.avgLeaseTime || 0) }}s avg time</div>
+          </div>
+        </div>
+
         <!-- Maintenance Mode Card (full width if there are issues) -->
         <MaintenanceCard />
         
@@ -191,6 +256,7 @@ import { resourcesApi } from '../api/resources';
 import { analyticsApi } from '../api/analytics';
 import { queuesApi } from '../api/queues';
 import { systemMetricsApi } from '../api/system-metrics';
+import { streamsApi } from '../api/streams';
 import { formatNumber } from '../utils/formatters';
 
 import LoadingSpinner from '../components/common/LoadingSpinner.vue';
@@ -208,6 +274,7 @@ const overview = ref(null);
 const status = ref(null);
 const systemMetrics = ref(null);
 const topQueues = ref([]);
+const streamStats = ref(null);
 
 // Calculate pending as: total - completed - failed - deadLetter
 const calculatedPending = computed(() => {
@@ -282,16 +349,18 @@ async function loadData() {
   error.value = null;
 
   try {
-    const [overviewRes, statusRes, queuesRes, systemMetricsRes] = await Promise.all([
+    const [overviewRes, statusRes, queuesRes, systemMetricsRes, streamStatsRes] = await Promise.all([
       resourcesApi.getOverview(),
       analyticsApi.getStatus(),
       queuesApi.getQueues(),
       systemMetricsApi.getSystemMetrics(), // Fetch last hour of system metrics
+      streamsApi.getStreamStats().catch(() => ({ data: { totalStreams: 0, activeLeases: 0 } })), // Gracefully handle if streams not supported
     ]);
 
     overview.value = overviewRes.data;
     status.value = statusRes.data;
     systemMetrics.value = systemMetricsRes.data;
+    streamStats.value = streamStatsRes.data;
     
     // Get top 5 queues by total messages
     topQueues.value = queuesRes.data.queues
@@ -345,6 +414,10 @@ function navigateToAnalytics() {
 function navigateToSystemMetrics() {
   router.push('/system-metrics');
 }
+
+function navigateToStreams() {
+  router.push('/streams');
+}
 </script>
 
 <style scoped>
@@ -365,6 +438,16 @@ function navigateToSystemMetrics() {
 
 .dashboard-content {
   @apply px-6 lg:px-8 py-6 space-y-6;
+}
+
+/* Section Headers */
+.section-header {
+  @apply mt-6 mb-3 first:mt-0;
+}
+
+.section-title {
+  @apply text-xs font-semibold uppercase tracking-wider text-gray-500 dark:text-gray-400;
+  @apply px-1;
 }
 
 /* Metrics Grid */

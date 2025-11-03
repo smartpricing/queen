@@ -22,32 +22,25 @@ export class StreamConsumer {
   async process(callback) {
     this.running = true;
     
-    console.log(`[StreamConsumer] Starting consumer: stream=${this.streamName}, group=${this.consumerGroup}`);
     
     while (this.running) {
       let window = null;
       
       try {
-        console.log(`[StreamConsumer] Polling for window...`);
         window = await this.pollWindow();
 
         if (!window) {
           // 204 No Content - no window available
-          console.log(`[StreamConsumer] No window available (204)`);
           continue;
         }
 
-        console.log(`[StreamConsumer] Received window: ${window.id}, messages=${window.allMessages.length}`);
         await this.executeCallback(window, callback);
 
       } catch (err) {
-        console.error('[StreamConsumer] Processing error:', err);
         // Backoff on error
         await new Promise(r => setTimeout(r, 1000));
       }
     }
-    
-    console.log(`[StreamConsumer] Consumer stopped`);
   }
 
   /**
@@ -107,7 +100,6 @@ export class StreamConsumer {
           });
         } catch (e) {
           leaseExpired = true;
-          console.warn(`[StreamConsumer] Lease ${window.leaseId} failed to renew:`, e.message);
         }
       }, this.leaseRenewInterval);
 
@@ -121,12 +113,9 @@ export class StreamConsumer {
           leaseId: window.leaseId,
           success: true
         });
-      } else {
-        console.warn(`[StreamConsumer] Window ${window.id} processed but lease expired, not ACKing`);
       }
 
     } catch (err) {
-      console.error(`[StreamConsumer] Failed to process window ${window.id}:`, err);
       
       // NACK if lease hasn't expired
       if (!leaseExpired) {
@@ -137,7 +126,7 @@ export class StreamConsumer {
             success: false  // NACK
           });
         } catch (nackErr) {
-          console.error(`[StreamConsumer] Failed to NACK window ${window.id}:`, nackErr);
+          
         }
       }
       
