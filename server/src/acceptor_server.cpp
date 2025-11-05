@@ -446,9 +446,9 @@ static void setup_worker_routes(uWS::App* app,
     });
     
     // Health check
-    app->get("/health", [queue_manager, worker_id](auto* res, auto* req) {
+    app->get("/health", [async_queue_manager, worker_id](auto* res, auto* req) {
         try {
-            bool healthy = queue_manager->health_check();
+            bool healthy = async_queue_manager->health_check();
             nlohmann::json response = {
                 {"status", healthy ? "healthy" : "unhealthy"},
                 {"database", healthy ? "connected" : "disconnected"},
@@ -463,16 +463,16 @@ static void setup_worker_routes(uWS::App* app,
     });
     
     // GET maintenance mode status (always fetch fresh from DB)
-    app->get("/api/v1/system/maintenance", [queue_manager](auto* res, auto* req) {
+    app->get("/api/v1/system/maintenance", [async_queue_manager](auto* res, auto* req) {
         try {
             // Force fresh check from database (bypass cache for status endpoint)
-            bool current_mode = queue_manager->get_maintenance_mode_fresh();
-            auto buffer_stats = queue_manager->get_buffer_stats();
+            bool current_mode = async_queue_manager->get_maintenance_mode_fresh();
+            auto buffer_stats = async_queue_manager->get_buffer_stats();
             
             nlohmann::json response = {
                 {"maintenanceMode", current_mode},
-                {"bufferedMessages", queue_manager->get_buffer_pending_count()},
-                {"bufferHealthy", queue_manager->is_buffer_healthy()},
+                {"bufferedMessages", async_queue_manager->get_buffer_pending_count()},
+                {"bufferHealthy", async_queue_manager->is_buffer_healthy()},
                 {"bufferStats", buffer_stats}
             };
             send_json_response(res, response);
@@ -482,9 +482,9 @@ static void setup_worker_routes(uWS::App* app,
     });
     
     // POST toggle maintenance mode
-    app->post("/api/v1/system/maintenance", [queue_manager](auto* res, auto* req) {
+    app->post("/api/v1/system/maintenance", [async_queue_manager](auto* res, auto* req) {
         read_json_body(res,
-            [res, queue_manager](const nlohmann::json& body) {
+            [res, async_queue_manager](const nlohmann::json& body) {
                 try {
                     if (!body.contains("enabled") || !body["enabled"].is_boolean()) {
                         send_error_response(res, "enabled (boolean) is required", 400);
@@ -492,12 +492,12 @@ static void setup_worker_routes(uWS::App* app,
                     }
                     
                     bool enable = body["enabled"];
-                    queue_manager->set_maintenance_mode(enable);
+                    async_queue_manager->set_maintenance_mode(enable);
                     
                     nlohmann::json response = {
                         {"maintenanceMode", enable},
-                        {"bufferedMessages", queue_manager->get_buffer_pending_count()},
-                        {"bufferHealthy", queue_manager->is_buffer_healthy()},
+                        {"bufferedMessages", async_queue_manager->get_buffer_pending_count()},
+                        {"bufferHealthy", async_queue_manager->is_buffer_healthy()},
                         {"message", enable ? 
                             "Maintenance mode ENABLED. All PUSHes routing to file buffer." :
                             "Maintenance mode DISABLED. Background processor will drain buffer to DB."
@@ -517,9 +517,9 @@ static void setup_worker_routes(uWS::App* app,
     });
     
     // Configure queue
-    app->post("/api/v1/configure", [queue_manager, worker_id](auto* res, auto* req) {
+    app->post("/api/v1/configure", [async_queue_manager, worker_id](auto* res, auto* req) {
         read_json_body(res,
-            [res, queue_manager, worker_id](const nlohmann::json& body) {
+            [res, async_queue_manager, worker_id](const nlohmann::json& body) {
                 try {
                     spdlog::debug("Configure request body: {}", body.dump());
                     
@@ -573,7 +573,9 @@ static void setup_worker_routes(uWS::App* app,
                     }
                     
                     spdlog::info("[Worker {}] Configuring queue: {}", worker_id, queue_name);
-                    bool success = queue_manager->configure_queue(queue_name, options, namespace_name, task_name);
+                    bool success = async_queue_manager->configure_queue(queue_name, options, namespace_name, task_name);
+                    
+                    spdlog::info("[Worker {}] Configure queue result: success={}", worker_id, success);
                     
                     if (success) {
                         nlohmann::json response = {
@@ -702,289 +704,6 @@ static void setup_worker_routes(uWS::App* app,
                     
                 } catch (const std::exception& e) {
                     spdlog::error("[Worker {}] PUSH: Error: {}", worker_id, e.what());
-                    send_error_response(res, e.what(), 500);
-                }
-            },
-            [res](const std::string& error) {
-                send_error_response(res, error, 400);
-            }
-        );
-    });
-    
-    // OLD PUSH ROUTE (using thread pool) - DEPRECATED, kept for reference
-    // TODO: Remove after async push is validated in production
-    app->post("/api/v1/push-legacy", [queue_manager, file_buffer, worker_id, db_thread_pool](auto* res, auto* req) {
-        read_json_body(res,
-            [res, queue_manager, file_buffer, worker_id, db_thread_pool](const nlohmann::json& body) {
-                try {
-                    if (!body.contains("items") || !body["items"].is_array()) {
-                        send_error_response(res, "items array is required", 400);
-                        return;
-                    }
-                    
-                    // Register response in uWebSockets thread - SAFE
-                    std::string request_id = global_response_registry->register_response(res, worker_id);
-                    
-                    spdlog::info("[Worker {}] PUSH (LEGACY): Registered response {}, submitting to ThreadPool", worker_id, request_id);
-                    
-                    // Execute PUSH operation in ThreadPool
-                    db_thread_pool->push([request_id, queue_manager, file_buffer, worker_id, body]() {
-                        spdlog::info("[Worker {}] PUSH (LEGACY): ThreadPool executing push operation for {}", worker_id, request_id);
-                        
-                        // FAILOVER: Quick health check first - if DB is known to be down, skip directly to failover
-                        if (file_buffer && !file_buffer->is_db_healthy()) {
-                            spdlog::warn("[Worker {}] PUSH (LEGACY): DB known to be down, using file buffer immediately for {}", worker_id, request_id);
-                            
-                            // Validate items before writing to file buffer
-                            for (const auto& item_json : body["items"]) {
-                                // Validate partition type if present
-                                if (item_json.contains("partition") && !item_json["partition"].is_string()) {
-                                    spdlog::error("[Worker {}] PUSH: Invalid partition type for {}, must be string", worker_id, request_id);
-                                    nlohmann::json error_response = {{"error", "Partition must be a string"}};
-                                    worker_response_queues[worker_id]->push(request_id, error_response, true, 400);
-                                    return;
-                                }
-                                
-                                // Validate queue type
-                                if (!item_json.contains("queue") || !item_json["queue"].is_string()) {
-                                    spdlog::error("[Worker {}] PUSH: Invalid or missing queue for {}", worker_id, request_id);
-                                    nlohmann::json error_response = {{"error", "Queue must be a string"}};
-                                    worker_response_queues[worker_id]->push(request_id, error_response, true, 400);
-                                    return;
-                                }
-                            }
-                            
-                            // Write all items to file buffer with failover flag
-                            for (const auto& item_json : body["items"]) {
-                                nlohmann::json buffered_event = {
-                                    {"queue", item_json["queue"]},
-                                    {"partition", item_json.value("partition", "Default")},
-                                    {"payload", item_json.value("payload", nlohmann::json{})},
-                                    {"namespace", item_json.value("namespace", "")},
-                                    {"task", item_json.value("task", "")},
-                                    {"traceId", item_json.value("traceId", "")},
-                                    {"transactionId", item_json.value("transactionId", queue_manager->generate_uuid())},
-                                    {"failover", true}
-                                };
-                                file_buffer->write_event(buffered_event);
-                            }
-                            
-                            // Build success response with failover metadata
-                            nlohmann::json json_results = nlohmann::json::array();
-                            for (const auto& item_json : body["items"]) {
-                                nlohmann::json json_result;
-                                json_result["transaction_id"] = item_json.value("transactionId", queue_manager->generate_uuid());
-                                json_result["status"] = "queued";
-                                json_result["failover"] = true;
-                                json_results.push_back(json_result);
-                            }
-                            
-                            worker_response_queues[worker_id]->push(request_id, json_results, false, 201);
-                            spdlog::info("[Worker {}] PUSH: Queued failover response for {} ({} items buffered)", worker_id, request_id, body["items"].size());
-                            return;
-                        }
-                        
-                        try {
-                            // Parse items with validation
-                            std::vector<PushItem> items;
-                            for (const auto& item_json : body["items"]) {
-                                // Validate partition type if present
-                                if (item_json.contains("partition") && !item_json["partition"].is_string()) {
-                                    spdlog::error("[Worker {}] PUSH: Invalid partition type for {}, must be string", worker_id, request_id);
-                                    nlohmann::json error_response = {{"error", "Partition must be a string"}};
-                                    worker_response_queues[worker_id]->push(request_id, error_response, true, 400);
-                                    return;
-                                }
-                                
-                                // Validate queue type
-                                if (!item_json.contains("queue") || !item_json["queue"].is_string()) {
-                                    spdlog::error("[Worker {}] PUSH: Invalid or missing queue for {}", worker_id, request_id);
-                                    nlohmann::json error_response = {{"error", "Queue must be a string"}};
-                                    worker_response_queues[worker_id]->push(request_id, error_response, true, 400);
-                                    return;
-                                }
-                                
-                                // Validate transactionId type if present
-                                if (item_json.contains("transactionId") && !item_json["transactionId"].is_string()) {
-                                    spdlog::error("[Worker {}] PUSH: Invalid transactionId type for {}, must be string", worker_id, request_id);
-                                    nlohmann::json error_response = {{"error", "TransactionId must be a string"}};
-                                    worker_response_queues[worker_id]->push(request_id, error_response, true, 400);
-                                    return;
-                                }
-                                
-                                // Validate traceId type if present
-                                if (item_json.contains("traceId") && !item_json["traceId"].is_string()) {
-                                    spdlog::error("[Worker {}] PUSH: Invalid traceId type for {}, must be string", worker_id, request_id);
-                                    nlohmann::json error_response = {{"error", "TraceId must be a string"}};
-                                    worker_response_queues[worker_id]->push(request_id, error_response, true, 400);
-                                    return;
-                                }
-                                
-                                PushItem item;
-                                item.queue = item_json["queue"];
-                                item.partition = item_json.value("partition", "Default");
-                                item.payload = item_json.value("payload", nlohmann::json{});
-                                if (item_json.contains("transactionId")) {
-                                    item.transaction_id = item_json["transactionId"];
-                                }
-                                if (item_json.contains("traceId")) {
-                                    item.trace_id = item_json["traceId"];
-                                }
-                                items.push_back(std::move(item));
-                            }
-                            
-                            // Execute database operation (blocks in ThreadPool worker, not uWebSockets thread)
-                            spdlog::info("[Worker {}] PUSH: Calling push_messages in ThreadPool for {}", worker_id, request_id);
-                            auto results = queue_manager->push_messages(items);
-                            
-                            // FAILOVER: Check if push failed
-                            bool has_error = false;
-                            std::string error_msg;
-                            
-                            for (const auto& result : results) {
-                                if (result.status == "failed" && result.error) {
-                                    has_error = true;
-                                    error_msg = *result.error;
-                                    break;
-                                }
-                            }
-                            
-                            // If ANY error occurred, do a health check to determine if DB is down
-                            bool db_failure = false;
-                            if (has_error) {
-                                // Do a quick health check
-                                bool db_is_healthy = queue_manager->health_check();
-                                if (!db_is_healthy) {
-                                    // DB is down - use failover
-                                    spdlog::warn("[Worker {}] PUSH: Error '{}' detected and health check failed - DB is down, using failover", worker_id, error_msg);
-                                    db_failure = true;
-                                } else {
-                                    // DB is healthy - this is a real application error
-                                    spdlog::warn("[Worker {}] PUSH: Error '{}' detected but DB is healthy - returning error to client", worker_id, error_msg);
-                                    nlohmann::json error_response = {{"error", error_msg}};
-                                    worker_response_queues[worker_id]->push(request_id, error_response, true, 400);
-                                    return;
-                                }
-                            }
-                            
-                            // FAILOVER: If DB failure detected, use file buffer (if available)
-                            if (db_failure) {
-                                if (file_buffer) {
-                                    spdlog::warn("[Worker {}] PUSH: DB connection failed, using file buffer for failover for {}", worker_id, request_id);
-                                    file_buffer->mark_db_unhealthy();
-                                    
-                                    // Write all items to file buffer
-                                    for (const auto& item_json : body["items"]) {
-                                        nlohmann::json buffered_event = {
-                                            {"queue", item_json["queue"]},
-                                            {"partition", item_json.value("partition", "Default")},
-                                            {"payload", item_json.value("payload", nlohmann::json{})},
-                                            {"namespace", item_json.value("namespace", "")},
-                                            {"task", item_json.value("task", "")},
-                                            {"traceId", item_json.value("traceId", "")},
-                                            {"transactionId", item_json.value("transactionId", queue_manager->generate_uuid())},
-                                            {"failover", true}
-                                        };
-                                        file_buffer->write_event(buffered_event);
-                                    }
-                                    
-                                    // Build success response with failover metadata
-                                    nlohmann::json json_results = nlohmann::json::array();
-                                    for (const auto& item_json : body["items"]) {
-                                        nlohmann::json json_result;
-                                        json_result["transaction_id"] = item_json.value("transactionId", queue_manager->generate_uuid());
-                                        json_result["status"] = "queued";
-                                        json_result["failover"] = true;
-                                        json_results.push_back(json_result);
-                                    }
-                                    
-                                    worker_response_queues[worker_id]->push(request_id, json_results, false, 201);
-                                    spdlog::info("[Worker {}] PUSH: Queued failover response for {} ({} items buffered)", worker_id, request_id, body["items"].size());
-                                    return;
-                                } else {
-                                    // No file buffer available (non-zero worker) - return error
-                                    spdlog::error("[Worker {}] PUSH: DB connection failed and no file buffer available for {}", worker_id, request_id);
-                                    nlohmann::json error_response = {{"error", "Database unavailable and failover not available on this worker"}};
-                                    worker_response_queues[worker_id]->push(request_id, error_response, true, 503);
-                                    return;
-                                }
-                            }
-                            
-                            // Convert PushResult vector to JSON (normal success case)
-                            nlohmann::json json_results = nlohmann::json::array();
-                            for (const auto& result : results) {
-                                nlohmann::json json_result;
-                                json_result["transaction_id"] = result.transaction_id;
-                                json_result["status"] = result.status;
-                                if (result.message_id.has_value()) {
-                                    json_result["message_id"] = result.message_id.value();
-                                }
-                                if (result.trace_id.has_value()) {
-                                    json_result["trace_id"] = result.trace_id.value();
-                                }
-                                if (result.error.has_value()) {
-                                    json_result["error"] = result.error.value();
-                                }
-                                json_results.push_back(json_result);
-                            }
-                            
-                            // All items succeeded
-                            worker_response_queues[worker_id]->push(request_id, json_results, false, 201);
-                            spdlog::info("[Worker {}] PUSH: Queued success response for {} ({} items)", worker_id, request_id, results.size());
-                            
-                        } catch (const nlohmann::json::exception& json_error) {
-                            // JSON parsing/validation error - return 400 error, do NOT trigger failover
-                            spdlog::error("[Worker {}] PUSH: JSON validation error for {}: {}", 
-                                       worker_id, request_id, json_error.what());
-                            nlohmann::json error_response = {{"error", std::string("Invalid JSON data: ") + json_error.what()}};
-                            worker_response_queues[worker_id]->push(request_id, error_response, true, 400);
-                        } catch (const std::exception& db_error) {
-                            // FAILOVER: PostgreSQL exception - fallback to file buffer for all items (if available)
-                            if (file_buffer) {
-                                spdlog::warn("[Worker {}] PUSH: PostgreSQL unavailable for {}, using file buffer for failover: {}", 
-                                           worker_id, request_id, db_error.what());
-                                
-                                // Mark DB as unhealthy so subsequent pushes skip DB attempt
-                                file_buffer->mark_db_unhealthy();
-                                
-                                // Write all items to file buffer
-                                for (const auto& item_json : body["items"]) {
-                                    nlohmann::json buffered_event = {
-                                        {"queue", item_json["queue"]},
-                                        {"partition", item_json.value("partition", "Default")},
-                                        {"payload", item_json.value("payload", nlohmann::json{})},
-                                        {"namespace", item_json.value("namespace", "")},
-                                        {"task", item_json.value("task", "")},
-                                        {"traceId", item_json.value("traceId", "")},
-                                        {"transactionId", item_json.value("transactionId", queue_manager->generate_uuid())},
-                                        {"failover", true}
-                                    };
-                                    file_buffer->write_event(buffered_event);
-                                }
-                                
-                                // Build success response with failover metadata
-                                nlohmann::json json_results = nlohmann::json::array();
-                                for (const auto& item_json : body["items"]) {
-                                    nlohmann::json json_result;
-                                    json_result["transaction_id"] = item_json.value("transactionId", queue_manager->generate_uuid());
-                                    json_result["status"] = "queued";
-                                    json_result["failover"] = true;
-                                    json_results.push_back(json_result);
-                                }
-                                
-                                worker_response_queues[worker_id]->push(request_id, json_results, false, 201);
-                                spdlog::info("[Worker {}] PUSH: Queued failover response for {} ({} items buffered)", worker_id, request_id, body["items"].size());
-                            } else {
-                                // No file buffer available (non-zero worker) - return error
-                                spdlog::error("[Worker {}] PUSH: PostgreSQL unavailable and no file buffer available for {}: {}", 
-                                            worker_id, request_id, db_error.what());
-                                nlohmann::json error_response = {{"error", "Database unavailable and failover not available on this worker"}};
-                                worker_response_queues[worker_id]->push(request_id, error_response, true, 503);
-                            }
-                        }
-                    });
-                    
-                } catch (const std::exception& e) {
                     send_error_response(res, e.what(), 500);
                 }
             },
@@ -1201,12 +920,12 @@ static void setup_worker_routes(uWS::App* app,
     });
     
     // Delete queue
-    app->del("/api/v1/resources/queues/:queue", [queue_manager, worker_id](auto* res, auto* req) {
+    app->del("/api/v1/resources/queues/:queue", [async_queue_manager, worker_id](auto* res, auto* req) {
         try {
             std::string queue_name = std::string(req->getParameter(0));
             
             spdlog::info("[Worker {}] DELETE queue: {}", worker_id, queue_name);
-            bool deleted = queue_manager->delete_queue(queue_name);
+            bool deleted = async_queue_manager->delete_queue(queue_name);
             
             nlohmann::json response = {
                 {"deleted", true},
@@ -1602,16 +1321,16 @@ static void setup_worker_routes(uWS::App* app,
     });
     
     // Lease extension
-    app->post("/api/v1/lease/:leaseId/extend", [queue_manager, worker_id](auto* res, auto* req) {
+    app->post("/api/v1/lease/:leaseId/extend", [async_queue_manager, worker_id](auto* res, auto* req) {
         read_json_body(res,
-            [res, queue_manager, worker_id, req](const nlohmann::json& body) {
+            [res, async_queue_manager, worker_id, req](const nlohmann::json& body) {
                 try {
                     std::string lease_id = std::string(req->getParameter(0));
                     int seconds = body.value("seconds", 60);
                     
                     spdlog::debug("[Worker {}] Extending lease: {}, seconds: {}", worker_id, lease_id, seconds);
                     
-                    bool success = queue_manager->extend_message_lease(lease_id, seconds);
+                    bool success = async_queue_manager->extend_message_lease(lease_id, seconds);
                     
                     if (success) {
                         nlohmann::json response = {
@@ -1788,9 +1507,9 @@ static void setup_worker_routes(uWS::App* app,
     // ============================================================================
     
     // POST /api/v1/traces - Record trace event
-    app->post("/api/v1/traces", [queue_manager, worker_id](auto* res, auto* req) {
+    app->post("/api/v1/traces", [async_queue_manager, worker_id](auto* res, auto* req) {
         read_json_body(res,
-            [res, queue_manager, worker_id](const nlohmann::json& body) {
+            [res, async_queue_manager, worker_id](const nlohmann::json& body) {
                 try {
                     // Validate required fields
                     if (!body.contains("transactionId") || !body.contains("partitionId")) {
@@ -1817,8 +1536,8 @@ static void setup_worker_routes(uWS::App* app,
                         }
                     }
                     
-                    // Call queue_manager method to store trace
-                    bool success = queue_manager->record_trace(
+                    // Call async_queue_manager method to store trace
+                    bool success = async_queue_manager->record_trace(
                         body["transactionId"],
                         body["partitionId"],
                         body.value("consumerGroup", "__QUEUE_MODE__"),
@@ -1846,12 +1565,12 @@ static void setup_worker_routes(uWS::App* app,
     });
     
     // GET /api/v1/traces/:partitionId/:transactionId - Get traces for a message
-    app->get("/api/v1/traces/:partitionId/:transactionId", [queue_manager](auto* res, auto* req) {
+    app->get("/api/v1/traces/:partitionId/:transactionId", [async_queue_manager](auto* res, auto* req) {
         try {
             std::string partition_id = std::string(req->getParameter(0));
             std::string transaction_id = std::string(req->getParameter(1));
             
-            auto traces = queue_manager->get_message_traces(partition_id, transaction_id);
+            auto traces = async_queue_manager->get_message_traces(partition_id, transaction_id);
             send_json_response(res, traces);
         } catch (const std::exception& e) {
             spdlog::error("Failed to get traces: {}", e.what());
@@ -1860,14 +1579,14 @@ static void setup_worker_routes(uWS::App* app,
     });
     
     // GET /api/v1/traces/by-name/:traceName - Get traces by any name
-    app->get("/api/v1/traces/by-name/:traceName", [queue_manager](auto* res, auto* req) {
+    app->get("/api/v1/traces/by-name/:traceName", [async_queue_manager](auto* res, auto* req) {
         try {
             std::string trace_name = std::string(req->getParameter(0));
             
             int limit = get_query_param_int(req, "limit", 100);
             int offset = get_query_param_int(req, "offset", 0);
             
-            auto traces = queue_manager->get_traces_by_name(trace_name, limit, offset);
+            auto traces = async_queue_manager->get_traces_by_name(trace_name, limit, offset);
             send_json_response(res, traces);
         } catch (const std::exception& e) {
             spdlog::error("Failed to get traces by name: {}", e.what());
@@ -1876,12 +1595,12 @@ static void setup_worker_routes(uWS::App* app,
     });
     
     // GET /api/v1/traces/names - Get available trace names
-    app->get("/api/v1/traces/names", [queue_manager](auto* res, auto* req) {
+    app->get("/api/v1/traces/names", [async_queue_manager](auto* res, auto* req) {
         try {
             int limit = get_query_param_int(req, "limit", 50);
             int offset = get_query_param_int(req, "offset", 0);
             
-            auto trace_names = queue_manager->get_available_trace_names(limit, offset);
+            auto trace_names = async_queue_manager->get_available_trace_names(limit, offset);
             send_json_response(res, trace_names);
         } catch (const std::exception& e) {
             spdlog::error("Failed to get available trace names: {}", e.what());
@@ -1919,57 +1638,9 @@ static void setup_worker_routes(uWS::App* app,
     });
     
     // GET /api/v1/resources/streams - List all streams
-    app->get("/api/v1/resources/streams", [](auto* res, auto* req) {
+    app->get("/api/v1/resources/streams", [async_queue_manager](auto* res, auto* req) {
         try {
-            ScopedConnection conn(global_db_pool.get());
-            auto result = QueryResult(conn->exec("SELECT * FROM streams ORDER BY created_at DESC"));
-            
-            nlohmann::json streams = nlohmann::json::array();
-            for (int i = 0; i < result.num_rows(); i++) {
-                nlohmann::json stream = {
-                    {"id", result.get_value(i, "id")},
-                    {"name", result.get_value(i, "name")},
-                    {"namespace", result.get_value(i, "namespace")},
-                    {"partitioned", result.get_value(i, "partitioned") == "t"},
-                    {"windowType", result.get_value(i, "window_type")},
-                    {"windowDurationMs", std::stoll(result.get_value(i, "window_duration_ms"))},
-                    {"windowGracePeriodMs", std::stoll(result.get_value(i, "window_grace_period_ms"))},
-                    {"windowLeaseTimeoutMs", std::stoll(result.get_value(i, "window_lease_timeout_ms"))},
-                    {"createdAt", result.get_value(i, "created_at")},
-                    {"updatedAt", result.get_value(i, "updated_at")}
-                };
-                
-                // Get source queues for this stream
-                auto sources_result = QueryResult(conn->exec_params(
-                    "SELECT q.name FROM stream_sources ss JOIN queues q ON ss.queue_id = q.id WHERE ss.stream_id = $1::UUID",
-                    {result.get_value(i, "id")}
-                ));
-                nlohmann::json source_queues = nlohmann::json::array();
-                for (int j = 0; j < sources_result.num_rows(); j++) {
-                    source_queues.push_back(sources_result.get_value(j, "name"));
-                }
-                stream["sourceQueues"] = source_queues;
-                
-                // Get active leases count
-                auto leases_result = QueryResult(conn->exec_params(
-                    "SELECT COUNT(*) as count FROM stream_leases WHERE stream_id = $1::UUID AND lease_expires_at > NOW()",
-                    {result.get_value(i, "id")}
-                ));
-                stream["activeLeases"] = leases_result.num_rows() > 0 ? std::stoi(leases_result.get_value(0, "count")) : 0;
-                
-                // Get consumer groups count
-                auto consumers_result = QueryResult(conn->exec_params(
-                    "SELECT COUNT(DISTINCT consumer_group) as count FROM stream_consumer_offsets WHERE stream_id = $1::UUID",
-                    {result.get_value(i, "id")}
-                ));
-                stream["consumerGroups"] = consumers_result.num_rows() > 0 ? std::stoi(consumers_result.get_value(0, "count")) : 0;
-                
-                streams.push_back(stream);
-            }
-            
-            nlohmann::json response = {
-                {"streams", streams}
-            };
+            auto response = async_queue_manager->list_streams();
             send_json_response(res, response);
         } catch (const std::exception& e) {
             send_error_response(res, e.what(), 500);
@@ -1977,61 +1648,9 @@ static void setup_worker_routes(uWS::App* app,
     });
     
     // GET /api/v1/resources/streams/stats - Get stream statistics
-    app->get("/api/v1/resources/streams/stats", [](auto* res, auto* req) {
+    app->get("/api/v1/resources/streams/stats", [async_queue_manager](auto* res, auto* req) {
         try {
-            ScopedConnection conn(global_db_pool.get());
-            
-            // Total streams
-            auto streams_result = QueryResult(conn->exec("SELECT COUNT(*) as count FROM streams"));
-            int total_streams = streams_result.num_rows() > 0 ? std::stoi(streams_result.get_value(0, "count")) : 0;
-            
-            // Partitioned streams count
-            auto partitioned_result = QueryResult(conn->exec("SELECT COUNT(*) as count FROM streams WHERE partitioned = true"));
-            int partitioned_streams = partitioned_result.num_rows() > 0 ? std::stoi(partitioned_result.get_value(0, "count")) : 0;
-            
-            // Active leases (windows being processed)
-            auto leases_result = QueryResult(conn->exec("SELECT COUNT(*) as count FROM stream_leases WHERE lease_expires_at > NOW()"));
-            int active_leases = leases_result.num_rows() > 0 ? std::stoi(leases_result.get_value(0, "count")) : 0;
-            
-            // Total unique consumer groups across all streams
-            auto consumer_groups_result = QueryResult(conn->exec("SELECT COUNT(DISTINCT consumer_group) as count FROM stream_consumer_offsets"));
-            int total_consumer_groups = consumer_groups_result.num_rows() > 0 ? std::stoi(consumer_groups_result.get_value(0, "count")) : 0;
-            
-            // Active consumers (consumer groups that consumed in last hour)
-            auto active_consumers_result = QueryResult(conn->exec(
-                "SELECT COUNT(DISTINCT consumer_group) as count FROM stream_consumer_offsets "
-                "WHERE last_consumed_at > NOW() - INTERVAL '1 hour'"
-            ));
-            int active_consumers = active_consumers_result.num_rows() > 0 ? std::stoi(active_consumers_result.get_value(0, "count")) : 0;
-            
-            // Total windows processed (sum of all consumer groups)
-            auto windows_processed_result = QueryResult(conn->exec("SELECT COALESCE(SUM(total_windows_consumed), 0) as total FROM stream_consumer_offsets"));
-            long long total_windows_processed = windows_processed_result.num_rows() > 0 ? std::stoll(windows_processed_result.get_value(0, "total")) : 0;
-            
-            // Windows processed in last hour
-            auto windows_hour_result = QueryResult(conn->exec(
-                "SELECT COUNT(*) as count FROM stream_consumer_offsets "
-                "WHERE last_consumed_at > NOW() - INTERVAL '1 hour'"
-            ));
-            int windows_last_hour = windows_hour_result.num_rows() > 0 ? std::stoi(windows_hour_result.get_value(0, "count")) : 0;
-            
-            // Average lease time (in seconds)
-            auto avg_lease_result = QueryResult(conn->exec(
-                "SELECT COALESCE(AVG(EXTRACT(EPOCH FROM (lease_expires_at - CURRENT_TIMESTAMP))), 0) as avg_seconds "
-                "FROM stream_leases WHERE lease_expires_at > NOW()"
-            ));
-            int avg_lease_time = avg_lease_result.num_rows() > 0 ? static_cast<int>(std::stod(avg_lease_result.get_value(0, "avg_seconds"))) : 0;
-            
-            nlohmann::json response = {
-                {"totalStreams", total_streams},
-                {"partitionedStreams", partitioned_streams},
-                {"activeLeases", active_leases},
-                {"totalConsumerGroups", total_consumer_groups},
-                {"activeConsumers", active_consumers},
-                {"totalWindowsProcessed", total_windows_processed},
-                {"windowsLastHour", windows_last_hour},
-                {"avgLeaseTime", avg_lease_time}
-            };
+            auto response = async_queue_manager->get_stream_stats();
             send_json_response(res, response);
         } catch (const std::exception& e) {
             send_error_response(res, e.what(), 500);
@@ -2039,103 +1658,50 @@ static void setup_worker_routes(uWS::App* app,
     });
     
     // GET /api/v1/resources/streams/:streamName - Get stream details
-    app->get("/api/v1/resources/streams/:streamName", [](auto* res, auto* req) {
+    app->get("/api/v1/resources/streams/:streamName", [async_queue_manager](auto* res, auto* req) {
         try {
             std::string stream_name = std::string(req->getParameter(0));
-            ScopedConnection conn(global_db_pool.get());
-            
-            auto result = QueryResult(conn->exec_params("SELECT * FROM streams WHERE name = $1", {stream_name}));
-            
-            if (result.num_rows() == 0) {
-                send_error_response(res, "Stream not found", 404);
-                return;
-            }
-            
-            nlohmann::json stream = {
-                {"id", result.get_value(0, "id")},
-                {"name", result.get_value(0, "name")},
-                {"namespace", result.get_value(0, "namespace")},
-                {"partitioned", result.get_value(0, "partitioned") == "t"},
-                {"windowType", result.get_value(0, "window_type")},
-                {"windowDurationMs", std::stoll(result.get_value(0, "window_duration_ms"))},
-                {"windowGracePeriodMs", std::stoll(result.get_value(0, "window_grace_period_ms"))},
-                {"windowLeaseTimeoutMs", std::stoll(result.get_value(0, "window_lease_timeout_ms"))},
-                {"createdAt", result.get_value(0, "created_at")},
-                {"updatedAt", result.get_value(0, "updated_at")}
-            };
-            
+            auto stream = async_queue_manager->get_stream_details(stream_name);
             send_json_response(res, stream);
         } catch (const std::exception& e) {
+            if (std::string(e.what()).find("not found") != std::string::npos) {
+                send_error_response(res, e.what(), 404);
+            } else {
             send_error_response(res, e.what(), 500);
+            }
         }
     });
     
     // GET /api/v1/resources/streams/:streamName/consumers - Get consumer groups for a stream
-    app->get("/api/v1/resources/streams/:streamName/consumers", [](auto* res, auto* req) {
+    app->get("/api/v1/resources/streams/:streamName/consumers", [async_queue_manager](auto* res, auto* req) {
         try {
             std::string stream_name = std::string(req->getParameter(0));
-            ScopedConnection conn(global_db_pool.get());
-            
-            // Get stream ID
-            auto stream_result = QueryResult(conn->exec_params("SELECT id FROM streams WHERE name = $1", {stream_name}));
-            if (stream_result.num_rows() == 0) {
-                send_error_response(res, "Stream not found", 404);
-                return;
-            }
-            std::string stream_id = stream_result.get_value(0, "id");
-            
-            // Get consumer groups
-            auto result = QueryResult(conn->exec_params(
-                "SELECT consumer_group, stream_key, "
-                "last_acked_window_end::TEXT, "
-                "COALESCE(total_windows_consumed, 0) as total_windows_consumed, "
-                "last_consumed_at::TEXT "
-                "FROM stream_consumer_offsets WHERE stream_id = $1::UUID ORDER BY consumer_group, stream_key",
-                {stream_id}
-            ));
-            
-            nlohmann::json consumers = nlohmann::json::array();
-            for (int i = 0; i < result.num_rows(); i++) {
-                std::string last_acked = result.get_value(i, "last_acked_window_end");
-                std::string last_consumed = result.get_value(i, "last_consumed_at");
-                
-                nlohmann::json consumer = {
-                    {"consumerGroup", result.get_value(i, "consumer_group")},
-                    {"streamKey", result.get_value(i, "stream_key")},
-                    {"lastAckedWindowEnd", last_acked.empty() ? nullptr : nlohmann::json(last_acked)},
-                    {"totalWindowsConsumed", std::stoll(result.get_value(i, "total_windows_consumed"))},
-                    {"lastConsumedAt", last_consumed.empty() ? nullptr : nlohmann::json(last_consumed)}
-                };
-                consumers.push_back(consumer);
-            }
-            
-            nlohmann::json response = {
-                {"consumers", consumers}
-            };
+            auto response = async_queue_manager->get_stream_consumers(stream_name);
             send_json_response(res, response);
         } catch (const std::exception& e) {
+            if (std::string(e.what()).find("not found") != std::string::npos) {
+                send_error_response(res, e.what(), 404);
+            } else {
             send_error_response(res, e.what(), 500);
+            }
         }
     });
     
     // DELETE /api/v1/resources/streams/:streamName - Delete a stream
-    app->del("/api/v1/resources/streams/:streamName", [](auto* res, auto* req) {
+    app->del("/api/v1/resources/streams/:streamName", [async_queue_manager](auto* res, auto* req) {
         try {
             std::string stream_name = std::string(req->getParameter(0));
-            ScopedConnection conn(global_db_pool.get());
+            bool success = async_queue_manager->delete_stream(stream_name);
             
-            auto result = QueryResult(conn->exec_params("DELETE FROM streams WHERE name = $1 RETURNING id", {stream_name}));
-            
-            if (result.num_rows() == 0) {
-                send_error_response(res, "Stream not found", 404);
-                return;
-            }
-            
+            if (success) {
             nlohmann::json response = {
                 {"success", true},
                 {"message", "Stream deleted successfully"}
             };
             send_json_response(res, response);
+            } else {
+                send_error_response(res, "Stream not found", 404);
+            }
         } catch (const std::exception& e) {
             send_error_response(res, e.what(), 500);
         }
@@ -2445,10 +2011,9 @@ static void worker_thread(const Config& config, int worker_id, int num_workers,
                 config.database.schema
             );
             
-            // Create small legacy pool ONLY for background services (StreamManager, Metrics, Retention, Eviction)
-            // TODO: Migrate these services to AsyncDbPool in future
-            int legacy_pool_size = 8;  // Small pool for background services only
-            spdlog::info("  - Creating small legacy DB Pool ({} connections) for background services only", legacy_pool_size);
+            // Create small legacy pool for old QueueManager (used for schema init and backward compatibility)
+            int legacy_pool_size = 8;  // Small pool for legacy QueueManager only
+            spdlog::info("  - Creating small legacy DB Pool ({} connections) for legacy QueueManager only", legacy_pool_size);
             global_db_pool = std::make_shared<DatabasePool>(
                 config.database.connection_string(),
                 legacy_pool_size,
@@ -2484,7 +2049,7 @@ static void worker_thread(const Config& config, int worker_id, int num_workers,
             
             // Create global stream manager (shared by all workers)
             global_stream_manager = std::make_shared<queen::StreamManager>(
-                global_db_pool,
+                global_async_db_pool,
                 global_db_thread_pool,
                 worker_response_queues,
                 global_stream_poll_registry,
@@ -2538,7 +2103,7 @@ static void worker_thread(const Config& config, int worker_id, int num_workers,
                 // Start metrics collector (samples every 1s, aggregates every 60s)
                 spdlog::info("[Worker 0] Starting background metrics collector...");
                 global_metrics_collector = std::make_shared<queen::MetricsCollector>(
-                    global_db_pool,
+                    global_async_db_pool,
                     global_db_thread_pool,
                     global_system_thread_pool,
                     global_system_info.hostname,
@@ -2552,7 +2117,7 @@ static void worker_thread(const Config& config, int worker_id, int num_workers,
                 // Start retention service (cleanup old messages, partitions, metrics)
                 spdlog::info("[Worker 0] Starting background retention service...");
                 global_retention_service = std::make_shared<queen::RetentionService>(
-                    global_db_pool,
+                    global_async_db_pool,
                     global_db_thread_pool,
                     global_system_thread_pool,
                     config.jobs.retention_interval,
@@ -2565,7 +2130,7 @@ static void worker_thread(const Config& config, int worker_id, int num_workers,
                 // Start eviction service (evict messages exceeding max_wait_time)
                 spdlog::info("[Worker 0] Starting background eviction service...");
                 global_eviction_service = std::make_shared<queen::EvictionService>(
-                    global_db_pool,
+                    global_async_db_pool,
                     global_db_thread_pool,
                     global_system_thread_pool,
                     config.jobs.eviction_interval,

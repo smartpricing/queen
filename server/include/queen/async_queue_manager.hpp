@@ -207,6 +207,59 @@ public:
         size_t in_use;
     };
     PoolStats get_pool_stats() const;
+    
+    // Maintenance mode (multi-instance support via database)
+    void set_maintenance_mode(bool enabled);
+    bool get_maintenance_mode() const { return maintenance_mode_cached_.load(); }
+    bool get_maintenance_mode_fresh();  // Force fresh check from DB
+    size_t get_buffer_pending_count() const;
+    bool is_buffer_healthy() const;
+    nlohmann::json get_buffer_stats() const;
+    
+    // Queue configuration (using QueueManager::QueueOptions)
+    bool configure_queue(const std::string& queue_name, 
+                        const QueueManager::QueueOptions& options,
+                        const std::string& namespace_name = "",
+                        const std::string& task_name = "");
+    
+    bool delete_queue(const std::string& queue_name);
+    
+    // Lease management
+    bool extend_message_lease(const std::string& lease_id, int seconds = 60);
+    
+    // Message tracing
+    bool record_trace(
+        const std::string& transaction_id,
+        const std::string& partition_id,
+        const std::string& consumer_group,
+        const std::vector<std::string>& trace_names,
+        const std::string& event_type,
+        const nlohmann::json& data,
+        const std::string& worker_id
+    );
+    
+    nlohmann::json get_message_traces(
+        const std::string& partition_id,
+        const std::string& transaction_id
+    );
+    
+    nlohmann::json get_traces_by_name(
+        const std::string& trace_name,
+        int limit,
+        int offset
+    );
+    
+    nlohmann::json get_available_trace_names(
+        int limit,
+        int offset
+    );
+    
+    // Stream management
+    nlohmann::json list_streams();
+    nlohmann::json get_stream_stats();
+    nlohmann::json get_stream_details(const std::string& stream_name);
+    nlohmann::json get_stream_consumers(const std::string& stream_name);
+    bool delete_stream(const std::string& stream_name);
 };
 
 } // namespace queen

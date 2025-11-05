@@ -1,6 +1,6 @@
 #pragma once
 
-#include "queen/database.hpp"
+#include "queen/async_database.hpp"
 #include "threadpool.hpp"
 #include <json.hpp>
 #include <spdlog/spdlog.h>
@@ -117,7 +117,7 @@ struct AggregatedMetrics {
 
 class MetricsCollector {
 private:
-    std::shared_ptr<DatabasePool> db_pool_;
+    std::shared_ptr<AsyncDbPool> db_pool_;
     std::shared_ptr<astp::ThreadPool> db_thread_pool_;
     std::shared_ptr<astp::ThreadPool> system_thread_pool_;
     
@@ -139,7 +139,7 @@ private:
     
 public:
     MetricsCollector(
-        std::shared_ptr<DatabasePool> db_pool,
+        std::shared_ptr<AsyncDbPool> db_pool,
         std::shared_ptr<astp::ThreadPool> db_thread_pool,
         std::shared_ptr<astp::ThreadPool> system_thread_pool,
         const std::string& hostname,

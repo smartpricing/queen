@@ -3,7 +3,7 @@
 namespace queen {
 
 EvictionService::EvictionService(
-    std::shared_ptr<DatabasePool> db_pool,
+    std::shared_ptr<AsyncDbPool> db_pool,
     std::shared_ptr<astp::ThreadPool> db_thread_pool,
     std::shared_ptr<astp::ThreadPool> system_thread_pool,
     int eviction_interval_ms,
@@ -80,7 +80,7 @@ void EvictionService::eviction_cycle() {
 
 int EvictionService::evict_expired_waiting_messages() {
     try {
-        ScopedConnection conn(db_pool_.get());
+        auto conn = db_pool_->acquire();
         
         // Delete messages that have been waiting longer than max_wait_time_seconds
         // This applies to messages that are pending (not yet consumed)
@@ -101,30 +101,28 @@ int EvictionService::evict_expired_waiting_messages() {
             RETURNING (SELECT partition_id FROM messages_to_evict LIMIT 1) as partition_id
         )";
         
-        auto result = QueryResult(conn->exec_params(sql, {
-            std::to_string(eviction_batch_size_)
-        }));
+        sendQueryParamsAsync(conn.get(), sql, {std::to_string(eviction_batch_size_)});
+        auto result = getTuplesResult(conn.get());  // Use getTuplesResult because of RETURNING clause
         
-        if (result.is_success()) {
-            std::string affected = result.affected_rows();
-            int evicted = affected.empty() ? 0 : std::stoi(affected);
+        char* affected_str = PQcmdTuples(result.get());
+        int evicted = (affected_str && *affected_str) ? std::stoi(affected_str) : 0;
             
             // Record in retention_history if messages were evicted
-            if (evicted > 0 && result.num_rows() > 0) {
+        if (evicted > 0 && PQntuples(result.get()) > 0) {
                 try {
-                    std::string partition_id = result.get_value(0, "partition_id");
+                std::string partition_id = PQgetvalue(result.get(), 0, PQfnumber(result.get(), "partition_id"));
                     std::string insert_history = R"(
                         INSERT INTO retention_history (partition_id, messages_deleted, retention_type)
                         VALUES ($1::uuid, $2, 'max_wait_time_eviction')
                     )";
-                    conn->exec_params(insert_history, {partition_id, std::to_string(evicted)});
+                sendQueryParamsAsync(conn.get(), insert_history, {partition_id, std::to_string(evicted)});
+                getCommandResult(conn.get());
                 } catch (const std::exception& e) {
                     spdlog::warn("Failed to record retention_history for eviction: {}", e.what());
                 }
             }
             
             return evicted;
-        }
         
     } catch (const std::exception& e) {
         spdlog::error("evict_expired_waiting_messages error: {}", e.what());

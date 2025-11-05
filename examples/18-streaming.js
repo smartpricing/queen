@@ -13,7 +13,6 @@ async function main() {
   await queen.queue('test-chat-agent').delete()
   await queen.queue('test-chat-translations').namespace('test').task('stream').create();
   await queen.queue('test-chat-agent').namespace('test').task('stream').create();
-  
 
   await queen.stream('test-chat-stream', 'test')
     .sources(['test-chat-translations','test-chat-agent'])

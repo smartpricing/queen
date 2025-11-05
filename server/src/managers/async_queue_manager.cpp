@@ -12,59 +12,6 @@
 
 namespace queen {
 
-// --- Helper Functions for Async Parameterized Queries ---
-
-/**
- * @brief Sends a parameterized query asynchronously
- * 
- * CRITICAL: In non-blocking mode, we must:
- * 1. Call PQsendQueryParams() to queue the query
- * 2. Call PQflush() in a loop until all data is sent (may require multiple writes)
- * 3. Then wait for the response
- */
-static void sendQueryParamsAsync(PGconn* conn, const std::string& sql, const std::vector<std::string>& params) {
-    std::vector<const char*> param_values;
-    param_values.reserve(params.size());
-    
-    for (const auto& param : params) {
-        param_values.push_back(param.c_str());
-    }
-    
-    if (!PQsendQueryParams(conn, sql.c_str(), static_cast<int>(params.size()),
-                          nullptr, param_values.data(), nullptr, nullptr, 0)) {
-        throw std::runtime_error("PQsendQueryParams failed: " + 
-                                 std::string(PQerrorMessage(conn)));
-    }
-    
-    // CRITICAL: Flush outgoing data buffer until all data is sent
-    // For large queries (e.g., 2000 items), this can take multiple iterations
-    while (true) {
-        int flush_result = PQflush(conn);
-        if (flush_result == 0) {
-            // All data successfully sent to server
-            break;
-        } else if (flush_result == -1) {
-            throw std::runtime_error("PQflush failed: " + 
-                                     std::string(PQerrorMessage(conn)));
-        }
-        // flush_result == 1: more data to send, socket send buffer full
-        // Wait for socket to be WRITABLE (not readable!)
-        waitForSocket(conn, false);  // false = wait for write
-    }
-    
-    // Now wait for query to be processed and response to arrive
-    while (true) {
-        waitForSocket(conn, true);  // true = wait for read
-        if (!PQconsumeInput(conn)) {
-            throw std::runtime_error("PQconsumeInput failed: " + 
-                                     std::string(PQerrorMessage(conn)));
-        }
-        if (PQisBusy(conn) == 0) {
-            break;
-        }
-    }
-}
-
 // --- Constructor ---
 
 AsyncQueueManager::AsyncQueueManager(std::shared_ptr<AsyncDbPool> async_db_pool, 
@@ -2962,6 +2909,850 @@ AsyncQueueManager::TransactionResult AsyncQueueManager::execute_transaction(
     }
     
     return txn_result;
+}
+
+// ===================================
+// MAINTENANCE MODE
+// ===================================
+
+void AsyncQueueManager::set_maintenance_mode(bool enabled) {
+    try {
+        auto conn = async_db_pool_->acquire();
+        
+        // Persist to database for multi-instance support
+        std::string sql = R"(
+            INSERT INTO system_state (key, value, updated_at)
+            VALUES ('maintenance_mode', $1::jsonb, NOW())
+            ON CONFLICT (key) DO UPDATE
+            SET value = EXCLUDED.value,
+                updated_at = NOW()
+        )";
+        
+        nlohmann::json value = {{"enabled", enabled}};
+        sendQueryParamsAsync(conn.get(), sql, {value.dump()});
+        getCommandResult(conn.get());
+        
+        // Update cache immediately on this instance
+        maintenance_mode_cached_.store(enabled);
+        last_maintenance_check_ms_.store(
+            std::chrono::duration_cast<std::chrono::milliseconds>(
+                std::chrono::system_clock::now().time_since_epoch()
+            ).count()
+        );
+        
+        spdlog::info("Maintenance mode {} (persisted to database for all instances)", 
+                    enabled ? "ENABLED - routing PUSHes to file buffer" : "DISABLED - resuming normal operations");
+        
+        if (!enabled && file_buffer_manager_) {
+            spdlog::info("File buffer will drain {} pending messages to database", 
+                        file_buffer_manager_->get_pending_count());
+        }
+        
+    } catch (const std::exception& e) {
+        spdlog::error("Failed to set maintenance mode: {}", e.what());
+        throw;
+    }
+}
+
+bool AsyncQueueManager::get_maintenance_mode_fresh() {
+    // Force cache invalidation by setting last_check to 0
+    last_maintenance_check_ms_.store(0);
+    return check_maintenance_mode_with_cache();
+}
+
+size_t AsyncQueueManager::get_buffer_pending_count() const {
+    if (!file_buffer_manager_) {
+        return 0;
+    }
+    return file_buffer_manager_->get_pending_count();
+}
+
+bool AsyncQueueManager::is_buffer_healthy() const {
+    if (!file_buffer_manager_) {
+        return true;  // No buffer = healthy by default
+    }
+    return file_buffer_manager_->is_db_healthy();
+}
+
+nlohmann::json AsyncQueueManager::get_buffer_stats() const {
+    if (!file_buffer_manager_) {
+        return {
+            {"pendingCount", 0},
+            {"failedCount", 0},
+            {"dbHealthy", true},
+            {"failedFiles", {
+                {"count", 0},
+                {"totalBytes", 0},
+                {"totalMB", 0.0},
+                {"failoverCount", 0},
+                {"qos0Count", 0}
+            }}
+        };
+    }
+    
+    auto failed_stats = file_buffer_manager_->get_failed_files_stats();
+    double total_mb = failed_stats.total_bytes / (1024.0 * 1024.0);
+    
+    return {
+        {"pendingCount", file_buffer_manager_->get_pending_count()},
+        {"failedCount", file_buffer_manager_->get_failed_count()},
+        {"dbHealthy", file_buffer_manager_->is_db_healthy()},
+        {"failedFiles", {
+            {"count", failed_stats.file_count},
+            {"totalBytes", failed_stats.total_bytes},
+            {"totalMB", total_mb},
+            {"failoverCount", failed_stats.failover_count},
+            {"qos0Count", failed_stats.qos0_count}
+        }}
+    };
+}
+
+// ===================================
+// QUEUE CONFIGURATION
+// ===================================
+
+bool AsyncQueueManager::configure_queue(const std::string& queue_name, 
+                                       const QueueManager::QueueOptions& options,
+                                       const std::string& namespace_name,
+                                       const std::string& task_name) {
+    try {
+        auto conn = async_db_pool_->acquire();
+        
+        std::string sql = R"(
+            INSERT INTO queues (
+                name, namespace, task, priority, lease_time, retry_limit, retry_delay,
+                max_queue_size, ttl, dead_letter_queue, dlq_after_max_retries, delayed_processing,
+                window_buffer, retention_seconds, completed_retention_seconds, 
+                retention_enabled, encryption_enabled, max_wait_time_seconds
+            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18)
+            ON CONFLICT (name) DO UPDATE SET
+                namespace = EXCLUDED.namespace,
+                task = EXCLUDED.task,
+                priority = EXCLUDED.priority,
+                lease_time = EXCLUDED.lease_time,
+                retry_limit = EXCLUDED.retry_limit,
+                retry_delay = EXCLUDED.retry_delay,
+                max_queue_size = EXCLUDED.max_queue_size,
+                ttl = EXCLUDED.ttl,
+                dead_letter_queue = EXCLUDED.dead_letter_queue,
+                dlq_after_max_retries = EXCLUDED.dlq_after_max_retries,
+                delayed_processing = EXCLUDED.delayed_processing,
+                window_buffer = EXCLUDED.window_buffer,
+                retention_seconds = EXCLUDED.retention_seconds,
+                completed_retention_seconds = EXCLUDED.completed_retention_seconds,
+                retention_enabled = EXCLUDED.retention_enabled,
+                encryption_enabled = EXCLUDED.encryption_enabled,
+                max_wait_time_seconds = EXCLUDED.max_wait_time_seconds
+        )";
+        
+        std::vector<std::string> params = {
+            queue_name,
+            namespace_name.empty() ? "" : namespace_name,
+            task_name.empty() ? "" : task_name,
+            std::to_string(options.priority),
+            std::to_string(options.lease_time),
+            std::to_string(options.retry_limit),
+            std::to_string(options.retry_delay),
+            std::to_string(options.max_size),
+            std::to_string(options.ttl),
+            options.dead_letter_queue ? "true" : "false",
+            options.dlq_after_max_retries ? "true" : "false",
+            std::to_string(options.delayed_processing),
+            std::to_string(options.window_buffer),
+            std::to_string(options.retention_seconds),
+            std::to_string(options.completed_retention_seconds),
+            options.retention_enabled ? "true" : "false",
+            options.encryption_enabled ? "true" : "false",
+            std::to_string(options.max_wait_time_seconds)
+        };
+        
+        sendQueryParamsAsync(conn.get(), sql, params);
+        getCommandResult(conn.get());
+        
+        spdlog::debug("Queue '{}' configured successfully in database", queue_name);
+        
+        // Ensure default partition exists
+        ensure_partition_exists(conn.get(), queue_name, "Default");
+        
+        spdlog::info("Queue '{}' fully configured with Default partition", queue_name);
+        return true;
+        
+    } catch (const std::exception& e) {
+        spdlog::error("Failed to configure queue '{}': {}", queue_name, e.what());
+        return false;
+    }
+}
+
+bool AsyncQueueManager::delete_queue(const std::string& queue_name) {
+    try {
+        auto conn = async_db_pool_->acquire();
+        
+        // Begin transaction and increase statement timeout for large queue deletions
+        sendAndWait(conn.get(), "BEGIN");
+        getCommandResult(conn.get());
+        
+        try {
+            // Set timeout to 10 minutes for this transaction
+            sendAndWait(conn.get(), "SET LOCAL statement_timeout = '600000'");
+            getCommandResult(conn.get());
+            
+            // First, delete consumer state for all partitions in this queue
+            std::string delete_consumers_sql = R"(
+                DELETE FROM partition_consumers
+                WHERE partition_id IN (
+                    SELECT p.id FROM partitions p
+                    JOIN queues q ON p.queue_id = q.id
+                    WHERE q.name = $1
+                )
+            )";
+            sendQueryParamsAsync(conn.get(), delete_consumers_sql, {queue_name});
+            getCommandResult(conn.get());
+            
+            // Delete the queue (CASCADE will handle partitions and messages)
+            std::string delete_queue_sql = "DELETE FROM queues WHERE name = $1 RETURNING id";
+            sendQueryParamsAsync(conn.get(), delete_queue_sql, {queue_name});
+            auto result = getTuplesResult(conn.get());
+            
+            if (PQntuples(result.get()) == 0) {
+                sendAndWait(conn.get(), "ROLLBACK");
+                getCommandResult(conn.get());
+                spdlog::warn("Queue not found: {}", queue_name);
+                return false;
+            }
+            
+            // Commit transaction
+            sendAndWait(conn.get(), "COMMIT");
+            getCommandResult(conn.get());
+            
+            spdlog::info("Queue deleted successfully: {}", queue_name);
+            return true;
+            
+        } catch (const std::exception& e) {
+            sendAndWait(conn.get(), "ROLLBACK");
+            getCommandResult(conn.get());
+            throw;
+        }
+        
+    } catch (const std::exception& e) {
+        spdlog::error("Failed to delete queue: {}", e.what());
+        return false;
+    }
+}
+
+bool AsyncQueueManager::extend_message_lease(const std::string& lease_id, int seconds) {
+    try {
+        auto conn = async_db_pool_->acquire();
+        
+        std::string sql = R"(
+            UPDATE partition_consumers
+            SET lease_expires_at = GREATEST(lease_expires_at, NOW() + INTERVAL '1 second' * $1)
+            WHERE worker_id = $2 AND lease_expires_at > NOW()
+            RETURNING lease_expires_at
+        )";
+        
+        sendQueryParamsAsync(conn.get(), sql, {std::to_string(seconds), lease_id});
+        auto result = getTuplesResult(conn.get());
+        
+        if (PQntuples(result.get()) > 0) {
+            spdlog::debug("Lease {} extended by {} seconds", lease_id, seconds);
+            return true;
+        }
+        
+        spdlog::debug("Lease {} not found or expired", lease_id);
+        return false;
+        
+    } catch (const std::exception& e) {
+        spdlog::error("Failed to extend lease: {}", e.what());
+        return false;
+    }
+}
+
+// ===================================
+// MESSAGE TRACING
+// ===================================
+
+bool AsyncQueueManager::record_trace(
+    const std::string& transaction_id,
+    const std::string& partition_id,
+    const std::string& consumer_group,
+    const std::vector<std::string>& trace_names,
+    const std::string& event_type,
+    const nlohmann::json& data,
+    const std::string& worker_id
+) {
+    try {
+        auto conn = async_db_pool_->acquire();
+        
+        // Start transaction for atomicity
+        sendAndWait(conn.get(), "BEGIN");
+        getCommandResult(conn.get());
+        
+        try {
+            // Get message_id from transaction_id + partition_id
+            std::string query = R"(
+                SELECT id FROM messages 
+                WHERE transaction_id = $1 AND partition_id = $2
+                LIMIT 1
+            )";
+            
+            sendQueryParamsAsync(conn.get(), query, {transaction_id, partition_id});
+            auto result = getTuplesResult(conn.get());
+            
+            if (PQntuples(result.get()) == 0) {
+                spdlog::warn("Message not found for trace: {}/{}", partition_id, transaction_id);
+                sendAndWait(conn.get(), "ROLLBACK");
+                getCommandResult(conn.get());
+                return false;
+            }
+            
+            std::string message_id = PQgetvalue(result.get(), 0, 0);
+            
+            // Insert main trace record
+            std::string insert_query = R"(
+                INSERT INTO message_traces 
+                (message_id, partition_id, transaction_id, consumer_group, event_type, data, worker_id)
+                VALUES ($1, $2, $3, $4, $5, $6, $7)
+                RETURNING id
+            )";
+            
+            sendQueryParamsAsync(conn.get(), insert_query, {
+                message_id,
+                partition_id,
+                transaction_id,
+                consumer_group,
+                event_type,
+                data.dump(),
+                worker_id
+            });
+            auto insert_result = getTuplesResult(conn.get());
+            
+            if (PQntuples(insert_result.get()) == 0) {
+                spdlog::error("Failed to insert trace");
+                sendAndWait(conn.get(), "ROLLBACK");
+                getCommandResult(conn.get());
+                return false;
+            }
+            
+            std::string trace_id = PQgetvalue(insert_result.get(), 0, 0);
+            
+            // Insert trace names (for filtering/searching)
+            if (!trace_names.empty()) {
+                for (const auto& name : trace_names) {
+                    std::string name_insert = R"(
+                        INSERT INTO message_trace_names (trace_id, trace_name)
+                        VALUES ($1, $2)
+                        ON CONFLICT (trace_id, trace_name) DO NOTHING
+                    )";
+                    sendQueryParamsAsync(conn.get(), name_insert, {trace_id, name});
+                    getCommandResult(conn.get());
+                }
+            }
+            
+            // Commit transaction
+            sendAndWait(conn.get(), "COMMIT");
+            getCommandResult(conn.get());
+            
+            return true;
+            
+        } catch (const std::exception& e) {
+            sendAndWait(conn.get(), "ROLLBACK");
+            getCommandResult(conn.get());
+            throw;
+        }
+        
+    } catch (const std::exception& e) {
+        spdlog::error("Failed to record trace: {}", e.what());
+        return false;
+    }
+}
+
+nlohmann::json AsyncQueueManager::get_message_traces(
+    const std::string& partition_id,
+    const std::string& transaction_id
+) {
+    try {
+        auto conn = async_db_pool_->acquire();
+        
+        // Get traces with their associated names
+        std::string query = R"(
+            SELECT 
+                mt.id,
+                mt.event_type,
+                mt.data,
+                mt.consumer_group,
+                mt.worker_id,
+                mt.created_at,
+                COALESCE(
+                    json_agg(mtn.trace_name ORDER BY mtn.trace_name) 
+                    FILTER (WHERE mtn.trace_name IS NOT NULL),
+                    '[]'::json
+                ) as trace_names
+            FROM message_traces mt
+            LEFT JOIN message_trace_names mtn ON mt.id = mtn.trace_id
+            WHERE mt.partition_id = $1 AND mt.transaction_id = $2
+            GROUP BY mt.id, mt.event_type, mt.data, mt.consumer_group, mt.worker_id, mt.created_at
+            ORDER BY mt.created_at ASC
+        )";
+        
+        sendQueryParamsAsync(conn.get(), query, {partition_id, transaction_id});
+        auto result = getTuplesResult(conn.get());
+        
+        nlohmann::json traces = nlohmann::json::array();
+        int num_rows = PQntuples(result.get());
+        int num_cols = PQnfields(result.get());
+        
+        for (int i = 0; i < num_rows; i++) {
+            nlohmann::json row;
+            for (int j = 0; j < num_cols; j++) {
+                std::string field_name = PQfname(result.get(), j);
+                if (PQgetisnull(result.get(), i, j)) {
+                    row[field_name] = nullptr;
+                } else {
+                    std::string value = PQgetvalue(result.get(), i, j);
+                    // Try to parse JSON fields
+                    if (field_name == "data" || field_name == "trace_names") {
+                        try {
+                            row[field_name] = nlohmann::json::parse(value);
+                        } catch (...) {
+                            row[field_name] = value;
+                        }
+                    } else {
+                        row[field_name] = value;
+                    }
+                }
+            }
+            traces.push_back(row);
+        }
+        
+        return {
+            {"traces", traces},
+            {"count", num_rows}
+        };
+    } catch (const std::exception& e) {
+        spdlog::error("Failed to get traces: {}", e.what());
+        throw;
+    }
+}
+
+nlohmann::json AsyncQueueManager::get_traces_by_name(
+    const std::string& trace_name,
+    int limit,
+    int offset
+) {
+    try {
+        auto conn = async_db_pool_->acquire();
+        
+        // Query traces by any matching name
+        std::string query = R"(
+            SELECT 
+                mt.id,
+                mt.transaction_id,
+                mt.partition_id,
+                mt.event_type,
+                mt.data,
+                mt.consumer_group,
+                mt.worker_id,
+                mt.created_at,
+                m.payload as message_payload,
+                q.name as queue_name,
+                p.name as partition_name,
+                COALESCE(
+                    json_agg(mtn2.trace_name ORDER BY mtn2.trace_name) 
+                    FILTER (WHERE mtn2.trace_name IS NOT NULL),
+                    '[]'::json
+                ) as trace_names
+            FROM message_trace_names mtn
+            JOIN message_traces mt ON mtn.trace_id = mt.id
+            LEFT JOIN message_trace_names mtn2 ON mt.id = mtn2.trace_id
+            LEFT JOIN messages m ON mt.message_id = m.id
+            LEFT JOIN partitions p ON mt.partition_id = p.id
+            LEFT JOIN queues q ON p.queue_id = q.id
+            WHERE mtn.trace_name = $1
+            GROUP BY mt.id, mt.transaction_id, mt.partition_id, mt.event_type, 
+                     mt.data, mt.consumer_group, mt.worker_id, mt.created_at,
+                     m.payload, q.name, p.name
+            ORDER BY mt.created_at ASC
+            LIMIT $2 OFFSET $3
+        )";
+        
+        sendQueryParamsAsync(conn.get(), query, {
+            trace_name,
+            std::to_string(limit),
+            std::to_string(offset)
+        });
+        auto result = getTuplesResult(conn.get());
+        
+        nlohmann::json traces = nlohmann::json::array();
+        int num_rows = PQntuples(result.get());
+        int num_cols = PQnfields(result.get());
+        
+        for (int i = 0; i < num_rows; i++) {
+            nlohmann::json row;
+            for (int j = 0; j < num_cols; j++) {
+                std::string field_name = PQfname(result.get(), j);
+                if (PQgetisnull(result.get(), i, j)) {
+                    row[field_name] = nullptr;
+                } else {
+                    std::string value = PQgetvalue(result.get(), i, j);
+                    // Try to parse JSON fields
+                    if (field_name == "data" || field_name == "trace_names" || field_name == "message_payload") {
+                        try {
+                            row[field_name] = nlohmann::json::parse(value);
+                        } catch (...) {
+                            row[field_name] = value;
+                        }
+                    } else {
+                        row[field_name] = value;
+                    }
+                }
+            }
+            traces.push_back(row);
+        }
+        
+        // Get total count
+        std::string count_query = R"(
+            SELECT COUNT(DISTINCT mt.id)
+            FROM message_trace_names mtn
+            JOIN message_traces mt ON mtn.trace_id = mt.id
+            WHERE mtn.trace_name = $1
+        )";
+        
+        sendQueryParamsAsync(conn.get(), count_query, {trace_name});
+        auto count_result = getTuplesResult(conn.get());
+        int total = (PQntuples(count_result.get()) > 0) ? std::stoi(PQgetvalue(count_result.get(), 0, 0)) : 0;
+        
+        return {
+            {"traces", traces},
+            {"count", num_rows},
+            {"total", total},
+            {"limit", limit},
+            {"offset", offset}
+        };
+    } catch (const std::exception& e) {
+        spdlog::error("Failed to get traces by name: {}", e.what());
+        throw;
+    }
+}
+
+nlohmann::json AsyncQueueManager::get_available_trace_names(
+    int limit,
+    int offset
+) {
+    try {
+        auto conn = async_db_pool_->acquire();
+        
+        // Query for distinct trace names with counts
+        std::string query = R"(
+            SELECT 
+                trace_name,
+                COUNT(DISTINCT trace_id) as trace_count,
+                COUNT(DISTINCT mt.transaction_id) as message_count,
+                MAX(mt.created_at) as last_seen
+            FROM message_trace_names mtn
+            JOIN message_traces mt ON mtn.trace_id = mt.id
+            GROUP BY trace_name
+            ORDER BY last_seen DESC
+            LIMIT $1 OFFSET $2
+        )";
+        
+        sendQueryParamsAsync(conn.get(), query, {
+            std::to_string(limit),
+            std::to_string(offset)
+        });
+        auto result = getTuplesResult(conn.get());
+        
+        nlohmann::json trace_names = nlohmann::json::array();
+        int num_rows = PQntuples(result.get());
+        int num_cols = PQnfields(result.get());
+        
+        for (int i = 0; i < num_rows; i++) {
+            nlohmann::json row;
+            for (int j = 0; j < num_cols; j++) {
+                std::string field_name = PQfname(result.get(), j);
+                if (PQgetisnull(result.get(), i, j)) {
+                    row[field_name] = nullptr;
+                } else {
+                    std::string value = PQgetvalue(result.get(), i, j);
+                    // Convert numeric fields
+                    if (field_name == "trace_count" || field_name == "message_count") {
+                        row[field_name] = std::stoi(value);
+                    } else {
+                        row[field_name] = value;
+                    }
+                }
+            }
+            trace_names.push_back(row);
+        }
+        
+        // Get total count
+        std::string count_query = R"(
+            SELECT COUNT(DISTINCT trace_name) as total
+            FROM message_trace_names
+        )";
+        
+        sendQueryParamsAsync(conn.get(), count_query, {});
+        auto count_result = getTuplesResult(conn.get());
+        int total = (PQntuples(count_result.get()) > 0) ? std::stoi(PQgetvalue(count_result.get(), 0, 0)) : 0;
+        
+        return {
+            {"trace_names", trace_names},
+            {"count", num_rows},
+            {"total", total},
+            {"limit", limit},
+            {"offset", offset}
+        };
+    } catch (const std::exception& e) {
+        spdlog::error("Failed to get available trace names: {}", e.what());
+        throw;
+    }
+}
+
+// ===================================
+// STREAM MANAGEMENT
+// ===================================
+
+nlohmann::json AsyncQueueManager::list_streams() {
+    try {
+        auto conn = async_db_pool_->acquire();
+        
+        sendAndWait(conn.get(), "SELECT * FROM streams ORDER BY created_at DESC");
+        auto result = getTuplesResult(conn.get());
+        
+        nlohmann::json streams = nlohmann::json::array();
+        int num_rows = PQntuples(result.get());
+        
+        for (int i = 0; i < num_rows; i++) {
+            std::string stream_id = PQgetvalue(result.get(), i, PQfnumber(result.get(), "id"));
+            
+            nlohmann::json stream = {
+                {"id", stream_id},
+                {"name", PQgetvalue(result.get(), i, PQfnumber(result.get(), "name"))},
+                {"namespace", PQgetvalue(result.get(), i, PQfnumber(result.get(), "namespace"))},
+                {"partitioned", std::string(PQgetvalue(result.get(), i, PQfnumber(result.get(), "partitioned"))) == "t"},
+                {"windowType", PQgetvalue(result.get(), i, PQfnumber(result.get(), "window_type"))},
+                {"windowDurationMs", std::stoll(PQgetvalue(result.get(), i, PQfnumber(result.get(), "window_duration_ms")))},
+                {"windowGracePeriodMs", std::stoll(PQgetvalue(result.get(), i, PQfnumber(result.get(), "window_grace_period_ms")))},
+                {"windowLeaseTimeoutMs", std::stoll(PQgetvalue(result.get(), i, PQfnumber(result.get(), "window_lease_timeout_ms")))},
+                {"createdAt", PQgetvalue(result.get(), i, PQfnumber(result.get(), "created_at"))},
+                {"updatedAt", PQgetvalue(result.get(), i, PQfnumber(result.get(), "updated_at"))}
+            };
+            
+            // Get source queues for this stream
+            sendQueryParamsAsync(conn.get(),
+                "SELECT q.name FROM stream_sources ss JOIN queues q ON ss.queue_id = q.id WHERE ss.stream_id = $1::UUID",
+                {stream_id}
+            );
+            auto sources_result = getTuplesResult(conn.get());
+            nlohmann::json source_queues = nlohmann::json::array();
+            for (int j = 0; j < PQntuples(sources_result.get()); j++) {
+                source_queues.push_back(PQgetvalue(sources_result.get(), j, 0));
+            }
+            stream["sourceQueues"] = source_queues;
+            
+            // Get active leases count
+            sendQueryParamsAsync(conn.get(),
+                "SELECT COUNT(*) as count FROM stream_leases WHERE stream_id = $1::UUID AND lease_expires_at > NOW()",
+                {stream_id}
+            );
+            auto leases_result = getTuplesResult(conn.get());
+            stream["activeLeases"] = (PQntuples(leases_result.get()) > 0) ? std::stoi(PQgetvalue(leases_result.get(), 0, 0)) : 0;
+            
+            // Get consumer groups count
+            sendQueryParamsAsync(conn.get(),
+                "SELECT COUNT(DISTINCT consumer_group) as count FROM stream_consumer_offsets WHERE stream_id = $1::UUID",
+                {stream_id}
+            );
+            auto consumers_result = getTuplesResult(conn.get());
+            stream["consumerGroups"] = (PQntuples(consumers_result.get()) > 0) ? std::stoi(PQgetvalue(consumers_result.get(), 0, 0)) : 0;
+            
+            streams.push_back(stream);
+        }
+        
+        return {{"streams", streams}};
+    } catch (const std::exception& e) {
+        spdlog::error("Failed to list streams: {}", e.what());
+        throw;
+    }
+}
+
+nlohmann::json AsyncQueueManager::get_stream_stats() {
+    try {
+        auto conn = async_db_pool_->acquire();
+        
+        // Total streams
+        sendAndWait(conn.get(), "SELECT COUNT(*) as count FROM streams");
+        auto streams_result = getTuplesResult(conn.get());
+        int total_streams = (PQntuples(streams_result.get()) > 0) ? std::stoi(PQgetvalue(streams_result.get(), 0, 0)) : 0;
+        
+        // Partitioned streams count
+        sendAndWait(conn.get(), "SELECT COUNT(*) as count FROM streams WHERE partitioned = true");
+        auto partitioned_result = getTuplesResult(conn.get());
+        int partitioned_streams = (PQntuples(partitioned_result.get()) > 0) ? std::stoi(PQgetvalue(partitioned_result.get(), 0, 0)) : 0;
+        
+        // Active leases (windows being processed)
+        sendAndWait(conn.get(), "SELECT COUNT(*) as count FROM stream_leases WHERE lease_expires_at > NOW()");
+        auto leases_result = getTuplesResult(conn.get());
+        int active_leases = (PQntuples(leases_result.get()) > 0) ? std::stoi(PQgetvalue(leases_result.get(), 0, 0)) : 0;
+        
+        // Total unique consumer groups across all streams
+        sendAndWait(conn.get(), "SELECT COUNT(DISTINCT consumer_group) as count FROM stream_consumer_offsets");
+        auto consumer_groups_result = getTuplesResult(conn.get());
+        int total_consumer_groups = (PQntuples(consumer_groups_result.get()) > 0) ? std::stoi(PQgetvalue(consumer_groups_result.get(), 0, 0)) : 0;
+        
+        // Active consumers (consumer groups that consumed in last hour)
+        sendAndWait(conn.get(),
+            "SELECT COUNT(DISTINCT consumer_group) as count FROM stream_consumer_offsets "
+            "WHERE last_consumed_at > NOW() - INTERVAL '1 hour'"
+        );
+        auto active_consumers_result = getTuplesResult(conn.get());
+        int active_consumers = (PQntuples(active_consumers_result.get()) > 0) ? std::stoi(PQgetvalue(active_consumers_result.get(), 0, 0)) : 0;
+        
+        // Total windows processed (sum of all consumer groups)
+        sendAndWait(conn.get(), "SELECT COALESCE(SUM(total_windows_consumed), 0) as total FROM stream_consumer_offsets");
+        auto windows_processed_result = getTuplesResult(conn.get());
+        long long total_windows_processed = (PQntuples(windows_processed_result.get()) > 0) ? std::stoll(PQgetvalue(windows_processed_result.get(), 0, 0)) : 0;
+        
+        // Windows processed in last hour
+        sendAndWait(conn.get(),
+            "SELECT COUNT(*) as count FROM stream_consumer_offsets "
+            "WHERE last_consumed_at > NOW() - INTERVAL '1 hour'"
+        );
+        auto windows_hour_result = getTuplesResult(conn.get());
+        int windows_last_hour = (PQntuples(windows_hour_result.get()) > 0) ? std::stoi(PQgetvalue(windows_hour_result.get(), 0, 0)) : 0;
+        
+        // Average lease time (in seconds)
+        sendAndWait(conn.get(),
+            "SELECT COALESCE(AVG(EXTRACT(EPOCH FROM (lease_expires_at - CURRENT_TIMESTAMP))), 0) as avg_seconds "
+            "FROM stream_leases WHERE lease_expires_at > NOW()"
+        );
+        auto avg_lease_result = getTuplesResult(conn.get());
+        int avg_lease_time = (PQntuples(avg_lease_result.get()) > 0) ? static_cast<int>(std::stod(PQgetvalue(avg_lease_result.get(), 0, 0))) : 0;
+        
+        return {
+            {"totalStreams", total_streams},
+            {"partitionedStreams", partitioned_streams},
+            {"activeLeases", active_leases},
+            {"totalConsumerGroups", total_consumer_groups},
+            {"activeConsumers", active_consumers},
+            {"totalWindowsProcessed", total_windows_processed},
+            {"windowsLastHour", windows_last_hour},
+            {"avgLeaseTime", avg_lease_time}
+        };
+    } catch (const std::exception& e) {
+        spdlog::error("Failed to get stream stats: {}", e.what());
+        throw;
+    }
+}
+
+nlohmann::json AsyncQueueManager::get_stream_details(const std::string& stream_name) {
+    try {
+        auto conn = async_db_pool_->acquire();
+        
+        sendQueryParamsAsync(conn.get(), "SELECT * FROM streams WHERE name = $1", {stream_name});
+        auto result = getTuplesResult(conn.get());
+        
+        if (PQntuples(result.get()) == 0) {
+            throw std::runtime_error("Stream not found");
+        }
+        
+        return {
+            {"id", PQgetvalue(result.get(), 0, PQfnumber(result.get(), "id"))},
+            {"name", PQgetvalue(result.get(), 0, PQfnumber(result.get(), "name"))},
+            {"namespace", PQgetvalue(result.get(), 0, PQfnumber(result.get(), "namespace"))},
+            {"partitioned", std::string(PQgetvalue(result.get(), 0, PQfnumber(result.get(), "partitioned"))) == "t"},
+            {"windowType", PQgetvalue(result.get(), 0, PQfnumber(result.get(), "window_type"))},
+            {"windowDurationMs", std::stoll(PQgetvalue(result.get(), 0, PQfnumber(result.get(), "window_duration_ms")))},
+            {"windowGracePeriodMs", std::stoll(PQgetvalue(result.get(), 0, PQfnumber(result.get(), "window_grace_period_ms")))},
+            {"windowLeaseTimeoutMs", std::stoll(PQgetvalue(result.get(), 0, PQfnumber(result.get(), "window_lease_timeout_ms")))},
+            {"createdAt", PQgetvalue(result.get(), 0, PQfnumber(result.get(), "created_at"))},
+            {"updatedAt", PQgetvalue(result.get(), 0, PQfnumber(result.get(), "updated_at"))}
+        };
+    } catch (const std::exception& e) {
+        spdlog::error("Failed to get stream details: {}", e.what());
+        throw;
+    }
+}
+
+nlohmann::json AsyncQueueManager::get_stream_consumers(const std::string& stream_name) {
+    try {
+        auto conn = async_db_pool_->acquire();
+        
+        // Get stream ID
+        sendQueryParamsAsync(conn.get(), "SELECT id FROM streams WHERE name = $1", {stream_name});
+        auto stream_result = getTuplesResult(conn.get());
+        
+        if (PQntuples(stream_result.get()) == 0) {
+            throw std::runtime_error("Stream not found");
+        }
+        
+        std::string stream_id = PQgetvalue(stream_result.get(), 0, 0);
+        
+        // Get consumer groups for this stream
+        std::string query = R"(
+            SELECT 
+                consumer_group,
+                last_partition_name,
+                last_window_start,
+                last_window_end,
+                total_windows_consumed,
+                last_consumed_at
+            FROM stream_consumer_offsets
+            WHERE stream_id = $1::UUID
+            ORDER BY last_consumed_at DESC
+        )";
+        
+        sendQueryParamsAsync(conn.get(), query, {stream_id});
+        auto result = getTuplesResult(conn.get());
+        
+        nlohmann::json consumers = nlohmann::json::array();
+        int num_rows = PQntuples(result.get());
+        int num_cols = PQnfields(result.get());
+        
+        for (int i = 0; i < num_rows; i++) {
+            nlohmann::json consumer;
+            for (int j = 0; j < num_cols; j++) {
+                std::string field_name = PQfname(result.get(), j);
+                if (PQgetisnull(result.get(), i, j)) {
+                    consumer[field_name] = nullptr;
+                } else {
+                    std::string value = PQgetvalue(result.get(), i, j);
+                    // Convert numeric fields
+                    if (field_name == "total_windows_consumed") {
+                        consumer[field_name] = std::stoll(value);
+                    } else {
+                        consumer[field_name] = value;
+                    }
+                }
+            }
+            consumers.push_back(consumer);
+        }
+        
+        return {{"consumers", consumers}};
+    } catch (const std::exception& e) {
+        spdlog::error("Failed to get stream consumers: {}", e.what());
+        throw;
+    }
+}
+
+bool AsyncQueueManager::delete_stream(const std::string& stream_name) {
+    try {
+        auto conn = async_db_pool_->acquire();
+        
+        sendQueryParamsAsync(conn.get(), "DELETE FROM streams WHERE name = $1 RETURNING id", {stream_name});
+        auto result = getTuplesResult(conn.get());
+        
+        if (PQntuples(result.get()) == 0) {
+            spdlog::warn("Stream not found: {}", stream_name);
+            return false;
+        }
+        
+        spdlog::info("Stream deleted successfully: {}", stream_name);
+        return true;
+        
+    } catch (const std::exception& e) {
+        spdlog::error("Failed to delete stream: {}", e.what());
+        return false;
+    }
 }
 
 } // namespace queen

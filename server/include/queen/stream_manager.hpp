@@ -1,6 +1,6 @@
 #pragma once
 
-#include "queen/database.hpp"
+#include "queen/async_database.hpp"
 #include "queen/response_queue.hpp"
 #include "queen/stream_poll_intention_registry.hpp"
 #include "threadpool.hpp"
@@ -52,7 +52,7 @@ struct StreamPartitionOffset {
 class StreamManager {
 public:
     StreamManager(
-        std::shared_ptr<DatabasePool> db_pool,
+        std::shared_ptr<AsyncDbPool> db_pool,
         std::shared_ptr<astp::ThreadPool> db_thread_pool,
         const std::vector<std::shared_ptr<ResponseQueue>>& worker_response_queues,
         std::shared_ptr<StreamPollIntentionRegistry> intention_registry,
@@ -77,30 +77,30 @@ public:
     );
     
 private:
-    std::shared_ptr<DatabasePool> db_pool_;
+    std::shared_ptr<AsyncDbPool> db_pool_;
     std::shared_ptr<astp::ThreadPool> db_thread_pool_;
     std::vector<std::shared_ptr<ResponseQueue>> worker_response_queues_;
     std::shared_ptr<StreamPollIntentionRegistry> stream_intention_registry_;
     std::shared_ptr<ResponseRegistry> response_registry_;
     
     // Database query helpers
-    std::optional<StreamDefinition> get_stream(DatabaseConnection* conn, const std::string& stream_name);
+    std::optional<StreamDefinition> get_stream(PGconn* conn, const std::string& stream_name);
     std::vector<StreamPartitionOffset> get_partitions_and_offsets(
-        DatabaseConnection* conn, 
+        PGconn* conn, 
         const std::string& stream_id, 
         const std::string& consumer_group,
         bool partitioned
     );
-    std::string get_watermark(DatabaseConnection* conn, const std::string& stream_id);
+    std::string get_watermark(PGconn* conn, const std::string& stream_id);
     bool check_lease_exists(
-        DatabaseConnection* conn,
+        PGconn* conn,
         const std::string& stream_id,
         const std::string& consumer_group,
         const std::string& stream_key,
         const std::string& window_start
     );
     std::string create_lease(
-        DatabaseConnection* conn,
+        PGconn* conn,
         const std::string& stream_id,
         const std::string& consumer_group,
         const std::string& stream_key,
@@ -109,7 +109,7 @@ private:
         int64_t lease_timeout_ms
     );
     nlohmann::json get_messages(
-        DatabaseConnection* conn,
+        PGconn* conn,
         const std::string& stream_id,
         const std::string& stream_key,
         bool partitioned,
@@ -117,7 +117,7 @@ private:
         const std::string& window_end
     );
     std::optional<std::string> get_first_message_time(
-        DatabaseConnection* conn,
+        PGconn* conn,
         const std::string& stream_id,
         const std::string& stream_key,
         bool partitioned

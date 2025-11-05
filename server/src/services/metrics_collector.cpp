@@ -3,7 +3,7 @@
 namespace queen {
 
 MetricsCollector::MetricsCollector(
-    std::shared_ptr<DatabasePool> db_pool,
+    std::shared_ptr<AsyncDbPool> db_pool,
     std::shared_ptr<astp::ThreadPool> db_thread_pool,
     std::shared_ptr<astp::ThreadPool> system_thread_pool,
     const std::string& hostname,
@@ -331,7 +331,7 @@ AggregatedMetrics MetricsCollector::aggregate(const std::vector<MetricsSample>& 
 
 void MetricsCollector::store_aggregated_metrics(const AggregatedMetrics& agg) {
     try {
-        ScopedConnection conn(db_pool_.get());
+        auto conn = db_pool_->acquire();
         
         // Truncate timestamp to minute
         auto time_t_ts = std::chrono::system_clock::to_time_t(agg.window_start);
@@ -364,14 +364,11 @@ void MetricsCollector::store_aggregated_metrics(const AggregatedMetrics& agg) {
             metrics_str
         };
         
-        auto result = QueryResult(conn->exec_params(query, params));
+        sendQueryParamsAsync(conn.get(), query, params);
+        getCommandResult(conn.get());
         
-        if (!result.is_success()) {
-            spdlog::error("Failed to store metrics: {}", result.error_message());
-        } else {
             spdlog::trace("Stored metrics: {}:{}:{} @ {}", 
                          hostname_, port_, worker_id_, timestamp_str);
-        }
         
     } catch (const std::exception& e) {
         spdlog::error("Exception storing metrics: {}", e.what());

@@ -54,7 +54,7 @@ metadata:
   name:  {{ .Release.Name }}
   namespace: {{ .Release.Namespace }}
 spec:
-  sessionAffinity: ClientIP
+  sessionAffinity: None
   selector:
     run: {{ .Release.Name }}
   ports:

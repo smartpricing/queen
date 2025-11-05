@@ -163,6 +163,29 @@ void getCommandResult(PGconn* conn) {
     }
 }
 
+// --- Helper: Get Command Result Pointer (for PQcmdTuples) ---
+
+PGResultPtr getCommandResultPtr(PGconn* conn) {
+    PGresult* result = PQgetResult(conn);
+    if (!result) {
+        throw std::runtime_error("Server returned no result.");
+    }
+    if (PQresultStatus(result) != PGRES_COMMAND_OK) {
+        std::string errMsg = PQresultErrorMessage(result);
+        PQclear(result);
+        throw std::runtime_error("Query command failed: " + errMsg);
+    }
+    
+    // Verify no extra results
+    PGResultPtr null_check(PQgetResult(conn));
+    if (null_check) {
+        PQclear(result);
+        throw std::runtime_error("Unexpected extra result after command.");
+    }
+    
+    return PGResultPtr(result);
+}
+
 // --- Helper: Get Tuples Result ---
 
 PGResultPtr getTuplesResult(PGconn* conn) {
@@ -185,6 +208,51 @@ PGResultPtr getTuplesResult(PGconn* conn) {
     }
     
     return PGResultPtr(result);
+}
+
+// --- Helper: Send Parameterized Query Async ---
+
+void sendQueryParamsAsync(PGconn* conn, const std::string& sql, const std::vector<std::string>& params) {
+    std::vector<const char*> param_values;
+    param_values.reserve(params.size());
+    
+    for (const auto& param : params) {
+        param_values.push_back(param.c_str());
+    }
+    
+    if (!PQsendQueryParams(conn, sql.c_str(), static_cast<int>(params.size()),
+                          nullptr, param_values.data(), nullptr, nullptr, 0)) {
+        throw std::runtime_error("PQsendQueryParams failed: " + 
+                                 std::string(PQerrorMessage(conn)));
+    }
+    
+    // CRITICAL: Flush outgoing data buffer until all data is sent
+    // For large queries (e.g., 2000 items), this can take multiple iterations
+    while (true) {
+        int flush_result = PQflush(conn);
+        if (flush_result == 0) {
+            // All data successfully sent to server
+            break;
+        } else if (flush_result == -1) {
+            throw std::runtime_error("PQflush failed: " + 
+                                     std::string(PQerrorMessage(conn)));
+        }
+        // flush_result == 1: more data to send, socket send buffer full
+        // Wait for socket to be WRITABLE (not readable!)
+        waitForSocket(conn, false);  // false = wait for write
+    }
+    
+    // Now wait for query to be processed and response to arrive
+    while (true) {
+        waitForSocket(conn, true);  // true = wait for read
+        if (!PQconsumeInput(conn)) {
+            throw std::runtime_error("PQconsumeInput failed: " + 
+                                     std::string(PQerrorMessage(conn)));
+        }
+        if (PQisBusy(conn) == 0) {
+            break;
+        }
+    }
 }
 
 // --- AsyncDbPool Implementation ---

@@ -1,5 +1,5 @@
 #include "queen/stream_manager.hpp"
-#include "queen/database.hpp"
+#include "queen/async_database.hpp"
 #include <App.h>
 #include <spdlog/spdlog.h>
 #include <iomanip>
@@ -9,7 +9,7 @@
 namespace queen {
 
 StreamManager::StreamManager(
-    std::shared_ptr<DatabasePool> db_pool,
+    std::shared_ptr<AsyncDbPool> db_pool,
     std::shared_ptr<astp::ThreadPool> db_thread_pool,
     const std::vector<std::shared_ptr<ResponseQueue>>& worker_response_queues,
     std::shared_ptr<StreamPollIntentionRegistry> intention_registry,
@@ -41,7 +41,7 @@ void StreamManager::handle_define(uWS::HttpResponse<false>* res, uWS::HttpReques
             
             // Execute in thread pool
             db_thread_pool_->push([this, request_id, worker_id, body]() {
-                ScopedConnection conn(db_pool_.get());
+                auto conn = db_pool_->acquire();
                 
                 try {
                     // Extract parameters
@@ -59,7 +59,10 @@ void StreamManager::handle_define(uWS::HttpResponse<false>* res, uWS::HttpReques
                         return;
                     }
                     
-                    if (!conn->begin_transaction()) {
+                    try {
+                        sendAndWait(conn.get(), "BEGIN");
+                        getCommandResult(conn.get());
+                    } catch (const std::exception& e) {
                         worker_response_queues_[worker_id]->push(request_id, {{"error", "Failed to begin transaction"}}, true, 500);
                         return;
                     }
@@ -83,20 +86,21 @@ void StreamManager::handle_define(uWS::HttpResponse<false>* res, uWS::HttpReques
                         RETURNING id
                     )";
                     
-                    auto stream_result = QueryResult(conn->exec_params(
-                        create_stream_sql,
+                    sendQueryParamsAsync(conn.get(), create_stream_sql,
                         {name, namespace_name, partitioned ? "true" : "false", window_type,
                          std::to_string(window_duration_ms), std::to_string(window_grace_period_ms), 
                          std::to_string(window_lease_timeout_ms)}
-                    ));
+                    );
+                    auto stream_result = getTuplesResult(conn.get());
                     
-                    if (!stream_result.is_success() || stream_result.num_rows() == 0) {
-                        conn->rollback_transaction();
+                    if (PQntuples(stream_result.get()) == 0) {
+                        sendAndWait(conn.get(), "ROLLBACK");
+                        getCommandResult(conn.get());
                         worker_response_queues_[worker_id]->push(request_id, {{"error", "Failed to create stream"}}, true, 500);
                         return;
                     }
                     
-                    std::string stream_id = stream_result.get_value(0, 0);
+                    std::string stream_id = PQgetvalue(stream_result.get(), 0, 0);
                     
                     // Q2: Link Stream to Queues
                     for (const auto& queue_name : source_queue_names) {
@@ -105,13 +109,18 @@ void StreamManager::handle_define(uWS::HttpResponse<false>* res, uWS::HttpReques
                             SELECT $1, q.id FROM queues q WHERE q.name = $2
                             ON CONFLICT (stream_id, queue_id) DO NOTHING
                         )";
-                        auto link_result = QueryResult(conn->exec_params(link_sql, {stream_id, queue_name}));
-                        if (!link_result.is_success()) {
-                            spdlog::warn("Failed to link queue {} to stream {}", queue_name, name);
+                        try {
+                            sendQueryParamsAsync(conn.get(), link_sql, {stream_id, queue_name});
+                            getCommandResult(conn.get());
+                        } catch (const std::exception& e) {
+                            spdlog::warn("Failed to link queue {} to stream {}: {}", queue_name, name, e.what());
                         }
                     }
                     
-                    if (!conn->commit_transaction()) {
+                    try {
+                        sendAndWait(conn.get(), "COMMIT");
+                        getCommandResult(conn.get());
+                    } catch (const std::exception& e) {
                         worker_response_queues_[worker_id]->push(request_id, {{"error", "Failed to commit transaction"}}, true, 500);
                         return;
                     }
@@ -127,7 +136,10 @@ void StreamManager::handle_define(uWS::HttpResponse<false>* res, uWS::HttpReques
                     
                 } catch (const std::exception& e) {
                     spdlog::error("Failed to define stream: {}", e.what());
-                    conn->rollback_transaction();
+                    try {
+                        sendAndWait(conn.get(), "ROLLBACK");
+                        getCommandResult(conn.get());
+                    } catch (...) {}
                     worker_response_queues_[worker_id]->push(request_id, {{"error", std::string("Failed: ") + e.what()}}, true, 500);
                 }
             });
@@ -158,19 +170,19 @@ void StreamManager::handle_poll(uWS::HttpResponse<false>* res, uWS::HttpRequest*
             
             // Try to find a window immediately
             db_thread_pool_->push([this, request_id, worker_id, stream_name, consumer_group, timeout]() {
-                ScopedConnection conn(db_pool_.get());
+                auto conn = db_pool_->acquire();
                 
                 try {
                     // Get stream
-                    auto stream_opt = get_stream(conn.operator->(), stream_name);
+                    auto stream_opt = get_stream(conn.get(), stream_name);
                     if (!stream_opt.has_value()) {
                         worker_response_queues_[worker_id]->push(request_id, {{"error", "Stream not found"}}, true, 404);
                         return;
                     }
                     
                     auto stream = stream_opt.value();
-                    std::string watermark_str = get_watermark(conn.operator->(), stream.id);
-                    auto partitions = get_partitions_and_offsets(conn.operator->(), stream.id, consumer_group, stream.partitioned);
+                    std::string watermark_str = get_watermark(conn.get(), stream.id);
+                    auto partitions = get_partitions_and_offsets(conn.get(), stream.id, consumer_group, stream.partitioned);
                     
                     spdlog::debug("Poll check: stream={}, watermark={}, partitions={}", stream_name, watermark_str, partitions.size());
                     
@@ -183,7 +195,7 @@ void StreamManager::handle_poll(uWS::HttpResponse<false>* res, uWS::HttpRequest*
                         std::string window_start_str;
                         
                         if (last_end_str == "-infinity") {
-                            auto first_time_opt = get_first_message_time(conn.operator->(), stream.id, stream_key, stream.partitioned);
+                            auto first_time_opt = get_first_message_time(conn.get(), stream.id, stream_key, stream.partitioned);
                             if (!first_time_opt.has_value()) {
                                 spdlog::debug("No messages yet for key={}", stream_key);
                                 continue;
@@ -217,20 +229,21 @@ void StreamManager::handle_poll(uWS::HttpResponse<false>* res, uWS::HttpRequest*
                           AND window_start = $4::TIMESTAMPTZ
                           AND lease_expires_at < NOW()
                     )";
-                    QueryResult(conn->exec_params(cleanup_sql, {stream.id, consumer_group, stream_key, window_start_str}));
+                    sendQueryParamsAsync(conn.get(), cleanup_sql, {stream.id, consumer_group, stream_key, window_start_str});
+                    getCommandResult(conn.get());
                     
                     // Now check if there's a valid (non-expired) lease
-                    if (check_lease_exists(conn.operator->(), stream.id, consumer_group, stream_key, window_start_str)) {
+                    if (check_lease_exists(conn.get(), stream.id, consumer_group, stream_key, window_start_str)) {
                         spdlog::debug("Window already leased");
                         continue;
                     }
                     
                     // Found a ready window! Try to create lease
                     try {
-                        std::string lease_id = create_lease(conn.operator->(), stream.id, consumer_group, stream_key,
+                        std::string lease_id = create_lease(conn.get(), stream.id, consumer_group, stream_key,
                                                             window_start_str, window_end_str, stream.window_lease_timeout_ms);
                         
-                        auto messages = get_messages(conn.operator->(), stream.id, stream_key, stream.partitioned, 
+                        auto messages = get_messages(conn.get(), stream.id, stream_key, stream.partitioned, 
                                                      window_start_str, window_end_str);
                         
                         nlohmann::json window_json = {
@@ -301,7 +314,7 @@ void StreamManager::handle_ack(uWS::HttpResponse<false>* res, uWS::HttpRequest* 
             
             // Execute in thread pool
             db_thread_pool_->push([this, request_id, worker_id, body]() {
-                ScopedConnection conn(db_pool_.get());
+                auto conn = db_pool_->acquire();
                 
                 try {
                     std::string lease_id = body.value("leaseId", "");
@@ -312,7 +325,10 @@ void StreamManager::handle_ack(uWS::HttpResponse<false>* res, uWS::HttpRequest* 
                         return;
                     }
                     
-                    if (!conn->begin_transaction()) {
+                    try {
+                        sendAndWait(conn.get(), "BEGIN");
+                        getCommandResult(conn.get());
+                    } catch (const std::exception& e) {
                         worker_response_queues_[worker_id]->push(request_id, {{"error", "Failed to begin transaction"}}, true, 500);
                         return;
                     }
@@ -324,18 +340,22 @@ void StreamManager::handle_ack(uWS::HttpResponse<false>* res, uWS::HttpRequest* 
                         WHERE lease_id = $1::UUID AND lease_expires_at > NOW()
                     )";
                     
-                    auto lease_result = QueryResult(conn->exec_params(validate_sql, {lease_id}));
+                    sendQueryParamsAsync(conn.get(), validate_sql, {lease_id});
+                    auto lease_result = getTuplesResult(conn.get());
                     
-                    if (!lease_result.is_success() || lease_result.num_rows() == 0) {
-                        conn->rollback_transaction();
+                    if (PQntuples(lease_result.get()) == 0) {
+                        try {
+                        sendAndWait(conn.get(), "ROLLBACK");
+                        getCommandResult(conn.get());
+                    } catch (...) {}
                         worker_response_queues_[worker_id]->push(request_id, {{"error", "Invalid or expired lease"}}, true, 400);
                         return;
                     }
                     
-                    std::string stream_id = lease_result.get_value(0, "stream_id");
-                    std::string consumer_group = lease_result.get_value(0, "consumer_group");
-                    std::string stream_key = lease_result.get_value(0, "stream_key");
-                    std::string window_end = lease_result.get_value(0, "window_end");
+                    std::string stream_id = PQgetvalue(lease_result.get(), 0, PQfnumber(lease_result.get(), "stream_id"));
+                    std::string consumer_group = PQgetvalue(lease_result.get(), 0, PQfnumber(lease_result.get(), "consumer_group"));
+                    std::string stream_key = PQgetvalue(lease_result.get(), 0, PQfnumber(lease_result.get(), "stream_key"));
+                    std::string window_end = PQgetvalue(lease_result.get(), 0, PQfnumber(lease_result.get(), "window_end"));
                     
                     if (success) {
                         // Q10: ACK Window
@@ -353,19 +373,19 @@ void StreamManager::handle_ack(uWS::HttpResponse<false>* res, uWS::HttpRequest* 
                                 last_consumed_at = NOW()
                         )";
                         
-                        auto ack_result = QueryResult(conn->exec_params(ack_sql, {stream_id, consumer_group, stream_key, window_end}));
-                        if (!ack_result.is_success()) {
-                            conn->rollback_transaction();
-                            worker_response_queues_[worker_id]->push(request_id, {{"error", "Failed to update offset"}}, true, 500);
-                            return;
-                        }
+                        sendQueryParamsAsync(conn.get(), ack_sql, {stream_id, consumer_group, stream_key, window_end});
+                        getCommandResult(conn.get());  // INSERT...ON CONFLICT returns COMMAND_OK, not TUPLES_OK
                     }
                     
                     // Q11: Delete Lease
                     std::string delete_lease_sql = "DELETE FROM stream_leases WHERE lease_id = $1::UUID";
-                    auto delete_result = QueryResult(conn->exec_params(delete_lease_sql, {lease_id}));
+                    sendQueryParamsAsync(conn.get(), delete_lease_sql, {lease_id});
+                    getCommandResult(conn.get());
                     
-                    if (!conn->commit_transaction()) {
+                    try {
+                        sendAndWait(conn.get(), "COMMIT");
+                        getCommandResult(conn.get());
+                    } catch (const std::exception& e) {
                         worker_response_queues_[worker_id]->push(request_id, {{"error", "Failed to commit transaction"}}, true, 500);
                         return;
                     }
@@ -380,7 +400,10 @@ void StreamManager::handle_ack(uWS::HttpResponse<false>* res, uWS::HttpRequest* 
                     
                 } catch (const std::exception& e) {
                     spdlog::error("[Worker {}] Failed to ack window: {}", worker_id, e.what());
-                    conn->rollback_transaction();
+                    try {
+                        sendAndWait(conn.get(), "ROLLBACK");
+                        getCommandResult(conn.get());
+                    } catch (...) {}
                     worker_response_queues_[worker_id]->push(request_id, {{"error", std::string("ACK error: ") + e.what()}}, true, 500);
                 }
             });
@@ -398,7 +421,7 @@ void StreamManager::handle_renew(uWS::HttpResponse<false>* res, uWS::HttpRequest
             
             // Execute in thread pool
             db_thread_pool_->push([this, request_id, worker_id, body]() {
-                ScopedConnection conn(db_pool_.get());
+                auto conn = db_pool_->acquire();
                 
                 try {
                     std::string lease_id = body.value("leaseId", "");
@@ -417,16 +440,17 @@ void StreamManager::handle_renew(uWS::HttpResponse<false>* res, uWS::HttpRequest
                         RETURNING lease_expires_at
                     )";
                     
-                    auto result = QueryResult(conn->exec_params(renew_sql, {lease_id, std::to_string(extend_ms)}));
+                    sendQueryParamsAsync(conn.get(), renew_sql, {lease_id, std::to_string(extend_ms)});
+                    auto result = getTuplesResult(conn.get());
                     
-                    if (!result.is_success() || result.num_rows() == 0) {
+                    if (PQntuples(result.get()) == 0) {
                         worker_response_queues_[worker_id]->push(request_id, {{"error", "Lease not found or expired"}}, true, 404);
                         return;
                     }
                     
                     nlohmann::json response = {
                         {"success", true},
-                        {"lease_expires_at", result.get_value(0, 0)}
+                        {"lease_expires_at", PQgetvalue(result.get(), 0, 0)}
                     };
                     
                     worker_response_queues_[worker_id]->push(request_id, response, false, 200);
@@ -450,7 +474,7 @@ void StreamManager::handle_seek(uWS::HttpResponse<false>* res, uWS::HttpRequest*
             
             // Execute in thread pool
             db_thread_pool_->push([this, request_id, worker_id, body]() {
-                ScopedConnection conn(db_pool_.get());
+                auto conn = db_pool_->acquire();
                 
                 try {
                     std::string stream_name = body.value("streamName", "");
@@ -462,7 +486,7 @@ void StreamManager::handle_seek(uWS::HttpResponse<false>* res, uWS::HttpRequest*
                         return;
                     }
                     
-                    auto stream_opt = get_stream(conn.operator->(), stream_name);
+                    auto stream_opt = get_stream(conn.get(), stream_name);
                     if (!stream_opt.has_value()) {
                         worker_response_queues_[worker_id]->push(request_id, {{"error", "Stream not found"}}, true, 404);
                         return;
@@ -470,7 +494,10 @@ void StreamManager::handle_seek(uWS::HttpResponse<false>* res, uWS::HttpRequest*
                     
                     std::string stream_id = stream_opt->id;
                     
-                    if (!conn->begin_transaction()) {
+                    try {
+                        sendAndWait(conn.get(), "BEGIN");
+                        getCommandResult(conn.get());
+                    } catch (const std::exception& e) {
                         worker_response_queues_[worker_id]->push(request_id, {{"error", "Failed to begin transaction"}}, true, 500);
                         return;
                     }
@@ -496,15 +523,13 @@ void StreamManager::handle_seek(uWS::HttpResponse<false>* res, uWS::HttpRequest*
                             last_consumed_at = NOW()
                     )";
                     
-                    auto seek_result = QueryResult(conn->exec_params(seek_sql, {stream_id, consumer_group, seek_timestamp}));
+                    sendQueryParamsAsync(conn.get(), seek_sql, {stream_id, consumer_group, seek_timestamp});
+                    getCommandResult(conn.get());  // INSERT...ON CONFLICT returns COMMAND_OK, not TUPLES_OK
                     
-                    if (!seek_result.is_success()) {
-                        conn->rollback_transaction();
-                        worker_response_queues_[worker_id]->push(request_id, {{"error", "Failed to seek offset"}}, true, 500);
-                        return;
-                    }
-                    
-                    if (!conn->commit_transaction()) {
+                    try {
+                        sendAndWait(conn.get(), "COMMIT");
+                        getCommandResult(conn.get());
+                    } catch (const std::exception& e) {
                         worker_response_queues_[worker_id]->push(request_id, {{"error", "Failed to commit transaction"}}, true, 500);
                         return;
                     }
@@ -519,7 +544,10 @@ void StreamManager::handle_seek(uWS::HttpResponse<false>* res, uWS::HttpRequest*
                     
                 } catch (const std::exception& e) {
                     spdlog::error("[Worker {}] Failed to seek offset: {}", worker_id, e.what());
-                    conn->rollback_transaction();
+                    try {
+                        sendAndWait(conn.get(), "ROLLBACK");
+                        getCommandResult(conn.get());
+                    } catch (...) {}
                     worker_response_queues_[worker_id]->push(request_id, {{"error", std::string("Seek error: ") + e.what()}}, true, 500);
                 }
             });
@@ -533,23 +561,24 @@ void StreamManager::handle_seek(uWS::HttpResponse<false>* res, uWS::HttpRequest*
 // Database Query Helpers
 // ============================================================================
 
-std::optional<StreamDefinition> StreamManager::get_stream(DatabaseConnection* conn, const std::string& stream_name) {
+std::optional<StreamDefinition> StreamManager::get_stream(PGconn* conn, const std::string& stream_name) {
     try {
-        auto result = QueryResult(conn->exec_params("SELECT * FROM streams WHERE name = $1", {stream_name}));
+        sendQueryParamsAsync(conn, "SELECT * FROM streams WHERE name = $1", {stream_name});
+        auto result = getTuplesResult(conn);
         
-        if (!result.is_success() || result.num_rows() == 0) {
+        if (PQntuples(result.get()) == 0) {
             return std::nullopt;
         }
         
         StreamDefinition def;
-        def.id = result.get_value(0, "id");
-        def.name = result.get_value(0, "name");
-        def.namespace_name = result.get_value(0, "namespace");
-        def.partitioned = result.get_value(0, "partitioned") == "t";
-        def.window_type = result.get_value(0, "window_type");
-        def.window_duration_ms = std::stoll(result.get_value(0, "window_duration_ms"));
-        def.window_grace_period_ms = std::stoll(result.get_value(0, "window_grace_period_ms"));
-        def.window_lease_timeout_ms = std::stoll(result.get_value(0, "window_lease_timeout_ms"));
+        def.id = PQgetvalue(result.get(), 0, PQfnumber(result.get(), "id"));
+        def.name = PQgetvalue(result.get(), 0, PQfnumber(result.get(), "name"));
+        def.namespace_name = PQgetvalue(result.get(), 0, PQfnumber(result.get(), "namespace"));
+        def.partitioned = std::string(PQgetvalue(result.get(), 0, PQfnumber(result.get(), "partitioned"))) == "t";
+        def.window_type = PQgetvalue(result.get(), 0, PQfnumber(result.get(), "window_type"));
+        def.window_duration_ms = std::stoll(PQgetvalue(result.get(), 0, PQfnumber(result.get(), "window_duration_ms")));
+        def.window_grace_period_ms = std::stoll(PQgetvalue(result.get(), 0, PQfnumber(result.get(), "window_grace_period_ms")));
+        def.window_lease_timeout_ms = std::stoll(PQgetvalue(result.get(), 0, PQfnumber(result.get(), "window_lease_timeout_ms")));
         
         return def;
         
@@ -560,7 +589,7 @@ std::optional<StreamDefinition> StreamManager::get_stream(DatabaseConnection* co
 }
 
 std::vector<StreamPartitionOffset> StreamManager::get_partitions_and_offsets(
-    DatabaseConnection* conn,
+    PGconn* conn,
     const std::string& stream_id,
     const std::string& consumer_group,
     bool partitioned
@@ -588,16 +617,15 @@ std::vector<StreamPartitionOffset> StreamManager::get_partitions_and_offsets(
                 WHERE ss.stream_id = $1::UUID
             )";
             
-            auto query_result = QueryResult(conn->exec_params(sql, {stream_id, consumer_group}));
+            sendQueryParamsAsync(conn, sql, {stream_id, consumer_group});
+            auto query_result = getTuplesResult(conn);
             
-            if (query_result.is_success()) {
-                for (int i = 0; i < query_result.num_rows(); i++) {
+            for (int i = 0; i < PQntuples(query_result.get()); i++) {
                     StreamPartitionOffset offset;
-                    offset.stream_key = query_result.get_value(i, "stream_key");
-                    offset.partition_name = query_result.get_value(i, "partition_name");
-                    offset.last_acked_window_end = query_result.get_value(i, "last_acked_window_end");
+                offset.stream_key = PQgetvalue(query_result.get(), i, PQfnumber(query_result.get(), "stream_key"));
+                offset.partition_name = PQgetvalue(query_result.get(), i, PQfnumber(query_result.get(), "partition_name"));
+                offset.last_acked_window_end = PQgetvalue(query_result.get(), i, PQfnumber(query_result.get(), "last_acked_window_end"));
                     result.push_back(offset);
-                }
             }
         } else {
             // Q4: Global query
@@ -615,13 +643,14 @@ std::vector<StreamPartitionOffset> StreamManager::get_partitions_and_offsets(
                   AND o.stream_key = '__GLOBAL__'
             )";
             
-            auto query_result = QueryResult(conn->exec_params(sql, {stream_id, consumer_group}));
+            sendQueryParamsAsync(conn, sql, {stream_id, consumer_group});
+            auto query_result = getTuplesResult(conn);
             
-            if (query_result.is_success() && query_result.num_rows() > 0) {
+            if (PQntuples(query_result.get()) > 0) {
                 StreamPartitionOffset offset;
-                offset.stream_key = query_result.get_value(0, "stream_key");
-                offset.partition_name = query_result.get_value(0, "partition_name");
-                offset.last_acked_window_end = query_result.get_value(0, "last_acked_window_end");
+                offset.stream_key = PQgetvalue(query_result.get(), 0, PQfnumber(query_result.get(), "stream_key"));
+                offset.partition_name = PQgetvalue(query_result.get(), 0, PQfnumber(query_result.get(), "partition_name"));
+                offset.last_acked_window_end = PQgetvalue(query_result.get(), 0, PQfnumber(query_result.get(), "last_acked_window_end"));
                 result.push_back(offset);
             } else {
                 // Create default entry
@@ -640,7 +669,7 @@ std::vector<StreamPartitionOffset> StreamManager::get_partitions_and_offsets(
     return result;
 }
 
-std::string StreamManager::get_watermark(DatabaseConnection* conn, const std::string& stream_id) {
+std::string StreamManager::get_watermark(PGconn* conn, const std::string& stream_id) {
     try {
         // Q5: Get Watermark
         std::string sql = R"(
@@ -651,13 +680,14 @@ std::string StreamManager::get_watermark(DatabaseConnection* conn, const std::st
             WHERE ss.stream_id = $1::UUID
         )";
         
-        auto result = QueryResult(conn->exec_params(sql, {stream_id}));
+        sendQueryParamsAsync(conn, sql, {stream_id});
+        auto result = getTuplesResult(conn);
         
-        if (!result.is_success() || result.num_rows() == 0 || result.is_null(0, 0)) {
+        if (PQntuples(result.get()) == 0 || PQgetisnull(result.get(), 0, 0)) {
             return "-infinity";
         }
         
-        return result.get_value(0, 0);
+        return PQgetvalue(result.get(), 0, 0);
         
     } catch (const std::exception& e) {
         spdlog::error("Failed to get watermark: {}", e.what());
@@ -666,7 +696,7 @@ std::string StreamManager::get_watermark(DatabaseConnection* conn, const std::st
 }
 
 bool StreamManager::check_lease_exists(
-    DatabaseConnection* conn,
+    PGconn* conn,
     const std::string& stream_id,
     const std::string& consumer_group,
     const std::string& stream_key,
@@ -684,9 +714,10 @@ bool StreamManager::check_lease_exists(
             LIMIT 1
         )";
         
-        auto result = QueryResult(conn->exec_params(sql, {stream_id, consumer_group, stream_key, window_start}));
+        sendQueryParamsAsync(conn, sql, {stream_id, consumer_group, stream_key, window_start});
+        auto result = getTuplesResult(conn);
         
-        return result.is_success() && result.num_rows() > 0;
+        return PQntuples(result.get()) > 0;
         
     } catch (const std::exception& e) {
         spdlog::error("Failed to check lease: {}", e.what());
@@ -695,7 +726,7 @@ bool StreamManager::check_lease_exists(
 }
 
 std::string StreamManager::create_lease(
-    DatabaseConnection* conn,
+    PGconn* conn,
     const std::string& stream_id,
     const std::string& consumer_group,
     const std::string& stream_key,
@@ -715,22 +746,17 @@ std::string StreamManager::create_lease(
             RETURNING lease_id
         )";
         
-        auto result = QueryResult(conn->exec_params(sql, {stream_id, consumer_group, stream_key, window_start, window_end, std::to_string(lease_timeout_ms)}));
+        sendQueryParamsAsync(conn, sql, {stream_id, consumer_group, stream_key, window_start, window_end, std::to_string(lease_timeout_ms)});
+        auto result = getTuplesResult(conn);
         
-        if (!result.is_success()) {
-            std::string error_msg = result.error_message();
-            spdlog::error("Failed to create lease - SQL error: {}", error_msg);
+        if (PQntuples(result.get()) == 0) {
+            spdlog::error("Create lease returned no rows");
             spdlog::error("Params: stream_id={}, consumer_group={}, stream_key={}, window_start={}, window_end={}, timeout={}ms", 
                          stream_id, consumer_group, stream_key, window_start, window_end, lease_timeout_ms);
-            throw std::runtime_error("SQL error: " + error_msg);
-        }
-        
-        if (result.num_rows() == 0) {
-            spdlog::error("Create lease returned no rows");
             throw std::runtime_error("No lease_id returned");
         }
         
-        return result.get_value(0, 0);
+        return PQgetvalue(result.get(), 0, 0);
         
     } catch (const std::exception& e) {
         spdlog::error("Failed to create lease: {}", e.what());
@@ -739,7 +765,7 @@ std::string StreamManager::create_lease(
 }
 
 nlohmann::json StreamManager::get_messages(
-    DatabaseConnection* conn,
+    PGconn* conn,
     const std::string& stream_id,
     const std::string& stream_key,
     bool partitioned,
@@ -763,17 +789,16 @@ nlohmann::json StreamManager::get_messages(
                 ORDER BY m.created_at, m.id
             )";
             
-            auto result = QueryResult(conn->exec_params(sql, {stream_id, stream_key, window_start, window_end}));
+            sendQueryParamsAsync(conn, sql, {stream_id, stream_key, window_start, window_end});
+            auto result = getTuplesResult(conn);
             
-            if (result.is_success()) {
-                for (int i = 0; i < result.num_rows(); i++) {
+            for (int i = 0; i < PQntuples(result.get()); i++) {
                     nlohmann::json msg = {
-                        {"id", result.get_value(i, "id")},
-                        {"data", nlohmann::json::parse(result.get_value(i, "payload"))},
-                        {"created_at", result.get_value(i, "created_at")}
+                    {"id", PQgetvalue(result.get(), i, PQfnumber(result.get(), "id"))},
+                    {"data", nlohmann::json::parse(PQgetvalue(result.get(), i, PQfnumber(result.get(), "payload")))},
+                    {"created_at", PQgetvalue(result.get(), i, PQfnumber(result.get(), "created_at"))}
                     };
                     messages.push_back(msg);
-                }
             }
         } else {
             // Q8: Global query
@@ -788,17 +813,16 @@ nlohmann::json StreamManager::get_messages(
                 ORDER BY m.created_at, m.id
             )";
             
-            auto result = QueryResult(conn->exec_params(sql, {stream_id, window_start, window_end}));
+            sendQueryParamsAsync(conn, sql, {stream_id, window_start, window_end});
+            auto result = getTuplesResult(conn);
             
-            if (result.is_success()) {
-                for (int i = 0; i < result.num_rows(); i++) {
+            for (int i = 0; i < PQntuples(result.get()); i++) {
                     nlohmann::json msg = {
-                        {"id", result.get_value(i, "id")},
-                        {"data", nlohmann::json::parse(result.get_value(i, "payload"))},
-                        {"created_at", result.get_value(i, "created_at")}
+                    {"id", PQgetvalue(result.get(), i, PQfnumber(result.get(), "id"))},
+                    {"data", nlohmann::json::parse(PQgetvalue(result.get(), i, PQfnumber(result.get(), "payload")))},
+                    {"created_at", PQgetvalue(result.get(), i, PQfnumber(result.get(), "created_at"))}
                     };
                     messages.push_back(msg);
-                }
             }
         }
         
@@ -810,7 +834,7 @@ nlohmann::json StreamManager::get_messages(
 }
 
 std::optional<std::string> StreamManager::get_first_message_time(
-    DatabaseConnection* conn,
+    PGconn* conn,
     const std::string& stream_id,
     const std::string& stream_key,
     bool partitioned
@@ -827,13 +851,14 @@ std::optional<std::string> StreamManager::get_first_message_time(
                   AND p.name = $2
             )";
             
-            auto result = QueryResult(conn->exec_params(sql, {stream_id, stream_key}));
+            sendQueryParamsAsync(conn, sql, {stream_id, stream_key});
+            auto result = getTuplesResult(conn);
             
-            if (!result.is_success() || result.num_rows() == 0 || result.is_null(0, 0)) {
+            if (PQntuples(result.get()) == 0 || PQgetisnull(result.get(), 0, 0)) {
                 return std::nullopt;
             }
             
-            return result.get_value(0, 0);
+            return PQgetvalue(result.get(), 0, 0);
         } else {
             // Q15: Global query
             std::string sql = R"(
@@ -844,13 +869,14 @@ std::optional<std::string> StreamManager::get_first_message_time(
                 WHERE ss.stream_id = $1::UUID
             )";
             
-            auto result = QueryResult(conn->exec_params(sql, {stream_id}));
+            sendQueryParamsAsync(conn, sql, {stream_id});
+            auto result = getTuplesResult(conn);
             
-            if (!result.is_success() || result.num_rows() == 0 || result.is_null(0, 0)) {
+            if (PQntuples(result.get()) == 0 || PQgetisnull(result.get(), 0, 0)) {
                 return std::nullopt;
             }
             
-            return result.get_value(0, 0);
+            return PQgetvalue(result.get(), 0, 0);
         }
         
     } catch (const std::exception& e) {
@@ -992,11 +1018,11 @@ bool StreamManager::check_and_deliver_window_for_poll(
         return false;
     }
     
-    ScopedConnection conn(db_pool_.get());
+    auto conn = db_pool_->acquire();
     
     try {
         // Get stream
-        auto stream_opt = get_stream(conn.operator->(), stream_name);
+        auto stream_opt = get_stream(conn.get(), stream_name);
         if (!stream_opt.has_value()) {
             // Stream not found - this shouldn't happen, but send error to first intention
             spdlog::error("Stream not found in poll worker: stream={}", stream_name);
@@ -1004,8 +1030,8 @@ bool StreamManager::check_and_deliver_window_for_poll(
         }
         
         auto stream = stream_opt.value();
-        std::string watermark_str = get_watermark(conn.operator->(), stream.id);
-        auto partitions = get_partitions_and_offsets(conn.operator->(), stream.id, consumer_group, stream.partitioned);
+        std::string watermark_str = get_watermark(conn.get(), stream.id);
+        auto partitions = get_partitions_and_offsets(conn.get(), stream.id, consumer_group, stream.partitioned);
         
         // Try to find a ready window (same logic as handle_poll immediate check)
         for (const auto& partition : partitions) {
@@ -1016,7 +1042,7 @@ bool StreamManager::check_and_deliver_window_for_poll(
             std::string window_start_str;
             
             if (last_end_str == "-infinity") {
-                auto first_time_opt = get_first_message_time(conn.operator->(), stream.id, stream_key, stream.partitioned);
+                auto first_time_opt = get_first_message_time(conn.get(), stream.id, stream_key, stream.partitioned);
                 if (!first_time_opt.has_value()) {
                     continue; // No messages yet for this partition
                 }
@@ -1045,19 +1071,20 @@ bool StreamManager::check_and_deliver_window_for_poll(
                   AND window_start = $4::TIMESTAMPTZ
                   AND lease_expires_at < NOW()
             )";
-            QueryResult(conn->exec_params(cleanup_sql, {stream.id, consumer_group, stream_key, window_start_str}));
+            sendQueryParamsAsync(conn.get(), cleanup_sql, {stream.id, consumer_group, stream_key, window_start_str});
+            getCommandResult(conn.get());
             
             // Check if there's a valid (non-expired) lease
-            if (check_lease_exists(conn.operator->(), stream.id, consumer_group, stream_key, window_start_str)) {
+            if (check_lease_exists(conn.get(), stream.id, consumer_group, stream_key, window_start_str)) {
                 continue; // Window already leased
             }
             
             // Found a ready window! Try to create lease and deliver to FIRST intention
             try {
-                std::string lease_id = create_lease(conn.operator->(), stream.id, consumer_group, stream_key,
+                std::string lease_id = create_lease(conn.get(), stream.id, consumer_group, stream_key,
                                                     window_start_str, window_end_str, stream.window_lease_timeout_ms);
                 
-                auto messages = get_messages(conn.operator->(), stream.id, stream_key, stream.partitioned, 
+                auto messages = get_messages(conn.get(), stream.id, stream_key, stream.partitioned, 
                                              window_start_str, window_end_str);
                 
                 nlohmann::json window_json = {

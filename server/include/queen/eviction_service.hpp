@@ -1,6 +1,6 @@
 #pragma once
 
-#include "queen/database.hpp"
+#include "queen/async_database.hpp"
 #include "threadpool.hpp"
 #include <spdlog/spdlog.h>
 #include <atomic>
@@ -18,7 +18,7 @@ namespace queen {
  */
 class EvictionService {
 private:
-    std::shared_ptr<DatabasePool> db_pool_;
+    std::shared_ptr<AsyncDbPool> db_pool_;
     std::shared_ptr<astp::ThreadPool> db_thread_pool_;
     std::shared_ptr<astp::ThreadPool> system_thread_pool_;
     
@@ -30,7 +30,7 @@ private:
     
 public:
     EvictionService(
-        std::shared_ptr<DatabasePool> db_pool,
+        std::shared_ptr<AsyncDbPool> db_pool,
         std::shared_ptr<astp::ThreadPool> db_thread_pool,
         std::shared_ptr<astp::ThreadPool> system_thread_pool,
         int eviction_interval_ms,

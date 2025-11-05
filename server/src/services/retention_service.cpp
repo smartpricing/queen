@@ -3,7 +3,7 @@
 namespace queen {
 
 RetentionService::RetentionService(
-    std::shared_ptr<DatabasePool> db_pool,
+    std::shared_ptr<AsyncDbPool> db_pool,
     std::shared_ptr<astp::ThreadPool> db_thread_pool,
     std::shared_ptr<astp::ThreadPool> system_thread_pool,
     int retention_interval_ms,
@@ -91,7 +91,7 @@ void RetentionService::cleanup_cycle() {
 
 int RetentionService::cleanup_expired_messages() {
     try {
-        ScopedConnection conn(db_pool_.get());
+        auto conn = db_pool_->acquire();
         
         // Delete messages older than retention_seconds (for queues with retention enabled)
         std::string sql = R"(
@@ -108,14 +108,11 @@ int RetentionService::cleanup_expired_messages() {
             )
         )";
         
-        auto result = QueryResult(conn->exec_params(sql, {
-            std::to_string(retention_batch_size_)
-        }));
+        sendQueryParamsAsync(conn.get(), sql, {std::to_string(retention_batch_size_)});
+        auto result = getCommandResultPtr(conn.get());
         
-        if (result.is_success()) {
-            std::string affected = result.affected_rows();
-            return affected.empty() ? 0 : std::stoi(affected);
-        }
+        char* affected_str = PQcmdTuples(result.get());
+        return (affected_str && *affected_str) ? std::stoi(affected_str) : 0;
         
     } catch (const std::exception& e) {
         spdlog::error("cleanup_expired_messages error: {}", e.what());
@@ -126,7 +123,7 @@ int RetentionService::cleanup_expired_messages() {
 
 int RetentionService::cleanup_completed_messages() {
     try {
-        ScopedConnection conn(db_pool_.get());
+        auto conn = db_pool_->acquire();
         
         // Delete completed messages older than completed_retention_seconds
         // Only delete messages that have been consumed (id <= last_consumed_id)
@@ -148,30 +145,29 @@ int RetentionService::cleanup_completed_messages() {
             RETURNING (SELECT partition_id FROM messages_to_delete LIMIT 1) as partition_id
         )";
         
-        auto result = QueryResult(conn->exec_params(sql, {
-            std::to_string(retention_batch_size_)
-        }));
+        sendQueryParamsAsync(conn.get(), sql, {std::to_string(retention_batch_size_)});
+        auto result = getTuplesResult(conn.get());
         
-        if (result.is_success()) {
-            std::string affected = result.affected_rows();
-            int deleted = affected.empty() ? 0 : std::stoi(affected);
+        // Get affected rows count
+        char* affected_str = PQcmdTuples(result.get());
+        int deleted = (affected_str && *affected_str) ? std::stoi(affected_str) : 0;
             
             // Record in retention_history if messages were deleted
-            if (deleted > 0 && result.num_rows() > 0) {
+        if (deleted > 0 && PQntuples(result.get()) > 0) {
                 try {
-                    std::string partition_id = result.get_value(0, "partition_id");
+                std::string partition_id = PQgetvalue(result.get(), 0, PQfnumber(result.get(), "partition_id"));
                     std::string insert_history = R"(
                         INSERT INTO retention_history (partition_id, messages_deleted, retention_type)
                         VALUES ($1::uuid, $2, 'completed_retention')
                     )";
-                    conn->exec_params(insert_history, {partition_id, std::to_string(deleted)});
+                sendQueryParamsAsync(conn.get(), insert_history, {partition_id, std::to_string(deleted)});
+                getCommandResult(conn.get());
                 } catch (const std::exception& e) {
                     spdlog::warn("Failed to record retention_history: {}", e.what());
                 }
             }
             
             return deleted;
-        }
         
     } catch (const std::exception& e) {
         spdlog::error("cleanup_completed_messages error: {}", e.what());
@@ -182,7 +178,7 @@ int RetentionService::cleanup_completed_messages() {
 
 int RetentionService::cleanup_inactive_partitions() {
     try {
-        ScopedConnection conn(db_pool_.get());
+        auto conn = db_pool_->acquire();
         
         // Delete partitions that:
         // 1. Have no activity for partition_cleanup_days
@@ -193,14 +189,11 @@ int RetentionService::cleanup_inactive_partitions() {
               AND id NOT IN (SELECT DISTINCT partition_id FROM messages WHERE partition_id IS NOT NULL)
         )";
         
-        auto result = QueryResult(conn->exec_params(sql, {
-            std::to_string(partition_cleanup_days_)
-        }));
+        sendQueryParamsAsync(conn.get(), sql, {std::to_string(partition_cleanup_days_)});
+        auto result = getCommandResultPtr(conn.get());
         
-        if (result.is_success()) {
-            std::string affected = result.affected_rows();
-            return affected.empty() ? 0 : std::stoi(affected);
-        }
+        char* affected_str = PQcmdTuples(result.get());
+        return (affected_str && *affected_str) ? std::stoi(affected_str) : 0;
         
     } catch (const std::exception& e) {
         spdlog::error("cleanup_inactive_partitions error: {}", e.what());
@@ -211,7 +204,7 @@ int RetentionService::cleanup_inactive_partitions() {
 
 int RetentionService::cleanup_old_metrics() {
     try {
-        ScopedConnection conn(db_pool_.get());
+        auto conn = db_pool_->acquire();
         
         int total_deleted = 0;
         
@@ -221,14 +214,10 @@ int RetentionService::cleanup_old_metrics() {
             WHERE acked_at < NOW() - ($1 || ' days')::INTERVAL
         )";
         
-        auto result1 = QueryResult(conn->exec_params(sql1, {
-            std::to_string(metrics_retention_days_)
-        }));
-        
-        if (result1.is_success()) {
-            std::string affected = result1.affected_rows();
-            total_deleted += affected.empty() ? 0 : std::stoi(affected);
-        }
+        sendQueryParamsAsync(conn.get(), sql1, {std::to_string(metrics_retention_days_)});
+        auto result1 = getCommandResultPtr(conn.get());
+        char* affected1_str = PQcmdTuples(result1.get());
+        total_deleted += (affected1_str && *affected1_str) ? std::stoi(affected1_str) : 0;
         
         // Clean system_metrics
         std::string sql2 = R"(
@@ -236,14 +225,10 @@ int RetentionService::cleanup_old_metrics() {
             WHERE timestamp < NOW() - ($1 || ' days')::INTERVAL
         )";
         
-        auto result2 = QueryResult(conn->exec_params(sql2, {
-            std::to_string(metrics_retention_days_)
-        }));
-        
-        if (result2.is_success()) {
-            std::string affected = result2.affected_rows();
-            total_deleted += affected.empty() ? 0 : std::stoi(affected);
-        }
+        sendQueryParamsAsync(conn.get(), sql2, {std::to_string(metrics_retention_days_)});
+        auto result2 = getCommandResultPtr(conn.get());
+        char* affected2_str = PQcmdTuples(result2.get());
+        total_deleted += (affected2_str && *affected2_str) ? std::stoi(affected2_str) : 0;
         
         // Clean retention_history itself (older than metrics_retention_days)
         std::string sql3 = R"(
@@ -251,14 +236,10 @@ int RetentionService::cleanup_old_metrics() {
             WHERE executed_at < NOW() - ($1 || ' days')::INTERVAL
         )";
         
-        auto result3 = QueryResult(conn->exec_params(sql3, {
-            std::to_string(metrics_retention_days_)
-        }));
-        
-        if (result3.is_success()) {
-            std::string affected = result3.affected_rows();
-            total_deleted += affected.empty() ? 0 : std::stoi(affected);
-        }
+        sendQueryParamsAsync(conn.get(), sql3, {std::to_string(metrics_retention_days_)});
+        auto result3 = getCommandResultPtr(conn.get());
+        char* affected3_str = PQcmdTuples(result3.get());
+        total_deleted += (affected3_str && *affected3_str) ? std::stoi(affected3_str) : 0;
         
         return total_deleted;
         

@@ -70,12 +70,33 @@ PGConnPtr asyncConnect(const char* conn_str,
 void sendAndWait(PGconn* conn, const char* query);
 
 /**
+ * @brief Sends a parameterized query asynchronously and waits for completion.
+ * 
+ * Uses PQsendQueryParams + socket polling to avoid blocking the thread.
+ * 
+ * @param conn Non-blocking PostgreSQL connection
+ * @param sql SQL query string with $1, $2, etc. placeholders
+ * @param params Vector of parameter values
+ * @throws std::runtime_error if query send or processing fails
+ */
+void sendQueryParamsAsync(PGconn* conn, const std::string& sql, const std::vector<std::string>& params);
+
+/**
  * @brief Retrieves and validates a command result (COMMAND_OK).
  * 
  * @param conn PostgreSQL connection
  * @throws std::runtime_error if result is invalid or not COMMAND_OK
  */
 void getCommandResult(PGconn* conn);
+
+/**
+ * @brief Retrieves and returns a command result for getting affected rows.
+ * 
+ * @param conn PostgreSQL connection
+ * @return PGResultPtr Smart pointer to result (for getting PQcmdTuples)
+ * @throws std::runtime_error if result is invalid or not COMMAND_OK
+ */
+PGResultPtr getCommandResultPtr(PGconn* conn);
 
 /**
  * @brief Retrieves and validates a tuple result (TUPLES_OK).
