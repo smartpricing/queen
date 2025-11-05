@@ -2,14 +2,88 @@
 
 Complete guide for building, configuring, and tuning the Queen C++ message queue server.
 
+## Overview
+
+Queen uses a high-performance **asynchronous, non-blocking PostgreSQL architecture** built on:
+- **uWebSockets** for event-driven HTTP/WebSocket handling
+- **libpq async API** for non-blocking database operations
+- **Event-loop concurrency** for scalable request processing
+
+**Key Features:**
+- ✅ Non-blocking I/O throughout the stack
+- ✅ Low latency (10-50ms for most operations)
+- ✅ High throughput (130K+ msg/s sustained)
+- ✅ Efficient resource utilization (14 total threads)
+- ✅ Horizontal scalability
+
+---
+
 ## Table of Contents
 
+- [Overview](#overview)
 - [Building the Server](#building-the-server)
+- [Architecture](#architecture)
 - [Performance Tuning](#performance-tuning)
 - [Database Configuration](#database-configuration)
 - [PostgreSQL Failover](#postgresql-failover)
 - [Queue Optimization](#queue-optimization)
 - [Monitoring & Debugging](#monitoring--debugging)
+
+---
+
+## Architecture
+
+### Core Components
+
+**Network Layer:**
+- **Acceptor**: Single thread listening on port 6632, round-robin distribution
+- **Workers**: Configurable event loop threads (default: 10, configurable via `NUM_WORKERS`)
+- **WebSocket Support**: Real-time streaming capabilities
+
+**Database Layer:**
+- **AsyncDbPool** (142 connections):
+  - Non-blocking PostgreSQL connections using libpq async API
+  - Socket-based I/O with `select()` for efficient waiting
+  - RAII-based resource management
+  - Connection health monitoring with automatic reset
+  - Thread-safe operation with mutex/condition variables
+  
+- **AsyncQueueManager**:
+  - Event-loop-based queue operations
+  - Direct execution in worker threads (no thread pool overhead)
+  - Operations: PUSH, POP, ACK, TRANSACTION
+  - Batch processing with dynamic sizing
+  - Automatic failover to file buffer
+
+**Background Services:**
+- **Poll Workers** (4 threads):
+  - Handle long-polling operations (`wait=true`)
+  - Non-blocking I/O with exponential backoff (100ms→2000ms)
+  - Intention registry for efficient request grouping
+  
+- **Background Pool** (8 connections):
+  - Metrics collection
+  - Message retention and cleanup
+  - Eviction service
+  - Stream management
+
+### Request Flow
+
+```
+Client → Acceptor → Worker Thread
+                       ↓
+                   AsyncQueueManager
+                       ↓
+                   AsyncDbPool (non-blocking)
+                       ↓
+                   PostgreSQL
+```
+
+**Key Characteristics:**
+- ✅ No blocking on database I/O
+- ✅ No thread pool overhead for hot paths
+- ✅ Direct response to client after async operation
+- ✅ Scalable with worker count
 
 ---
 
@@ -102,21 +176,39 @@ CXXFLAGS="-std=c++17 -g -O0" make
 
 ## Performance Tuning
 
+### Database Pool Configuration
+
+**The server uses a split-pool approach:**
+
+```bash
+# Total pool budget
+DB_POOL_SIZE=150
+
+# Automatic split (configured in code):
+# - AsyncDbPool: 142 connections (95% of total) - for PUSH/POP/ACK/TRANSACTION
+# - Background Pool: 8 connections (5% of total) - for metrics, retention, eviction
+```
+
+**Hot-path operations** (PUSH/POP/ACK/TRANSACTION) use **AsyncDbPool** with non-blocking I/O.
+
+**Background services** use a small synchronous pool for non-critical operations.
+
 ### Critical: Database Pool Size
 
 **The most important tuning parameter.**
 
-**Rule:** `DB_POOL_SIZE` ≥ **2.5× number of worker threads**
-
 ```bash
-# Default: 10 worker threads
-DB_POOL_SIZE=50 ./bin/queen-server          # Recommended: 50
+# Default configuration (good for most use cases)
+DB_POOL_SIZE=150 ./bin/queen-server          # 142 async + 8 background
 
-# High load: 20 workers (modify in source)
-DB_POOL_SIZE=100 ./bin/queen-server         # Minimum: 50, Recommended: 100
+# High load with many workers
+DB_POOL_SIZE=200 ./bin/queen-server          # 190 async + 10 background
+
+# Very high load
+DB_POOL_SIZE=300 ./bin/queen-server          # 285 async + 15 background
 ```
 
-**Why?** Each worker can have multiple concurrent requests. Pool exhaustion causes `mutex lock failed` errors.
+**Why?** The async pool handles many concurrent operations efficiently with non-blocking I/O. Pool exhaustion can still occur under extreme load or with misconfigured PostgreSQL `max_connections`.
 
 ### Worker Thread Configuration
 
@@ -134,34 +226,44 @@ export NUM_WORKERS=10  # Configurable via environment (default: 10, max: CPU cor
 
 **Note:** The number of workers is automatically capped at your CPU core count.
 
-### Architecture: Acceptor/Worker Pattern
+### Acceptor/Worker Pattern
 
 ```
 Client → Acceptor (listens on port 6632)
            ↓ (round-robin distribution)
-        Worker 1 (event loop + DB pool)
-        Worker 2 (event loop + DB pool)
-        Worker 3 (event loop + DB pool)
+        Worker 1 (event loop + AsyncQueueManager → AsyncDbPool)
+        Worker 2 (event loop + AsyncQueueManager → AsyncDbPool)
+        Worker 3 (event loop + AsyncQueueManager → AsyncDbPool)
         ...
-        Worker N (event loop + DB pool)
+        Worker N (event loop + AsyncQueueManager → AsyncDbPool)
+                                   ↓
+                         AsyncDbPool (142 connections)
+                              Non-blocking I/O
+                              Socket-based waiting
 ```
 
 **Benefits:**
 - ✅ True parallelism across CPU cores
-- ✅ Non-blocking async I/O in each worker
+- ✅ Non-blocking async database I/O
+- ✅ No thread pool overhead for hot-path operations
 - ✅ Cross-platform (macOS, Linux, Windows)
-- ✅ No event loop blocking
+- ✅ Event-driven concurrency (unlimited scalability)
+- ✅ Low latency (10-50ms for most operations)
 
 ### High-Throughput Configuration
 
 ```bash
-export DB_POOL_SIZE=300
-export BATCH_INSERT_SIZE=2000
-export QUEUE_POLL_INTERVAL=50
-export MAX_PARTITION_CANDIDATES=200
-export RETENTION_BATCH_SIZE=2000
-export EVICTION_BATCH_SIZE=2000
-export DEFAULT_BATCH_SIZE=100
+export DB_POOL_SIZE=300                       # 285 async + 15 background
+export NUM_WORKERS=10                         # Worker threads (default)
+export BATCH_INSERT_SIZE=2000                 # Batch insert size
+export BATCH_PUSH_TARGET_SIZE_MB=4            # Target batch size (MB)
+export BATCH_PUSH_MAX_SIZE_MB=8               # Max batch size (MB)
+export POLL_WORKER_INTERVAL=50                # Poll worker interval (ms)
+export POLL_DB_INTERVAL=100                   # DB polling interval (ms)
+export MAX_PARTITION_CANDIDATES=200           # Partition candidates
+export RETENTION_BATCH_SIZE=2000              # Retention batch size
+export EVICTION_BATCH_SIZE=2000               # Eviction batch size
+export DEFAULT_BATCH_SIZE=100                 # Default batch size
 
 ./bin/queen-server
 ```
@@ -169,7 +271,10 @@ export DEFAULT_BATCH_SIZE=100
 **Expected Performance:**
 - **Throughput**: 130,000+ msg/s sustained
 - **Peak**: 148,000+ msg/s
-- **Latency**: Sub-millisecond ACKs
+- **POP Latency**: 10-50ms
+- **ACK Latency**: 10-50ms
+- **Transaction Latency**: 50-200ms
+- **Database Threads**: 4 (poll workers only)
 
 ### Long Polling Optimization
 
@@ -803,9 +908,15 @@ See [ENV_VARIABLES.md](ENV_VARIABLES.md) for the complete list of all 100+ confi
 
 ## Further Reading
 
-- [QUICK_START.md](QUICK_START.md) - Quick start guide
-- [ENV_VARIABLES.md](ENV_VARIABLES.md) - All environment variables
+### Core Documentation
+- [ENV_VARIABLES.md](ENV_VARIABLES.md) - Complete environment variable reference
+- [API.md](API.md) - HTTP API documentation
 - [../README.md](../README.md) - Main project README
+- [../docs/STREAMING_USAGE.md](../docs/STREAMING_USAGE.md) - Streaming guide
+- [../docs/RETENTION.md](../docs/RETENTION.md) - Retention & cleanup
+
+### Technical Documentation
+- [ASYNC_DATABASE_IMPLEMENTATION.md](ASYNC_DATABASE_IMPLEMENTATION.md) - AsyncDbPool internals
 
 ---
 

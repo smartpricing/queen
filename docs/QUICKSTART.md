@@ -12,7 +12,7 @@ docker network create queen
 docker run --name postgres --network queen -e POSTGRES_PASSWORD=postgres -p 5432:5432 -d postgres
 
 # Queen server
-docker run -it -p 6633:6632 --network queen -e PG_HOST=postgres -e PG_PORT=5432 -e PG_USER=postgres -e PG_PASSWORD=postgres -e PG_DB=postgres  -e DB_POOL_SIZE=20 -e NUM_WORKERS=2 docker.io/smartnessai/queen-mq:0.4.1
+docker run -it -p 6633:6632 --network queen -e PG_HOST=postgres -e PG_PORT=5432 -e PG_USER=postgres -e PG_PASSWORD=postgres -e PG_DB=postgres  -e DB_POOL_SIZE=20 -e NUM_WORKERS=2 docker.io/smartnessai/queen-mq:0.5.0
 ```
 
 ## Run Queen client
