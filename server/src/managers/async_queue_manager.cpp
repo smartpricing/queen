@@ -2491,6 +2491,313 @@ AsyncQueueManager::BatchAckResult AsyncQueueManager::acknowledge_messages_batch(
 }
 
 // ===================================
+// TRANSACTION HELPERS - USE PROVIDED CONNECTION
+// ===================================
+
+PushResult AsyncQueueManager::push_single_message_transactional(
+    PGconn* conn,
+    const PushItem& item
+) {
+    PushResult result;
+    result.transaction_id = item.transaction_id.value_or(generate_transaction_id());
+    
+    try {
+        // Ensure queue exists
+        if (!ensure_queue_exists(conn, item.queue, "", "")) {
+            result.status = "failed";
+            result.error = "Failed to ensure queue exists";
+            return result;
+        }
+        
+        // Ensure partition exists
+        if (!ensure_partition_exists(conn, item.queue, item.partition)) {
+            result.status = "failed";
+            result.error = "Failed to create partition";
+            return result;
+        }
+        
+        // Generate message ID
+        std::string message_id = generate_uuid();
+        
+        // Check encryption
+        sendQueryParamsAsync(conn, "SELECT encryption_enabled FROM queues WHERE name = $1", {item.queue});
+        auto encryption_result = getTuplesResult(conn);
+        
+        bool encryption_enabled = false;
+        if (PQntuples(encryption_result.get()) > 0) {
+            const char* enc_str = PQgetvalue(encryption_result.get(), 0, 0);
+            encryption_enabled = (enc_str && (std::string(enc_str) == "t" || std::string(enc_str) == "true"));
+        }
+        
+        // Prepare payload
+        std::string payload_str = item.payload.dump();
+        bool is_encrypted = false;
+        
+        if (encryption_enabled) {
+            EncryptionService* enc_service = get_encryption_service();
+            if (enc_service && enc_service->is_enabled()) {
+                auto encrypted = enc_service->encrypt_payload(payload_str);
+                if (encrypted.has_value()) {
+                    nlohmann::json encrypted_json = {
+                        {"encrypted", encrypted->encrypted},
+                        {"iv", encrypted->iv},
+                        {"authTag", encrypted->auth_tag}
+                    };
+                    payload_str = encrypted_json.dump();
+                    is_encrypted = true;
+                }
+            }
+        }
+        
+        // Insert message
+        std::string sql;
+        std::vector<std::string> params;
+        
+        if (item.trace_id.has_value() && !item.trace_id->empty()) {
+            sql = R"(
+                INSERT INTO messages (
+                    id, transaction_id, partition_id, payload, trace_id, is_encrypted, created_at
+                )
+                SELECT $1, $2, p.id, $3, $4, $5, NOW()
+                FROM partitions p
+                JOIN queues q ON q.id = p.queue_id
+                WHERE q.name = $6 AND p.name = $7
+                RETURNING id, trace_id
+            )";
+            
+            params = {
+                message_id,
+                result.transaction_id,
+                payload_str,
+                item.trace_id.value(),
+                is_encrypted ? "true" : "false",
+                item.queue,
+                item.partition
+            };
+        } else {
+            sql = R"(
+                INSERT INTO messages (
+                    id, transaction_id, partition_id, payload, is_encrypted, created_at
+                )
+                SELECT $1, $2, p.id, $3, $4, NOW()
+                FROM partitions p
+                JOIN queues q ON q.id = p.queue_id
+                WHERE q.name = $5 AND p.name = $6
+                RETURNING id, trace_id
+            )";
+            
+            params = {
+                message_id,
+                result.transaction_id,
+                payload_str,
+                is_encrypted ? "true" : "false",
+                item.queue,
+                item.partition
+            };
+        }
+        
+        sendQueryParamsAsync(conn, sql, params);
+        auto query_result = getTuplesResult(conn);
+        
+        if (PQntuples(query_result.get()) > 0) {
+            result.status = "queued";
+            result.message_id = PQgetvalue(query_result.get(), 0, 0);
+            const char* trace_val = PQgetvalue(query_result.get(), 0, 1);
+            if (trace_val && strlen(trace_val) > 0) {
+                result.trace_id = trace_val;
+            }
+        } else {
+            result.status = "failed";
+            result.error = "Insert returned no result";
+        }
+        
+    } catch (const std::exception& e) {
+        result.status = "failed";
+        result.error = e.what();
+        spdlog::error("Failed to push message in transaction: {}", e.what());
+    }
+    
+    return result;
+}
+
+AsyncQueueManager::AckResult AsyncQueueManager::acknowledge_message_transactional(
+    PGconn* conn,
+    const std::string& transaction_id,
+    const std::string& status,
+    const std::optional<std::string>& error,
+    const std::string& consumer_group,
+    const std::optional<std::string>& partition_id_param
+) {
+    AckResult result;
+    result.success = false;
+    result.message = "not_found";
+    
+    try {
+        // CRITICAL: partition_id is MANDATORY
+        if (!partition_id_param.has_value() || partition_id_param->empty()) {
+            spdlog::error("partition_id is required for acknowledgment of transaction {}", transaction_id);
+            result.message = "invalid_request";
+            result.error = "partition_id is required";
+            return result;
+        }
+        
+        std::string partition_id = *partition_id_param;
+        
+        if (status == "completed") {
+            // Update cursor - simplified for transactions (no retry logic)
+            std::string sql = R"(
+                UPDATE partition_consumers 
+                SET last_consumed_id = m.id,
+                    last_consumed_created_at = m.created_at,
+                    last_consumed_at = NOW(),
+                    total_messages_consumed = total_messages_consumed + 1,
+                    acked_count = CASE 
+                        WHEN acked_count + 1 >= batch_size AND batch_size > 0 
+                        THEN 0
+                        ELSE acked_count + 1
+                    END,
+                    lease_expires_at = CASE 
+                        WHEN acked_count + 1 >= batch_size AND batch_size > 0 
+                        THEN NULL 
+                        ELSE lease_expires_at 
+                    END,
+                    lease_acquired_at = CASE 
+                        WHEN acked_count + 1 >= batch_size AND batch_size > 0 
+                        THEN NULL 
+                        ELSE lease_acquired_at 
+                    END,
+                    batch_size = CASE 
+                        WHEN acked_count + 1 >= batch_size AND batch_size > 0 
+                        THEN 0 
+                        ELSE batch_size 
+                    END,
+                    worker_id = CASE 
+                        WHEN acked_count + 1 >= batch_size AND batch_size > 0 
+                        THEN NULL 
+                        ELSE worker_id 
+                    END
+                FROM messages m
+                WHERE partition_consumers.partition_id = $1::uuid
+                  AND partition_consumers.consumer_group = $2
+                  AND m.partition_id = $1::uuid
+                  AND m.transaction_id = $3
+                RETURNING (partition_consumers.lease_expires_at IS NULL) as lease_released
+            )";
+            
+            sendQueryParamsAsync(conn, sql, {partition_id, consumer_group, transaction_id});
+            auto query_result = getTuplesResult(conn);
+            
+            if (PQntuples(query_result.get()) > 0) {
+                const char* lease_released_val = PQgetvalue(query_result.get(), 0, 0);
+                bool lease_released = (lease_released_val && (std::string(lease_released_val) == "t"));
+                
+                if (lease_released) {
+                    std::string insert_consumed_sql = R"(
+                        INSERT INTO messages_consumed (partition_id, consumer_group, messages_completed, messages_failed, acked_at)
+                        VALUES ($1, $2, 1, 0, NOW())
+                    )";
+                    sendQueryParamsAsync(conn, insert_consumed_sql, {partition_id, consumer_group});
+                    getCommandResult(conn);
+                }
+                
+                result.success = true;
+                result.message = "completed";
+            }
+            
+        } else if (status == "failed") {
+            // For transactions: Move to DLQ and advance cursor (no retry logic)
+            std::string dlq_sql = R"(
+                INSERT INTO dead_letter_queue (
+                    message_id, partition_id, consumer_group, error_message, 
+                    retry_count, original_created_at
+                )
+                SELECT m.id, m.partition_id, $1::varchar, $2::text, 0, m.created_at
+                FROM messages m
+                WHERE m.partition_id = $3::uuid
+                  AND m.transaction_id = $4
+                  AND NOT EXISTS (
+                      SELECT 1 FROM dead_letter_queue dlq
+                      WHERE dlq.message_id = m.id AND dlq.consumer_group = $1::varchar
+                  )
+            )";
+            
+            sendQueryParamsAsync(conn, dlq_sql, {
+                consumer_group,
+                error.value_or("Message processing failed"),
+                partition_id,
+                transaction_id
+            });
+            getCommandResult(conn);
+            
+            // Advance cursor
+            std::string cursor_sql = R"(
+                UPDATE partition_consumers 
+                SET last_consumed_id = m.id,
+                    last_consumed_created_at = m.created_at,
+                    last_consumed_at = NOW(),
+                    total_messages_consumed = total_messages_consumed + 1,
+                    batch_retry_count = 0,
+                    acked_count = CASE 
+                        WHEN acked_count + 1 >= batch_size AND batch_size > 0 
+                        THEN 0
+                        ELSE acked_count + 1
+                    END,
+                    lease_expires_at = CASE 
+                        WHEN acked_count + 1 >= batch_size AND batch_size > 0 
+                        THEN NULL 
+                        ELSE lease_expires_at 
+                    END,
+                    lease_acquired_at = CASE 
+                        WHEN acked_count + 1 >= batch_size AND batch_size > 0 
+                        THEN NULL 
+                        ELSE lease_acquired_at 
+                    END,
+                    batch_size = CASE 
+                        WHEN acked_count + 1 >= batch_size AND batch_size > 0 
+                        THEN 0 
+                        ELSE batch_size 
+                    END,
+                    worker_id = CASE 
+                        WHEN acked_count + 1 >= batch_size AND batch_size > 0 
+                        THEN NULL 
+                        ELSE worker_id 
+                    END
+                FROM messages m
+                WHERE partition_consumers.partition_id = $1::uuid
+                  AND partition_consumers.consumer_group = $2
+                  AND m.partition_id = $1::uuid
+                  AND m.transaction_id = $3
+                RETURNING (partition_consumers.lease_expires_at IS NULL) as lease_released
+            )";
+            
+            sendQueryParamsAsync(conn, cursor_sql, {partition_id, consumer_group, transaction_id});
+            auto cursor_result = getTuplesResult(conn);
+            
+            bool lease_released = PQntuples(cursor_result.get()) > 0 &&
+                                 std::string(PQgetvalue(cursor_result.get(), 0, 0)) == "t";
+            
+            if (lease_released) {
+                std::string insert_consumed_sql = R"(
+                    INSERT INTO messages_consumed (partition_id, consumer_group, messages_completed, messages_failed, acked_at)
+                    VALUES ($1, $2, 0, 1, NOW())
+                )";
+                sendQueryParamsAsync(conn, insert_consumed_sql, {partition_id, consumer_group});
+                getCommandResult(conn);
+            }
+            
+            result.success = true;
+            result.message = "failed_dlq";
+        }
+        
+    } catch (const std::exception& e) {
+        spdlog::error("Failed to acknowledge message in transaction: {}", e.what());
+        result.error = e.what();
+    }
+    
+    return result;
+}
+
+// ===================================
 // TRANSACTION OPERATIONS - ASYNC VERSION
 // ===================================
 
@@ -2515,7 +2822,7 @@ AsyncQueueManager::TransactionResult AsyncQueueManager::execute_transaction(
                 nlohmann::json op_result;
                 
                 if (op_type == "push") {
-                    // Push operation
+                    // Push operation - use transactional helper with shared connection
                     if (!op.contains("items") || !op["items"].is_array()) {
                         op_result["type"] = "push";
                         op_result["error"] = "items array required for push operation";
@@ -2525,7 +2832,9 @@ AsyncQueueManager::TransactionResult AsyncQueueManager::execute_transaction(
                     }
                     
                     auto items_json = op["items"];
-                    std::vector<PushItem> items;
+                    op_result["type"] = "push";
+                    op_result["count"] = items_json.size();
+                    op_result["results"] = nlohmann::json::array();
                     
                     for (const auto& item_json : items_json) {
                         PushItem item;
@@ -2540,16 +2849,9 @@ AsyncQueueManager::TransactionResult AsyncQueueManager::execute_transaction(
                             item.trace_id = item_json["traceId"].get<std::string>();
                         }
                         
-                        items.push_back(item);
-                    }
-                    
-                    auto push_results = push_messages(items);
-                    
-                    op_result["type"] = "push";
-                    op_result["count"] = push_results.size();
-                    op_result["results"] = nlohmann::json::array();
-                    
-                    for (const auto& pr : push_results) {
+                        // Use transactional helper with shared connection
+                        auto pr = push_single_message_transactional(conn.get(), item);
+                        
                         nlohmann::json push_res;
                         push_res["status"] = pr.status;
                         push_res["transactionId"] = pr.transaction_id;
@@ -2558,11 +2860,14 @@ AsyncQueueManager::TransactionResult AsyncQueueManager::execute_transaction(
                         }
                         if (pr.error.has_value()) {
                             push_res["error"] = *pr.error;
+                            txn_result.success = false;
                         }
                         op_result["results"].push_back(push_res);
                     }
                     
                 } else if (op_type == "pop") {
+                    // Pop operation - WARNING: This acquires its own connection (not truly atomic)
+                    // TODO: Create pop_with_conn version for true atomicity
                     std::string queue = op.value("queue", "");
                     std::optional<std::string> partition = (op.contains("partition") && !op["partition"].is_null()) ?
                         std::optional<std::string>(op["partition"].get<std::string>()) : std::nullopt;
@@ -2599,17 +2904,17 @@ AsyncQueueManager::TransactionResult AsyncQueueManager::execute_transaction(
                     }
                     
                 } else if (op_type == "ack") {
+                    // Ack operation - use transactional helper with shared connection
                     std::string transaction_id = op.value("transactionId", "");
                     std::string status = op.value("status", "completed");
                     std::optional<std::string> error = (op.contains("error") && !op["error"].is_null()) ?
                         std::optional<std::string>(op["error"].get<std::string>()) : std::nullopt;
                     std::string consumer_group = op.value("consumerGroup", "__QUEUE_MODE__");
-                    std::optional<std::string> lease_id = (op.contains("leaseId") && !op["leaseId"].is_null()) ?
-                        std::optional<std::string>(op["leaseId"].get<std::string>()) : std::nullopt;
                     std::optional<std::string> partition_id = (op.contains("partitionId") && !op["partitionId"].is_null()) ?
                         std::optional<std::string>(op["partitionId"].get<std::string>()) : std::nullopt;
                     
-                    auto ack_result = acknowledge_message(transaction_id, status, error, consumer_group, lease_id, partition_id);
+                    // Use transactional helper with shared connection
+                    auto ack_result = acknowledge_message_transactional(conn.get(), transaction_id, status, error, consumer_group, partition_id);
                     
                     op_result["type"] = "ack";
                     op_result["success"] = ack_result.success;
@@ -2630,12 +2935,21 @@ AsyncQueueManager::TransactionResult AsyncQueueManager::execute_transaction(
                 txn_result.results.push_back(op_result);
             }
             
-            // Commit transaction
-            sendAndWait(conn.get(), "COMMIT");
-            getCommandResult(conn.get());
+            // Check if transaction should commit or rollback
+            if (txn_result.success) {
+                // All operations succeeded - commit
+                sendAndWait(conn.get(), "COMMIT");
+                getCommandResult(conn.get());
+                spdlog::debug("Transaction committed successfully");
+            } else {
+                // At least one operation failed - rollback
+                sendAndWait(conn.get(), "ROLLBACK");
+                getCommandResult(conn.get());
+                spdlog::warn("Transaction rolled back due to operation failure");
+            }
             
         } catch (const std::exception& e) {
-            // Rollback on error
+            // Rollback on exception
             sendAndWait(conn.get(), "ROLLBACK");
             getCommandResult(conn.get());
             throw;

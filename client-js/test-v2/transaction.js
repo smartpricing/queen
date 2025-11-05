@@ -445,3 +445,61 @@ export async function transactionMultipleQueues(client) {
     }
 }
 
+export async function transactionRollback(client) {
+    const queueA = await client.queue('test-queue-v2-txn-rollback-a')
+    .config({
+        leaseTime: 1
+    }).create()
+    const queueB = await client.queue('test-queue-v2-txn-rollback-b').config({
+        leaseTime: 1
+    }).create()
+    if (!queueA.configured || !queueB.configured) {
+        return { success: false, message: 'Queues not created' }
+    }
+
+    // Push a test message to queue A
+    await client.queue('test-queue-v2-txn-rollback-a').push([{ data: { test: 'rollback' } }])
+
+    // Pop the message
+    const messages = await client.queue('test-queue-v2-txn-rollback-a').batch(1).wait(false).pop()
+    if (messages.length === 0) {
+        return { success: false, message: 'No message to pop' }
+    }
+
+    // Attempt a transaction that should fail and rollback
+    let transactionFailed = false
+    try {
+        await client
+            .transaction()
+            .queue('test-queue-v2-txn-rollback-b')
+            .push([{ data: { value: 1 } }])  // This PUSH should succeed...
+            .ack(messages[0])  // This ACK should succeed...
+            .ack({ transactionId: 'non-existent-id', partitionId: messages[0].partitionId })  // But this should FAIL
+            .commit()
+    } catch (error) {
+        transactionFailed = true
+    }
+
+    // Verify transaction failed
+    if (!transactionFailed) {
+        return { success: false, message: 'Transaction should have failed but did not' }
+    }
+
+    await new Promise(resolve => setTimeout(resolve, 2000))
+
+    // Verify rollback: queue B should be EMPTY (PUSH was rolled back)
+    const resultB = await client.queue('test-queue-v2-txn-rollback-b').batch(10).wait(false).pop()
+    
+    // Verify rollback: queue A should still have the message (ACK was rolled back)
+    const resultA = await client.queue('test-queue-v2-txn-rollback-a').batch(10).wait(false).pop()
+
+    const rollbackWorked = resultB.length === 0 && resultA.length === 1
+
+    return { 
+        success: rollbackWorked,
+        message: rollbackWorked 
+            ? 'Transaction rollback verified: PUSH and ACK were both rolled back' 
+            : `Rollback failed: Queue A has ${resultA.length} messages (expected 1), Queue B has ${resultB.length} messages (expected 0)`
+    }
+}
+

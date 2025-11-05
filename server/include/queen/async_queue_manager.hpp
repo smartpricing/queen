@@ -102,6 +102,12 @@ private:
         const std::string& consumer_group
     );
     
+    // Transaction helpers - use provided connection for atomicity
+    PushResult push_single_message_transactional(
+        PGconn* conn,
+        const PushItem& item
+    );
+    
     // Helper for sending queries and getting results asynchronously
     void send_query_async(PGconn* conn, const std::string& sql, const std::vector<std::string>& params);
     PGResultPtr get_query_result_async(PGconn* conn);
@@ -155,6 +161,19 @@ public:
         const std::optional<std::string>& lease_id,
         const std::optional<std::string>& partition_id
     );
+    
+private:
+    // Transactional version - uses provided connection (no retry logic)
+    AckResult acknowledge_message_transactional(
+        PGconn* conn,
+        const std::string& transaction_id,
+        const std::string& status,
+        const std::optional<std::string>& error,
+        const std::string& consumer_group,
+        const std::optional<std::string>& partition_id
+    );
+    
+public:
     
     struct BatchAckResult {
         int successful_acks;
