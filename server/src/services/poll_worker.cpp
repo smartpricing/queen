@@ -297,10 +297,10 @@ void poll_worker_loop(
                                     } else {
                                         // Any partition in queue
                                         result = async_queue_manager->pop_messages_from_queue(
-                                            batch_copy[0].queue_name.value(),
-                                            batch_copy[0].consumer_group,
+                                        batch_copy[0].queue_name.value(),
+                                        batch_copy[0].consumer_group,
                                             opts
-                                        );
+                                    );
                                     }
                                 } else {
                                     // Namespace/task-based pop

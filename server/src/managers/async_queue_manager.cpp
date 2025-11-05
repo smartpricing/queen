@@ -520,7 +520,110 @@ std::vector<PushResult> AsyncQueueManager::push_messages(const std::vector<PushI
     
     std::vector<PushResult> all_results(items.size());
     
-    // TODO: Batch capacity check could be added here (similar to regular QueueManager)
+    // Batch capacity check - check ALL queues in ONE query
+    try {
+        // Build map of queue -> total batch size across all partitions
+        std::map<std::string, int> queue_batch_sizes;
+        for (const auto& [partition_key, item_indices] : partition_groups_ordered) {
+            size_t colon_pos = partition_key.find(':');
+            std::string queue_name = partition_key.substr(0, colon_pos);
+            queue_batch_sizes[queue_name] += item_indices.size();
+        }
+        
+        // Check capacity for all queues with max_queue_size set
+        if (!queue_batch_sizes.empty()) {
+            std::vector<std::string> queues_to_check;
+            for (const auto& [queue_name, _] : queue_batch_sizes) {
+                queues_to_check.push_back(queue_name);
+            }
+            
+            // Build PostgreSQL array
+            auto build_pg_array = [](const std::vector<std::string>& vec) -> std::string {
+                std::string result = "{";
+                for (size_t i = 0; i < vec.size(); ++i) {
+                    if (i > 0) result += ",";
+                    result += "\"";
+                    for (char c : vec[i]) {
+                        if (c == '\\' || c == '"') result += '\\';
+                        result += c;
+                    }
+                    result += "\"";
+                }
+                result += "}";
+                return result;
+            };
+            
+            std::string queues_array = build_pg_array(queues_to_check);
+            
+            auto capacity_conn = async_db_pool_->acquire();
+            std::string capacity_check_sql = R"(
+                SELECT 
+                  q.name,
+                  q.max_queue_size,
+                  (
+                    SELECT COUNT(m.id)::integer
+                    FROM messages m
+                    JOIN partitions p ON p.id = m.partition_id
+                    LEFT JOIN partition_consumers pc ON pc.partition_id = p.id
+                      AND pc.consumer_group = '__QUEUE_MODE__'
+                    WHERE p.queue_id = q.id
+                      AND (pc.last_consumed_created_at IS NULL 
+                           OR m.created_at > pc.last_consumed_created_at
+                           OR (m.created_at = pc.last_consumed_created_at AND m.id > pc.last_consumed_id))
+                  ) as current_depth
+                FROM queues q
+                WHERE q.name = ANY($1::varchar[])
+                  AND q.max_queue_size > 0
+            )";
+            
+            sendQueryParamsAsync(capacity_conn.get(), capacity_check_sql, {queues_array});
+            auto capacity_result = getTuplesResult(capacity_conn.get());
+            
+            // Check each queue's capacity
+            for (int i = 0; i < PQntuples(capacity_result.get()); ++i) {
+                std::string queue_name = PQgetvalue(capacity_result.get(), i, 0);
+                const char* max_size_str = PQgetvalue(capacity_result.get(), i, 1);
+                const char* current_depth_str = PQgetvalue(capacity_result.get(), i, 2);
+                
+                int max_size = (max_size_str && strlen(max_size_str) > 0) ? std::stoi(max_size_str) : 0;
+                int current_depth = (current_depth_str && strlen(current_depth_str) > 0) ? std::stoi(current_depth_str) : 0;
+                int batch_size = queue_batch_sizes[queue_name];
+                
+                if (current_depth + batch_size > max_size) {
+                    // Queue would exceed capacity - fail all messages for this queue
+                    std::string error_msg = "Queue '" + queue_name + "' would exceed max capacity (" +
+                                          std::to_string(max_size) + "). Current: " + 
+                                          std::to_string(current_depth) + ", Batch: " + 
+                                          std::to_string(batch_size);
+                    
+                    spdlog::warn(error_msg);
+                    
+                    // Find all items for this queue and mark them as failed
+                    for (size_t item_idx = 0; item_idx < items.size(); ++item_idx) {
+                        if (items[item_idx].queue == queue_name) {
+                            PushResult failed_result;
+                            failed_result.transaction_id = items[item_idx].transaction_id.value_or(generate_transaction_id());
+                            failed_result.status = "failed";
+                            failed_result.error = error_msg;
+                            all_results[item_idx] = failed_result;
+                        }
+                    }
+                    
+                    // Remove this queue from partition_groups_ordered
+                    partition_groups_ordered.erase(
+                        std::remove_if(partition_groups_ordered.begin(), partition_groups_ordered.end(),
+                            [&queue_name](const auto& pair) {
+                                return pair.first.substr(0, pair.first.find(':')) == queue_name;
+                            }),
+                        partition_groups_ordered.end()
+                    );
+                }
+            }
+        }
+    } catch (const std::exception& e) {
+        spdlog::error("Batch capacity check failed: {}", e.what());
+        // Continue with push - individual checks will catch issues
+    }
     
     // Process each partition group in order
     for (const auto& [partition_key, item_indices] : partition_groups_ordered) {
@@ -1807,7 +1910,71 @@ AsyncQueueManager::AckResult AsyncQueueManager::acknowledge_message(
             return result;
             
         } else if (status == "failed") {
-            // Insert into DLQ
+            // Check if this failure completes the batch and if we should retry
+            std::string batch_info_sql = R"(
+                SELECT 
+                    pc.batch_size,
+                    pc.acked_count,
+                    pc.batch_retry_count,
+                    q.retry_limit
+                FROM partition_consumers pc
+                JOIN partitions p ON p.id = pc.partition_id
+                JOIN queues q ON q.id = p.queue_id
+                WHERE pc.partition_id = $1::uuid
+                  AND pc.consumer_group = $2
+                LIMIT 1
+            )";
+            
+            sendQueryParamsAsync(conn.get(), batch_info_sql, {partition_id, consumer_group});
+            auto batch_info = getTuplesResult(conn.get());
+            
+            int batch_size = 0;
+            int acked_count = 0;
+            int batch_retry_count = 0;
+            int retry_limit = 3;
+            
+            if (PQntuples(batch_info.get()) > 0) {
+                const char* bs = PQgetvalue(batch_info.get(), 0, 0);
+                const char* ac = PQgetvalue(batch_info.get(), 0, 1);
+                const char* brc = PQgetvalue(batch_info.get(), 0, 2);
+                const char* rl = PQgetvalue(batch_info.get(), 0, 3);
+                
+                batch_size = (bs && strlen(bs) > 0) ? std::stoi(bs) : 0;
+                acked_count = (ac && strlen(ac) > 0) ? std::stoi(ac) : 0;
+                batch_retry_count = (brc && strlen(brc) > 0) ? std::stoi(brc) : 0;
+                retry_limit = (rl && strlen(rl) > 0) ? std::stoi(rl) : 3;
+            }
+            
+            // Check if this is the last message in batch being ACKed
+            bool is_last_in_batch = (batch_size > 0) && (acked_count + 1 >= batch_size);
+            
+            if (is_last_in_batch && batch_retry_count < retry_limit) {
+                // This is a batch failure and we haven't exceeded retry limit
+                // Increment retry counter, release lease, DON'T advance cursor (retry!)
+                spdlog::info("Single message failure completing batch - retry {}/{}", batch_retry_count + 1, retry_limit);
+                
+                std::string retry_sql = R"(
+                    UPDATE partition_consumers
+                    SET lease_expires_at = NULL,
+                        lease_acquired_at = NULL,
+                        message_batch = NULL,
+                        batch_size = 0,
+                        acked_count = 0,
+                        worker_id = NULL,
+                        batch_retry_count = COALESCE(batch_retry_count, 0) + 1
+                    WHERE partition_id = $1::uuid
+                      AND consumer_group = $2
+                )";
+                
+                sendQueryParamsAsync(conn.get(), retry_sql, {partition_id, consumer_group});
+                getCommandResult(conn.get());
+                
+                result.success = true;
+                result.message = "failed_retry";
+                return result;
+            }
+            
+            // Either not last in batch, or retry limit exceeded - move to DLQ
             std::string dlq_sql = R"(
                 INSERT INTO dead_letter_queue (
                     message_id, partition_id, consumer_group, error_message, 
@@ -1838,6 +2005,7 @@ AsyncQueueManager::AckResult AsyncQueueManager::acknowledge_message(
                     last_consumed_created_at = m.created_at,
                     last_consumed_at = NOW(),
                     total_messages_consumed = total_messages_consumed + 1,
+                    batch_retry_count = 0,
                     acked_count = CASE 
                         WHEN acked_count + 1 >= batch_size AND batch_size > 0 
                         THEN 0
@@ -1868,10 +2036,24 @@ AsyncQueueManager::AckResult AsyncQueueManager::acknowledge_message(
                   AND partition_consumers.consumer_group = $2
                   AND m.partition_id = $1::uuid
                   AND m.transaction_id = $3
+                RETURNING (partition_consumers.lease_expires_at IS NULL) as lease_released
             )";
             
             sendQueryParamsAsync(conn.get(), cursor_sql, {partition_id, consumer_group, transaction_id});
-            getCommandResult(conn.get());
+            auto cursor_result = getTuplesResult(conn.get());
+            
+            bool lease_released = PQntuples(cursor_result.get()) > 0 &&
+                                 std::string(PQgetvalue(cursor_result.get(), 0, 0)) == "t";
+            
+            if (lease_released) {
+                // Insert analytics for failed message
+                std::string insert_consumed_sql = R"(
+                    INSERT INTO messages_consumed (partition_id, consumer_group, messages_completed, messages_failed, acked_at)
+                    VALUES ($1, $2, 0, 1, NOW())
+                )";
+                sendQueryParamsAsync(conn.get(), insert_consumed_sql, {partition_id, consumer_group});
+                getCommandResult(conn.get());
+            }
             
             spdlog::warn("Message failed and moved to DLQ: {} - {}", transaction_id, error.value_or("No error message"));
             result.success = true;
@@ -1959,6 +2141,183 @@ AsyncQueueManager::BatchAckResult AsyncQueueManager::acknowledge_messages_batch(
             }
             
             std::string partition_id = acknowledgments[0]["partitionId"].get<std::string>();
+            
+            // Get batch size for the partition
+            std::string batch_size_sql = R"(
+                SELECT pc.batch_size
+                FROM partition_consumers pc
+                WHERE pc.partition_id = $1::uuid
+                  AND pc.consumer_group = $2
+                LIMIT 1
+            )";
+            
+            sendQueryParamsAsync(conn.get(), batch_size_sql, {partition_id, consumer_group});
+            auto batch_size_result = getTuplesResult(conn.get());
+            
+            if (PQntuples(batch_size_result.get()) == 0) {
+                throw std::runtime_error("Cannot find batch size for partition");
+            }
+            
+            const char* batch_size_str = PQgetvalue(batch_size_result.get(), 0, 0);
+            int leased_batch_size = (batch_size_str && strlen(batch_size_str) > 0) ? std::stoi(batch_size_str) : 0;
+            
+            // Check if this is a total batch failure
+            bool is_total_batch_failure = (failed_count == total_messages) && (total_messages == leased_batch_size);
+            
+            if (is_total_batch_failure) {
+                // Get retry info
+                std::string retry_info_sql = R"(
+                    SELECT 
+                        q.retry_limit,
+                        pc.batch_retry_count
+                    FROM messages m
+                    JOIN partitions p ON p.id = m.partition_id
+                    JOIN queues q ON q.id = p.queue_id
+                    JOIN partition_consumers pc ON pc.partition_id = m.partition_id 
+                      AND pc.consumer_group = $2
+                    WHERE m.partition_id = $3::uuid
+                      AND m.transaction_id = ANY($1::varchar[])
+                    LIMIT 1
+                )";
+                
+                sendQueryParamsAsync(conn.get(), retry_info_sql, {txn_array, consumer_group, partition_id});
+                auto retry_info = getTuplesResult(conn.get());
+                
+                if (PQntuples(retry_info.get()) == 0) {
+                    throw std::runtime_error("Cannot find queue retry limit");
+                }
+                
+                const char* retry_limit_str = PQgetvalue(retry_info.get(), 0, 0);
+                const char* batch_retry_str = PQgetvalue(retry_info.get(), 0, 1);
+                
+                int retry_limit = (retry_limit_str && strlen(retry_limit_str) > 0) ? std::stoi(retry_limit_str) : 3;
+                int current_retry_count = (batch_retry_str && strlen(batch_retry_str) > 0) ? std::stoi(batch_retry_str) : 0;
+                
+                if (current_retry_count >= retry_limit) {
+                    // Retry limit exceeded - move to DLQ and advance cursor
+                    spdlog::warn("Batch retry limit exceeded ({}/{}), moving to DLQ", current_retry_count, retry_limit);
+                    
+                    std::vector<std::string> failed_errors;
+                    for (const auto& ack : failed) {
+                        std::string error_msg = "Batch retry limit exceeded";
+                        if (ack.contains("error") && !ack["error"].is_null()) {
+                            error_msg = ack["error"].get<std::string>();
+                        }
+                        failed_errors.push_back(error_msg);
+                    }
+                    
+                    std::string error_array = build_pg_array(failed_errors);
+                    
+                    std::string dlq_sql = R"(
+                        INSERT INTO dead_letter_queue (message_id, partition_id, consumer_group, error_message, original_created_at)
+                        SELECT 
+                            m.id,
+                            m.partition_id,
+                            $2,
+                            e.error_message,
+                            m.created_at
+                        FROM messages m
+                        CROSS JOIN LATERAL UNNEST($1::varchar[], $4::text[]) AS e(txn_id, error_message)
+                        WHERE m.partition_id = $3::uuid
+                          AND m.transaction_id = e.txn_id
+                        ON CONFLICT DO NOTHING
+                    )";
+                    
+                    sendQueryParamsAsync(conn.get(), dlq_sql, {txn_array, consumer_group, partition_id, error_array});
+                    getCommandResult(conn.get());
+                    
+                    // Get last message for cursor
+                    std::string last_msg_sql = R"(
+                        SELECT id, created_at
+                        FROM messages m
+                        WHERE m.partition_id = $1::uuid
+                          AND m.transaction_id = ANY($2::varchar[])
+                        ORDER BY m.created_at DESC, m.id DESC
+                        LIMIT 1
+                    )";
+                    
+                    sendQueryParamsAsync(conn.get(), last_msg_sql, {partition_id, txn_array});
+                    auto last_msg = getTuplesResult(conn.get());
+                    
+                    std::string last_id = PQgetvalue(last_msg.get(), 0, 0);
+                    std::string last_created = PQgetvalue(last_msg.get(), 0, 1);
+                    
+                    // Advance cursor and reset retry count
+                    std::string cursor_sql = R"(
+                        UPDATE partition_consumers
+                        SET 
+                            last_consumed_created_at = $1,
+                            last_consumed_id = $2,
+                            total_messages_consumed = total_messages_consumed + $3,
+                            total_batches_consumed = total_batches_consumed + 1,
+                            last_consumed_at = NOW(),
+                            batch_retry_count = 0,
+                            pending_estimate = GREATEST(0, pending_estimate - $3),
+                            last_stats_update = NOW(),
+                            lease_expires_at = NULL,
+                            lease_acquired_at = NULL,
+                            message_batch = NULL,
+                            batch_size = 0,
+                            acked_count = 0,
+                            worker_id = NULL
+                        WHERE partition_id = $4 AND consumer_group = $5
+                    )";
+                    
+                    sendQueryParamsAsync(conn.get(), cursor_sql, {last_created, last_id, std::to_string(total_messages), partition_id, consumer_group});
+                    getCommandResult(conn.get());
+                    
+                    // Insert analytics
+                    std::string insert_consumed_sql = R"(
+                        INSERT INTO messages_consumed (partition_id, consumer_group, messages_completed, messages_failed, acked_at)
+                        VALUES ($1, $2, 0, $3, NOW())
+                    )";
+                    sendQueryParamsAsync(conn.get(), insert_consumed_sql, {partition_id, consumer_group, std::to_string(failed_count)});
+                    getCommandResult(conn.get());
+                    
+                    for (const auto& ack : failed) {
+                        AckResult result;
+                        result.success = true;
+                        result.message = "failed_dlq";
+                        batch_result.results.push_back(result);
+                        batch_result.successful_acks++;
+                    }
+                    
+                } else {
+                    // Batch retry - increment counter, release lease, DON'T advance cursor
+                    spdlog::info("Total batch failure - retry {}/{}", current_retry_count + 1, retry_limit);
+                    
+                    std::string retry_sql = R"(
+                        UPDATE partition_consumers pc
+                        SET lease_expires_at = NULL,
+                            lease_acquired_at = NULL,
+                            message_batch = NULL,
+                            batch_size = 0,
+                            acked_count = 0,
+                            worker_id = NULL,
+                            batch_retry_count = COALESCE(batch_retry_count, 0) + 1
+                        WHERE pc.partition_id = $1 AND pc.consumer_group = $2
+                    )";
+                    
+                    sendQueryParamsAsync(conn.get(), retry_sql, {partition_id, consumer_group});
+                    getCommandResult(conn.get());
+                    
+                    for (const auto& ack : failed) {
+                        AckResult result;
+                        result.success = true;
+                        result.message = "failed_retry";
+                        batch_result.results.push_back(result);
+                        batch_result.successful_acks++;
+                    }
+                }
+                
+                // Commit and exit early for total batch failure
+                sendAndWait(conn.get(), "COMMIT");
+                getCommandResult(conn.get());
+                
+                return batch_result;
+            }
+            
+            // Partial success - advance cursor, DLQ individual failures
             
             // Get last message info for cursor update
             std::string batch_info_sql = R"(
@@ -2155,7 +2514,55 @@ AsyncQueueManager::TransactionResult AsyncQueueManager::execute_transaction(
                 std::string op_type = op.value("type", "");
                 nlohmann::json op_result;
                 
-                if (op_type == "pop") {
+                if (op_type == "push") {
+                    // Push operation
+                    if (!op.contains("items") || !op["items"].is_array()) {
+                        op_result["type"] = "push";
+                        op_result["error"] = "items array required for push operation";
+                        txn_result.success = false;
+                        txn_result.results.push_back(op_result);
+                        continue;
+                    }
+                    
+                    auto items_json = op["items"];
+                    std::vector<PushItem> items;
+                    
+                    for (const auto& item_json : items_json) {
+                        PushItem item;
+                        item.queue = item_json.value("queue", "");
+                        item.partition = item_json.value("partition", "Default");
+                        item.payload = item_json.contains("data") ? item_json["data"] : item_json.value("payload", nlohmann::json{});
+                        
+                        if (item_json.contains("transactionId") && !item_json["transactionId"].is_null()) {
+                            item.transaction_id = item_json["transactionId"].get<std::string>();
+                        }
+                        if (item_json.contains("traceId") && !item_json["traceId"].is_null()) {
+                            item.trace_id = item_json["traceId"].get<std::string>();
+                        }
+                        
+                        items.push_back(item);
+                    }
+                    
+                    auto push_results = push_messages(items);
+                    
+                    op_result["type"] = "push";
+                    op_result["count"] = push_results.size();
+                    op_result["results"] = nlohmann::json::array();
+                    
+                    for (const auto& pr : push_results) {
+                        nlohmann::json push_res;
+                        push_res["status"] = pr.status;
+                        push_res["transactionId"] = pr.transaction_id;
+                        if (pr.message_id.has_value()) {
+                            push_res["messageId"] = *pr.message_id;
+                        }
+                        if (pr.error.has_value()) {
+                            push_res["error"] = *pr.error;
+                        }
+                        op_result["results"].push_back(push_res);
+                    }
+                    
+                } else if (op_type == "pop") {
                     std::string queue = op.value("queue", "");
                     std::optional<std::string> partition = (op.contains("partition") && !op["partition"].is_null()) ?
                         std::optional<std::string>(op["partition"].get<std::string>()) : std::nullopt;

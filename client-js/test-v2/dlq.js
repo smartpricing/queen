@@ -25,7 +25,7 @@ export async function testDLQ(client) {
         .queue(queueName)
         .batch(1)
         .wait(false)
-        .limit(1)  // Process up to 2 messages (original + retry)
+        .limit(2)  // Process up to 2 messages (original + retry)
         .each()
         .consume(async msg => {
             // Always fail to trigger DLQ

@@ -70,8 +70,8 @@ export async function transactionMultiplePushes(client) {
 }
 
 export async function transactionMultipleAcks(client) {
-    const queueA = await client.queue('test-queue-v2-txn-multi-ack-a').create()
-    const queueB = await client.queue('test-queue-v2-txn-multi-ack-b').create()
+    const queueA = await client.queue('test-queue-v2-txn-multi-ack-a').config().create()
+    const queueB = await client.queue('test-queue-v2-txn-multi-ack-b').config().create()
     if (!queueA.configured || !queueB.configured) {
         return { success: false, message: 'Queues not created' }
     }
@@ -111,8 +111,12 @@ export async function transactionMultipleAcks(client) {
 }
 
 export async function transactionAckWithStatus(client) {
-    const queueA = await client.queue('test-queue-v2-txn-ack-status-a').create()
-    const queueB = await client.queue('test-queue-v2-txn-ack-status-b').create()
+    const queueA = await client.queue('test-queue-v2-txn-ack-status-a').config({
+        retryLimit: 0
+    }).create()
+    const queueB = await client.queue('test-queue-v2-txn-ack-status-b').config({
+        retryLimit: 0
+    }).create()
     if (!queueA.configured || !queueB.configured) {
         return { success: false, message: 'Queues not created' }
     }
