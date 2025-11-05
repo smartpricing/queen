@@ -1,5 +1,7 @@
 #include "queen/database.hpp"
+#include "queen/async_database.hpp"
 #include "queen/queue_manager.hpp"
+#include "queen/async_queue_manager.hpp"
 #include "queen/analytics_manager.hpp"
 #include "queen/config.hpp"
 #include "queen/encryption.hpp"
@@ -33,6 +35,7 @@
 static std::shared_ptr<astp::ThreadPool> global_db_thread_pool;
 static std::shared_ptr<astp::ThreadPool> global_system_thread_pool;
 static std::shared_ptr<queen::DatabasePool> global_db_pool;
+static std::shared_ptr<queen::AsyncDbPool> global_async_db_pool;  // Async DB pool for non-blocking push
 static std::vector<std::shared_ptr<queen::ResponseQueue>> worker_response_queues;  // Per-worker queues
 static std::shared_ptr<queen::ResponseRegistry> global_response_registry;
 static std::shared_ptr<queen::MetricsCollector> global_metrics_collector;
@@ -428,6 +431,7 @@ static bool serve_static_file(uWS::HttpResponse<false>* res,
 // Setup routes for a worker app
 static void setup_worker_routes(uWS::App* app, 
                                 std::shared_ptr<QueueManager> queue_manager,
+                                std::shared_ptr<queen::AsyncQueueManager> async_queue_manager,
                                 std::shared_ptr<AnalyticsManager> analytics_manager,
                                 std::shared_ptr<FileBufferManager> file_buffer,
                                 const Config& config,
@@ -610,8 +614,106 @@ static void setup_worker_routes(uWS::App* app,
     });
     
     
-    // ASYNC PUSH - NEW RESPONSE QUEUE ARCHITECTURE WITH FAILOVER
-    app->post("/api/v1/push", [queue_manager, file_buffer, worker_id, db_thread_pool](auto* res, auto* req) {
+    // ASYNC PUSH - NON-BLOCKING WITH ASYNC DB POOL (NO THREAD POOL NEEDED!)
+    app->post("/api/v1/push", [async_queue_manager, file_buffer, worker_id](auto* res, auto* req) {
+        read_json_body(res,
+            [res, async_queue_manager, file_buffer, worker_id](const nlohmann::json& body) {
+                try {
+                    if (!body.contains("items") || !body["items"].is_array()) {
+                        send_error_response(res, "items array is required", 400);
+                        return;
+                    }
+                    
+                    spdlog::debug("[Worker {}] PUSH: Processing {} items (async, non-blocking)", 
+                                 worker_id, body["items"].size());
+                    
+                    // Parse and validate items
+                    std::vector<PushItem> items;
+                    for (const auto& item_json : body["items"]) {
+                        // Validate partition type if present
+                        if (item_json.contains("partition") && !item_json["partition"].is_string()) {
+                            send_error_response(res, "Partition must be a string", 400);
+                            return;
+                        }
+                        
+                        // Validate queue type
+                        if (!item_json.contains("queue") || !item_json["queue"].is_string()) {
+                            send_error_response(res, "Queue must be a string", 400);
+                            return;
+                        }
+                        
+                        // Validate transactionId type if present
+                        if (item_json.contains("transactionId") && !item_json["transactionId"].is_string()) {
+                            send_error_response(res, "TransactionId must be a string", 400);
+                            return;
+                        }
+                        
+                        // Validate traceId type if present
+                        if (item_json.contains("traceId") && !item_json["traceId"].is_string()) {
+                            send_error_response(res, "TraceId must be a string", 400);
+                            return;
+                        }
+                        
+                        PushItem item;
+                        item.queue = item_json["queue"];
+                        item.partition = item_json.value("partition", "Default");
+                        item.payload = item_json.value("payload", nlohmann::json{});
+                        if (item_json.contains("transactionId")) {
+                            item.transaction_id = item_json["transactionId"];
+                        }
+                        if (item_json.contains("traceId")) {
+                            item.trace_id = item_json["traceId"];
+                        }
+                        items.push_back(std::move(item));
+                    }
+                    
+                    // Execute async push operation (non-blocking, polls socket internally)
+                    // This runs directly in the uWebSockets thread!
+                    auto push_start = std::chrono::steady_clock::now();
+                    auto results = async_queue_manager->push_messages(items);
+                    auto push_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+                        std::chrono::steady_clock::now() - push_start).count();
+                    
+                    spdlog::info("[Worker {}] PUSH: Async push_messages completed in {}ms ({} items)", 
+                                worker_id, push_ms, items.size());
+                    
+                    // Convert results to JSON and respond immediately
+                    nlohmann::json json_results = nlohmann::json::array();
+                    for (const auto& result : results) {
+                        nlohmann::json json_result;
+                        json_result["transaction_id"] = result.transaction_id;
+                        json_result["status"] = result.status;
+                        
+                        if (result.error) {
+                            json_result["error"] = *result.error;
+                        }
+                        if (result.message_id) {
+                            json_result["message_id"] = *result.message_id;
+                        }
+                        if (result.trace_id) {
+                            json_result["trace_id"] = *result.trace_id;
+                        }
+                        
+                        json_results.push_back(json_result);
+                    }
+                    
+                    // Send response immediately (we're in the uWebSockets thread)
+                    send_json_response(res, json_results, 201);
+                    
+                } catch (const std::exception& e) {
+                    spdlog::error("[Worker {}] PUSH: Error: {}", worker_id, e.what());
+                    send_error_response(res, e.what(), 500);
+                }
+            },
+            [res](const std::string& error) {
+                send_error_response(res, error, 400);
+            }
+        );
+    });
+    
+    // OLD PUSH ROUTE (using thread pool) - DEPRECATED, kept for reference
+    // TODO: Remove after async push is validated in production
+    app->post("/api/v1/push-legacy", [queue_manager, file_buffer, worker_id, db_thread_pool](auto* res, auto* req) {
         read_json_body(res,
             [res, queue_manager, file_buffer, worker_id, db_thread_pool](const nlohmann::json& body) {
                 try {
@@ -623,15 +725,15 @@ static void setup_worker_routes(uWS::App* app,
                     // Register response in uWebSockets thread - SAFE
                     std::string request_id = global_response_registry->register_response(res, worker_id);
                     
-                    spdlog::info("[Worker {}] PUSH: Registered response {}, submitting to ThreadPool", worker_id, request_id);
+                    spdlog::info("[Worker {}] PUSH (LEGACY): Registered response {}, submitting to ThreadPool", worker_id, request_id);
                     
                     // Execute PUSH operation in ThreadPool
                     db_thread_pool->push([request_id, queue_manager, file_buffer, worker_id, body]() {
-                        spdlog::info("[Worker {}] PUSH: ThreadPool executing push operation for {}", worker_id, request_id);
+                        spdlog::info("[Worker {}] PUSH (LEGACY): ThreadPool executing push operation for {}", worker_id, request_id);
                         
                         // FAILOVER: Quick health check first - if DB is known to be down, skip directly to failover
                         if (file_buffer && !file_buffer->is_db_healthy()) {
-                            spdlog::warn("[Worker {}] PUSH: DB known to be down, using file buffer immediately for {}", worker_id, request_id);
+                            spdlog::warn("[Worker {}] PUSH (LEGACY): DB known to be down, using file buffer immediately for {}", worker_id, request_id);
                             
                             // Validate items before writing to file buffer
                             for (const auto& item_json : body["items"]) {
@@ -2432,20 +2534,39 @@ static void worker_thread(const Config& config, int worker_id, int num_workers,
         std::call_once(global_pool_init_flag, [&config, num_workers]() {
             // Calculate global pool sizes with 5% safety buffer
             int total_connections = static_cast<int>(config.database.pool_size * 0.95); // 95% of total
-            int total_db_threads = total_connections; // 1:1 ratio
+            
+            // SPLIT connections between async (push) and regular (pop/ack/analytics) pools
+            // 60% async for high-volume push, 40% regular for other operations
+            int async_connections = static_cast<int>(total_connections * 0.6);
+            int regular_connections = total_connections - async_connections;
+            
+            int total_db_threads = regular_connections; // 1:1 ratio with regular pool
             int system_threads = 4; // Small pool for background tasks (metrics, cleanup, etc.)
             
             spdlog::info("Initializing GLOBAL shared resources:");
             spdlog::info("  - Total DB connections: {} (95% of {})", total_connections, config.database.pool_size);
+            spdlog::info("  - Async DB connections: {} (60% for push)", async_connections);
+            spdlog::info("  - Regular DB connections: {} (40% for pop/ack/analytics)", regular_connections);
             spdlog::info("  - DB ThreadPool threads: {}", total_db_threads);
             spdlog::info("  - System ThreadPool threads: {}", system_threads);
             spdlog::info("  - Number of workers: {}", num_workers);
             
-            // Create global connection pool
+            // Create global connection pool (for pop, ack, analytics, background jobs)
             global_db_pool = std::make_shared<DatabasePool>(
                 config.database.connection_string(),
-                total_connections,
+                regular_connections,
                 config.database.pool_acquisition_timeout,
+                config.database.statement_timeout,
+                config.database.lock_timeout,
+                config.database.idle_timeout,
+                config.database.schema
+            );
+            
+            // Create global ASYNC connection pool for non-blocking push operations
+            spdlog::info("  - Creating Async DB Pool ({} connections) for non-blocking push", async_connections);
+            global_async_db_pool = std::make_shared<queen::AsyncDbPool>(
+                config.database.connection_string(),
+                async_connections,
                 config.database.statement_timeout,
                 config.database.lock_timeout,
                 config.database.idle_timeout,
@@ -2496,10 +2617,16 @@ static void worker_thread(const Config& config, int worker_id, int num_workers,
         
         // Use global shared resources
         auto db_pool = global_db_pool;
+        auto async_db_pool = global_async_db_pool;
         auto db_thread_pool = global_db_thread_pool;
         
         // Thread-local queue manager (uses shared pool)
         auto queue_manager = std::make_shared<QueueManager>(db_pool, config.queue, config.database.schema);
+        
+        // Thread-local ASYNC queue manager for non-blocking push operations
+        auto async_queue_manager = std::make_shared<queen::AsyncQueueManager>(
+            async_db_pool, config.queue, config.database.schema
+        );
         
         // Thread-local analytics manager (uses shared pool)
         auto analytics_manager = std::make_shared<AnalyticsManager>(db_pool);
@@ -2651,7 +2778,8 @@ static void worker_thread(const Config& config, int worker_id, int num_workers,
         
         // Connect file buffer to queue manager for maintenance mode
         queue_manager->set_file_buffer_manager(file_buffer);
-        spdlog::info("[Worker {}] File buffer connected to queue manager for maintenance mode", worker_id);
+        async_queue_manager->set_file_buffer_manager(file_buffer);
+        spdlog::info("[Worker {}] File buffer connected to queue managers for maintenance mode", worker_id);
         
         // Create worker App
         spdlog::info("[Worker {}] Creating uWS::App...", worker_id);
@@ -2659,7 +2787,7 @@ static void worker_thread(const Config& config, int worker_id, int num_workers,
         
         // Setup routes
         spdlog::info("[Worker {}] Setting up routes...", worker_id);
-        setup_worker_routes(worker_app, queue_manager, analytics_manager, file_buffer, config, worker_id, db_thread_pool);
+        setup_worker_routes(worker_app, queue_manager, async_queue_manager, analytics_manager, file_buffer, config, worker_id, db_thread_pool);
         spdlog::info("[Worker {}] Routes configured", worker_id);
         
         // Register this worker app with the acceptor (thread-safe)
