@@ -1059,5 +1059,1189 @@ bool AsyncQueueManager::health_check() {
     }
 }
 
+// ===================================
+// POP OPERATIONS - ASYNC VERSIONS
+// ===================================
+
+// --- Lease Management ---
+
+std::string AsyncQueueManager::acquire_partition_lease(
+    PGconn* conn,
+    const std::string& queue_name,
+    const std::string& partition_name,
+    const std::string& consumer_group,
+    int lease_time_seconds,
+    const PopOptions& options
+) {
+    try {
+        // Reclaim expired leases FIRST
+        std::string reclaim_sql = R"(
+            UPDATE partition_consumers
+            SET lease_expires_at = NULL,
+                lease_acquired_at = NULL,
+                message_batch = NULL,
+                batch_size = 0,
+                acked_count = 0,
+                worker_id = NULL
+            WHERE lease_expires_at IS NOT NULL
+              AND lease_expires_at < NOW()
+        )";
+        
+        sendAndWait(conn, reclaim_sql.c_str());
+        getCommandResult(conn);
+        spdlog::debug("Reclaimed expired leases");
+        
+        std::string lease_id = generate_uuid();
+        
+        // Check subscription preferences for initial cursor
+        std::string initial_cursor_id = "00000000-0000-0000-0000-000000000000";
+        std::string initial_cursor_timestamp_sql = "NULL";
+        
+        if (consumer_group != "__QUEUE_MODE__" && 
+            (options.subscription_mode.has_value() || options.subscription_from.has_value())) {
+            
+            std::string sub_mode = options.subscription_mode.value_or("");
+            std::string sub_from = options.subscription_from.value_or("");
+            
+            // For 'new', 'new-only', or 'now' - start from latest message
+            if (sub_mode == "new" || sub_mode == "new-only" || sub_from == "now") {
+                std::string latest_sql = R"(
+                    SELECT m.id, m.created_at
+                    FROM messages m
+                    JOIN partitions p ON m.partition_id = p.id
+                    JOIN queues q ON p.queue_id = q.id
+                    WHERE q.name = $1 AND p.name = $2
+                    ORDER BY m.created_at DESC, m.id DESC
+                    LIMIT 1
+                )";
+                
+                sendQueryParamsAsync(conn, latest_sql, {queue_name, partition_name});
+                auto latest_result = getTuplesResult(conn);
+                
+                if (PQntuples(latest_result.get()) > 0) {
+                    initial_cursor_id = PQgetvalue(latest_result.get(), 0, 0);
+                    initial_cursor_timestamp_sql = "'" + std::string(PQgetvalue(latest_result.get(), 0, 1)) + "'";
+                    spdlog::debug("Subscription mode '{}' - starting from latest message: {}", sub_mode, initial_cursor_id);
+                }
+            }
+        }
+        
+        // Check if consumer group already exists
+        std::string check_sql = R"(
+            SELECT pc.id FROM partition_consumers pc
+            JOIN partitions p ON pc.partition_id = p.id
+            JOIN queues q ON p.queue_id = q.id
+            WHERE q.name = $1 AND p.name = $2 AND pc.consumer_group = $3
+        )";
+        
+        sendQueryParamsAsync(conn, check_sql, {queue_name, partition_name, consumer_group});
+        auto check_result = getTuplesResult(conn);
+        bool consumer_exists = PQntuples(check_result.get()) > 0;
+        
+        spdlog::debug("Consumer group '{}' exists: {}, has subscription options: {}", 
+                     consumer_group, consumer_exists, 
+                     (options.subscription_mode.has_value() || options.subscription_from.has_value()));
+        
+        std::string sql;
+        std::vector<std::string> params;
+        
+        if (!consumer_exists && consumer_group != "__QUEUE_MODE__" && 
+            (options.subscription_mode.has_value() || options.subscription_from.has_value())) {
+            // New consumer group with subscription preferences
+            spdlog::debug("Creating new consumer group '{}' with cursor at: {}", consumer_group, initial_cursor_id);
+            
+            sql = R"(
+                INSERT INTO partition_consumers (
+                    partition_id, consumer_group, lease_expires_at, lease_acquired_at, worker_id,
+                    last_consumed_id, last_consumed_created_at
+                )
+                SELECT p.id, $1, NOW() + INTERVAL '1 second' * $2, NOW(), $3, 
+                       $6::uuid, )" + initial_cursor_timestamp_sql + R"(
+                FROM partitions p
+                JOIN queues q ON q.id = p.queue_id
+                WHERE q.name = $4 AND p.name = $5
+                ON CONFLICT (partition_id, consumer_group) DO NOTHING
+                RETURNING worker_id
+            )";
+            
+            params = {
+                consumer_group,
+                std::to_string(lease_time_seconds),
+                lease_id,
+                queue_name,
+                partition_name,
+                initial_cursor_id
+            };
+        } else {
+            // Existing consumer or no subscription preference
+            sql = R"(
+                INSERT INTO partition_consumers (
+                    partition_id, consumer_group, lease_expires_at, lease_acquired_at, worker_id
+                )
+                SELECT p.id, $1, NOW() + INTERVAL '1 second' * $2, NOW(), $3
+                FROM partitions p
+                JOIN queues q ON q.id = p.queue_id
+                WHERE q.name = $4 AND p.name = $5
+                ON CONFLICT (partition_id, consumer_group) DO UPDATE SET
+                    lease_expires_at = NOW() + INTERVAL '1 second' * $2,
+                    lease_acquired_at = NOW(),
+                    worker_id = $3
+                WHERE partition_consumers.lease_expires_at IS NULL 
+                   OR partition_consumers.lease_expires_at <= NOW()
+                RETURNING worker_id
+            )";
+            
+            params = {
+                consumer_group,
+                std::to_string(lease_time_seconds),
+                lease_id,
+                queue_name,
+                partition_name
+            };
+        }
+        
+        spdlog::debug("Lease acquisition query params: consumer_group={}, lease_time={}, lease_id={}, queue={}, partition={}", 
+                     consumer_group, lease_time_seconds, lease_id, queue_name, partition_name);
+        
+        sendQueryParamsAsync(conn, sql, params);
+        auto result = getTuplesResult(conn);
+        
+        spdlog::debug("Lease acquisition returned {} rows", PQntuples(result.get()));
+        
+        if (PQntuples(result.get()) > 0) {
+            spdlog::debug("Lease acquired successfully: {}", lease_id);
+            return lease_id;
+        } else {
+            spdlog::debug("Lease acquisition failed - partition may be locked by another consumer");
+            return "";
+        }
+        
+    } catch (const std::exception& e) {
+        spdlog::error("Failed to acquire lease: {}", e.what());
+        return "";
+    }
+}
+
+void AsyncQueueManager::release_partition_lease(
+    PGconn* conn,
+    const std::string& queue_name,
+    const std::string& partition_name,
+    const std::string& consumer_group
+) {
+    try {
+        std::string release_sql = R"(
+            UPDATE partition_consumers
+            SET lease_expires_at = NULL,
+                lease_acquired_at = NULL,
+                worker_id = NULL
+            WHERE partition_id = (
+                SELECT p.id FROM partitions p
+                JOIN queues q ON p.queue_id = q.id
+                WHERE q.name = $1 AND p.name = $2
+            )
+            AND consumer_group = $3
+        )";
+        
+        sendQueryParamsAsync(conn, release_sql, {queue_name, partition_name, consumer_group});
+        getCommandResult(conn);
+        
+    } catch (const std::exception& e) {
+        spdlog::warn("Failed to release lease: {}", e.what());
+    }
+}
+
+bool AsyncQueueManager::ensure_consumer_group_exists(
+    PGconn* conn,
+    const std::string& queue_name,
+    const std::string& partition_name,
+    const std::string& consumer_group
+) {
+    try {
+        std::string sql = R"(
+            INSERT INTO partition_consumers (partition_id, consumer_group)
+            SELECT p.id, $3
+            FROM partitions p
+            JOIN queues q ON p.queue_id = q.id
+            WHERE q.name = $1 AND p.name = $2
+            ON CONFLICT (partition_id, consumer_group) DO NOTHING
+        )";
+        
+        sendQueryParamsAsync(conn, sql, {queue_name, partition_name, consumer_group});
+        getCommandResult(conn);
+        return true;
+        
+    } catch (const std::exception& e) {
+        spdlog::error("Failed to ensure consumer group exists: {}", e.what());
+        return false;
+    }
+}
+
+// --- Pop from Specific Partition ---
+
+PopResult AsyncQueueManager::pop_messages_from_partition(
+    const std::string& queue_name,
+    const std::string& partition_name,
+    const std::string& consumer_group,
+    const PopOptions& options
+) {
+    PopResult result;
+    
+    try {
+        auto conn = async_db_pool_->acquire();
+        
+        // Check if partition is accessible considering window_buffer
+        std::string window_check_sql = R"(
+            SELECT p.id, q.window_buffer
+            FROM partitions p
+            JOIN queues q ON p.queue_id = q.id
+            WHERE q.name = $1 AND p.name = $2
+              AND (q.window_buffer = 0 OR NOT EXISTS (
+                SELECT 1 FROM messages m
+                WHERE m.partition_id = p.id
+                  AND m.created_at > NOW() - INTERVAL '1 second' * q.window_buffer
+              ))
+        )";
+        
+        sendQueryParamsAsync(conn.get(), window_check_sql, {queue_name, partition_name});
+        auto window_result = getTuplesResult(conn.get());
+        
+        if (PQntuples(window_result.get()) == 0) {
+            spdlog::debug("Partition {} blocked by window buffer", partition_name);
+            return result;
+        }
+        
+        // Get queue configuration for delayed_processing, max_wait_time_seconds, and lease_time
+        std::string config_sql = R"(
+            SELECT q.delayed_processing, q.max_wait_time_seconds, q.lease_time
+            FROM queues q
+            WHERE q.name = $1
+        )";
+        
+        sendQueryParamsAsync(conn.get(), config_sql, {queue_name});
+        auto config_result = getTuplesResult(conn.get());
+        
+        int delayed_processing = 0;
+        int max_wait_time = 0;
+        int lease_time = 300;
+        
+        if (PQntuples(config_result.get()) > 0) {
+            const char* delay_str = PQgetvalue(config_result.get(), 0, 0);
+            const char* wait_str = PQgetvalue(config_result.get(), 0, 1);
+            const char* lease_str = PQgetvalue(config_result.get(), 0, 2);
+            
+            delayed_processing = (delay_str && strlen(delay_str) > 0) ? std::stoi(delay_str) : 0;
+            max_wait_time = (wait_str && strlen(wait_str) > 0) ? std::stoi(wait_str) : 0;
+            lease_time = (lease_str && strlen(lease_str) > 0) ? std::stoi(lease_str) : 300;
+        }
+        
+        // Acquire lease for this partition
+        std::string lease_id = acquire_partition_lease(conn.get(), queue_name, partition_name, 
+                                                      consumer_group, lease_time, options);
+        if (lease_id.empty()) {
+            return result;
+        }
+        
+        result.lease_id = lease_id;
+        
+        // Build WHERE clause
+        std::string where_clause = R"(
+            WHERE q.name = $1 AND p.name = $2 AND pc.consumer_group = $3
+              AND pc.worker_id = $4 AND pc.lease_expires_at > NOW()
+              AND (pc.last_consumed_created_at IS NULL 
+                   OR m.created_at > pc.last_consumed_created_at
+                   OR (m.created_at = pc.last_consumed_created_at AND m.id > pc.last_consumed_id))
+        )";
+        
+        std::vector<std::string> params = {
+            queue_name,
+            partition_name,
+            consumer_group,
+            lease_id
+        };
+        
+        // Add delayed processing filter
+        if (delayed_processing > 0) {
+            where_clause += " AND m.created_at <= NOW() - INTERVAL '1 second' * $" + std::to_string(params.size() + 1);
+            params.push_back(std::to_string(delayed_processing));
+            spdlog::debug("Delayed processing filter active: {} seconds", delayed_processing);
+        }
+        
+        // Add max wait time filter
+        if (max_wait_time > 0) {
+            where_clause += " AND m.created_at > NOW() - INTERVAL '1 second' * $" + std::to_string(params.size() + 1);
+            params.push_back(std::to_string(max_wait_time));
+        }
+        
+        // Add batch limit
+        params.push_back(std::to_string(options.batch));
+        std::string limit_param = "$" + std::to_string(params.size());
+        
+        // Get messages
+        std::string sql = R"(
+            SELECT m.id, m.transaction_id, m.partition_id, m.payload, m.trace_id, m.created_at, m.is_encrypted,
+                   q.name as queue_name, p.name as partition_name, q.priority as queue_priority
+            FROM messages m
+            JOIN partitions p ON p.id = m.partition_id
+            JOIN queues q ON q.id = p.queue_id
+            JOIN partition_consumers pc ON pc.partition_id = p.id
+            )" + where_clause + R"(
+            ORDER BY m.created_at ASC, m.id ASC
+            LIMIT )" + limit_param + R"(
+            FOR UPDATE OF m SKIP LOCKED
+        )";
+        
+        spdlog::debug("Pop query params: queue={}, partition={}, consumer_group={}, lease_id={}, batch={}", 
+                     queue_name, partition_name, consumer_group, lease_id, options.batch);
+        
+        sendQueryParamsAsync(conn.get(), sql, params);
+        auto query_result = getTuplesResult(conn.get());
+        
+        int num_messages = PQntuples(query_result.get());
+        
+        spdlog::debug("Pop query returned {} rows (requested: {})", num_messages, options.batch);
+        
+        if (num_messages < options.batch) {
+            spdlog::debug("Returned fewer messages than requested - likely fewer messages available in partition");
+        }
+        
+        if (num_messages > 0) {
+            // Update batch_size
+            std::string update_batch_size = R"(
+                UPDATE partition_consumers
+                SET batch_size = $1,
+                    acked_count = 0
+                WHERE partition_id = (
+                    SELECT p.id FROM partitions p
+                    JOIN queues q ON p.queue_id = q.id
+                    WHERE q.name = $2 AND p.name = $3
+                )
+                AND consumer_group = $4
+                AND worker_id = $5
+            )";
+            
+            sendQueryParamsAsync(conn.get(), update_batch_size, {
+                std::to_string(num_messages),
+                queue_name,
+                partition_name,
+                consumer_group,
+                lease_id
+            });
+            getCommandResult(conn.get());
+        }
+        
+        if (num_messages == 0) {
+            // No messages found - release lease
+            spdlog::debug("No messages found - releasing lease for partition: {}", partition_name);
+            release_partition_lease(conn.get(), queue_name, partition_name, consumer_group);
+            return result;
+        }
+        
+        // Get encryption service if needed
+        EncryptionService* enc_service = get_encryption_service();
+        
+        // Parse messages
+        for (int i = 0; i < num_messages; ++i) {
+            Message msg;
+            msg.id = PQgetvalue(query_result.get(), i, 0);
+            msg.transaction_id = PQgetvalue(query_result.get(), i, 1);
+            msg.partition_id = PQgetvalue(query_result.get(), i, 2);
+            
+            std::string payload_str = PQgetvalue(query_result.get(), i, 3);
+            const char* trace_val = PQgetvalue(query_result.get(), i, 4);
+            msg.trace_id = (trace_val && strlen(trace_val) > 0) ? trace_val : "";
+            
+            // Parse created_at
+            const char* created_str = PQgetvalue(query_result.get(), i, 5);
+            if (created_str && strlen(created_str) > 0) {
+                std::tm tm = {};
+                std::istringstream ss(created_str);
+                ss >> std::get_time(&tm, "%Y-%m-%d %H:%M:%S");
+                msg.created_at = std::chrono::system_clock::from_time_t(std::mktime(&tm));
+            }
+            
+            const char* is_encrypted_val = PQgetvalue(query_result.get(), i, 6);
+            bool is_encrypted = (is_encrypted_val && (std::string(is_encrypted_val) == "t" || std::string(is_encrypted_val) == "true"));
+            
+            msg.queue_name = PQgetvalue(query_result.get(), i, 7);
+            msg.partition_name = PQgetvalue(query_result.get(), i, 8);
+            
+            // Decrypt if needed
+            if (is_encrypted && enc_service && enc_service->is_enabled()) {
+                try {
+                    auto encrypted_json = nlohmann::json::parse(payload_str);
+                    EncryptionService::EncryptedData encrypted_data{
+                        encrypted_json["encrypted"],
+                        encrypted_json["iv"],
+                        encrypted_json["authTag"]
+                    };
+                    auto decrypted = enc_service->decrypt_payload(encrypted_data);
+                    
+                    if (decrypted.has_value()) {
+                        msg.payload = nlohmann::json::parse(decrypted.value());
+                    } else {
+                        spdlog::error("Decryption failed for message {}", msg.id);
+                        msg.payload = nlohmann::json::parse(payload_str);
+                    }
+                } catch (const std::exception& e) {
+                    spdlog::error("Error decrypting message {}: {}", msg.id, e.what());
+                    msg.payload = nlohmann::json::parse(payload_str);
+                }
+            } else {
+                msg.payload = nlohmann::json::parse(payload_str);
+            }
+            
+            result.messages.push_back(msg);
+        }
+        
+        // Auto-ack if enabled
+        if (options.auto_ack && !result.messages.empty()) {
+            spdlog::debug("Auto-ack enabled - acknowledging {} messages", result.messages.size());
+            for (const auto& msg : result.messages) {
+                acknowledge_message(msg.transaction_id, "completed", std::nullopt, 
+                                  consumer_group, lease_id, msg.partition_id);
+            }
+        }
+        
+    } catch (const std::exception& e) {
+        spdlog::error("Failed to pop from partition: {}", e.what());
+    }
+    
+    return result;
+}
+
+// --- Pop from Any Partition in Queue ---
+
+PopResult AsyncQueueManager::pop_messages_from_queue(
+    const std::string& queue_name,
+    const std::string& consumer_group,
+    const PopOptions& options
+) {
+    PopResult result;
+    
+    try {
+        auto conn = async_db_pool_->acquire();
+        
+        // Get queue configuration for window_buffer
+        std::string config_sql = "SELECT window_buffer FROM queues WHERE name = $1";
+        sendQueryParamsAsync(conn.get(), config_sql, {queue_name});
+        auto config_result = getTuplesResult(conn.get());
+        
+        int window_buffer = 0;
+        if (PQntuples(config_result.get()) > 0) {
+            const char* buffer_str = PQgetvalue(config_result.get(), 0, 0);
+            window_buffer = (buffer_str && strlen(buffer_str) > 0) ? std::stoi(buffer_str) : 0;
+        }
+        
+        // Build query to find available partitions
+        std::string sql;
+        std::vector<std::string> params = {queue_name, consumer_group};
+        
+        if (window_buffer > 0) {
+            sql = R"(
+                SELECT p.id, p.name, COUNT(m.id) as message_count
+                FROM partitions p
+                JOIN queues q ON p.queue_id = q.id
+                LEFT JOIN messages m ON m.partition_id = p.id
+                LEFT JOIN partition_consumers pc ON pc.partition_id = p.id 
+                    AND pc.consumer_group = $2
+                WHERE q.name = $1
+                  AND (pc.lease_expires_at IS NULL OR pc.lease_expires_at <= NOW())
+                  AND m.id IS NOT NULL
+                  AND NOT EXISTS (
+                      SELECT 1 FROM messages m2
+                      WHERE m2.partition_id = p.id
+                        AND m2.created_at > NOW() - INTERVAL '1 second' * $3
+                  )
+                  AND (pc.last_consumed_created_at IS NULL
+                       OR m.created_at > pc.last_consumed_created_at
+                       OR (m.created_at = pc.last_consumed_created_at AND m.id > pc.last_consumed_id))
+                GROUP BY p.id, p.name
+                HAVING COUNT(m.id) > 0
+                ORDER BY COUNT(m.id) DESC
+                LIMIT 10
+            )";
+            params.push_back(std::to_string(window_buffer));
+        } else {
+            sql = R"(
+                SELECT p.id, p.name, COUNT(m.id) as message_count
+                FROM partitions p
+                JOIN queues q ON p.queue_id = q.id
+                LEFT JOIN messages m ON m.partition_id = p.id
+                LEFT JOIN partition_consumers pc ON pc.partition_id = p.id 
+                    AND pc.consumer_group = $2
+                WHERE q.name = $1
+                  AND (pc.lease_expires_at IS NULL OR pc.lease_expires_at <= NOW())
+                  AND m.id IS NOT NULL
+                  AND (pc.last_consumed_created_at IS NULL
+                       OR m.created_at > pc.last_consumed_created_at
+                       OR (m.created_at = pc.last_consumed_created_at AND m.id > pc.last_consumed_id))
+                GROUP BY p.id, p.name
+                HAVING COUNT(m.id) > 0
+                ORDER BY COUNT(m.id) DESC
+                LIMIT 10
+            )";
+        }
+        
+        sendQueryParamsAsync(conn.get(), sql, params);
+        auto partitions_result = getTuplesResult(conn.get());
+        
+        if (PQntuples(partitions_result.get()) == 0) {
+            spdlog::debug("No available partitions found for queue: {}", queue_name);
+            return result;
+        }
+        
+        // Try each partition until we get messages
+        for (int i = 0; i < PQntuples(partitions_result.get()); ++i) {
+            std::string partition_name = PQgetvalue(partitions_result.get(), i, 1);
+            const char* count_str = PQgetvalue(partitions_result.get(), i, 2);
+            int message_count = (count_str && strlen(count_str) > 0) ? std::stoi(count_str) : 0;
+            
+            spdlog::debug("Trying partition '{}' with {} messages", partition_name, message_count);
+            
+            result = pop_messages_from_partition(queue_name, partition_name, consumer_group, options);
+            
+            if (!result.messages.empty()) {
+                return result;
+            }
+        }
+        
+    } catch (const std::exception& e) {
+        spdlog::error("Failed to pop from any partition: {}", e.what());
+    }
+    
+    return result;
+}
+
+// --- Pop with Namespace/Task Filters ---
+
+PopResult AsyncQueueManager::pop_messages_filtered(
+    const std::optional<std::string>& namespace_name,
+    const std::optional<std::string>& task_name,
+    const std::string& consumer_group,
+    const PopOptions& options
+) {
+    PopResult result;
+    
+    try {
+        auto conn = async_db_pool_->acquire();
+        
+        // Find queues matching filters with window buffer check
+        std::string sql = R"(
+            SELECT 
+                q.name as queue_name,
+                p.name as partition_name,
+                q.window_buffer
+            FROM queues q
+            JOIN partitions p ON p.queue_id = q.id
+            WHERE 1=1
+        )";
+        
+        std::vector<std::string> params;
+        
+        if (namespace_name.has_value()) {
+            sql += " AND q.namespace = $" + std::to_string(params.size() + 1);
+            params.push_back(*namespace_name);
+        }
+        
+        if (task_name.has_value()) {
+            sql += " AND q.task = $" + std::to_string(params.size() + 1);
+            params.push_back(*task_name);
+        }
+        
+        sql += R"(
+              AND (q.window_buffer = 0 OR NOT EXISTS (
+                SELECT 1 FROM messages m
+                WHERE m.partition_id = p.id
+                  AND m.created_at > NOW() - INTERVAL '1 second' * q.window_buffer
+              ))
+            LIMIT 10
+        )";
+        
+        sendQueryParamsAsync(conn.get(), sql, params);
+        auto queues_result = getTuplesResult(conn.get());
+        
+        if (PQntuples(queues_result.get()) == 0) {
+            spdlog::debug("No queues found matching namespace/task filters");
+            return result;
+        }
+        
+        // Try each matching queue/partition
+        for (int i = 0; i < PQntuples(queues_result.get()); ++i) {
+            std::string queue_name = PQgetvalue(queues_result.get(), i, 0);
+            std::string partition_name = PQgetvalue(queues_result.get(), i, 1);
+            
+            result = pop_messages_from_partition(queue_name, partition_name, consumer_group, options);
+            
+            if (!result.messages.empty()) {
+                return result;
+            }
+        }
+        
+    } catch (const std::exception& e) {
+        spdlog::error("Failed to pop with namespace/task: {}", e.what());
+    }
+    
+    return result;
+}
+
+// ===================================
+// ACK OPERATIONS - ASYNC VERSIONS
+// ===================================
+
+AsyncQueueManager::AckResult AsyncQueueManager::acknowledge_message(
+    const std::string& transaction_id,
+    const std::string& status,
+    const std::optional<std::string>& error,
+    const std::string& consumer_group,
+    const std::optional<std::string>& lease_id,
+    const std::optional<std::string>& partition_id_param
+) {
+    AckResult result;
+    result.success = false;
+    result.message = "not_found";
+    
+    try {
+        auto conn = async_db_pool_->acquire();
+        
+        // CRITICAL: partition_id is MANDATORY
+        if (!partition_id_param.has_value() || partition_id_param->empty()) {
+            spdlog::error("partition_id is required for acknowledgment of transaction {}", transaction_id);
+            result.message = "invalid_request";
+            result.error = "partition_id is required";
+            return result;
+        }
+        
+        std::string partition_id = *partition_id_param;
+        spdlog::debug("Using provided partition_id {} for transaction {}", partition_id, transaction_id);
+        
+        // Validate lease if provided
+        if (lease_id.has_value()) {
+            spdlog::debug("Validating lease {} for transaction {}", *lease_id, transaction_id);
+            std::string validate_sql = R"(
+                SELECT 1 FROM partition_consumers pc
+                WHERE pc.partition_id = $1::uuid
+                  AND pc.worker_id = $2
+                  AND pc.lease_expires_at > NOW()
+            )";
+            
+            sendQueryParamsAsync(conn.get(), validate_sql, {partition_id, *lease_id});
+            auto valid = getTuplesResult(conn.get());
+            
+            if (PQntuples(valid.get()) == 0) {
+                spdlog::warn("Invalid lease {} for partition {}", *lease_id, partition_id);
+                result.message = "invalid_lease";
+                result.error = "Lease validation failed";
+                return result;
+            }
+            spdlog::debug("Lease {} validated successfully", *lease_id);
+        }
+        
+        if (status == "completed") {
+            // Update cursor and release lease if all messages ACKed
+            std::string sql = R"(
+                UPDATE partition_consumers 
+                SET last_consumed_id = m.id,
+                    last_consumed_created_at = m.created_at,
+                    last_consumed_at = NOW(),
+                    total_messages_consumed = total_messages_consumed + 1,
+                    acked_count = CASE 
+                        WHEN acked_count + 1 >= batch_size AND batch_size > 0 
+                        THEN 0
+                        ELSE acked_count + 1
+                    END,
+                    lease_expires_at = CASE 
+                        WHEN acked_count + 1 >= batch_size AND batch_size > 0 
+                        THEN NULL 
+                        ELSE lease_expires_at 
+                    END,
+                    lease_acquired_at = CASE 
+                        WHEN acked_count + 1 >= batch_size AND batch_size > 0 
+                        THEN NULL 
+                        ELSE lease_acquired_at 
+                    END,
+                    batch_size = CASE 
+                        WHEN acked_count + 1 >= batch_size AND batch_size > 0 
+                        THEN 0 
+                        ELSE batch_size 
+                    END,
+                    worker_id = CASE 
+                        WHEN acked_count + 1 >= batch_size AND batch_size > 0 
+                        THEN NULL 
+                        ELSE worker_id 
+                    END
+                FROM messages m
+                WHERE partition_consumers.partition_id = $1::uuid
+                  AND partition_consumers.consumer_group = $2
+                  AND m.partition_id = $1::uuid
+                  AND m.transaction_id = $3
+                RETURNING 
+                    (partition_consumers.lease_expires_at IS NULL) as lease_released,
+                    partition_consumers.partition_id
+            )";
+            
+            sendQueryParamsAsync(conn.get(), sql, {partition_id, consumer_group, transaction_id});
+            auto query_result = getTuplesResult(conn.get());
+            
+            if (PQntuples(query_result.get()) > 0) {
+                const char* lease_released_val = PQgetvalue(query_result.get(), 0, 0);
+                bool lease_released = (lease_released_val && (std::string(lease_released_val) == "t"));
+                
+                if (lease_released) {
+                    spdlog::debug("Lease released after ACK for transaction: {}", transaction_id);
+                    
+                    // Insert into messages_consumed for analytics
+                    std::string partition_id_ret = PQgetvalue(query_result.get(), 0, 1);
+                    std::string insert_consumed_sql = R"(
+                        INSERT INTO messages_consumed (partition_id, consumer_group, messages_completed, messages_failed, acked_at)
+                        VALUES ($1, $2, 1, 0, NOW())
+                    )";
+                    
+                    sendQueryParamsAsync(conn.get(), insert_consumed_sql, {partition_id_ret, consumer_group});
+                    getCommandResult(conn.get());
+                }
+                
+                result.success = true;
+                result.message = "completed";
+            }
+            
+            return result;
+            
+        } else if (status == "failed") {
+            // Insert into DLQ
+            std::string dlq_sql = R"(
+                INSERT INTO dead_letter_queue (
+                    message_id, partition_id, consumer_group, error_message, 
+                    retry_count, original_created_at
+                )
+                SELECT m.id, m.partition_id, $1::varchar, $2::text, 0, m.created_at
+                FROM messages m
+                WHERE m.partition_id = $3::uuid
+                  AND m.transaction_id = $4
+                  AND NOT EXISTS (
+                      SELECT 1 FROM dead_letter_queue dlq
+                      WHERE dlq.message_id = m.id AND dlq.consumer_group = $1::varchar
+                  )
+            )";
+            
+            sendQueryParamsAsync(conn.get(), dlq_sql, {
+                consumer_group,
+                error.value_or("Message processing failed"),
+                partition_id,
+                transaction_id
+            });
+            getCommandResult(conn.get());
+            
+            // Advance cursor for failed messages
+            std::string cursor_sql = R"(
+                UPDATE partition_consumers 
+                SET last_consumed_id = m.id,
+                    last_consumed_created_at = m.created_at,
+                    last_consumed_at = NOW(),
+                    total_messages_consumed = total_messages_consumed + 1,
+                    acked_count = CASE 
+                        WHEN acked_count + 1 >= batch_size AND batch_size > 0 
+                        THEN 0
+                        ELSE acked_count + 1
+                    END,
+                    lease_expires_at = CASE 
+                        WHEN acked_count + 1 >= batch_size AND batch_size > 0 
+                        THEN NULL 
+                        ELSE lease_expires_at 
+                    END,
+                    lease_acquired_at = CASE 
+                        WHEN acked_count + 1 >= batch_size AND batch_size > 0 
+                        THEN NULL 
+                        ELSE lease_acquired_at 
+                    END,
+                    batch_size = CASE 
+                        WHEN acked_count + 1 >= batch_size AND batch_size > 0 
+                        THEN 0 
+                        ELSE batch_size 
+                    END,
+                    worker_id = CASE 
+                        WHEN acked_count + 1 >= batch_size AND batch_size > 0 
+                        THEN NULL 
+                        ELSE worker_id 
+                    END
+                FROM messages m
+                WHERE partition_consumers.partition_id = $1::uuid
+                  AND partition_consumers.consumer_group = $2
+                  AND m.partition_id = $1::uuid
+                  AND m.transaction_id = $3
+            )";
+            
+            sendQueryParamsAsync(conn.get(), cursor_sql, {partition_id, consumer_group, transaction_id});
+            getCommandResult(conn.get());
+            
+            spdlog::warn("Message failed and moved to DLQ: {} - {}", transaction_id, error.value_or("No error message"));
+            result.success = true;
+            result.message = "failed_dlq";
+            return result;
+        }
+        
+    } catch (const std::exception& e) {
+        spdlog::error("Failed to acknowledge message: {}", e.what());
+        result.error = e.what();
+    }
+    
+    return result;
+}
+
+AsyncQueueManager::BatchAckResult AsyncQueueManager::acknowledge_messages_batch(
+    const std::vector<nlohmann::json>& acknowledgments
+) {
+    BatchAckResult batch_result;
+    batch_result.successful_acks = 0;
+    batch_result.failed_acks = 0;
+    
+    if (acknowledgments.empty()) {
+        return batch_result;
+    }
+    
+    try {
+        // CRITICAL: Use ONE connection for entire batch
+        auto conn = async_db_pool_->acquire();
+        
+        spdlog::debug("Batch ACK: Processing {} acknowledgments with SINGLE connection", acknowledgments.size());
+        
+        // Begin transaction for atomic batch ACK
+        sendAndWait(conn.get(), "BEGIN");
+        getCommandResult(conn.get());
+        
+        try {
+            // Extract consumer_group from first ack (should be same for all)
+            std::string consumer_group = acknowledgments[0].value("consumerGroup", "__QUEUE_MODE__");
+            
+            // Group by status
+            std::vector<nlohmann::json> completed;
+            std::vector<nlohmann::json> failed;
+            
+            for (const auto& ack : acknowledgments) {
+                std::string status = ack.value("status", "completed");
+                if (status == "completed") {
+                    completed.push_back(ack);
+                } else if (status == "failed") {
+                    failed.push_back(ack);
+                }
+            }
+            
+            int total_messages = acknowledgments.size();
+            int failed_count = failed.size();
+            int success_count = completed.size();
+            
+            // Build array of all transaction IDs
+            std::vector<std::string> all_txn_ids;
+            for (const auto& ack : acknowledgments) {
+                all_txn_ids.push_back(ack.value("transactionId", ""));
+            }
+            
+            // Build PostgreSQL array
+            auto build_pg_array = [](const std::vector<std::string>& vec) -> std::string {
+                std::string result = "{";
+                for (size_t i = 0; i < vec.size(); ++i) {
+                    if (i > 0) result += ",";
+                    result += "\"";
+                    for (char c : vec[i]) {
+                        if (c == '\\' || c == '"') result += '\\';
+                        result += c;
+                    }
+                    result += "\"";
+                }
+                result += "}";
+                return result;
+            };
+            
+            std::string txn_array = build_pg_array(all_txn_ids);
+            
+            // Get partition_id from first ack
+            if (!acknowledgments[0].contains("partitionId") || acknowledgments[0]["partitionId"].is_null()) {
+                throw std::runtime_error("partition_id is required for batch acknowledgment");
+            }
+            
+            std::string partition_id = acknowledgments[0]["partitionId"].get<std::string>();
+            
+            // Get last message info for cursor update
+            std::string batch_info_sql = R"(
+                SELECT 
+                    m.id,
+                    m.created_at
+                FROM messages m
+                WHERE m.partition_id = $1::uuid
+                  AND m.transaction_id = ANY($2::varchar[])
+                ORDER BY m.created_at DESC, m.id DESC
+                LIMIT 1
+            )";
+            
+            sendQueryParamsAsync(conn.get(), batch_info_sql, {partition_id, txn_array});
+            auto batch_info = getTuplesResult(conn.get());
+            
+            if (PQntuples(batch_info.get()) == 0) {
+                throw std::runtime_error("No messages found for acknowledgment");
+            }
+            
+            std::string last_id = PQgetvalue(batch_info.get(), 0, 0);
+            std::string last_created = PQgetvalue(batch_info.get(), 0, 1);
+            
+            // Move failed messages to DLQ
+            if (!failed.empty()) {
+                std::vector<std::string> failed_txn_ids;
+                std::vector<std::string> failed_errors;
+                
+                for (const auto& ack : failed) {
+                    failed_txn_ids.push_back(ack.value("transactionId", ""));
+                    std::string error_msg = "Unknown error";
+                    if (ack.contains("error") && !ack["error"].is_null()) {
+                        error_msg = ack["error"].get<std::string>();
+                    }
+                    failed_errors.push_back(error_msg);
+                }
+                
+                std::string failed_array = build_pg_array(failed_txn_ids);
+                std::string error_array = build_pg_array(failed_errors);
+                
+                std::string dlq_sql = R"(
+                    INSERT INTO dead_letter_queue (message_id, partition_id, consumer_group, error_message, original_created_at)
+                    SELECT 
+                        m.id,
+                        m.partition_id,
+                        $2,
+                        e.error_message,
+                        m.created_at
+                    FROM messages m
+                    CROSS JOIN LATERAL UNNEST($1::varchar[], $4::text[]) AS e(txn_id, error_message)
+                    WHERE m.partition_id = $3::uuid
+                      AND m.transaction_id = e.txn_id
+                    ON CONFLICT DO NOTHING
+                )";
+                
+                sendQueryParamsAsync(conn.get(), dlq_sql, {failed_array, consumer_group, partition_id, error_array});
+                getCommandResult(conn.get());
+                
+                spdlog::info("Moved {} failed messages to DLQ", failed_count);
+            }
+            
+            // Advance cursor atomically
+            std::string cursor_sql = R"(
+                UPDATE partition_consumers
+                SET 
+                    last_consumed_created_at = $1,
+                    last_consumed_id = $2,
+                    total_messages_consumed = total_messages_consumed + $3,
+                    total_batches_consumed = total_batches_consumed + 1,
+                    last_consumed_at = NOW(),
+                    batch_retry_count = 0,
+                    pending_estimate = GREATEST(0, pending_estimate - $3),
+                    last_stats_update = NOW(),
+                    acked_count = CASE 
+                        WHEN acked_count + $3 >= batch_size AND batch_size > 0 
+                        THEN 0
+                        ELSE acked_count + $3
+                    END,
+                    lease_expires_at = CASE 
+                        WHEN acked_count + $3 >= batch_size AND batch_size > 0 
+                        THEN NULL 
+                        ELSE lease_expires_at 
+                    END,
+                    lease_acquired_at = CASE 
+                        WHEN acked_count + $3 >= batch_size AND batch_size > 0 
+                        THEN NULL 
+                        ELSE lease_acquired_at 
+                    END,
+                    message_batch = CASE 
+                        WHEN acked_count + $3 >= batch_size AND batch_size > 0 
+                        THEN NULL 
+                        ELSE message_batch 
+                    END,
+                    batch_size = CASE 
+                        WHEN acked_count + $3 >= batch_size AND batch_size > 0 
+                        THEN 0 
+                        ELSE batch_size 
+                    END,
+                    worker_id = CASE 
+                        WHEN acked_count + $3 >= batch_size AND batch_size > 0 
+                        THEN NULL 
+                        ELSE worker_id 
+                    END
+                WHERE partition_id = $4 AND consumer_group = $5
+                RETURNING (lease_expires_at IS NULL) as lease_released
+            )";
+            
+            sendQueryParamsAsync(conn.get(), cursor_sql, {
+                last_created, last_id, std::to_string(total_messages), partition_id, consumer_group
+            });
+            auto cursor_result = getTuplesResult(conn.get());
+            
+            bool lease_released = PQntuples(cursor_result.get()) > 0 && 
+                                 std::string(PQgetvalue(cursor_result.get(), 0, 0)) == "t";
+            
+            spdlog::debug("Batch ACK: Success={} Failed={} Lease={}", 
+                        success_count, failed_count, lease_released ? "Released" : "Active");
+            
+            // Insert analytics record if lease was released (batch complete)
+            if (lease_released) {
+                std::string insert_consumed_sql = R"(
+                    INSERT INTO messages_consumed (partition_id, consumer_group, messages_completed, messages_failed, acked_at)
+                    VALUES ($1, $2, $3, $4, NOW())
+                )";
+                
+                sendQueryParamsAsync(conn.get(), insert_consumed_sql, {
+                    partition_id, 
+                    consumer_group, 
+                    std::to_string(success_count), 
+                    std::to_string(failed_count)
+                });
+                getCommandResult(conn.get());
+            }
+            
+            // Commit transaction
+            sendAndWait(conn.get(), "COMMIT");
+            getCommandResult(conn.get());
+            
+            // Build results
+            for (const auto& ack : acknowledgments) {
+                AckResult result;
+                std::string status = ack.value("status", "completed");
+                result.success = true;
+                result.message = (status == "completed") ? "completed" : "failed_dlq";
+                batch_result.results.push_back(result);
+                batch_result.successful_acks++;
+            }
+            
+        } catch (const std::exception& e) {
+            // Rollback on error
+            sendAndWait(conn.get(), "ROLLBACK");
+            getCommandResult(conn.get());
+            throw;
+        }
+        
+    } catch (const std::exception& e) {
+        spdlog::error("Batch acknowledgment failed: {}", e.what());
+        
+        // Return all as failed
+        for (size_t i = 0; i < acknowledgments.size(); ++i) {
+            AckResult result;
+            result.success = false;
+            result.message = "batch_failed";
+            result.error = e.what();
+            batch_result.results.push_back(result);
+            batch_result.failed_acks++;
+        }
+    }
+    
+    return batch_result;
+}
+
+// ===================================
+// TRANSACTION OPERATIONS - ASYNC VERSION
+// ===================================
+
+AsyncQueueManager::TransactionResult AsyncQueueManager::execute_transaction(
+    const std::vector<nlohmann::json>& operations
+) {
+    TransactionResult txn_result;
+    txn_result.transaction_id = generate_transaction_id();
+    txn_result.success = true;
+    txn_result.results.reserve(operations.size());
+    
+    try {
+        auto conn = async_db_pool_->acquire();
+        
+        // Begin transaction
+        sendAndWait(conn.get(), "BEGIN");
+        getCommandResult(conn.get());
+        
+        try {
+            for (const auto& op : operations) {
+                std::string op_type = op.value("type", "");
+                nlohmann::json op_result;
+                
+                if (op_type == "pop") {
+                    std::string queue = op.value("queue", "");
+                    std::optional<std::string> partition = (op.contains("partition") && !op["partition"].is_null()) ?
+                        std::optional<std::string>(op["partition"].get<std::string>()) : std::nullopt;
+                    std::string consumer_group = op.value("consumerGroup", "__QUEUE_MODE__");
+                    
+                    PopOptions pop_opts;
+                    pop_opts.batch = op.value("batch", 1);
+                    pop_opts.auto_ack = op.value("autoAck", false);
+                    
+                    PopResult pop_result;
+                    if (partition.has_value()) {
+                        pop_result = pop_messages_from_partition(queue, *partition, consumer_group, pop_opts);
+                    } else {
+                        pop_result = pop_messages_from_queue(queue, consumer_group, pop_opts);
+                    }
+                    
+                    op_result["type"] = "pop";
+                    op_result["messages"] = nlohmann::json::array();
+                    for (const auto& msg : pop_result.messages) {
+                        nlohmann::json msg_json;
+                        msg_json["id"] = msg.id;
+                        msg_json["transactionId"] = msg.transaction_id;
+                        msg_json["partitionId"] = msg.partition_id;
+                        msg_json["payload"] = msg.payload;
+                        msg_json["queueName"] = msg.queue_name;
+                        msg_json["partitionName"] = msg.partition_name;
+                        if (!msg.trace_id.empty()) {
+                            msg_json["traceId"] = msg.trace_id;
+                        }
+                        op_result["messages"].push_back(msg_json);
+                    }
+                    if (pop_result.lease_id.has_value()) {
+                        op_result["leaseId"] = *pop_result.lease_id;
+                    }
+                    
+                } else if (op_type == "ack") {
+                    std::string transaction_id = op.value("transactionId", "");
+                    std::string status = op.value("status", "completed");
+                    std::optional<std::string> error = (op.contains("error") && !op["error"].is_null()) ?
+                        std::optional<std::string>(op["error"].get<std::string>()) : std::nullopt;
+                    std::string consumer_group = op.value("consumerGroup", "__QUEUE_MODE__");
+                    std::optional<std::string> lease_id = (op.contains("leaseId") && !op["leaseId"].is_null()) ?
+                        std::optional<std::string>(op["leaseId"].get<std::string>()) : std::nullopt;
+                    std::optional<std::string> partition_id = (op.contains("partitionId") && !op["partitionId"].is_null()) ?
+                        std::optional<std::string>(op["partitionId"].get<std::string>()) : std::nullopt;
+                    
+                    auto ack_result = acknowledge_message(transaction_id, status, error, consumer_group, lease_id, partition_id);
+                    
+                    op_result["type"] = "ack";
+                    op_result["success"] = ack_result.success;
+                    op_result["message"] = ack_result.message;
+                    if (ack_result.error.has_value()) {
+                        op_result["error"] = *ack_result.error;
+                    }
+                    
+                    if (!ack_result.success) {
+                        txn_result.success = false;
+                    }
+                } else {
+                    op_result["type"] = "unknown";
+                    op_result["error"] = "Unknown operation type: " + op_type;
+                    txn_result.success = false;
+                }
+                
+                txn_result.results.push_back(op_result);
+            }
+            
+            // Commit transaction
+            sendAndWait(conn.get(), "COMMIT");
+            getCommandResult(conn.get());
+            
+        } catch (const std::exception& e) {
+            // Rollback on error
+            sendAndWait(conn.get(), "ROLLBACK");
+            getCommandResult(conn.get());
+            throw;
+        }
+        
+    } catch (const std::exception& e) {
+        spdlog::error("Transaction failed: {}", e.what());
+        txn_result.success = false;
+        txn_result.error = e.what();
+    }
+    
+    return txn_result;
+}
+
 } // namespace queen
 

@@ -27,7 +27,7 @@ std::string generate_unique_id() {
 void init_long_polling(
     std::shared_ptr<astp::ThreadPool> thread_pool,
     std::shared_ptr<PollIntentionRegistry> registry,
-    std::shared_ptr<QueueManager> queue_manager,
+    std::shared_ptr<AsyncQueueManager> async_queue_manager,
     std::vector<std::shared_ptr<ResponseQueue>> worker_response_queues,
     int worker_count,
     int poll_worker_interval_ms,
@@ -47,7 +47,7 @@ void init_long_polling(
                 worker_id,
                 worker_count,
                 registry,
-                queue_manager,
+                async_queue_manager,
                 thread_pool,
                 worker_response_queues,
                 poll_worker_interval_ms,
@@ -81,7 +81,7 @@ void poll_worker_loop(
     int worker_id,
     int total_workers,
     std::shared_ptr<PollIntentionRegistry> registry,
-    std::shared_ptr<QueueManager> queue_manager,
+    std::shared_ptr<AsyncQueueManager> async_queue_manager,
     std::shared_ptr<astp::ThreadPool> thread_pool,
     std::vector<std::shared_ptr<ResponseQueue>> worker_response_queues,
     int poll_worker_interval_ms,
@@ -281,18 +281,38 @@ void poll_worker_loop(
                                 // Execute the actual pop with locking
                                 PopResult result;
                                 if (batch_copy[0].is_queue_based()) {
-                                    result = queue_manager->pop_messages(
-                                        batch_copy[0].queue_name.value(),
-                                        batch_copy[0].partition_name,
-                                        batch_copy[0].consumer_group,
-                                        {.wait = false, .batch = total_batch}
-                                    );
+                                    // Queue-based pop
+                                    PopOptions opts;
+                                    opts.wait = false;
+                                    opts.batch = total_batch;
+                                    
+                                    if (batch_copy[0].partition_name.has_value()) {
+                                        // Specific partition
+                                        result = async_queue_manager->pop_messages_from_partition(
+                                            batch_copy[0].queue_name.value(),
+                                            batch_copy[0].partition_name.value(),
+                                            batch_copy[0].consumer_group,
+                                            opts
+                                        );
+                                    } else {
+                                        // Any partition in queue
+                                        result = async_queue_manager->pop_messages_from_queue(
+                                            batch_copy[0].queue_name.value(),
+                                            batch_copy[0].consumer_group,
+                                            opts
+                                        );
+                                    }
                                 } else {
-                                    result = queue_manager->pop_with_namespace_task(
+                                    // Namespace/task-based pop
+                                    PopOptions opts;
+                                    opts.wait = false;
+                                    opts.batch = total_batch;
+                                    
+                                    result = async_queue_manager->pop_messages_filtered(
                                         batch_copy[0].namespace_name,
                                         batch_copy[0].task_name,
                                         batch_copy[0].consumer_group,
-                                        {.wait = false, .batch = total_batch}
+                                        opts
                                     );
                                 }
                                 

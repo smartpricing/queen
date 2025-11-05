@@ -1,7 +1,7 @@
 #pragma once
 
 #include "queen/poll_intention_registry.hpp"
-#include "queen/queue_manager.hpp"
+#include "queen/async_queue_manager.hpp"
 #include "queen/response_queue.hpp"
 #include <threadpool.hpp>
 #include <memory>
@@ -18,7 +18,7 @@ namespace queen {
  * 
  * @param thread_pool The ThreadPool to reserve workers from
  * @param registry The shared PollIntentionRegistry
- * @param queue_manager The QueueManager for database operations
+ * @param async_queue_manager The AsyncQueueManager for database operations
  * @param response_queue The ResponseQueue for sending responses
  * @param worker_count Number of poll worker threads to reserve (default: 2)
  * @param poll_worker_interval_ms How often workers wake to check registry (default: 50ms)
@@ -30,7 +30,7 @@ namespace queen {
 void init_long_polling(
     std::shared_ptr<astp::ThreadPool> thread_pool,
     std::shared_ptr<PollIntentionRegistry> registry,
-    std::shared_ptr<QueueManager> queue_manager,
+    std::shared_ptr<AsyncQueueManager> async_queue_manager,
     std::vector<std::shared_ptr<ResponseQueue>> worker_response_queues,  // All worker queues
     int worker_count = 2,
     int poll_worker_interval_ms = 50,
@@ -57,7 +57,7 @@ void init_long_polling(
  * @param worker_id Worker ID for load balancing (0-based)
  * @param total_workers Total number of poll workers
  * @param registry The shared PollIntentionRegistry
- * @param queue_manager The QueueManager for database operations
+ * @param async_queue_manager The AsyncQueueManager for database operations
  * @param thread_pool The ThreadPool for submitting pop jobs
  * @param response_queue The ResponseQueue for sending responses
  * @param poll_worker_interval_ms How often to wake and check registry (default: 50ms)
@@ -70,7 +70,7 @@ void poll_worker_loop(
     int worker_id,
     int total_workers,
     std::shared_ptr<PollIntentionRegistry> registry,
-    std::shared_ptr<QueueManager> queue_manager,
+    std::shared_ptr<AsyncQueueManager> async_queue_manager,
     std::shared_ptr<astp::ThreadPool> thread_pool,
     std::vector<std::shared_ptr<ResponseQueue>> worker_response_queues,
     int poll_worker_interval_ms = 50,

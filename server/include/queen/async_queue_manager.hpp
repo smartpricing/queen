@@ -78,6 +78,30 @@ private:
     // Size estimation for dynamic batching
     size_t estimate_row_size(const PushItem& item, bool encryption_enabled) const;
     
+    // Lease management - async versions
+    std::string acquire_partition_lease(
+        PGconn* conn,
+        const std::string& queue_name,
+        const std::string& partition_name,
+        const std::string& consumer_group,
+        int lease_time_seconds,
+        const PopOptions& options
+    );
+    
+    void release_partition_lease(
+        PGconn* conn,
+        const std::string& queue_name,
+        const std::string& partition_name,
+        const std::string& consumer_group
+    );
+    
+    bool ensure_consumer_group_exists(
+        PGconn* conn,
+        const std::string& queue_name,
+        const std::string& partition_name,
+        const std::string& consumer_group
+    );
+    
     // Helper for sending queries and getting results asynchronously
     void send_query_async(PGconn* conn, const std::string& sql, const std::vector<std::string>& params);
     PGResultPtr get_query_result_async(PGconn* conn);
@@ -94,6 +118,65 @@ public:
     
     // Core message operations - async versions
     std::vector<PushResult> push_messages(const std::vector<PushItem>& items);
+    
+    // Pop operations - async versions
+    PopResult pop_messages_from_partition(
+        const std::string& queue_name,
+        const std::string& partition_name,
+        const std::string& consumer_group,
+        const PopOptions& options
+    );
+    
+    PopResult pop_messages_from_queue(
+        const std::string& queue_name,
+        const std::string& consumer_group,
+        const PopOptions& options
+    );
+    
+    PopResult pop_messages_filtered(
+        const std::optional<std::string>& namespace_name,
+        const std::optional<std::string>& task_name,
+        const std::string& consumer_group,
+        const PopOptions& options
+    );
+    
+    // Acknowledgment operations - async versions
+    struct AckResult {
+        bool success;
+        std::string message;
+        std::optional<std::string> error;
+    };
+    
+    AckResult acknowledge_message(
+        const std::string& transaction_id,
+        const std::string& status,
+        const std::optional<std::string>& error,
+        const std::string& consumer_group,
+        const std::optional<std::string>& lease_id,
+        const std::optional<std::string>& partition_id
+    );
+    
+    struct BatchAckResult {
+        int successful_acks;
+        int failed_acks;
+        std::vector<AckResult> results;
+    };
+    
+    BatchAckResult acknowledge_messages_batch(
+        const std::vector<nlohmann::json>& acknowledgments
+    );
+    
+    // Transaction operations - async version
+    struct TransactionResult {
+        bool success;
+        std::string transaction_id;
+        std::vector<nlohmann::json> results;
+        std::optional<std::string> error;
+    };
+    
+    TransactionResult execute_transaction(
+        const std::vector<nlohmann::json>& operations
+    );
     
     // Health check
     bool health_check();

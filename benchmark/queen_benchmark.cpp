@@ -336,7 +336,7 @@ void consumer_thread(int thread_id, const BenchmarkConfig& config, BenchmarkStat
         queue_builder
             .batch(config.batch_size)
             .wait(false)  // Long polling
-            .idle_millis(5000)  // Stop after 5 seconds of no messages
+            .idle_millis(500)  // Stop after 5 seconds of no messages
             .auto_ack(true)
             .consume([&](const json& messages) {
                 stats.mark_message_time();  // Track actual processing time

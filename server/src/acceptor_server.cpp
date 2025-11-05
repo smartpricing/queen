@@ -995,7 +995,7 @@ static void setup_worker_routes(uWS::App* app,
     });
     
     // SPECIFIC POP from queue/partition - NEW RESPONSE QUEUE ARCHITECTURE WITH POLL INTENTION REGISTRY
-    app->get("/api/v1/pop/queue/:queue/partition/:partition", [queue_manager, config, worker_id, db_thread_pool](auto* res, auto* req) {
+    app->get("/api/v1/pop/queue/:queue/partition/:partition", [async_queue_manager, config, worker_id](auto* res, auto* req) {
         try {
             std::string queue_name = std::string(req->getParameter(0));
             std::string partition_name = std::string(req->getParameter(1));
@@ -1005,7 +1005,7 @@ static void setup_worker_routes(uWS::App* app,
             int timeout_ms = get_query_param_int(req, "timeout", config.queue.default_timeout);
             int batch = get_query_param_int(req, "batch", config.queue.default_batch_size);
             
-            auto pool_stats = queue_manager->get_pool_stats();
+            auto pool_stats = async_queue_manager->get_pool_stats();
             spdlog::info("[Worker {}] SPOP: [{}/{}@{}] batch={}, wait={} | Pool: {}/{} conn ({} in use)", 
                         worker_id, queue_name, partition_name, consumer_group, batch, wait,
                         pool_stats.available, pool_stats.total, pool_stats.in_use);
@@ -1026,10 +1026,10 @@ static void setup_worker_routes(uWS::App* app,
                 options.subscription_from = sub_from;
             }
             
-            // Register response in uWebSockets thread - SAFE
-            std::string request_id = global_response_registry->register_response(res, worker_id);
-            
             if (wait) {
+                // Register response in uWebSockets thread for long-polling
+                std::string request_id = global_response_registry->register_response(res, worker_id);
+                
                 // Use Poll Intention Registry for long-polling
                 queen::PollIntention intention{
                     .request_id = request_id,
@@ -1053,68 +1053,61 @@ static void setup_worker_routes(uWS::App* app,
                 return;
             }
             
-            // Non-waiting mode: use ThreadPool directly (existing logic)
-            spdlog::info("[Worker {}] SPOP: Registered response {}, submitting to ThreadPool (wait=false)", worker_id, request_id);
+            // Non-waiting mode: use AsyncQueueManager directly in uWS event loop
+            spdlog::info("[Worker {}] SPOP: Executing immediate pop for {}/{} (wait=false)", worker_id, queue_name, partition_name);
             
-            db_thread_pool->push([request_id, queue_manager, worker_id, queue_name, partition_name, consumer_group, options]() {
-                spdlog::info("[Worker {}] SPOP: ThreadPool executing specific pop operation for {}", worker_id, request_id);
+            try {
+                auto start_time = std::chrono::steady_clock::now();
+                auto result = async_queue_manager->pop_messages_from_partition(queue_name, partition_name, consumer_group, options);
+                auto duration_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+                    std::chrono::steady_clock::now() - start_time).count();
                 
-                try {
-                    auto start_time = std::chrono::steady_clock::now();
-                    auto result = queue_manager->pop_messages(queue_name, partition_name, consumer_group, options);
-                    auto duration_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
-                        std::chrono::steady_clock::now() - start_time).count();
-                    
-                    if (result.messages.empty()) {
-                        // No messages - send 204 No Content
-                        nlohmann::json empty_response;
-                        worker_response_queues[worker_id]->push(request_id, empty_response, false, 204);
-                        spdlog::info("[Worker {}] SPOP: No messages for {} [{}/{}], {}ms", 
-                                   worker_id, request_id, queue_name, partition_name, duration_ms);
-                        return;
-                    }
-                    
-                    // Build response JSON
-                    nlohmann::json response = {{"messages", nlohmann::json::array()}};
-                    
-                    for (const auto& msg : result.messages) {
-                        auto time_t = std::chrono::system_clock::to_time_t(msg.created_at);
-                        auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(
-                            msg.created_at.time_since_epoch()) % 1000;
-                        
-                        std::stringstream created_at_ss;
-                        created_at_ss << std::put_time(std::gmtime(&time_t), "%Y-%m-%dT%H:%M:%S");
-                        created_at_ss << '.' << std::setfill('0') << std::setw(3) << ms.count() << 'Z';
-                        
-                        nlohmann::json msg_json = {
-                            {"id", msg.id},
-                            {"transactionId", msg.transaction_id},
-                            {"partitionId", msg.partition_id},
-                            {"traceId", msg.trace_id.empty() ? nlohmann::json(nullptr) : nlohmann::json(msg.trace_id)},
-                            {"queue", msg.queue_name},
-                            {"partition", msg.partition_name},
-                            {"data", msg.payload},
-                            {"retryCount", msg.retry_count},
-                            {"priority", msg.priority},
-                            {"createdAt", created_at_ss.str()},
-                            {"consumerGroup", consumer_group == "__QUEUE_MODE__" ? nlohmann::json(nullptr) : nlohmann::json(consumer_group)},
-                            {"leaseId", result.lease_id.has_value() ? nlohmann::json(*result.lease_id) : nlohmann::json(nullptr)}
-                        };
-                        response["messages"].push_back(msg_json);
-                    }
-                    
-                    // SAFE: Push to response queue
-                    worker_response_queues[worker_id]->push(request_id, response, false, 200);
-                    spdlog::info("[Worker {}] SPOP: Queued response for {} [{}/{}] ({} messages, {}ms)", 
-                               worker_id, request_id, queue_name, partition_name, result.messages.size(), duration_ms);
-                    
-                } catch (const std::exception& e) {
-                    // Error handling - push error to response queue
-                    nlohmann::json error_response = {{"error", e.what()}};
-                    worker_response_queues[worker_id]->push(request_id, error_response, true, 500);
-                    spdlog::error("[Worker {}] SPOP: Error for {} [{}/{}]: {}", worker_id, request_id, queue_name, partition_name, e.what());
+                if (result.messages.empty()) {
+                    // No messages - send 204 No Content
+                    nlohmann::json empty_response;
+                    send_json_response(res, empty_response, 204);
+                    spdlog::info("[Worker {}] SPOP: No messages for [{}/{}], {}ms", 
+                               worker_id, queue_name, partition_name, duration_ms);
+                    return;
                 }
-            });
+                
+                // Build response JSON
+                nlohmann::json response = {{"messages", nlohmann::json::array()}};
+                
+                for (const auto& msg : result.messages) {
+                    auto time_t = std::chrono::system_clock::to_time_t(msg.created_at);
+                    auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+                        msg.created_at.time_since_epoch()) % 1000;
+                    
+                    std::stringstream created_at_ss;
+                    created_at_ss << std::put_time(std::gmtime(&time_t), "%Y-%m-%dT%H:%M:%S");
+                    created_at_ss << '.' << std::setfill('0') << std::setw(3) << ms.count() << 'Z';
+                    
+                    nlohmann::json msg_json = {
+                        {"id", msg.id},
+                        {"transactionId", msg.transaction_id},
+                        {"partitionId", msg.partition_id},
+                        {"traceId", msg.trace_id.empty() ? nlohmann::json(nullptr) : nlohmann::json(msg.trace_id)},
+                        {"queue", msg.queue_name},
+                        {"partition", msg.partition_name},
+                        {"data", msg.payload},
+                        {"retryCount", msg.retry_count},
+                        {"priority", msg.priority},
+                        {"createdAt", created_at_ss.str()},
+                        {"consumerGroup", consumer_group == "__QUEUE_MODE__" ? nlohmann::json(nullptr) : nlohmann::json(consumer_group)},
+                        {"leaseId", result.lease_id.has_value() ? nlohmann::json(*result.lease_id) : nlohmann::json(nullptr)}
+                    };
+                    response["messages"].push_back(msg_json);
+                }
+                
+                send_json_response(res, response, 200);
+                spdlog::info("[Worker {}] SPOP: Sent response for [{}/{}] ({} messages, {}ms)", 
+                           worker_id, queue_name, partition_name, result.messages.size(), duration_ms);
+                
+            } catch (const std::exception& e) {
+                send_error_response(res, e.what(), 500);
+                spdlog::error("[Worker {}] SPOP: Error for [{}/{}]: {}", worker_id, queue_name, partition_name, e.what());
+            }
             
         } catch (const std::exception& e) {
             send_error_response(res, e.what(), 500);
@@ -1123,9 +1116,9 @@ static void setup_worker_routes(uWS::App* app,
     
     // ASYNC ACK batch
     // ASYNC ACK Batch - NEW RESPONSE QUEUE ARCHITECTURE
-    app->post("/api/v1/ack/batch", [queue_manager, worker_id, db_thread_pool](auto* res, auto* req) {
+    app->post("/api/v1/ack/batch", [async_queue_manager, worker_id](auto* res, auto* req) {
         read_json_body(res,
-            [res, queue_manager, worker_id, db_thread_pool](const nlohmann::json& body) {
+            [res, async_queue_manager, worker_id](const nlohmann::json& body) {
                 try {
                     if (!body.contains("acknowledgments") || !body["acknowledgments"].is_array()) {
                         send_error_response(res, "acknowledgments array is required", 400);
@@ -1139,79 +1132,63 @@ static void setup_worker_routes(uWS::App* app,
                         consumer_group = body["consumerGroup"];
                     }
                     
-                    std::vector<QueueManager::AckItem> ack_items;
+                    // Validate each acknowledgment has required fields
+                    std::vector<nlohmann::json> ack_items;
                     for (const auto& ack_json : acknowledgments) {
-                        QueueManager::AckItem ack;
-                        
                         if (!ack_json.contains("transactionId") || ack_json["transactionId"].is_null() || !ack_json["transactionId"].is_string()) {
                             send_error_response(res, "Each acknowledgment must have a valid transactionId string", 400);
                             return;
                         }
-                        ack.transaction_id = ack_json["transactionId"];
                         
-                        ack.status = "completed";
-                        if (ack_json.contains("status") && !ack_json["status"].is_null() && ack_json["status"].is_string()) {
-                            ack.status = ack_json["status"];
-                        }
-                        
-                        if (ack_json.contains("error") && !ack_json["error"].is_null() && ack_json["error"].is_string()) {
-                            ack.error = ack_json["error"];
-                        }
-                        
-                        // CRITICAL: partition_id is now MANDATORY to prevent acking wrong message
-                        // when transactionId is not unique across partitions
-                        if (ack_json.contains("partitionId") && !ack_json["partitionId"].is_null() && ack_json["partitionId"].is_string()) {
-                            ack.partition_id = ack_json["partitionId"];
-                        } else {
+                        // CRITICAL: partition_id is now MANDATORY
+                        if (!ack_json.contains("partitionId") || ack_json["partitionId"].is_null() || !ack_json["partitionId"].is_string()) {
                             send_error_response(res, "Each acknowledgment must have a valid partitionId string to ensure message uniqueness", 400);
                             return;
                         }
                         
-                        ack_items.push_back(ack);
+                        // Build ack item with consumer group
+                        nlohmann::json ack_item = ack_json;
+                        ack_item["consumerGroup"] = consumer_group;
+                        ack_items.push_back(ack_item);
                     }
                     
-                    // Register response in uWebSockets thread - SAFE
-                    std::string request_id = global_response_registry->register_response(res, worker_id);
+                    spdlog::info("[Worker {}] ACK BATCH: Executing immediate batch ACK ({} items)", worker_id, ack_items.size());
                     
-                    spdlog::info("[Worker {}] ACK BATCH: Registered response {}, submitting to ThreadPool", worker_id, request_id);
-                    
-                    // Execute batch ACK operation in ThreadPool
-                    db_thread_pool->push([request_id, queue_manager, worker_id, ack_items, consumer_group]() {
-                        spdlog::info("[Worker {}] ACK BATCH: ThreadPool executing batch ACK operation for {}", worker_id, request_id);
+                    // Execute batch ACK operation directly in uWS event loop
+                    try {
+                        auto ack_start = std::chrono::steady_clock::now();
+                        auto batch_result = async_queue_manager->acknowledge_messages_batch(ack_items);
+                        auto ack_end = std::chrono::steady_clock::now();
+                        auto ack_duration_ms = std::chrono::duration_cast<std::chrono::milliseconds>(ack_end - ack_start).count();
                         
-                        try {
-                            auto ack_start = std::chrono::steady_clock::now();
-                            auto results = queue_manager->acknowledge_messages(ack_items, consumer_group);
-                            auto ack_end = std::chrono::steady_clock::now();
-                            auto ack_duration_ms = std::chrono::duration_cast<std::chrono::milliseconds>(ack_end - ack_start).count();
-                            
-                            spdlog::info("[Worker {}] ACK BATCH: {} items, {}ms", 
-                                        worker_id, results.size(), ack_duration_ms);
-                            
-                            nlohmann::json response = {
-                                {"processed", results.size()},
-                                {"results", nlohmann::json::array()}
+                        spdlog::info("[Worker {}] ACK BATCH: {} items, {}ms (success: {}, failed: {})", 
+                                    worker_id, batch_result.results.size(), ack_duration_ms,
+                                    batch_result.successful_acks, batch_result.failed_acks);
+                        
+                        nlohmann::json response = {
+                            {"successful", batch_result.successful_acks},
+                            {"failed", batch_result.failed_acks},
+                            {"results", nlohmann::json::array()}
+                        };
+                        
+                        for (const auto& ack_result : batch_result.results) {
+                            nlohmann::json result_item = {
+                                {"success", ack_result.success},
+                                {"message", ack_result.message}
                             };
-                            
-                            for (const auto& ack_result : results) {
-                                nlohmann::json result_item = {
-                                    {"transactionId", ack_result.transaction_id},
-                                    {"status", ack_result.status}
-                                };
-                                response["results"].push_back(result_item);
+                            if (ack_result.error.has_value()) {
+                                result_item["error"] = *ack_result.error;
                             }
-                            
-                            // SAFE: Push to response queue
-                            worker_response_queues[worker_id]->push(request_id, response, false, 200);
-                            spdlog::info("[Worker {}] ACK BATCH: Queued response for {} ({} items)", worker_id, request_id, results.size());
-                            
-                        } catch (const std::exception& e) {
-                            // Error handling - push error to response queue
-                            nlohmann::json error_response = {{"error", e.what()}};
-                            worker_response_queues[worker_id]->push(request_id, error_response, true, 500);
-                            spdlog::error("[Worker {}] ACK BATCH: Error for {}: {}", worker_id, request_id, e.what());
+                            response["results"].push_back(result_item);
                         }
-                    });
+                        
+                        send_json_response(res, response, 200);
+                        spdlog::info("[Worker {}] ACK BATCH: Sent response ({} items)", worker_id, batch_result.results.size());
+                        
+                    } catch (const std::exception& e) {
+                        send_error_response(res, e.what(), 500);
+                        spdlog::error("[Worker {}] ACK BATCH: Error: {}", worker_id, e.what());
+                    }
                     
                 } catch (const std::exception& e) {
                     send_error_response(res, e.what(), 500);
@@ -1244,7 +1221,7 @@ static void setup_worker_routes(uWS::App* app,
     });
     
     // POP from queue (any partition) - NEW RESPONSE QUEUE ARCHITECTURE WITH POLL INTENTION REGISTRY
-    app->get("/api/v1/pop/queue/:queue", [queue_manager, config, worker_id, db_thread_pool](auto* res, auto* req) {
+    app->get("/api/v1/pop/queue/:queue", [async_queue_manager, config, worker_id](auto* res, auto* req) {
         try {
             std::string queue_name = std::string(req->getParameter(0));
             std::string consumer_group = get_query_param(req, "consumerGroup", "__QUEUE_MODE__");
@@ -1253,7 +1230,7 @@ static void setup_worker_routes(uWS::App* app,
             int timeout_ms = get_query_param_int(req, "timeout", config.queue.default_timeout);
             int batch = get_query_param_int(req, "batch", config.queue.default_batch_size);
             
-            auto pool_stats = queue_manager->get_pool_stats();
+            auto pool_stats = async_queue_manager->get_pool_stats();
             spdlog::info("[Worker {}] QPOP: [{}/*@{}] batch={}, wait={} | Pool: {}/{} conn ({} in use)", 
                         worker_id, queue_name, consumer_group, batch, wait,
                         pool_stats.available, pool_stats.total, pool_stats.in_use);
@@ -1274,10 +1251,10 @@ static void setup_worker_routes(uWS::App* app,
                 options.subscription_from = sub_from;
             }
             
-            // Register response in uWebSockets thread - SAFE
-            std::string request_id = global_response_registry->register_response(res, worker_id);
-            
             if (wait) {
+                // Register response in uWebSockets thread for long-polling
+                std::string request_id = global_response_registry->register_response(res, worker_id);
+                
                 // Use Poll Intention Registry for long-polling
                 queen::PollIntention intention{
                     .request_id = request_id,
@@ -1301,68 +1278,61 @@ static void setup_worker_routes(uWS::App* app,
                 return;
             }
             
-            // Non-waiting mode: use ThreadPool directly (existing logic)
-            spdlog::info("[Worker {}] QPOP: Registered response {}, submitting to ThreadPool (wait=false)", worker_id, request_id);
+            // Non-waiting mode: use AsyncQueueManager directly in uWS event loop
+            spdlog::info("[Worker {}] QPOP: Executing immediate pop for {}/* (wait=false)", worker_id, queue_name);
             
-            db_thread_pool->push([request_id, queue_manager, worker_id, queue_name, consumer_group, options]() {
-                spdlog::info("[Worker {}] QPOP: ThreadPool executing queue pop operation for {}", worker_id, request_id);
+            try {
+                auto start_time = std::chrono::steady_clock::now();
+                auto result = async_queue_manager->pop_messages_from_queue(queue_name, consumer_group, options);
+                auto duration_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+                    std::chrono::steady_clock::now() - start_time).count();
                 
-                try {
-                    auto start_time = std::chrono::steady_clock::now();
-                    auto result = queue_manager->pop_messages(queue_name, std::nullopt, consumer_group, options);
-                    auto duration_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
-                        std::chrono::steady_clock::now() - start_time).count();
-                    
-                    if (result.messages.empty()) {
-                        // No messages - send 204 No Content
-                        nlohmann::json empty_response;
-                        worker_response_queues[worker_id]->push(request_id, empty_response, false, 204);
-                        spdlog::info("[Worker {}] QPOP: No messages for {} [{}/*], {}ms", 
-                                   worker_id, request_id, queue_name, duration_ms);
-                        return;
-                    }
-                    
-                    // Build response JSON
-                    nlohmann::json response = {{"messages", nlohmann::json::array()}};
-                    
-                    for (const auto& msg : result.messages) {
-                        auto time_t = std::chrono::system_clock::to_time_t(msg.created_at);
-                        auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(
-                            msg.created_at.time_since_epoch()) % 1000;
-                        
-                        std::stringstream created_at_ss;
-                        created_at_ss << std::put_time(std::gmtime(&time_t), "%Y-%m-%dT%H:%M:%S");
-                        created_at_ss << '.' << std::setfill('0') << std::setw(3) << ms.count() << 'Z';
-                        
-                        nlohmann::json msg_json = {
-                            {"id", msg.id},
-                            {"transactionId", msg.transaction_id},
-                            {"partitionId", msg.partition_id},
-                            {"traceId", msg.trace_id.empty() ? nlohmann::json(nullptr) : nlohmann::json(msg.trace_id)},
-                            {"queue", msg.queue_name},
-                            {"partition", msg.partition_name},
-                            {"data", msg.payload},
-                            {"retryCount", msg.retry_count},
-                            {"priority", msg.priority},
-                            {"createdAt", created_at_ss.str()},
-                            {"consumerGroup", consumer_group == "__QUEUE_MODE__" ? nlohmann::json(nullptr) : nlohmann::json(consumer_group)},
-                            {"leaseId", result.lease_id.has_value() ? nlohmann::json(*result.lease_id) : nlohmann::json(nullptr)}
-                        };
-                        response["messages"].push_back(msg_json);
-                    }
-                    
-                    // SAFE: Push to response queue
-                    worker_response_queues[worker_id]->push(request_id, response, false, 200);
-                    spdlog::info("[Worker {}] QPOP: Queued response for {} [{}/*] ({} messages, {}ms)", 
-                               worker_id, request_id, queue_name, result.messages.size(), duration_ms);
-                    
-                } catch (const std::exception& e) {
-                    // Error handling - push error to response queue
-                    nlohmann::json error_response = {{"error", e.what()}};
-                    worker_response_queues[worker_id]->push(request_id, error_response, true, 500);
-                    spdlog::error("[Worker {}] QPOP: Error for {} [{}/*]: {}", worker_id, request_id, queue_name, e.what());
+                if (result.messages.empty()) {
+                    // No messages - send 204 No Content
+                    nlohmann::json empty_response;
+                    send_json_response(res, empty_response, 204);
+                    spdlog::info("[Worker {}] QPOP: No messages for [{}/*], {}ms", 
+                               worker_id, queue_name, duration_ms);
+                    return;
                 }
-            });
+                
+                // Build response JSON
+                nlohmann::json response = {{"messages", nlohmann::json::array()}};
+                
+                for (const auto& msg : result.messages) {
+                    auto time_t = std::chrono::system_clock::to_time_t(msg.created_at);
+                    auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+                        msg.created_at.time_since_epoch()) % 1000;
+                    
+                    std::stringstream created_at_ss;
+                    created_at_ss << std::put_time(std::gmtime(&time_t), "%Y-%m-%dT%H:%M:%S");
+                    created_at_ss << '.' << std::setfill('0') << std::setw(3) << ms.count() << 'Z';
+                    
+                    nlohmann::json msg_json = {
+                        {"id", msg.id},
+                        {"transactionId", msg.transaction_id},
+                        {"partitionId", msg.partition_id},
+                        {"traceId", msg.trace_id.empty() ? nlohmann::json(nullptr) : nlohmann::json(msg.trace_id)},
+                        {"queue", msg.queue_name},
+                        {"partition", msg.partition_name},
+                        {"data", msg.payload},
+                        {"retryCount", msg.retry_count},
+                        {"priority", msg.priority},
+                        {"createdAt", created_at_ss.str()},
+                        {"consumerGroup", consumer_group == "__QUEUE_MODE__" ? nlohmann::json(nullptr) : nlohmann::json(consumer_group)},
+                        {"leaseId", result.lease_id.has_value() ? nlohmann::json(*result.lease_id) : nlohmann::json(nullptr)}
+                    };
+                    response["messages"].push_back(msg_json);
+                }
+                
+                send_json_response(res, response, 200);
+                spdlog::info("[Worker {}] QPOP: Sent response for [{}/*] ({} messages, {}ms)", 
+                           worker_id, queue_name, result.messages.size(), duration_ms);
+                
+            } catch (const std::exception& e) {
+                send_error_response(res, e.what(), 500);
+                spdlog::error("[Worker {}] QPOP: Error for [{}/*]: {}", worker_id, queue_name, e.what());
+            }
             
         } catch (const std::exception& e) {
             send_error_response(res, e.what(), 500);
@@ -1370,9 +1340,9 @@ static void setup_worker_routes(uWS::App* app,
     });
     
     // ASYNC Single ACK - NEW RESPONSE QUEUE ARCHITECTURE
-    app->post("/api/v1/ack", [queue_manager, worker_id, db_thread_pool](auto* res, auto* req) {
+    app->post("/api/v1/ack", [async_queue_manager, worker_id](auto* res, auto* req) {
         read_json_body(res,
-            [res, queue_manager, worker_id, db_thread_pool](const nlohmann::json& body) {
+            [res, async_queue_manager, worker_id](const nlohmann::json& body) {
                 try {
                     std::string transaction_id = "";
                     if (body.contains("transactionId") && !body["transactionId"].is_null() && body["transactionId"].is_string()) {
@@ -1412,56 +1382,46 @@ static void setup_worker_routes(uWS::App* app,
                         return;
                     }
                     
-                    // Register response in uWebSockets thread - SAFE
-                    std::string request_id = global_response_registry->register_response(res, worker_id);
+                    spdlog::info("[Worker {}] ACK: Executing immediate ACK", worker_id);
                     
-                    spdlog::info("[Worker {}] ACK: Registered response {}, submitting to ThreadPool", worker_id, request_id);
-                    
-                    // Execute ACK operation in ThreadPool
-                    db_thread_pool->push([request_id, queue_manager, worker_id, transaction_id, status, error, consumer_group, lease_id, partition_id]() {
-                        spdlog::info("[Worker {}] ACK: ThreadPool executing ACK operation for {}", worker_id, request_id);
+                    // Execute ACK operation directly in uWS event loop
+                    try {
+                        auto ack_start = std::chrono::steady_clock::now();
+                        auto ack_result = async_queue_manager->acknowledge_message(transaction_id, status, error, consumer_group, lease_id, partition_id);
+                        auto ack_end = std::chrono::steady_clock::now();
+                        auto ack_duration_ms = std::chrono::duration_cast<std::chrono::milliseconds>(ack_end - ack_start).count();
                         
-                        try {
-                            auto ack_start = std::chrono::steady_clock::now();
-                            auto ack_result = queue_manager->acknowledge_message(transaction_id, status, error, consumer_group, lease_id, partition_id);
-                            auto ack_end = std::chrono::steady_clock::now();
-                            auto ack_duration_ms = std::chrono::duration_cast<std::chrono::milliseconds>(ack_end - ack_start).count();
+                        spdlog::debug("[Worker {}] ACK: 1 item, {}ms", worker_id, ack_duration_ms);
+                        
+                        if (ack_result.success) {
+                            auto now = std::chrono::system_clock::now();
+                            auto time_t = std::chrono::system_clock::to_time_t(now);
+                            auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+                                now.time_since_epoch()) % 1000;
                             
-                            spdlog::debug("[Worker {}] ACK: 1 item, {}ms", worker_id, ack_duration_ms);
+                            std::stringstream ss;
+                            ss << std::put_time(std::gmtime(&time_t), "%Y-%m-%dT%H:%M:%S");
+                            ss << '.' << std::setfill('0') << std::setw(3) << ms.count() << 'Z';
                             
-                            if (ack_result.success) {
-                                auto now = std::chrono::system_clock::now();
-                                auto time_t = std::chrono::system_clock::to_time_t(now);
-                                auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(
-                                    now.time_since_epoch()) % 1000;
-                                
-                                std::stringstream ss;
-                                ss << std::put_time(std::gmtime(&time_t), "%Y-%m-%dT%H:%M:%S");
-                                ss << '.' << std::setfill('0') << std::setw(3) << ms.count() << 'Z';
-                                
-                                nlohmann::json response = {
-                                    {"transactionId", transaction_id},
-                                    {"status", ack_result.status},
-                                    {"consumerGroup", consumer_group == "__QUEUE_MODE__" ? nlohmann::json(nullptr) : nlohmann::json(consumer_group)},
-                                    {"acknowledgedAt", ss.str()}
-                                };
-                                
-                                // SAFE: Push to response queue
-                                worker_response_queues[worker_id]->push(request_id, response, false, 200);
-                                spdlog::info("[Worker {}] ACK: Queued success response for {}", worker_id, request_id);
-                            } else {
-                                nlohmann::json error_response = {{"error", "Failed to acknowledge message: " + ack_result.status}};
-                                worker_response_queues[worker_id]->push(request_id, error_response, true, 500);
-                                spdlog::warn("[Worker {}] ACK: Queued error response for {}: {}", worker_id, request_id, ack_result.status);
-                            }
+                            nlohmann::json response = {
+                                {"transactionId", transaction_id},
+                                {"status", ack_result.message},
+                                {"consumerGroup", consumer_group == "__QUEUE_MODE__" ? nlohmann::json(nullptr) : nlohmann::json(consumer_group)},
+                                {"acknowledgedAt", ss.str()}
+                            };
                             
-                        } catch (const std::exception& e) {
-                            // Error handling - push error to response queue
-                            nlohmann::json error_response = {{"error", e.what()}};
-                            worker_response_queues[worker_id]->push(request_id, error_response, true, 500);
-                            spdlog::error("[Worker {}] ACK: Error for {}: {}", worker_id, request_id, e.what());
+                            send_json_response(res, response, 200);
+                            spdlog::info("[Worker {}] ACK: Sent success response", worker_id);
+                        } else {
+                            nlohmann::json error_response = {{"error", "Failed to acknowledge message: " + ack_result.message}};
+                            send_json_response(res, error_response, 500);
+                            spdlog::warn("[Worker {}] ACK: Sent error response: {}", worker_id, ack_result.message);
                         }
-                    });
+                        
+                    } catch (const std::exception& e) {
+                        send_error_response(res, e.what(), 500);
+                        spdlog::error("[Worker {}] ACK: Error: {}", worker_id, e.what());
+                    }
                     
                 } catch (const std::exception& e) {
                     send_error_response(res, e.what(), 500);
@@ -1474,7 +1434,7 @@ static void setup_worker_routes(uWS::App* app,
     });
     
     // ASYNC POP with namespace/task filtering (no specific queue) - NEW RESPONSE QUEUE ARCHITECTURE WITH POLL INTENTION REGISTRY
-    app->get("/api/v1/pop", [queue_manager, config, worker_id, db_thread_pool](auto* res, auto* req) {
+    app->get("/api/v1/pop", [async_queue_manager, config, worker_id](auto* res, auto* req) {
         try {
             std::string consumer_group = get_query_param(req, "consumerGroup", "__QUEUE_MODE__");
             std::string namespace_param = get_query_param(req, "namespace", "");
@@ -1498,10 +1458,10 @@ static void setup_worker_routes(uWS::App* app,
             std::string sub_from = get_query_param(req, "subscriptionFrom", "");
             if (!sub_from.empty()) options.subscription_from = sub_from;
             
-            // Register response in uWebSockets thread - SAFE
-            std::string request_id = global_response_registry->register_response(res, worker_id);
-            
             if (wait) {
+                // Register response in uWebSockets thread for long-polling
+                std::string request_id = global_response_registry->register_response(res, worker_id);
+                
                 // Use Poll Intention Registry for long-polling
                 queen::PollIntention intention{
                     .request_id = request_id,
@@ -1527,62 +1487,56 @@ static void setup_worker_routes(uWS::App* app,
                 return;
             }
             
-            // Non-waiting mode: use ThreadPool directly (existing logic)
-            spdlog::info("[Worker {}] POP: Registered response {}, submitting to ThreadPool (wait=false)", worker_id, request_id);
+            // Non-waiting mode: use AsyncQueueManager directly in uWS event loop
+            spdlog::info("[Worker {}] POP: Executing immediate pop for namespace={} task={} (wait=false)", 
+                        worker_id, namespace_name.value_or("*"), task_name.value_or("*"));
             
-            db_thread_pool->push([request_id, queue_manager, worker_id, namespace_name, task_name, consumer_group, options]() {
-                spdlog::info("[Worker {}] POP: ThreadPool executing pop operation for {}", worker_id, request_id);
+            try {
+                auto result = async_queue_manager->pop_messages_filtered(namespace_name, task_name, consumer_group, options);
                 
-                try {
-                    auto result = queue_manager->pop_with_namespace_task(namespace_name, task_name, consumer_group, options);
-                    
-                    if (result.messages.empty()) {
-                        // No messages - send 204 No Content
-                        nlohmann::json empty_response;
-                        worker_response_queues[worker_id]->push(request_id, empty_response, false, 204);
-                        spdlog::debug("[Worker {}] POP: No messages for {}", worker_id, request_id);
-                        return;
-                    }
-                    
-                    // Build response JSON
-                    nlohmann::json response = {{"messages", nlohmann::json::array()}};
-                    for (const auto& msg : result.messages) {
-                        auto time_t = std::chrono::system_clock::to_time_t(msg.created_at);
-                        auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(
-                            msg.created_at.time_since_epoch()) % 1000;
-                        
-                        std::stringstream created_at_ss;
-                        created_at_ss << std::put_time(std::gmtime(&time_t), "%Y-%m-%dT%H:%M:%S");
-                        created_at_ss << '.' << std::setfill('0') << std::setw(3) << ms.count() << 'Z';
-                        
-                        nlohmann::json msg_json = {
-                            {"id", msg.id},
-                            {"transactionId", msg.transaction_id},
-                            {"partitionId", msg.partition_id},
-                            {"traceId", msg.trace_id.empty() ? nlohmann::json(nullptr) : nlohmann::json(msg.trace_id)},
-                            {"queue", msg.queue_name},
-                            {"partition", msg.partition_name},
-                            {"data", msg.payload},
-                            {"retryCount", msg.retry_count},
-                            {"priority", msg.priority},
-                            {"createdAt", created_at_ss.str()},
-                            {"consumerGroup", consumer_group == "__QUEUE_MODE__" ? nlohmann::json(nullptr) : nlohmann::json(consumer_group)},
-                            {"leaseId", result.lease_id.has_value() ? nlohmann::json(*result.lease_id) : nlohmann::json(nullptr)}
-                        };
-                        response["messages"].push_back(msg_json);
-                    }
-                    
-                    // SAFE: Push to response queue
-                    worker_response_queues[worker_id]->push(request_id, response, false, 200);
-                    spdlog::info("[Worker {}] POP: Queued response for {} ({} messages)", worker_id, request_id, result.messages.size());
-                    
-                } catch (const std::exception& e) {
-                    // Error handling - push error to response queue
-                    nlohmann::json error_response = {{"error", e.what()}};
-                    worker_response_queues[worker_id]->push(request_id, error_response, true, 500);
-                    spdlog::error("[Worker {}] POP: Error for {}: {}", worker_id, request_id, e.what());
+                if (result.messages.empty()) {
+                    // No messages - send 204 No Content
+                    nlohmann::json empty_response;
+                    send_json_response(res, empty_response, 204);
+                    spdlog::debug("[Worker {}] POP: No messages", worker_id);
+                    return;
                 }
-            });
+                
+                // Build response JSON
+                nlohmann::json response = {{"messages", nlohmann::json::array()}};
+                for (const auto& msg : result.messages) {
+                    auto time_t = std::chrono::system_clock::to_time_t(msg.created_at);
+                    auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+                        msg.created_at.time_since_epoch()) % 1000;
+                    
+                    std::stringstream created_at_ss;
+                    created_at_ss << std::put_time(std::gmtime(&time_t), "%Y-%m-%dT%H:%M:%S");
+                    created_at_ss << '.' << std::setfill('0') << std::setw(3) << ms.count() << 'Z';
+                    
+                    nlohmann::json msg_json = {
+                        {"id", msg.id},
+                        {"transactionId", msg.transaction_id},
+                        {"partitionId", msg.partition_id},
+                        {"traceId", msg.trace_id.empty() ? nlohmann::json(nullptr) : nlohmann::json(msg.trace_id)},
+                        {"queue", msg.queue_name},
+                        {"partition", msg.partition_name},
+                        {"data", msg.payload},
+                        {"retryCount", msg.retry_count},
+                        {"priority", msg.priority},
+                        {"createdAt", created_at_ss.str()},
+                        {"consumerGroup", consumer_group == "__QUEUE_MODE__" ? nlohmann::json(nullptr) : nlohmann::json(consumer_group)},
+                        {"leaseId", result.lease_id.has_value() ? nlohmann::json(*result.lease_id) : nlohmann::json(nullptr)}
+                    };
+                    response["messages"].push_back(msg_json);
+                }
+                
+                send_json_response(res, response, 200);
+                spdlog::info("[Worker {}] POP: Sent response ({} messages)", worker_id, result.messages.size());
+                
+            } catch (const std::exception& e) {
+                send_error_response(res, e.what(), 500);
+                spdlog::error("[Worker {}] POP: Error: {}", worker_id, e.what());
+            }
             
         } catch (const std::exception& e) {
             send_error_response(res, e.what(), 500);
@@ -1590,9 +1544,9 @@ static void setup_worker_routes(uWS::App* app,
     });
     
     // ASYNC Transaction API (atomic operations) - NEW RESPONSE QUEUE ARCHITECTURE
-    app->post("/api/v1/transaction", [queue_manager, worker_id, db_thread_pool](auto* res, auto* req) {
+    app->post("/api/v1/transaction", [async_queue_manager, worker_id](auto* res, auto* req) {
         read_json_body(res,
-            [res, queue_manager, worker_id, db_thread_pool](const nlohmann::json& body) {
+            [res, async_queue_manager, worker_id](const nlohmann::json& body) {
                 try {
                     if (!body.contains("operations") || !body["operations"].is_array()) {
                         send_error_response(res, "operations array required", 400);
@@ -1605,105 +1559,37 @@ static void setup_worker_routes(uWS::App* app,
                         return;
                     }
                     
-                    // Register response in uWebSockets thread - SAFE
-                    std::string request_id = global_response_registry->register_response(res, worker_id);
+                    spdlog::info("[Worker {}] TRANSACTION: Executing immediate transaction ({} operations)", worker_id, operations.size());
                     
-                    spdlog::info("[Worker {}] TRANSACTION: Registered response {}, submitting to ThreadPool", worker_id, request_id);
-                    
-                    // Execute entire transaction in ThreadPool
-                    db_thread_pool->push([request_id, queue_manager, worker_id, operations]() {
-                        spdlog::info("[Worker {}] TRANSACTION: ThreadPool executing transaction operations for {}", worker_id, request_id);
-                        
-                        try {
-                            // Execute operations sequentially
-                            nlohmann::json results = nlohmann::json::array();
-                    
-                            for (const auto& op : operations) {
-                                if (!op.contains("type")) {
-                                    nlohmann::json error_response = {{"error", "operation type required"}};
-                                    worker_response_queues[worker_id]->push(request_id, error_response, true, 400);
-                                    spdlog::error("[Worker {}] TRANSACTION: Missing operation type for {}", worker_id, request_id);
-                                    return;
-                                }
-                        
-                                std::string op_type = op["type"];
-                                
-                                if (op_type == "push") {
-                                    // Push operation
-                                    auto items_json = op["items"];
-                                    std::vector<PushItem> items;
-                                    
-                                    for (const auto& item_json : items_json) {
-                                        PushItem item;
-                                        item.queue = item_json["queue"];
-                                        item.partition = item_json.value("partition", "Default");
-                                        item.payload = item_json.value("payload", nlohmann::json{});
-                                        items.push_back(item);
-                                    }
-                                    
-                                    auto push_results = queue_manager->push_messages(items);
-                                    nlohmann::json push_result_json;
-                                    push_result_json["type"] = "push";
-                                    push_result_json["count"] = push_results.size();
-                                    results.push_back(push_result_json);
-                                    
-                                } else if (op_type == "ack") {
-                                    // ACK operation
-                                    std::string transaction_id = op["transactionId"];
-                                    std::string status = op.value("status", "completed");
-                                    std::string consumer_group = op.value("consumerGroup", "__QUEUE_MODE__");
-                                    
-                                    std::optional<std::string> error;
-                                    if (op.contains("error") && !op["error"].is_null()) {
-                                        error = op["error"];
-                                    }
-                                    
-                                    // CRITICAL: partition_id is now MANDATORY
-                                    std::optional<std::string> partition_id;
-                                    if (op.contains("partitionId") && !op["partitionId"].is_null() && op["partitionId"].is_string()) {
-                                        partition_id = op["partitionId"];
-                                    } else {
-                                        nlohmann::json error_response = {{"error", "partitionId is required for ack operations to ensure message uniqueness"}};
-                                        worker_response_queues[worker_id]->push(request_id, error_response, true, 400);
-                                        spdlog::error("[Worker {}] TRANSACTION: Missing partitionId in ack operation for {}", worker_id, request_id);
-                                        return;
-                                    }
-                                    
-                                    auto ack_result = queue_manager->acknowledge_message(transaction_id, status, error, consumer_group, std::nullopt, partition_id);
-                                    nlohmann::json ack_result_json;
-                                    ack_result_json["type"] = "ack";
-                                    ack_result_json["success"] = ack_result.success;
-                                    ack_result_json["transactionId"] = ack_result.transaction_id;
-                                    ack_result_json["status"] = ack_result.status;
-                                    results.push_back(ack_result_json);
-                                    
-                                } else {
-                                    // Handle unknown operation type
-                                    nlohmann::json error_response = {{"error", "Unknown operation type: " + op_type}};
-                                    worker_response_queues[worker_id]->push(request_id, error_response, true, 400);
-                                    spdlog::error("[Worker {}] TRANSACTION: Unknown operation type {} for {}", worker_id, op_type, request_id);
-                                    return;
-                                }
-                            }
-                            
-                            // Build final response
-                            nlohmann::json response = {
-                                {"success", true},
-                                {"results", results},
-                                {"transactionId", queue_manager->generate_uuid()}
-                            };
-                            
-                            // SAFE: Push to response queue
-                            worker_response_queues[worker_id]->push(request_id, response, false, 200);
-                            spdlog::info("[Worker {}] TRANSACTION: Queued response for {} ({} operations)", worker_id, request_id, operations.size());
-                            
-                        } catch (const std::exception& e) {
-                            // Error handling - push error to response queue
-                            nlohmann::json error_response = {{"error", e.what()}};
-                            worker_response_queues[worker_id]->push(request_id, error_response, true, 500);
-                            spdlog::error("[Worker {}] TRANSACTION: Error for {}: {}", worker_id, request_id, e.what());
+                    // Execute entire transaction directly in uWS event loop
+                    try {
+                        // Convert operations to vector for execute_transaction
+                        std::vector<nlohmann::json> ops_vec;
+                        for (const auto& op : operations) {
+                            ops_vec.push_back(op);
                         }
-                    });
+                        
+                        auto txn_result = async_queue_manager->execute_transaction(ops_vec);
+                        
+                        nlohmann::json response = {
+                            {"transactionId", txn_result.transaction_id},
+                            {"success", txn_result.success},
+                            {"results", txn_result.results}
+                        };
+                        
+                        if (txn_result.error.has_value()) {
+                            response["error"] = *txn_result.error;
+                        }
+                        
+                        int status_code = txn_result.success ? 200 : 400;
+                        send_json_response(res, response, status_code);
+                        spdlog::info("[Worker {}] TRANSACTION: Sent response ({} operations, success={})", 
+                                   worker_id, txn_result.results.size(), txn_result.success);
+                        
+                    } catch (const std::exception& e) {
+                        send_error_response(res, e.what(), 500);
+                        spdlog::error("[Worker {}] TRANSACTION: Error: {}", worker_id, e.what());
+                    }
                     
                 } catch (const std::exception& e) {
                     send_error_response(res, e.what(), 500);
@@ -2535,26 +2421,36 @@ static void worker_thread(const Config& config, int worker_id, int num_workers,
             // Calculate global pool sizes with 5% safety buffer
             int total_connections = static_cast<int>(config.database.pool_size * 0.95); // 95% of total
             
-            // SPLIT connections between async (push) and regular (pop/ack/analytics) pools
-            // 60% async for high-volume push, 40% regular for other operations
-            int async_connections = static_cast<int>(total_connections * 0.6);
-            int regular_connections = total_connections - async_connections;
+            // ALL connections go to async pool (100% utilization)
+            // No more DatabasePool - everything uses AsyncDbPool
             
-            int total_db_threads = regular_connections; // 1:1 ratio with regular pool
+            int poll_worker_threads = 4; // Only poll workers need thread pool now
             int system_threads = 4; // Small pool for background tasks (metrics, cleanup, etc.)
             
-            spdlog::info("Initializing GLOBAL shared resources:");
-            spdlog::info("  - Total DB connections: {} (95% of {})", total_connections, config.database.pool_size);
-            spdlog::info("  - Async DB connections: {} (60% for push)", async_connections);
-            spdlog::info("  - Regular DB connections: {} (40% for pop/ack/analytics)", regular_connections);
-            spdlog::info("  - DB ThreadPool threads: {}", total_db_threads);
+            spdlog::info("Initializing GLOBAL shared resources (ASYNC-ONLY MODE):");
+            spdlog::info("  - Total DB connections: {} (95% of {}) - ALL ASYNC", total_connections, config.database.pool_size);
+            spdlog::info("  - Poll Worker ThreadPool threads: {} (long-polling only)", poll_worker_threads);
             spdlog::info("  - System ThreadPool threads: {}", system_threads);
             spdlog::info("  - Number of workers: {}", num_workers);
             
-            // Create global connection pool (for pop, ack, analytics, background jobs)
+            // Create ONLY async connection pool (for ALL operations)
+            spdlog::info("  - Creating Async DB Pool ({} connections) for ALL operations", total_connections);
+            global_async_db_pool = std::make_shared<queen::AsyncDbPool>(
+                config.database.connection_string(),
+                total_connections,  // Use ALL connections
+                config.database.statement_timeout,
+                config.database.lock_timeout,
+                config.database.idle_timeout,
+                config.database.schema
+            );
+            
+            // Create small legacy pool ONLY for background services (StreamManager, Metrics, Retention, Eviction)
+            // TODO: Migrate these services to AsyncDbPool in future
+            int legacy_pool_size = 8;  // Small pool for background services only
+            spdlog::info("  - Creating small legacy DB Pool ({} connections) for background services only", legacy_pool_size);
             global_db_pool = std::make_shared<DatabasePool>(
                 config.database.connection_string(),
-                regular_connections,
+                legacy_pool_size,
                 config.database.pool_acquisition_timeout,
                 config.database.statement_timeout,
                 config.database.lock_timeout,
@@ -2562,19 +2458,8 @@ static void worker_thread(const Config& config, int worker_id, int num_workers,
                 config.database.schema
             );
             
-            // Create global ASYNC connection pool for non-blocking push operations
-            spdlog::info("  - Creating Async DB Pool ({} connections) for non-blocking push", async_connections);
-            global_async_db_pool = std::make_shared<queen::AsyncDbPool>(
-                config.database.connection_string(),
-                async_connections,
-                config.database.statement_timeout,
-                config.database.lock_timeout,
-                config.database.idle_timeout,
-                config.database.schema
-            );
-            
-            // Create global DB operations ThreadPool
-            global_db_thread_pool = std::make_shared<astp::ThreadPool>(total_db_threads);
+            // Create global DB operations ThreadPool (only for poll workers now)
+            global_db_thread_pool = std::make_shared<astp::ThreadPool>(poll_worker_threads);
             
             // Create global System operations ThreadPool (for metrics, cleanup, etc.)
             global_system_thread_pool = std::make_shared<astp::ThreadPool>(system_threads);
@@ -2616,28 +2501,29 @@ static void worker_thread(const Config& config, int worker_id, int num_workers,
         });
         
         // Use global shared resources
-        auto db_pool = global_db_pool;
         auto async_db_pool = global_async_db_pool;
+        auto db_pool = global_db_pool;  // Small legacy pool for admin operations
         auto db_thread_pool = global_db_thread_pool;
         
-        // Thread-local queue manager (uses shared pool)
-        auto queue_manager = std::make_shared<QueueManager>(db_pool, config.queue, config.database.schema);
-        
-        // Thread-local ASYNC queue manager for non-blocking push operations
+        // Thread-local ASYNC queue manager for ALL performance-critical operations
         auto async_queue_manager = std::make_shared<queen::AsyncQueueManager>(
             async_db_pool, config.queue, config.database.schema
         );
         
-        // Thread-local analytics manager (uses shared pool)
+        // Thread-local legacy queue manager for administrative operations only
+        // (configure, delete, maintenance, schema init, traces - not performance-critical)
+        auto queue_manager = std::make_shared<QueueManager>(db_pool, config.queue, config.database.schema);
+        
+        // Thread-local analytics manager (uses small legacy pool for background queries)
         auto analytics_manager = std::make_shared<AnalyticsManager>(db_pool);
         
-        spdlog::info("[Worker {}] Using GLOBAL shared ThreadPool and DatabasePool", worker_id);
+        spdlog::info("[Worker {}] Using GLOBAL shared ThreadPool and Async Database Pool", worker_id);
         
         // Test database connection and log pool stats
         // FAILOVER: Don't fail at startup if DB is down - use file buffer instead
-        bool db_available = queue_manager->health_check();
+        bool db_available = async_queue_manager->health_check();
         
-        auto pool_stats = queue_manager->get_pool_stats();
+        auto pool_stats = async_queue_manager->get_pool_stats();
         
         if (db_available) {
             spdlog::info("[Worker {}] Database connection: OK | Pool: {}/{} conn available", 
@@ -2698,7 +2584,7 @@ static void worker_thread(const Config& config, int worker_id, int num_workers,
             queen::init_long_polling(
                 global_db_thread_pool,
                 global_poll_intention_registry,
-                queue_manager,
+                async_queue_manager,
                 worker_response_queues,  // All worker queues (poll workers will route to correct one)
                 2,  // 2 poll workers
                 config.queue.poll_worker_interval,
