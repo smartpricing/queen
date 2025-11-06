@@ -85,6 +85,458 @@ std::string AsyncQueueManager::generate_transaction_id() {
     return generate_uuid();
 }
 
+// --- Schema Initialization ---
+
+bool AsyncQueueManager::initialize_schema() {
+    try {
+        auto conn = async_db_pool_->acquire();
+        if (!conn) {
+            spdlog::error("Failed to acquire connection for schema initialization");
+            return false;
+        }
+        
+        spdlog::info("Initializing schema: {}", schema_name_);
+        
+        // Helper lambda for async query execution
+        auto exec_async = [](PGconn* c, const std::string& sql) -> bool {
+            // Send query
+            if (!PQsendQuery(c, sql.c_str())) {
+                spdlog::error("PQsendQuery failed: {}", PQerrorMessage(c));
+                return false;
+            }
+            
+            // Wait for query to complete
+            while (PQisBusy(c)) {
+                if (!PQconsumeInput(c)) {
+                    spdlog::error("PQconsumeInput failed: {}", PQerrorMessage(c));
+                    return false;
+                }
+            }
+            
+            // Get result
+            PGresult* res = PQgetResult(c);
+            if (!res) {
+                spdlog::error("No result returned");
+                return false;
+            }
+            
+            bool success = (PQresultStatus(res) == PGRES_COMMAND_OK);
+            if (!success) {
+                spdlog::error("Query failed: {}", PQresultErrorMessage(res));
+            }
+            PQclear(res);
+            
+            // Consume any remaining results
+            PGresult* extra;
+            while ((extra = PQgetResult(c)) != nullptr) {
+                PQclear(extra);
+            }
+            
+            return success;
+        };
+        
+        // Create schema if it doesn't exist
+        std::string create_schema_sql = "CREATE SCHEMA IF NOT EXISTS " + schema_name_;
+        if (!exec_async(conn.get(), create_schema_sql)) {
+            spdlog::error("Failed to create schema {}", schema_name_);
+            return false;
+        }
+        
+        // Create tables - Queen Message Queue Schema V3
+        // Tables will be created in the schema specified by search_path
+        std::string create_tables_sql = R"(
+            CREATE TABLE IF NOT EXISTS queues (
+                id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+                name VARCHAR(255) UNIQUE NOT NULL,
+                namespace VARCHAR(255),
+                task VARCHAR(255),
+                priority INTEGER DEFAULT 0,
+                lease_time INTEGER DEFAULT 300,
+                retry_limit INTEGER DEFAULT 3,
+                retry_delay INTEGER DEFAULT 1000,
+                ttl INTEGER DEFAULT 3600,
+                dead_letter_queue BOOLEAN DEFAULT FALSE,
+                dlq_after_max_retries BOOLEAN DEFAULT FALSE,
+                delayed_processing INTEGER DEFAULT 0,
+                window_buffer INTEGER DEFAULT 0,
+                retention_seconds INTEGER DEFAULT 0,
+                completed_retention_seconds INTEGER DEFAULT 0,
+                retention_enabled BOOLEAN DEFAULT FALSE,
+                encryption_enabled BOOLEAN DEFAULT FALSE,
+                max_wait_time_seconds INTEGER DEFAULT 0,
+                max_queue_size INTEGER DEFAULT 0,
+                created_at TIMESTAMPTZ DEFAULT NOW()
+            );
+            
+            CREATE TABLE IF NOT EXISTS partitions (
+                id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+                queue_id UUID REFERENCES queues(id) ON DELETE CASCADE,
+                name VARCHAR(255) NOT NULL DEFAULT 'Default',
+                created_at TIMESTAMPTZ DEFAULT NOW(),
+                last_activity TIMESTAMPTZ DEFAULT NOW(),
+                UNIQUE(queue_id, name)
+            );
+            
+            CREATE TABLE IF NOT EXISTS messages (
+                id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+                transaction_id VARCHAR(255) NOT NULL,
+                trace_id UUID DEFAULT gen_random_uuid(),
+                partition_id UUID REFERENCES partitions(id) ON DELETE CASCADE,
+                payload JSONB NOT NULL,
+                created_at TIMESTAMPTZ DEFAULT NOW(),
+                is_encrypted BOOLEAN DEFAULT FALSE
+            );
+            
+            -- Unique constraint scoped to partition (not global)
+            CREATE UNIQUE INDEX IF NOT EXISTS messages_partition_transaction_unique 
+                ON messages(partition_id, transaction_id);
+            
+            CREATE TABLE IF NOT EXISTS partition_consumers (
+                id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+                partition_id UUID REFERENCES partitions(id) ON DELETE CASCADE,
+                consumer_group VARCHAR(255) DEFAULT '__QUEUE_MODE__',
+                last_consumed_id UUID DEFAULT '00000000-0000-0000-0000-000000000000',
+                last_consumed_created_at TIMESTAMPTZ,
+                total_messages_consumed BIGINT DEFAULT 0,
+                total_batches_consumed BIGINT DEFAULT 0,
+                last_consumed_at TIMESTAMPTZ,
+                lease_expires_at TIMESTAMPTZ,
+                lease_acquired_at TIMESTAMPTZ,
+                message_batch JSONB,
+                batch_size INTEGER DEFAULT 0,
+                acked_count INTEGER DEFAULT 0,
+                worker_id VARCHAR(255),
+                pending_estimate BIGINT DEFAULT 0,
+                last_stats_update TIMESTAMPTZ,
+                batch_retry_count INTEGER DEFAULT 0,
+                created_at TIMESTAMPTZ DEFAULT NOW(),
+                UNIQUE(partition_id, consumer_group),
+                CHECK (
+                    (last_consumed_id = '00000000-0000-0000-0000-000000000000' 
+                     AND last_consumed_created_at IS NULL)
+                    OR 
+                    (last_consumed_id != '00000000-0000-0000-0000-000000000000' 
+                     AND last_consumed_created_at IS NOT NULL)
+                )
+            );
+            
+            CREATE TABLE IF NOT EXISTS messages_consumed (
+                id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+                partition_id UUID REFERENCES partitions(id) ON DELETE CASCADE,
+                consumer_group VARCHAR(255) NOT NULL,
+                messages_completed INTEGER DEFAULT 0,
+                messages_failed INTEGER DEFAULT 0,
+                acked_at TIMESTAMPTZ DEFAULT NOW()
+            );
+            
+            CREATE TABLE IF NOT EXISTS dead_letter_queue (
+                id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+                message_id UUID REFERENCES messages(id) ON DELETE CASCADE,
+                partition_id UUID REFERENCES partitions(id) ON DELETE CASCADE,
+                consumer_group VARCHAR(255),
+                error_message TEXT,
+                retry_count INTEGER DEFAULT 0,
+                original_created_at TIMESTAMPTZ,
+                failed_at TIMESTAMPTZ DEFAULT NOW()
+            );
+            
+            CREATE TABLE IF NOT EXISTS retention_history (
+                id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+                partition_id UUID REFERENCES partitions(id) ON DELETE CASCADE,
+                messages_deleted INTEGER DEFAULT 0,
+                retention_type VARCHAR(50),
+                executed_at TIMESTAMPTZ DEFAULT NOW()
+            );
+            
+            CREATE TABLE IF NOT EXISTS system_metrics (
+                id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+                timestamp TIMESTAMPTZ NOT NULL,
+                hostname TEXT NOT NULL,
+                port INTEGER NOT NULL,
+                worker_id TEXT NOT NULL,
+                sample_count INTEGER NOT NULL DEFAULT 60,
+                metrics JSONB NOT NULL,
+                CONSTRAINT unique_metric_per_replica 
+                    UNIQUE (timestamp, hostname, port, worker_id)
+            );
+            
+            CREATE TABLE IF NOT EXISTS message_traces (
+                id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+                message_id UUID REFERENCES messages(id) ON DELETE CASCADE,
+                partition_id UUID REFERENCES partitions(id) ON DELETE CASCADE,
+                transaction_id VARCHAR(255) NOT NULL,
+                consumer_group VARCHAR(255),
+                event_type VARCHAR(100),
+                data JSONB NOT NULL,
+                created_at TIMESTAMPTZ DEFAULT NOW(),
+                worker_id VARCHAR(255)
+            );
+            
+            CREATE TABLE IF NOT EXISTS message_trace_names (
+                trace_id UUID REFERENCES message_traces(id) ON DELETE CASCADE,
+                trace_name TEXT NOT NULL,
+                PRIMARY KEY (trace_id, trace_name)
+            );
+            
+            -- System state table for shared configuration across instances
+            CREATE TABLE IF NOT EXISTS system_state (
+                key TEXT PRIMARY KEY,
+                value JSONB NOT NULL,
+                updated_at TIMESTAMPTZ DEFAULT NOW()
+            );
+            
+            -- ============================================================================
+            -- Queen Streaming Schema V3
+            -- ============================================================================
+            
+            -- 1. Stream Definitions
+            CREATE TABLE IF NOT EXISTS streams (
+                id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+                name VARCHAR(255) UNIQUE NOT NULL,
+                namespace VARCHAR(255) NOT NULL,
+                
+                -- TRUE = group by partition_id
+                -- FALSE = process all partitions as one global stream
+                partitioned BOOLEAN NOT NULL DEFAULT FALSE,
+
+                -- Static Window Configuration
+                window_type VARCHAR(50) NOT NULL, -- 'tumbling'
+                
+                -- For TIME windows
+                window_duration_ms BIGINT, 
+                
+                -- For COUNT windows
+                window_size_count INT,
+                
+                -- For SLIDING windows
+                window_slide_ms BIGINT,
+                window_slide_count INT,
+
+                -- Common settings
+                window_grace_period_ms BIGINT NOT NULL DEFAULT 30000,
+                window_lease_timeout_ms BIGINT NOT NULL DEFAULT 30000,
+
+                created_at TIMESTAMPTZ DEFAULT NOW(),
+                updated_at TIMESTAMPTZ DEFAULT NOW()
+            );
+
+            -- 2. Junction table for stream sources (many-to-many)
+            CREATE TABLE IF NOT EXISTS stream_sources (
+                stream_id UUID NOT NULL REFERENCES streams(id) ON DELETE CASCADE,
+                queue_id UUID NOT NULL REFERENCES queues(id) ON DELETE CASCADE,
+                PRIMARY KEY (stream_id, queue_id)
+            );
+
+            -- 3. Consumer Offsets (The "Bookmark" table)
+            CREATE TABLE IF NOT EXISTS stream_consumer_offsets (
+                stream_id UUID REFERENCES streams(id) ON DELETE CASCADE,
+                consumer_group VARCHAR(255) NOT NULL,
+                
+                -- KEY FIX: Stores partition_id::TEXT or '__GLOBAL__'
+                stream_key TEXT NOT NULL,
+
+                -- 'bookmark' for TIME-based windows
+                last_acked_window_end TIMESTAMPTZ,
+                -- 'bookmark' for COUNT-based windows
+                last_acked_message_id UUID,
+
+                total_windows_consumed BIGINT DEFAULT 0,
+                last_consumed_at TIMESTAMPTZ,
+                
+                PRIMARY KEY (stream_id, consumer_group, stream_key)
+            );
+
+            -- 4. Active Leases (The "In-Flight" table)
+            CREATE TABLE IF NOT EXISTS stream_leases (
+                id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+                stream_id UUID REFERENCES streams(id) ON DELETE CASCADE,
+                consumer_group VARCHAR(255) NOT NULL,
+
+                -- KEY FIX: Stores partition_id::TEXT or '__GLOBAL__'
+                stream_key TEXT NOT NULL, 
+                
+                window_start TIMESTAMPTZ NOT NULL,
+                window_end TIMESTAMPTZ NOT NULL,
+                
+                lease_id UUID NOT NULL UNIQUE,
+                lease_consumer_id VARCHAR(255),
+                lease_expires_at TIMESTAMPTZ NOT NULL,
+                
+                UNIQUE(stream_id, consumer_group, stream_key, window_start, window_end)
+            );
+
+            -- 5. Watermark Table (CRITICAL)
+            CREATE TABLE IF NOT EXISTS queue_watermarks (
+                queue_id UUID PRIMARY KEY REFERENCES queues(id) ON DELETE CASCADE,
+                queue_name VARCHAR(255) NOT NULL,
+                max_created_at TIMESTAMPTZ NOT NULL DEFAULT '-infinity'::timestamptz,
+                updated_at TIMESTAMPTZ DEFAULT NOW()
+            );
+        )";
+        
+        if (!exec_async(conn.get(), create_tables_sql)) {
+            spdlog::error("Failed to create tables");
+            return false;
+        }
+        
+        // Create indexes for optimal query performance
+        std::string create_indexes_sql = R"(
+            CREATE INDEX IF NOT EXISTS idx_queues_name ON queues(name);
+            CREATE INDEX IF NOT EXISTS idx_queues_priority ON queues(priority DESC);
+            CREATE INDEX IF NOT EXISTS idx_queues_namespace ON queues(namespace) WHERE namespace IS NOT NULL;
+            CREATE INDEX IF NOT EXISTS idx_queues_task ON queues(task) WHERE task IS NOT NULL;
+            CREATE INDEX IF NOT EXISTS idx_queues_namespace_task ON queues(namespace, task) WHERE namespace IS NOT NULL AND task IS NOT NULL;
+            CREATE INDEX IF NOT EXISTS idx_queues_retention_enabled ON queues(retention_enabled) WHERE retention_enabled = true;
+            CREATE INDEX IF NOT EXISTS idx_partitions_queue_name ON partitions(queue_id, name);
+            CREATE INDEX IF NOT EXISTS idx_partitions_last_activity ON partitions(last_activity);
+            CREATE INDEX IF NOT EXISTS idx_messages_partition_created_id ON messages(partition_id, created_at, id);
+            CREATE INDEX IF NOT EXISTS idx_messages_transaction_id ON messages(transaction_id);
+            CREATE INDEX IF NOT EXISTS idx_messages_trace_id ON messages(trace_id);
+            CREATE INDEX IF NOT EXISTS idx_messages_created_at ON messages(created_at);
+            CREATE INDEX IF NOT EXISTS idx_partition_consumers_lookup ON partition_consumers(partition_id, consumer_group);
+            CREATE INDEX IF NOT EXISTS idx_partition_consumers_active_leases ON partition_consumers(partition_id, consumer_group, lease_expires_at) WHERE lease_expires_at IS NOT NULL;
+            CREATE INDEX IF NOT EXISTS idx_partition_consumers_expired_leases ON partition_consumers(lease_expires_at) WHERE lease_expires_at IS NOT NULL;
+            CREATE INDEX IF NOT EXISTS idx_partition_consumers_progress ON partition_consumers(last_consumed_at DESC);
+            CREATE INDEX IF NOT EXISTS idx_partition_consumers_idle ON partition_consumers(partition_id, consumer_group) WHERE lease_expires_at IS NULL;
+            CREATE INDEX IF NOT EXISTS idx_partition_consumers_consumer_group ON partition_consumers(consumer_group);
+            CREATE INDEX IF NOT EXISTS idx_messages_consumed_acked_at ON messages_consumed(acked_at DESC);
+            CREATE INDEX IF NOT EXISTS idx_messages_consumed_partition_acked ON messages_consumed(partition_id, acked_at DESC);
+            CREATE INDEX IF NOT EXISTS idx_messages_consumed_consumer_acked ON messages_consumed(consumer_group, acked_at DESC);
+            CREATE INDEX IF NOT EXISTS idx_messages_consumed_partition_id ON messages_consumed(partition_id);
+            CREATE INDEX IF NOT EXISTS idx_dlq_partition ON dead_letter_queue(partition_id);
+            CREATE INDEX IF NOT EXISTS idx_dlq_consumer_group ON dead_letter_queue(consumer_group);
+            CREATE INDEX IF NOT EXISTS idx_dlq_failed_at ON dead_letter_queue(failed_at DESC);
+            CREATE INDEX IF NOT EXISTS idx_dlq_message_consumer ON dead_letter_queue(message_id, consumer_group);
+            CREATE INDEX IF NOT EXISTS idx_retention_history_partition ON retention_history(partition_id);
+            CREATE INDEX IF NOT EXISTS idx_retention_history_executed ON retention_history(executed_at);
+            CREATE INDEX IF NOT EXISTS idx_system_metrics_timestamp ON system_metrics(timestamp DESC);
+            CREATE INDEX IF NOT EXISTS idx_system_metrics_replica ON system_metrics(hostname, port);
+            CREATE INDEX IF NOT EXISTS idx_system_metrics_worker ON system_metrics(worker_id);
+            CREATE INDEX IF NOT EXISTS idx_system_metrics_metrics ON system_metrics USING GIN (metrics);
+            CREATE INDEX IF NOT EXISTS idx_message_traces_message_id ON message_traces(message_id);
+            CREATE INDEX IF NOT EXISTS idx_message_traces_transaction_partition ON message_traces(transaction_id, partition_id);
+            CREATE INDEX IF NOT EXISTS idx_message_traces_created_at ON message_traces(created_at DESC);
+            CREATE INDEX IF NOT EXISTS idx_message_trace_names_name ON message_trace_names(trace_name);
+            CREATE INDEX IF NOT EXISTS idx_message_trace_names_trace_id ON message_trace_names(trace_id);
+            CREATE INDEX IF NOT EXISTS idx_system_state_key ON system_state(key);
+            
+            -- Streaming indexes
+            CREATE INDEX IF NOT EXISTS idx_queue_watermarks_name ON queue_watermarks(queue_name);
+            CREATE INDEX IF NOT EXISTS idx_stream_leases_lookup ON stream_leases(stream_id, consumer_group, stream_key, window_start);
+            CREATE INDEX IF NOT EXISTS idx_stream_leases_expires ON stream_leases(lease_expires_at);
+            CREATE INDEX IF NOT EXISTS idx_stream_consumer_offsets_lookup ON stream_consumer_offsets(stream_id, consumer_group, stream_key);
+        )";
+        
+        if (!exec_async(conn.get(), create_indexes_sql)) {
+            spdlog::warn("Some indexes may not have been created");
+        } else {
+            spdlog::info("Database indexes created successfully");
+        }
+        
+        // Create triggers
+        std::string create_triggers_sql = R"(
+            -- Statement-level trigger for partition last_activity (batch-efficient)
+            CREATE OR REPLACE FUNCTION update_partition_last_activity()
+            RETURNS TRIGGER AS $$
+            BEGIN
+                -- Update last_activity for all affected partitions in the batch
+                UPDATE partitions 
+                SET last_activity = NOW() 
+                WHERE id IN (SELECT DISTINCT partition_id FROM new_messages);
+                RETURN NULL;
+            END;
+            $$ LANGUAGE plpgsql;
+
+            DROP TRIGGER IF EXISTS trigger_update_partition_activity ON messages;
+            CREATE TRIGGER trigger_update_partition_activity
+            AFTER INSERT ON messages
+            REFERENCING NEW TABLE AS new_messages
+            FOR EACH STATEMENT
+            EXECUTE FUNCTION update_partition_last_activity();
+
+            -- Statement-level trigger for pending estimate (batch-efficient)
+            CREATE OR REPLACE FUNCTION update_pending_on_push()
+            RETURNS TRIGGER AS $$
+            BEGIN
+                -- Increment pending_estimate by the count of messages per partition
+                UPDATE partition_consumers pc
+                SET pending_estimate = pc.pending_estimate + msg_counts.count,
+                    last_stats_update = NOW()
+                FROM (
+                    SELECT partition_id, COUNT(*) as count
+                    FROM new_messages
+                    GROUP BY partition_id
+                ) msg_counts
+                WHERE pc.partition_id = msg_counts.partition_id;
+                RETURN NULL;
+            END;
+            $$ LANGUAGE plpgsql;
+
+            DROP TRIGGER IF EXISTS trigger_update_pending_on_push ON messages;
+            CREATE TRIGGER trigger_update_pending_on_push
+            AFTER INSERT ON messages
+            REFERENCING NEW TABLE AS new_messages
+            FOR EACH STATEMENT
+            EXECUTE FUNCTION update_pending_on_push();
+
+            -- Streaming watermark trigger function (statement-level for batch efficiency)
+            CREATE OR REPLACE FUNCTION update_queue_watermark()
+            RETURNS TRIGGER AS $$
+            BEGIN
+                -- Process all inserted rows in the batch at once
+                INSERT INTO queue_watermarks (queue_id, queue_name, max_created_at)
+                SELECT 
+                    q.id,
+                    q.name,
+                    MAX(nm.created_at) as max_created_at
+                FROM new_messages nm
+                JOIN partitions p ON p.id = nm.partition_id
+                JOIN queues q ON p.queue_id = q.id
+                GROUP BY q.id, q.name
+                ON CONFLICT (queue_id)
+                DO UPDATE SET
+                    max_created_at = GREATEST(queue_watermarks.max_created_at, EXCLUDED.max_created_at),
+                    updated_at = NOW();
+                RETURN NULL;
+            END;
+            $$ LANGUAGE plpgsql;
+
+            DROP TRIGGER IF EXISTS trigger_update_watermark ON messages;
+            CREATE TRIGGER trigger_update_watermark
+            AFTER INSERT ON messages
+            REFERENCING NEW TABLE AS new_messages
+            FOR EACH STATEMENT
+            EXECUTE FUNCTION update_queue_watermark();
+        )";
+        
+        if (!exec_async(conn.get(), create_triggers_sql)) {
+            spdlog::warn("Some triggers may not have been created");
+        } else {
+            spdlog::info("Database triggers created successfully");
+        }
+        
+        // Initialize system state (maintenance mode default value)
+        std::string init_system_state = R"(
+            INSERT INTO system_state (key, value, updated_at)
+            VALUES ('maintenance_mode', '{"enabled": false}'::jsonb, NOW())
+            ON CONFLICT (key) DO NOTHING;
+        )";
+        
+        if (!exec_async(conn.get(), init_system_state)) {
+            spdlog::warn("Failed to initialize system state");
+        } else {
+            spdlog::info("System state initialized (maintenance_mode: false)");
+        }
+        
+        spdlog::info("Database schema V3 initialized successfully (tables, indexes, triggers)");
+        return true;
+        
+    } catch (const std::exception& e) {
+        spdlog::error("Failed to initialize schema: {}", e.what());
+        return false;
+    }
+}
+
 // --- Maintenance Mode ---
 
 bool AsyncQueueManager::check_maintenance_mode_with_cache() {
@@ -3110,7 +3562,7 @@ nlohmann::json AsyncQueueManager::get_buffer_stats() const {
 // ===================================
 
 bool AsyncQueueManager::configure_queue(const std::string& queue_name, 
-                                       const QueueManager::QueueOptions& options,
+                                       const QueueOptions& options,
                                        const std::string& namespace_name,
                                        const std::string& task_name) {
     try {

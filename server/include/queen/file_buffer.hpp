@@ -11,7 +11,7 @@
 
 namespace queen {
 
-class QueueManager;
+class AsyncQueueManager;
 
 /**
  * FileBufferManager - Dual purpose file-based buffer:
@@ -24,7 +24,7 @@ class QueueManager;
 class FileBufferManager {
 public:
     FileBufferManager(
-        std::shared_ptr<QueueManager> queue_manager,
+        std::shared_ptr<AsyncQueueManager> queue_manager,
         const std::string& buffer_dir = "/var/lib/queen/buffers",
         int flush_interval_ms = 100,
         size_t max_batch_size = 100,
@@ -89,7 +89,7 @@ private:
     std::vector<nlohmann::json> read_events_from_file(const std::string& file_path, size_t max_count = 0);
     bool has_failover_files() const;
     
-    std::shared_ptr<QueueManager> queue_manager_;
+    std::shared_ptr<AsyncQueueManager> queue_manager_;
     std::string buffer_dir_;
     
     // Current active buffer files (with .tmp extension)

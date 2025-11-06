@@ -36,12 +36,11 @@ static int json_to_int(const nlohmann::json& val, int default_value = 0) {
     return default_value;
 }
 
-// Helper: Get string from JSON value (handles strings, numbers, nulls, booleans)
+// Helper: Get string from JSON value (handles strings, numbers, nulls)
 static std::string json_to_string(const nlohmann::json& val, const std::string& default_value = "") {
     if (val.is_null()) return default_value;
     if (val.is_string()) return val.get<std::string>();
     if (val.is_number()) return std::to_string(val.get<double>());
-    if (val.is_boolean()) return val.get<bool>() ? "true" : "false";
     return default_value;
 }
 
@@ -454,7 +453,7 @@ nlohmann::json AnalyticsManager::get_queue(const std::string& queue_name) {
             throw std::runtime_error("Queue not found");
         }
         
-        std::string queue_id = json_to_string(queue_result[0]["id"]);
+        std::string queue_id = queue_result[0]["id"];
         
         // Get partitions with stats
         std::string partitions_query = R"(
@@ -487,12 +486,12 @@ nlohmann::json AnalyticsManager::get_queue(const std::string& queue_name) {
         int total_completed = 0, total_failed = 0, total_dead_letter = 0;
         
         for (int i = 0; i < partitions_result.size(); i++) {
-            int total = json_to_int(partitions_result[i]["message_count"]);
-            int pending = json_to_int(partitions_result[i]["pending"]);
-            int processing = json_to_int(partitions_result[i]["processing"]);
-            int completed = json_to_int(partitions_result[i]["completed"]);
-            int failed = json_to_int(partitions_result[i]["failed"]);
-            int dead_letter = json_to_int(partitions_result[i]["dead_letter"]);
+            int total = json_to_int();
+            int pending = json_to_int();
+            int processing = json_to_int();
+            int completed = json_to_int();
+            int failed = json_to_int();
+            int dead_letter = json_to_int();
             
             total_total += total;
             total_pending += pending;
@@ -501,8 +500,8 @@ nlohmann::json AnalyticsManager::get_queue(const std::string& queue_name) {
             total_failed += failed;
             total_dead_letter += dead_letter;
             
-            std::string oldest_msg = json_to_string(partitions_result[i]["oldest_message"]);
-            std::string newest_msg = json_to_string(partitions_result[i]["newest_message"]);
+            std::string oldest_msg = partitions_result[i]["oldest_message"];
+            std::string newest_msg = partitions_result[i]["newest_message"];
             
             partitions.push_back({
                 {"id", partitions_result[i]["id"]},
@@ -864,8 +863,9 @@ nlohmann::json AnalyticsManager::list_messages(const MessageFilters& filters) {
         int total_bus_groups = 0;
         
         if (!mode_result.empty()) {
-            std::string has_queue_str = json_to_string(mode_result[0]["has_queue_mode"]);
-            has_queue_mode = (has_queue_str == "t" || has_queue_str == "true");
+            has_queue_mode = mode_result[0]["has_queue_mode"].is_boolean() ?
+                mode_result[0]["has_queue_mode"].get<bool>() :
+                (json_to_string(mode_result[0]["has_queue_mode"]) == "t");
             total_bus_groups = json_to_int(mode_result[0]["bus_groups_count"]);
         }
         
@@ -1001,8 +1001,9 @@ nlohmann::json AnalyticsManager::list_messages(const MessageFilters& filters) {
             std::string queue_status = json_to_string(result[i]["queue_status"]);
             
             // Get per-partition mode information
-            std::string partition_has_queue_str = json_to_string(result[i]["partition_has_queue_mode"]);
-            bool partition_has_queue_mode = (partition_has_queue_str == "t" || partition_has_queue_str == "true");
+            bool partition_has_queue_mode = result[i]["partition_has_queue_mode"].is_boolean() ?
+                result[i]["partition_has_queue_mode"].get<bool>() :
+                (json_to_string(result[i]["partition_has_queue_mode"]) == "t");
             int partition_bus_groups = json_to_int(result[i]["partition_bus_groups_count"]);
             
             // Compute final display status based on THIS MESSAGE'S partition mode
@@ -1140,8 +1141,9 @@ nlohmann::json AnalyticsManager::get_message(const std::string& partition_id, co
         std::string queue_path = json_to_string(result[0]["queue_name"]) + "/" + json_to_string(result[0]["partition_name"]);
         
         // Get mode detection values
-        std::string has_queue_str = json_to_string(result[0]["has_queue_mode"]);
-        bool has_queue_mode = (has_queue_str == "t" || has_queue_str == "true");
+        bool has_queue_mode = result[0]["has_queue_mode"].is_boolean() ? 
+            result[0]["has_queue_mode"].get<bool>() : 
+            (json_to_string(result[0]["has_queue_mode"]) == "t");
         int total_bus_groups = json_to_int(result[0]["total_bus_groups"]);
         int consumed_by_groups = json_to_int(result[0]["consumed_by_groups_count"]);
         std::string queue_status = json_to_string(result[0]["queue_status"]);
@@ -1199,75 +1201,39 @@ nlohmann::json AnalyticsManager::get_message(const std::string& partition_id, co
         
         // Parse payload as JSON - decrypt if encrypted
         try {
-            std::string is_encrypted_str = json_to_string(result[0]["is_encrypted"]);
-            bool is_encrypted = (is_encrypted_str == "t" || is_encrypted_str == "true");
+            std::string payload_str = json_to_string(result[0]["payload"]);
+            bool is_encrypted = result[0]["is_encrypted"].is_boolean() ?
+                result[0]["is_encrypted"].get<bool>() :
+                (json_to_string(result[0]["is_encrypted"]) == "t");
             
-            // Handle payload - it might be JSON object, string, or null
-            if (result[0]["payload"].is_null()) {
-                response["payload"] = nullptr;
-            } else if (result[0]["payload"].is_object() || result[0]["payload"].is_array()) {
-                // Payload is already a JSON object/array (from JSONB column)
-                if (is_encrypted) {
-                    // Decrypt the payload
-                    EncryptionService::EncryptedData encrypted_data;
-                    encrypted_data.encrypted = result[0]["payload"]["encrypted"];
-                    encrypted_data.iv = result[0]["payload"]["iv"];
-                    encrypted_data.auth_tag = result[0]["payload"]["authTag"];
-                    
-                    auto enc_service = get_encryption_service();
-                    if (enc_service && enc_service->is_enabled()) {
-                        auto decrypted = enc_service->decrypt_payload(encrypted_data);
-                        if (decrypted.has_value()) {
-                            response["payload"] = nlohmann::json::parse(*decrypted);
-                        } else {
-                            spdlog::error("Failed to decrypt message payload for transaction_id: {}", transaction_id);
-                            response["payload"] = result[0]["payload"];  // Return encrypted data as fallback
-                        }
+            if (is_encrypted) {
+                // Decrypt the payload
+                auto encrypted_json = nlohmann::json::parse(payload_str);
+                
+                EncryptionService::EncryptedData encrypted_data;
+                encrypted_data.encrypted = encrypted_json["encrypted"];
+                encrypted_data.iv = encrypted_json["iv"];
+                encrypted_data.auth_tag = encrypted_json["authTag"];
+                
+                auto enc_service = get_encryption_service();
+                if (enc_service && enc_service->is_enabled()) {
+                    auto decrypted = enc_service->decrypt_payload(encrypted_data);
+                    if (decrypted.has_value()) {
+                        response["payload"] = nlohmann::json::parse(*decrypted);
                     } else {
-                        spdlog::warn("Message is encrypted but encryption service not available");
-                        response["payload"] = result[0]["payload"];
+                        spdlog::error("Failed to decrypt message payload for transaction_id: {}", transaction_id);
+                        response["payload"] = payload_str;  // Return encrypted data as fallback
                     }
                 } else {
-                    // Direct JSON object - use as is
-                    response["payload"] = result[0]["payload"];
-                }
-            } else if (result[0]["payload"].is_string()) {
-                // Payload is a string that might need parsing
-                std::string payload_str = result[0]["payload"].get<std::string>();
-                if (payload_str.empty()) {
-                    response["payload"] = nullptr;
-                } else if (is_encrypted) {
-                    // Decrypt the payload from string
-                    auto encrypted_json = nlohmann::json::parse(payload_str);
-                    
-                    EncryptionService::EncryptedData encrypted_data;
-                    encrypted_data.encrypted = encrypted_json["encrypted"];
-                    encrypted_data.iv = encrypted_json["iv"];
-                    encrypted_data.auth_tag = encrypted_json["authTag"];
-                    
-                    auto enc_service = get_encryption_service();
-                    if (enc_service && enc_service->is_enabled()) {
-                        auto decrypted = enc_service->decrypt_payload(encrypted_data);
-                        if (decrypted.has_value()) {
-                            response["payload"] = nlohmann::json::parse(*decrypted);
-                        } else {
-                            spdlog::error("Failed to decrypt message payload for transaction_id: {}", transaction_id);
-                            response["payload"] = payload_str;
-                        }
-                    } else {
-                        spdlog::warn("Message is encrypted but encryption service not available");
-                        response["payload"] = payload_str;
-                    }
-                } else {
-                    response["payload"] = nlohmann::json::parse(payload_str);
+                    spdlog::warn("Message is encrypted but encryption service not available");
+                    response["payload"] = payload_str;
                 }
             } else {
-                // Other type - convert to string
-                response["payload"] = json_to_string(result[0]["payload"]);
+                response["payload"] = nlohmann::json::parse(payload_str);
             }
         } catch (const std::exception& e) {
             spdlog::warn("Failed to parse payload for transaction_id {}: {}", transaction_id, e.what());
-            response["payload"] = result[0]["payload"];  // Return raw value as fallback
+            response["payload"]  = json_to_string(result[0]["payload"]);
         }
         
         return response;
@@ -1388,21 +1354,21 @@ nlohmann::json AnalyticsManager::get_dlq_messages(const DLQFilters& filters) {
         nlohmann::json messages = nlohmann::json::array();
         
         for (size_t i = 0; i < result.size(); i++) {
-            std::string is_encrypted_str = json_to_string(result[i]["is_encrypted"]);
-            bool is_encrypted = (is_encrypted_str == "t" || is_encrypted_str == "true");
+            std::string payload_str = json_to_string(result[i]["payload"]);
+            bool is_encrypted = result[i]["is_encrypted"].is_boolean() ?
+                result[i]["is_encrypted"].get<bool>() :
+                (json_to_string(result[i]["is_encrypted"]) == "t");
             nlohmann::json payload;
             
-            // Handle payload - it might be JSON object, string, or null
-            if (result[i]["payload"].is_null()) {
-                payload = nullptr;
-            } else if (result[i]["payload"].is_object() || result[i]["payload"].is_array()) {
-                // Payload is already a JSON object/array (from JSONB column)
+            try {
                 if (is_encrypted) {
                     // Decrypt the payload
+                    auto encrypted_json = nlohmann::json::parse(payload_str);
+                    
                     EncryptionService::EncryptedData encrypted_data;
-                    encrypted_data.encrypted = result[i]["payload"]["encrypted"];
-                    encrypted_data.iv = result[i]["payload"]["iv"];
-                    encrypted_data.auth_tag = result[i]["payload"]["authTag"];
+                    encrypted_data.encrypted = encrypted_json["encrypted"];
+                    encrypted_data.iv = encrypted_json["iv"];
+                    encrypted_data.auth_tag = encrypted_json["authTag"];
                     
                     auto enc_service = get_encryption_service();
                     if (enc_service && enc_service->is_enabled()) {
@@ -1412,58 +1378,20 @@ nlohmann::json AnalyticsManager::get_dlq_messages(const DLQFilters& filters) {
                         } else {
                             spdlog::error("Failed to decrypt DLQ message payload for message_id: {}", 
                                          result[i]["message_id"].dump());
-                            payload = result[i]["payload"];  // Return encrypted data as fallback
+                            payload = payload_str;  // Return encrypted data as fallback
                         }
                     } else {
                         spdlog::warn("DLQ message is encrypted but encryption service not available");
-                        payload = result[i]["payload"];
+                        payload = payload_str;
                     }
                 } else {
-                    // Direct JSON object - use as is
-                    payload = result[i]["payload"];
+                    // Parse as normal JSON
+                    payload = nlohmann::json::parse(payload_str);
                 }
-            } else if (result[i]["payload"].is_string()) {
-                // Payload is a string that might need parsing
-                std::string payload_str = result[i]["payload"].get<std::string>();
-                if (payload_str.empty()) {
-                    payload = nullptr;
-                } else {
-                    try {
-                        if (is_encrypted) {
-                            // Decrypt the payload from string
-                            auto encrypted_json = nlohmann::json::parse(payload_str);
-                            
-                            EncryptionService::EncryptedData encrypted_data;
-                            encrypted_data.encrypted = encrypted_json["encrypted"];
-                            encrypted_data.iv = encrypted_json["iv"];
-                            encrypted_data.auth_tag = encrypted_json["authTag"];
-                            
-                            auto enc_service = get_encryption_service();
-                            if (enc_service && enc_service->is_enabled()) {
-                                auto decrypted = enc_service->decrypt_payload(encrypted_data);
-                                if (decrypted.has_value()) {
-                                    payload = nlohmann::json::parse(*decrypted);
-                                } else {
-                                    spdlog::error("Failed to decrypt DLQ message payload for message_id: {}", 
-                                                 result[i]["message_id"].dump());
-                                    payload = payload_str;
-                                }
-                            } else {
-                                spdlog::warn("DLQ message is encrypted but encryption service not available");
-                                payload = payload_str;
-                            }
-                        } else {
-                            payload = nlohmann::json::parse(payload_str);
-                        }
-                    } catch (const std::exception& e) {
-                        spdlog::warn("Failed to parse DLQ payload for message_id {}: {}", 
-                                     result[i]["message_id"].dump(), e.what());
-                        payload = payload_str; // Fallback to string if JSON parse fails
-                    }
-                }
-            } else {
-                // Other type - convert to string
-                payload = json_to_string(result[i]["payload"]);
+            } catch (const std::exception& e) {
+                spdlog::warn("Failed to parse DLQ payload for message_id {}: {}", 
+                             result[i]["message_id"].dump(), e.what());
+                payload = payload_str; // Fallback to string if JSON parse fails
             }
             
             nlohmann::json message = {
@@ -1507,7 +1435,7 @@ nlohmann::json AnalyticsManager::get_dlq_messages(const DLQFilters& filters) {
         
         int total = 0;
         if (!count_result.empty()) {
-            total = json_to_int(count_result[0]["total"]);
+            total = json_to_int();
         }
         
         nlohmann::json response = {
@@ -1579,8 +1507,8 @@ nlohmann::json AnalyticsManager::get_status(const StatusFilters& filters) {
         
         nlohmann::json throughput = nlohmann::json::array();
         for (int i = 0; i < throughput_result.size(); i++) {
-            int ingested = json_to_int(throughput_result[i]["messages_ingested"]);
-            int processed = json_to_int(throughput_result[i]["messages_processed"]);
+            int ingested = json_to_int();
+            int processed = json_to_int();
             throughput.push_back({
                 {"timestamp", throughput_result[i]["minute"]},
                 {"ingested", ingested},
@@ -1611,15 +1539,15 @@ nlohmann::json AnalyticsManager::get_status(const StatusFilters& filters) {
         
         nlohmann::json queues = nlohmann::json::array();
         for (int i = 0; i < queues_result.size(); i++) {
-            std::string ns_val = json_to_string(queues_result[i]["namespace"]);
-            std::string task_val = json_to_string(queues_result[i]["task"]);
+            std::string ns_val = queues_result[i]["namespace"];
+            std::string task_val = queues_result[i]["task"];
             queues.push_back({
                 {"id", queues_result[i]["id"]},
                 {"name", queues_result[i]["name"]},
                 {"namespace", ns_val.empty() ? nullptr : nlohmann::json(ns_val)},
                 {"task", task_val.empty() ? nullptr : nlohmann::json(task_val)},
-                {"partitions", json_to_int(queues_result[i]["partition_count"])},
-                {"totalConsumed", json_to_int(queues_result[i]["total_consumed"])}
+                {"partitions", json_to_int()},
+                {"totalConsumed", json_to_int()}
             });
         }
         
@@ -1675,18 +1603,18 @@ nlohmann::json AnalyticsManager::get_status(const StatusFilters& filters) {
         
         auto counts_result = exec_query_params_json(conn.get(), counts_query, {from_iso, to_iso});
         
-        int total = json_to_int(counts_result[0]["total_messages"]);
-        int unconsumed = json_to_int(counts_result[0]["unconsumed"]);
-        int processing = json_to_int(counts_result[0]["processing"]);
+        int total = json_to_int();
+        int unconsumed = json_to_int();
+        int processing = json_to_int();
         int pending = std::max(0, unconsumed - processing);
         
         nlohmann::json messages = {
             {"total", total},
             {"pending", pending},
             {"processing", processing},
-            {"completed", json_to_int(counts_result[0]["completed"])},
+            {"completed", json_to_int()},
             {"failed", 0},
-            {"deadLetter", json_to_int(counts_result[0]["dead_letter"])}
+            {"deadLetter", json_to_int()}
         };
         
         // Query 4: Active leases
@@ -1703,10 +1631,10 @@ nlohmann::json AnalyticsManager::get_status(const StatusFilters& filters) {
         auto leases_result = exec_query_json(conn.get(), leases_query);
         
         nlohmann::json leases = {
-            {"active", json_to_int(leases_result[0]["active_leases"])},
-            {"partitionsWithLeases", json_to_int(leases_result[0]["partitions_with_leases"])},
-            {"totalBatchSize", json_to_int(leases_result[0]["total_batch_size"])},
-            {"totalAcked", json_to_int(leases_result[0]["total_acked"])}
+            {"active", json_to_int()},
+            {"partitionsWithLeases", json_to_int()},
+            {"totalBatchSize", json_to_int()},
+            {"totalAcked", json_to_int()}
         };
         
         // Query 5: DLQ stats
@@ -1732,14 +1660,14 @@ nlohmann::json AnalyticsManager::get_status(const StatusFilters& filters) {
         nlohmann::json top_errors = nlohmann::json::array();
         
         for (int i = 0; i < dlq_result.size(); i++) {
-            int error_count = json_to_int(dlq_result[i]["error_count"]);
+            int error_count = json_to_int();
             dlq_total += error_count;
-            std::string partition_id = json_to_string(dlq_result[i]["partition_id"]);
+            std::string partition_id = dlq_result[i]["partition_id"];
             if (!partition_id.empty()) {
                 dlq_partitions.insert(partition_id);
             }
             
-            std::string error_msg = json_to_string(dlq_result[i]["error_message"]);
+            std::string error_msg = dlq_result[i]["error_message"];
             if (!error_msg.empty()) {
                 top_errors.push_back({
                     {"error", error_msg},
@@ -2106,9 +2034,9 @@ nlohmann::json AnalyticsManager::get_analytics(const AnalyticsFilters& filters) 
         int total_ingested = 0, total_processed = 0, total_failed = 0;
         
         for (int i = 0; i < throughput_result.size(); i++) {
-            int ingested = json_to_int(throughput_result[i]["ingested"]);
-            int processed = json_to_int(throughput_result[i]["processed"]);
-            int failed = json_to_int(throughput_result[i]["failed"]);
+            int ingested = json_to_int();
+            int processed = json_to_int();
+            int failed = json_to_int();
             
             total_ingested += ingested;
             total_processed += processed;
@@ -2162,8 +2090,8 @@ nlohmann::json AnalyticsManager::get_analytics(const AnalyticsFilters& filters) 
             {"queueDepths", {
                 {"timeSeries", nlohmann::json::array()},
                 {"current", {
-                    {"pending", json_to_int(depth_result[0]["pending"])},
-                    {"processing", json_to_int(depth_result[0]["processing"])}
+                    {"pending", json_to_int()},
+                    {"processing", json_to_int()}
                 }}
             }},
             {"topQueues", nlohmann::json::array()},
@@ -2232,28 +2160,9 @@ nlohmann::json AnalyticsManager::get_system_metrics(const SystemMetricsFilters& 
             // Create replica key (hostname:port)
             std::string replica_key = hostname + ":" + port;
             
-            // Parse metrics - the metrics column might be JSON object or string
-            nlohmann::json metrics;
-            if (result[i]["metrics"].is_object() || result[i]["metrics"].is_array()) {
-                // Already a JSON object/array
-                metrics = result[i]["metrics"];
-            } else if (result[i]["metrics"].is_string()) {
-                // String that needs parsing
-                std::string metrics_str = result[i]["metrics"].get<std::string>();
-                if (!metrics_str.empty()) {
-                    try {
-                        metrics = nlohmann::json::parse(metrics_str);
-                    } catch (const std::exception& e) {
-                        spdlog::warn("Failed to parse metrics JSON string: {}", e.what());
-                        metrics = nlohmann::json::object();
-                    }
-                } else {
-                    metrics = nlohmann::json::object();
-                }
-            } else {
-                // Null or other type
-                metrics = nlohmann::json::object();
-            }
+            // Parse metrics
+            std::string metrics_str = json_to_string(result[i]["metrics"]);
+            nlohmann::json metrics = nlohmann::json::parse(metrics_str);
             
             // Initialize replica if not exists
             if (replicas.find(replica_key) == replicas.end()) {

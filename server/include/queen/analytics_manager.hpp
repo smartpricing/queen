@@ -1,6 +1,6 @@
 #pragma once
 
-#include "queen/database.hpp"
+#include "queen/async_database.hpp"
 #include <json.hpp>
 #include <memory>
 #include <string>
@@ -11,10 +11,10 @@ namespace queen {
 // Analytics and Status Manager for dashboard/frontend queries
 class AnalyticsManager {
 private:
-    std::shared_ptr<DatabasePool> db_pool_;
+    std::shared_ptr<AsyncDbPool> async_db_pool_;
     
 public:
-    explicit AnalyticsManager(std::shared_ptr<DatabasePool> db_pool);
+    explicit AnalyticsManager(std::shared_ptr<AsyncDbPool> async_db_pool);
     
     // Metrics
     nlohmann::json get_metrics(int total_messages = 0);

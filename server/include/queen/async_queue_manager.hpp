@@ -1,7 +1,7 @@
 #pragma once
 
 #include "queen/async_database.hpp"
-#include "queen/queue_manager.hpp"  // Use structs from here
+#include "queen/queue_types.hpp"
 #include "queen/config.hpp"
 #include <json.hpp>
 #include <string>
@@ -15,8 +15,6 @@ namespace queen {
 
 // Forward declarations
 class FileBufferManager;
-
-// Note: Message, PushItem, PushResult are defined in queue_manager.hpp
 
 /**
  * @brief Async Queue Manager using AsyncDbPool for non-blocking database operations.
@@ -122,6 +120,9 @@ public:
         file_buffer_manager_ = fbm;
     }
     
+    // Schema initialization
+    bool initialize_schema();
+    
     // Core message operations - async versions
     std::vector<PushResult> push_messages(const std::vector<PushItem>& items);
     
@@ -216,9 +217,9 @@ public:
     bool is_buffer_healthy() const;
     nlohmann::json get_buffer_stats() const;
     
-    // Queue configuration (using QueueManager::QueueOptions)
-    bool configure_queue(const std::string& queue_name, 
-                        const QueueManager::QueueOptions& options,
+    // Queue configuration
+    bool configure_queue(const std::string& queue_name,
+                        const QueueOptions& options,
                         const std::string& namespace_name = "",
                         const std::string& task_name = "");
     

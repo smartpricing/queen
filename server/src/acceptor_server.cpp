@@ -1,6 +1,4 @@
-#include "queen/database.hpp"
 #include "queen/async_database.hpp"
-#include "queen/queue_manager.hpp"
 #include "queen/async_queue_manager.hpp"
 #include "queen/analytics_manager.hpp"
 #include "queen/config.hpp"
@@ -34,7 +32,7 @@
 // Global shared resources for all workers (declared early for use in handlers)
 static std::shared_ptr<astp::ThreadPool> global_db_thread_pool;
 static std::shared_ptr<astp::ThreadPool> global_system_thread_pool;
-static std::shared_ptr<queen::DatabasePool> global_db_pool;
+// Removed: global_db_pool - Now using only AsyncDbPool
 static std::shared_ptr<queen::AsyncDbPool> global_async_db_pool;  // Async DB pool for non-blocking push
 static std::vector<std::shared_ptr<queen::ResponseQueue>> worker_response_queues;  // Per-worker queues
 static std::shared_ptr<queen::ResponseRegistry> global_response_registry;
@@ -175,137 +173,8 @@ static bool get_query_param_bool(uWS::HttpRequest* req, const std::string& key, 
     return value == "true" || value == "1";
 }
 
-// Async POP polling helper structure
-struct AsyncPopState {
-    uWS::HttpResponse<false>* res;
-    std::shared_ptr<QueueManager> queue_manager;
-    std::string queue_name;
-    std::string partition_name;
-    std::string consumer_group;
-    int batch;
-    int worker_id;
-    std::chrono::steady_clock::time_point deadline;
-    std::chrono::steady_clock::time_point start_time;
-    std::shared_ptr<bool> aborted;
-    uWS::Loop* loop;
-    us_timer_t* timer;
-    int retry_count;
-    int current_interval_ms;  // Current backoff interval
-};
-
-// Timer callback for async POP retries
-static void pop_retry_timer(us_timer_t* timer) {
-    // Correctly read the pointer (we stored AsyncPopState*, not AsyncPopState**)
-    AsyncPopState* state = *(AsyncPopState**)us_timer_ext(timer);
-    
-    // Check if already cleaned up (safety)
-    if (state == nullptr) {
-        us_timer_close(timer);
-        return;
-    }
-    
-    if (*state->aborted) {
-        spdlog::debug("[Worker {}] POP aborted, canceling retries", state->worker_id);
-        *(AsyncPopState**)us_timer_ext(timer) = nullptr;  // Mark as cleaned up
-        us_timer_close(timer);
-        delete state;
-        return;
-    }
-    
-    auto now = std::chrono::steady_clock::now();
-    if (now >= state->deadline) {
-        // Timeout reached, send empty response
-        auto duration_ms = std::chrono::duration_cast<std::chrono::milliseconds>(now - state->start_time).count();
-        auto pool_stats = state->queue_manager->get_pool_stats();
-        spdlog::info("[Worker {}] <<< POP END (timeout): {}/{}, got 0 msgs, took {}ms, retries={} | Pool: {}/{} conn ({} in use)", 
-                    state->worker_id, state->queue_name, state->partition_name, duration_ms, state->retry_count,
-                    pool_stats.available, pool_stats.total, pool_stats.in_use);
-        
-        if (!*state->aborted) {
-            setup_cors_headers(state->res);
-            state->res->writeStatus("204");
-            state->res->end();
-        }
-        
-        *(AsyncPopState**)us_timer_ext(timer) = nullptr;  // Mark as cleaned up
-        us_timer_close(timer);
-        delete state;
-        return;
-    }
-    
-    // Try to pop again (non-blocking single attempt)
-    PopOptions options;
-    options.wait = false;  // Non-blocking!
-    options.timeout = 0;
-    options.batch = state->batch;
-    
-    state->retry_count++;
-    
-    try {
-        auto result = state->queue_manager->pop_messages(
-            state->queue_name, 
-            state->partition_name.empty() ? std::nullopt : std::optional<std::string>(state->partition_name),
-            state->consumer_group, 
-            options
-        );
-        
-        if (!result.messages.empty()) {
-            // Found messages! Send response
-            auto duration_ms = std::chrono::duration_cast<std::chrono::milliseconds>(now - state->start_time).count();
-            auto pool_stats = state->queue_manager->get_pool_stats();
-            spdlog::info("[Worker {}] <<< POP END (found): {}/{}, got {} msgs, took {}ms, retries={} | Pool: {}/{} conn ({} in use)", 
-                        state->worker_id, state->queue_name, state->partition_name, 
-                        result.messages.size(), duration_ms, state->retry_count,
-                        pool_stats.available, pool_stats.total, pool_stats.in_use);
-            
-            if (!*state->aborted) {
-                nlohmann::json response = {{"messages", nlohmann::json::array()}};
-                
-                for (const auto& msg : result.messages) {
-                    auto time_t = std::chrono::system_clock::to_time_t(msg.created_at);
-                    auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(
-                        msg.created_at.time_since_epoch()) % 1000;
-                    
-                    std::stringstream created_at_ss;
-                    created_at_ss << std::put_time(std::gmtime(&time_t), "%Y-%m-%dT%H:%M:%S");
-                    created_at_ss << '.' << std::setfill('0') << std::setw(3) << ms.count() << 'Z';
-                    
-                    nlohmann::json msg_json = {
-                        {"id", msg.id},
-                        {"transactionId", msg.transaction_id},
-                        {"partitionId", msg.partition_id},
-                        {"traceId", msg.trace_id.empty() ? nlohmann::json(nullptr) : nlohmann::json(msg.trace_id)},
-                        {"queue", msg.queue_name},
-                        {"partition", msg.partition_name},
-                        {"data", msg.payload},
-                        {"retryCount", msg.retry_count},
-                        {"priority", msg.priority},
-                        {"createdAt", created_at_ss.str()},
-                        {"consumerGroup", nlohmann::json(nullptr)},
-                        {"leaseId", result.lease_id.has_value() ? nlohmann::json(*result.lease_id) : nlohmann::json(nullptr)}
-                    };
-                    response["messages"].push_back(msg_json);
-                }
-                
-                send_json_response(state->res, response);
-            }
-            
-            *(AsyncPopState**)us_timer_ext(timer) = nullptr;  // Mark as cleaned up
-            us_timer_close(timer);
-            delete state;
-            return;
-        }
-    } catch (const std::exception& e) {
-        spdlog::error("[Worker {}] POP retry error: {}", state->worker_id, e.what());
-    }
-    
-    // No messages yet, apply exponential backoff
-    // Double the interval, max 2000ms
-    state->current_interval_ms = std::min(state->current_interval_ms * 2, 2000);
-    
-    // Update timer with new interval
-    us_timer_set(timer, pop_retry_timer, state->current_interval_ms, state->current_interval_ms);
-}
+// REMOVED: AsyncPopState struct and pop_retry_timer function - dead code (never instantiated)
+// The new system uses Poll Intention Registry for long-polling instead
 
 // ============================================================================
 // Static File Serving Helpers
@@ -430,7 +299,6 @@ static bool serve_static_file(uWS::HttpResponse<false>* res,
 
 // Setup routes for a worker app
 static void setup_worker_routes(uWS::App* app, 
-                                std::shared_ptr<QueueManager> queue_manager,
                                 std::shared_ptr<queen::AsyncQueueManager> async_queue_manager,
                                 std::shared_ptr<AnalyticsManager> analytics_manager,
                                 std::shared_ptr<FileBufferManager> file_buffer,
@@ -552,7 +420,7 @@ static void setup_worker_routes(uWS::App* app,
                     
                     spdlog::debug("Namespace: '{}', Task: '{}'", namespace_name, task_name);
                     
-                    QueueManager::QueueOptions options;
+                    QueueOptions options;
                     if (body.contains("options") && body["options"].is_object()) {
                         auto opts = body["options"];
                         options.lease_time = opts.value("leaseTime", 300);
@@ -2000,24 +1868,11 @@ static void worker_thread(const Config& config, int worker_id, int num_workers,
             spdlog::info("  - System ThreadPool threads: {}", system_threads);
             spdlog::info("  - Number of workers: {}", num_workers);
             
-            // Create ONLY async connection pool (for ALL operations)
+            // Create ONLY async connection pool (for ALL operations including analytics)
             spdlog::info("  - Creating Async DB Pool ({} connections) for ALL operations", total_connections);
             global_async_db_pool = std::make_shared<queen::AsyncDbPool>(
                 config.database.connection_string(),
                 total_connections,  // Use ALL connections
-                config.database.statement_timeout,
-                config.database.lock_timeout,
-                config.database.idle_timeout,
-                config.database.schema
-            );
-            
-            // Create small legacy pool for old QueueManager (used for schema init and backward compatibility)
-            int legacy_pool_size = 8;  // Small pool for legacy QueueManager only
-            spdlog::info("  - Creating small legacy DB Pool ({} connections) for legacy QueueManager only", legacy_pool_size);
-            global_db_pool = std::make_shared<DatabasePool>(
-                config.database.connection_string(),
-                legacy_pool_size,
-                config.database.pool_acquisition_timeout,
                 config.database.statement_timeout,
                 config.database.lock_timeout,
                 config.database.idle_timeout,
@@ -2068,20 +1923,15 @@ static void worker_thread(const Config& config, int worker_id, int num_workers,
         
         // Use global shared resources
         auto async_db_pool = global_async_db_pool;
-        auto db_pool = global_db_pool;  // Small legacy pool for admin operations
         auto db_thread_pool = global_db_thread_pool;
         
-        // Thread-local ASYNC queue manager for ALL performance-critical operations
+        // Thread-local ASYNC queue manager for ALL operations
         auto async_queue_manager = std::make_shared<queen::AsyncQueueManager>(
             async_db_pool, config.queue, config.database.schema
         );
         
-        // Thread-local legacy queue manager for administrative operations only
-        // (configure, delete, maintenance, schema init, traces - not performance-critical)
-        auto queue_manager = std::make_shared<QueueManager>(db_pool, config.queue, config.database.schema);
-        
-        // Thread-local analytics manager (uses small legacy pool for background queries)
-        auto analytics_manager = std::make_shared<AnalyticsManager>(db_pool);
+        // Thread-local analytics manager (uses async pool for dashboard queries)
+        auto analytics_manager = std::make_shared<AnalyticsManager>(async_db_pool);
         
         spdlog::info("[Worker {}] Using GLOBAL shared ThreadPool and Async Database Pool", worker_id);
         
@@ -2098,7 +1948,7 @@ static void worker_thread(const Config& config, int worker_id, int num_workers,
             // Only first worker initializes schema (only if DB is available)
             if (worker_id == 0) {
                 spdlog::info("[Worker 0] Initializing database schema...");
-                queue_manager->initialize_schema();
+                async_queue_manager->initialize_schema();
                 
                 // Start metrics collector (samples every 1s, aggregates every 60s)
                 spdlog::info("[Worker 0] Starting background metrics collector...");
@@ -2187,7 +2037,7 @@ static void worker_thread(const Config& config, int worker_id, int num_workers,
                          config.file_buffer.buffer_dir);
             
             auto new_file_buffer = std::make_shared<FileBufferManager>(
-                queue_manager,
+                async_queue_manager,
                 config.file_buffer.buffer_dir,
                 config.file_buffer.flush_interval_ms,
                 config.file_buffer.max_batch_size,
@@ -2228,10 +2078,9 @@ static void worker_thread(const Config& config, int worker_id, int num_workers,
             spdlog::info("[Worker {}] Using shared file buffer from Worker 0", worker_id);
         }
         
-        // Connect file buffer to queue manager for maintenance mode
-        queue_manager->set_file_buffer_manager(file_buffer);
+        // Connect file buffer to async queue manager for maintenance mode
         async_queue_manager->set_file_buffer_manager(file_buffer);
-        spdlog::info("[Worker {}] File buffer connected to queue managers for maintenance mode", worker_id);
+        spdlog::info("[Worker {}] File buffer connected to async queue manager for maintenance mode", worker_id);
         
         // Create worker App
         spdlog::info("[Worker {}] Creating uWS::App...", worker_id);
@@ -2239,7 +2088,7 @@ static void worker_thread(const Config& config, int worker_id, int num_workers,
         
         // Setup routes
         spdlog::info("[Worker {}] Setting up routes...", worker_id);
-        setup_worker_routes(worker_app, queue_manager, async_queue_manager, analytics_manager, file_buffer, config, worker_id, db_thread_pool);
+        setup_worker_routes(worker_app, async_queue_manager, analytics_manager, file_buffer, config, worker_id, db_thread_pool);
         spdlog::info("[Worker {}] Routes configured", worker_id);
         
         // Register this worker app with the acceptor (thread-safe)

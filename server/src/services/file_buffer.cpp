@@ -1,5 +1,5 @@
 #include "queen/file_buffer.hpp"
-#include "queen/queue_manager.hpp"
+#include "queen/async_queue_manager.hpp"
 #include <spdlog/spdlog.h>
 #include <fcntl.h>
 #include <unistd.h>
@@ -16,7 +16,7 @@
 namespace queen {
 
 FileBufferManager::FileBufferManager(
-    std::shared_ptr<QueueManager> qm,
+    std::shared_ptr<AsyncQueueManager> qm,
     const std::string& buffer_dir,
     int flush_interval_ms,
     size_t max_batch_size,

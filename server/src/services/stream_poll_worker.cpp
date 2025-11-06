@@ -1,5 +1,4 @@
 #include "queen/stream_poll_worker.hpp"
-#include "queen/database.hpp"
 #include <spdlog/spdlog.h>
 #include <thread>
 #include <unordered_map>
