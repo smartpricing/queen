@@ -84,12 +84,11 @@ PGConnPtr asyncConnect(const char* conn_str,
     // Set client encoding to UTF8
     PQsetClientEncoding(conn, "UTF8");
 
-    // Set timeout parameters and search_path
+    // Set timeout parameters
     std::string set_params = 
         "SET statement_timeout = " + std::to_string(statement_timeout_ms) + "; " +
         "SET lock_timeout = " + std::to_string(lock_timeout_ms) + "; " +
-        "SET idle_in_transaction_session_timeout = " + std::to_string(idle_in_transaction_timeout_ms) + "; " +
-        "SET search_path TO " + schema + ", public;";
+        "SET idle_in_transaction_session_timeout = " + std::to_string(idle_in_transaction_timeout_ms) + ";";
     
     // Send the configuration commands
     if (!PQsendQuery(conn, set_params.c_str())) {
@@ -188,12 +187,11 @@ bool asyncReset(PGconn* conn,
     // Set client encoding to UTF8
     PQsetClientEncoding(conn, "UTF8");
 
-    // Re-apply timeout parameters and search_path
+    // Re-apply timeout parameters
     std::string set_params = 
         "SET statement_timeout = " + std::to_string(statement_timeout_ms) + "; " +
         "SET lock_timeout = " + std::to_string(lock_timeout_ms) + "; " +
-        "SET idle_in_transaction_session_timeout = " + std::to_string(idle_in_transaction_timeout_ms) + "; " +
-        "SET search_path TO " + schema + ", public;";
+        "SET idle_in_transaction_session_timeout = " + std::to_string(idle_in_transaction_timeout_ms) + ";";
     
     // Send the configuration commands
     if (!PQsendQuery(conn, set_params.c_str())) {

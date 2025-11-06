@@ -345,7 +345,7 @@ void MetricsCollector::store_aggregated_metrics(const AggregatedMetrics& agg) {
         std::string metrics_str = metrics_json.dump();
         
         std::string query = R"(
-            INSERT INTO system_metrics (
+            INSERT INTO queen.system_metrics (
                 timestamp, hostname, port, worker_id,
                 sample_count, metrics
             ) VALUES ($1, $2, $3, $4, $5, $6)
