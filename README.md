@@ -24,6 +24,10 @@ Why "Queen"? Because years ago, when I first read the word "queue" in my mind, I
 
 [QUICKSTART](docs/QUICKSTART.md)
 
+Latest server production version is **0.5.0**.
+
+---
+
 ## Introduction
 
 QueenMQ is a queue system written in C++ and backed by PostgreSQL, born from the need to manage many FIFO partitions for Smartchat with solid guarantees around delivery and failure handling. During the initial development, I realized that with a few simple additions to the original design, I could build a very powerful and flexible queue system. This project is almost entirely written by AI, with my supervision—only the test files (or a good part of them) are manually written.
