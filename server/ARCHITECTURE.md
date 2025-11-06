@@ -439,7 +439,6 @@ export FILE_BUFFER_EVENTS_PER_FILE=10000
 # Network
 export PORT=6632
 export NUM_WORKERS=10
-export PG_SCHEMA=queen # default schema
 
 # Database
 export DB_POOL_SIZE=150              # Most important!
