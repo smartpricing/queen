@@ -3,6 +3,8 @@
 #include <stdexcept>
 #include <cerrno>
 #include <cstring>
+#include <thread>
+#include <chrono>
 
 // For select() system call (POSIX)
 #include <sys/select.h>
@@ -122,6 +124,114 @@ PGConnPtr asyncConnect(const char* conn_str,
     }
 
     return PGConnPtr(conn);
+}
+
+// --- Helper: Asynchronous Connection Reset ---
+
+bool asyncReset(PGconn* conn,
+               int statement_timeout_ms,
+               int lock_timeout_ms,
+               int idle_in_transaction_timeout_ms,
+               const std::string& schema) {
+    if (!conn) {
+        spdlog::error("[asyncReset] Cannot reset null connection");
+        return false;
+    }
+
+    // Start asynchronous reset
+    if (PQresetStart(conn) == 0) {
+        spdlog::error("[asyncReset] PQresetStart failed");
+        return false;
+    }
+
+    // Poll until reset completes
+    PostgresPollingStatusType poll_status;
+    do {
+        poll_status = PQresetPoll(conn);
+        switch (poll_status) {
+            case PGRES_POLLING_READING:
+                try {
+                    waitForSocket(conn, true);
+                } catch (const std::exception& e) {
+                    spdlog::error("[asyncReset] Socket wait (read) failed: {}", e.what());
+                    return false;
+                }
+                break;
+            case PGRES_POLLING_WRITING:
+                try {
+                    waitForSocket(conn, false);
+                } catch (const std::exception& e) {
+                    spdlog::error("[asyncReset] Socket wait (write) failed: {}", e.what());
+                    return false;
+                }
+                break;
+            case PGRES_POLLING_FAILED:
+                spdlog::error("[asyncReset] Reset failed: {}", PQerrorMessage(conn));
+                return false;
+            case PGRES_POLLING_OK:
+                break;
+        }
+    } while (poll_status != PGRES_POLLING_OK);
+
+    // Verify connection is now valid
+    if (PQstatus(conn) != CONNECTION_OK) {
+        spdlog::error("[asyncReset] Connection still invalid after reset: {}", PQerrorMessage(conn));
+        return false;
+    }
+
+    // Set connection to non-blocking mode
+    if (PQsetnonblocking(conn, 1) != 0) {
+        spdlog::error("[asyncReset] Failed to set non-blocking mode: {}", PQerrorMessage(conn));
+        return false;
+    }
+
+    // Set client encoding to UTF8
+    PQsetClientEncoding(conn, "UTF8");
+
+    // Re-apply timeout parameters and search_path
+    std::string set_params = 
+        "SET statement_timeout = " + std::to_string(statement_timeout_ms) + "; " +
+        "SET lock_timeout = " + std::to_string(lock_timeout_ms) + "; " +
+        "SET idle_in_transaction_session_timeout = " + std::to_string(idle_in_transaction_timeout_ms) + "; " +
+        "SET search_path TO " + schema + ", public;";
+    
+    // Send the configuration commands
+    if (!PQsendQuery(conn, set_params.c_str())) {
+        spdlog::error("[asyncReset] Failed to send connection parameters: {}", PQerrorMessage(conn));
+        return false;
+    }
+
+    // Wait for the configuration to complete
+    try {
+        while (true) {
+            waitForSocket(conn, true);
+            if (!PQconsumeInput(conn)) {
+                spdlog::error("[asyncReset] PQconsumeInput failed during setup: {}", PQerrorMessage(conn));
+                return false;
+            }
+            if (PQisBusy(conn) == 0) {
+                break;
+            }
+        }
+    } catch (const std::exception& e) {
+        spdlog::error("[asyncReset] Failed waiting for parameter setup: {}", e.what());
+        return false;
+    }
+
+    // Consume all results from SET commands
+    PGresult* result;
+    while ((result = PQgetResult(conn)) != nullptr) {
+        if (PQresultStatus(result) != PGRES_COMMAND_OK) {
+            std::string errMsg = PQresultErrorMessage(result);
+            PQclear(result);
+            spdlog::error("[asyncReset] Failed to set connection parameters: {}", errMsg);
+            return false;
+        }
+        PQclear(result);
+    }
+
+    spdlog::info("[asyncReset] Connection reset and reconfigured successfully");
+    return true;
 }
 
 // --- Helper: Send Query and Wait ---
@@ -330,22 +440,46 @@ AsyncDbPool::~AsyncDbPool() {
 }
 
 AsyncDbPool::PooledConnection AsyncDbPool::acquire() {
-    std::unique_lock<std::mutex> lock(mtx_);
+    // Try to get a healthy connection, with a limit to prevent infinite loops
+    // When DB is down, trying each connection once is enough (they'll all fail fast)
+    const int MAX_HEALTH_CHECK_ATTEMPTS = static_cast<int>(all_connections_.size());
+    int attempts = 0;
+    
+    while (attempts < MAX_HEALTH_CHECK_ATTEMPTS) {
+        std::unique_lock<std::mutex> lock(mtx_);
 
-    // Wait until a connection is available
-    cv_.wait(lock, [this] { return !idle_connections_.empty(); });
+        // Wait until a connection is available
+        cv_.wait(lock, [this] { return !idle_connections_.empty(); });
 
-    // We have the lock, and the queue is not empty
-    PGconn* conn = idle_connections_.front();
-    idle_connections_.pop();
+        // We have the lock, and the queue is not empty
+        PGconn* conn = idle_connections_.front();
+        idle_connections_.pop();
 
-    spdlog::debug("[AsyncDbPool] Connection acquired ({} remaining)", 
-                 idle_connections_.size());
+        spdlog::debug("[AsyncDbPool] Connection acquired ({} remaining)", 
+                     idle_connections_.size());
 
-    // Return a smart pointer with a custom deleter
-    return PooledConnection(conn, [this](PGconn* returned_conn) {
-        this->release(returned_conn);
-    });
+        // Release the lock before health check to avoid blocking other threads
+        lock.unlock();
+
+        // Proactive health check - catch stale connections before use
+        if (ensureConnectionHealthy(conn)) {
+            // Connection is healthy, return it
+            return PooledConnection(conn, [this](PGconn* returned_conn) {
+                this->release(returned_conn);
+            });
+        }
+        
+        // Connection is unhealthy, return to pool and try again
+        spdlog::debug("[AsyncDbPool] Connection health check failed (attempt {}/{}), trying next connection", 
+                     attempts + 1, MAX_HEALTH_CHECK_ATTEMPTS);
+        release(conn);
+        attempts++;
+    }
+    
+    // All attempts exhausted - database is likely down
+    spdlog::error("[AsyncDbPool] Failed to acquire healthy connection after {} attempts. Database may be unavailable.", 
+                 MAX_HEALTH_CHECK_ATTEMPTS);
+    throw std::runtime_error("Failed to acquire healthy database connection: all connections unhealthy. Database may be down.");
 }
 
 void AsyncDbPool::release(PGconn* conn) {
@@ -363,21 +497,13 @@ void AsyncDbPool::release(PGconn* conn) {
         spdlog::debug("[AsyncDbPool] Drained {} pending results from connection before release", drained_count);
     }
     
-    // Check if connection is still valid
+    // Check if connection is still valid and reset if needed
     if (PQstatus(conn) != CONNECTION_OK) {
-        spdlog::warn("[AsyncDbPool] Connection invalid on release, attempting reset...");
-        PQreset(conn);
+        spdlog::warn("[AsyncDbPool] Connection invalid on release, attempting async reset...");
         
-        if (PQstatus(conn) == CONNECTION_OK) {
-            // Re-enable non-blocking mode after reset
-            if (PQsetnonblocking(conn, 1) != 0) {
-                spdlog::error("[AsyncDbPool] Failed to set non-blocking after reset");
-            } else {
-                spdlog::info("[AsyncDbPool] Connection reset successfully");
-            }
-        } else {
-            spdlog::error("[AsyncDbPool] Connection reset failed: {}", 
-                         PQerrorMessage(conn));
+        if (!asyncReset(conn, statement_timeout_ms_, lock_timeout_ms_, 
+                       idle_in_transaction_timeout_ms_, schema_)) {
+            spdlog::error("[AsyncDbPool] Async connection reset failed, connection may be unusable");
         }
     }
     
@@ -395,6 +521,186 @@ void AsyncDbPool::release(PGconn* conn) {
 size_t AsyncDbPool::available() const {
     std::lock_guard<std::mutex> lock(mtx_);
     return idle_connections_.size();
+}
+
+bool AsyncDbPool::ensureConnectionHealthy(PGconn* conn) {
+    if (!conn) {
+        spdlog::error("[AsyncDbPool] Cannot check health of null connection");
+        return false;
+    }
+
+    // Check connection status
+    ConnStatusType status = PQstatus(conn);
+    
+    if (status != CONNECTION_OK) {
+        // Connection is not OK, attempt reset immediately
+        spdlog::warn("[AsyncDbPool] Connection status not OK ({}), attempting reset...", 
+                    static_cast<int>(status));
+        return asyncReset(conn, statement_timeout_ms_, lock_timeout_ms_, 
+                        idle_in_transaction_timeout_ms_, schema_);
+    }
+    
+    // Connection status is OK - do a quick ping to verify it's responsive
+    // Send a simple ping query
+    if (!PQsendQuery(conn, "SELECT 1")) {
+        spdlog::warn("[AsyncDbPool] Connection failed health check (send), attempting reset...");
+        return asyncReset(conn, statement_timeout_ms_, lock_timeout_ms_, 
+                        idle_in_transaction_timeout_ms_, schema_);
+    }
+
+    // Wait for response with a timeout
+    try {
+        // Use select with a short timeout to check if the connection is responsive
+        int sock_fd = PQsocket(conn);
+        if (sock_fd < 0) {
+            spdlog::warn("[AsyncDbPool] Invalid socket during health check, attempting reset...");
+            // Drain the query we just sent
+            PGresult* drain;
+            while ((drain = PQgetResult(conn)) != nullptr) {
+                PQclear(drain);
+            }
+            return asyncReset(conn, statement_timeout_ms_, lock_timeout_ms_, 
+                            idle_in_transaction_timeout_ms_, schema_);
+        }
+
+        fd_set fds;
+        FD_ZERO(&fds);
+        FD_SET(sock_fd, &fds);
+        
+        // 100ms timeout for health check (fail fast when DB is down)
+        struct timeval tv;
+        tv.tv_sec = 0;
+        tv.tv_usec = 100000;  // 100ms
+        
+        int ret = select(sock_fd + 1, &fds, nullptr, nullptr, &tv);
+            
+            if (ret < 0) {
+                spdlog::warn("[AsyncDbPool] Health check select failed, attempting reset...");
+                // Drain the query
+                PGresult* drain;
+                while ((drain = PQgetResult(conn)) != nullptr) {
+                    PQclear(drain);
+                }
+                return asyncReset(conn, statement_timeout_ms_, lock_timeout_ms_, 
+                                idle_in_transaction_timeout_ms_, schema_);
+            }
+            
+            if (ret == 0) {
+                // Timeout - connection is unresponsive
+                spdlog::warn("[AsyncDbPool] Health check timeout, attempting reset...");
+                // Drain the query
+                PGresult* drain;
+                while ((drain = PQgetResult(conn)) != nullptr) {
+                    PQclear(drain);
+                }
+                return asyncReset(conn, statement_timeout_ms_, lock_timeout_ms_, 
+                                idle_in_transaction_timeout_ms_, schema_);
+            }
+
+            // Data is available, consume it
+            if (!PQconsumeInput(conn)) {
+                spdlog::warn("[AsyncDbPool] Failed to consume health check input, attempting reset...");
+                // Drain the query
+                PGresult* drain;
+                while ((drain = PQgetResult(conn)) != nullptr) {
+                    PQclear(drain);
+                }
+                return asyncReset(conn, statement_timeout_ms_, lock_timeout_ms_, 
+                                idle_in_transaction_timeout_ms_, schema_);
+            }
+
+            // Check if query is complete
+            while (PQisBusy(conn)) {
+                waitForSocket(conn, true);
+                if (!PQconsumeInput(conn)) {
+                    spdlog::warn("[AsyncDbPool] Failed to consume input, attempting reset...");
+                    return asyncReset(conn, statement_timeout_ms_, lock_timeout_ms_, 
+                                    idle_in_transaction_timeout_ms_, schema_);
+                }
+            }
+
+            // Get and verify result
+            PGresult* result = PQgetResult(conn);
+            if (!result) {
+                spdlog::warn("[AsyncDbPool] No result from health check, attempting reset...");
+                return asyncReset(conn, statement_timeout_ms_, lock_timeout_ms_, 
+                                idle_in_transaction_timeout_ms_, schema_);
+            }
+
+            ExecStatusType res_status = PQresultStatus(result);
+            PQclear(result);
+            
+            // Drain any remaining results
+            PGresult* drain;
+            while ((drain = PQgetResult(conn)) != nullptr) {
+                PQclear(drain);
+            }
+
+            if (res_status != PGRES_TUPLES_OK) {
+                spdlog::warn("[AsyncDbPool] Health check query failed, attempting reset...");
+                return asyncReset(conn, statement_timeout_ms_, lock_timeout_ms_, 
+                                idle_in_transaction_timeout_ms_, schema_);
+            }
+
+            // Connection is healthy
+            spdlog::debug("[AsyncDbPool] Connection passed health check");
+            return true;
+
+        } catch (const std::exception& e) {
+            spdlog::warn("[AsyncDbPool] Health check exception: {}, attempting reset...", e.what());
+            // Drain any pending results
+            PGresult* drain;
+            while ((drain = PQgetResult(conn)) != nullptr) {
+                PQclear(drain);
+            }
+            return asyncReset(conn, statement_timeout_ms_, lock_timeout_ms_, 
+                            idle_in_transaction_timeout_ms_, schema_);
+        }
+}
+
+size_t AsyncDbPool::resetAllIdle() {
+    std::vector<PGconn*> connections_to_reset;
+    
+    // Collect all idle connections
+    {
+        std::lock_guard<std::mutex> lock(mtx_);
+        size_t idle_count = idle_connections_.size();
+        
+        spdlog::info("[AsyncDbPool] Resetting {} idle connections...", idle_count);
+        
+        // Move all idle connections to a temporary vector
+        while (!idle_connections_.empty()) {
+            connections_to_reset.push_back(idle_connections_.front());
+            idle_connections_.pop();
+        }
+    }
+    
+    // Reset connections outside the lock to avoid blocking other operations
+    size_t success_count = 0;
+    for (PGconn* conn : connections_to_reset) {
+        if (asyncReset(conn, statement_timeout_ms_, lock_timeout_ms_, 
+                      idle_in_transaction_timeout_ms_, schema_)) {
+            success_count++;
+        } else {
+            spdlog::error("[AsyncDbPool] Failed to reset connection during bulk reset");
+        }
+    }
+    
+    // Return all connections to the pool
+    {
+        std::lock_guard<std::mutex> lock(mtx_);
+        for (PGconn* conn : connections_to_reset) {
+            idle_connections_.push(conn);
+        }
+    }
+    
+    // Notify waiting threads
+    cv_.notify_all();
+    
+    spdlog::info("[AsyncDbPool] Bulk reset complete: {}/{} connections reset successfully", 
+                success_count, connections_to_reset.size());
+    
+    return success_count;
 }
 
 } // namespace queen

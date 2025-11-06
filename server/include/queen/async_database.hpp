@@ -59,6 +59,26 @@ PGConnPtr asyncConnect(const char* conn_str,
                       const std::string& schema = "queen");
 
 /**
+ * @brief Asynchronously resets a PostgreSQL connection and re-applies parameters.
+ * 
+ * Uses PQresetStart/PQresetPoll for non-blocking connection reset.
+ * After successful reset, re-applies all connection parameters including
+ * timeouts and schema settings.
+ * 
+ * @param conn Existing connection to reset (must not be nullptr)
+ * @param statement_timeout_ms Statement timeout in milliseconds
+ * @param lock_timeout_ms Lock timeout in milliseconds
+ * @param idle_in_transaction_timeout_ms Idle in transaction timeout in milliseconds
+ * @param schema Database schema to use (sets search_path)
+ * @return true if reset successful, false otherwise
+ */
+bool asyncReset(PGconn* conn,
+               int statement_timeout_ms,
+               int lock_timeout_ms,
+               int idle_in_transaction_timeout_ms,
+               const std::string& schema);
+
+/**
  * @brief Sends a query asynchronously and waits for completion.
  * 
  * Uses PQsendQuery + socket polling to avoid blocking the thread.
@@ -183,6 +203,16 @@ public:
      */
     size_t available() const;
 
+    /**
+     * @brief Resets all idle connections in the pool.
+     * 
+     * Useful for recovering from database restarts. Only resets
+     * connections that are currently idle (not in use).
+     * 
+     * @return Number of connections successfully reset
+     */
+    size_t resetAllIdle();
+
 private:
     /**
      * @brief Returns a connection to the pool.
@@ -192,6 +222,14 @@ private:
      * @param conn Connection to return
      */
     void release(PGconn* conn);
+
+    /**
+     * @brief Checks if a connection is healthy and resets if needed.
+     * 
+     * @param conn Connection to check
+     * @return true if connection is healthy or was successfully reset
+     */
+    bool ensureConnectionHealthy(PGconn* conn);
 
     std::string conn_str_;
     int statement_timeout_ms_;

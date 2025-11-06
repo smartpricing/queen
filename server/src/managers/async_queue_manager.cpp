@@ -375,9 +375,52 @@ PushResult AsyncQueueManager::push_single_message(const PushItem& item) {
         }
         
     } catch (const std::exception& e) {
-        result.status = "failed";
-        result.error = e.what();
-        spdlog::error("Failed to push message: {}", e.what());
+        // Database push failed - try file buffer failover
+        spdlog::warn("Database push failed: {}. Attempting file buffer failover...", e.what());
+        
+        if (file_buffer_manager_) {
+            // Mark database as unhealthy for faster failover on subsequent requests
+            file_buffer_manager_->mark_db_unhealthy();
+            
+            try {
+                nlohmann::json event = {
+                    {"queue", item.queue},
+                    {"partition", item.partition},
+                    {"payload", item.payload},
+                    {"transactionId", result.transaction_id},
+                    {"failover", true}  // Failover buffer (FIFO, will be replayed when DB recovers)
+                };
+                
+                if (item.trace_id.has_value() && !item.trace_id->empty()) {
+                    event["traceId"] = *item.trace_id;
+                }
+                
+                if (file_buffer_manager_->write_event(event)) {
+                    spdlog::info("Message successfully failed over to file buffer");
+                    result.status = "buffered";
+                    result.message_id = std::nullopt;
+                    result.trace_id = item.trace_id;
+                    result.error = std::nullopt;  // Clear error since failover succeeded
+                    return result;
+                } else {
+                    spdlog::error("File buffer write failed during failover");
+                    result.status = "failed";
+                    result.error = std::string("Database error: ") + e.what() + "; File buffer also failed";
+                    return result;
+                }
+            } catch (const std::exception& fb_error) {
+                spdlog::error("File buffer failover exception: {}", fb_error.what());
+                result.status = "failed";
+                result.error = std::string("Database error: ") + e.what() + "; Failover error: " + fb_error.what();
+                return result;
+            }
+        } else {
+            // No file buffer configured - return database error
+            spdlog::error("Database push failed and no file buffer configured: {}", e.what());
+            result.status = "failed";
+            result.error = e.what();
+            return result;
+        }
     }
     
     return result;
@@ -1069,13 +1112,68 @@ std::vector<PushResult> AsyncQueueManager::push_messages_chunk(const std::vector
         }
         
     } catch (const std::exception& e) {
-        for (auto& result : results) {
-            if (result.status.empty()) {
-                result.status = "failed";
-                result.error = e.what();
+        // Database batch push failed - try file buffer failover for all items
+        spdlog::warn("Database batch push failed: {}. Attempting file buffer failover for {} items...", 
+                    e.what(), items.size());
+        
+        if (file_buffer_manager_) {
+            // Mark database as unhealthy for faster failover on subsequent requests
+            file_buffer_manager_->mark_db_unhealthy();
+            
+            // Try to failover all items to file buffer
+            size_t failover_success_count = 0;
+            for (size_t i = 0; i < items.size(); ++i) {
+                const auto& item = items[i];
+                
+                // Initialize result if empty
+                if (i >= results.size()) {
+                    PushResult result;
+                    result.transaction_id = item.transaction_id.value_or(generate_transaction_id());
+                    results.push_back(result);
+                }
+                
+                try {
+                    nlohmann::json event = {
+                        {"queue", item.queue},
+                        {"partition", item.partition},
+                        {"payload", item.payload},
+                        {"transactionId", results[i].transaction_id},
+                        {"failover", true}  // Failover buffer (FIFO, will be replayed when DB recovers)
+                    };
+                    
+                    if (item.trace_id.has_value() && !item.trace_id->empty()) {
+                        event["traceId"] = *item.trace_id;
+                    }
+                    
+                    if (file_buffer_manager_->write_event(event)) {
+                        results[i].status = "buffered";
+                        results[i].message_id = std::nullopt;
+                        results[i].trace_id = item.trace_id;
+                        results[i].error = std::nullopt;
+                        failover_success_count++;
+                    } else {
+                        results[i].status = "failed";
+                        results[i].error = std::string("Database error: ") + e.what() + "; File buffer write failed";
+                    }
+                } catch (const std::exception& fb_error) {
+                    spdlog::error("File buffer failover exception for item {}: {}", i, fb_error.what());
+                    results[i].status = "failed";
+                    results[i].error = std::string("Database error: ") + e.what() + "; Failover error: " + fb_error.what();
+                }
             }
+            
+            spdlog::info("Batch failover complete: {}/{} messages buffered successfully", 
+                        failover_success_count, items.size());
+        } else {
+            // No file buffer configured - mark all as failed with database error
+            for (auto& result : results) {
+                if (result.status.empty()) {
+                    result.status = "failed";
+                    result.error = e.what();
+                }
+            }
+            spdlog::error("Batch push failed and no file buffer configured: {}", e.what());
         }
-        spdlog::error("Batch push failed: {}", e.what());
     }
     
     auto chunk_total_ms = std::chrono::duration_cast<std::chrono::milliseconds>(

@@ -347,25 +347,30 @@ FILE_BUFFER_DIR=/custom/path ./bin/queen-server
 
 ### Results
 
-| Mode | Threads | Messages | Batch Size | Partitions | Queue Mode | Throughput | Bandwidth |
-|------|---------|----------|------------|------------|------------|------------|-----------|
-| **Producer** | 100 | 10K | 1 | 100 | single-queue | **1,431 msg/sec** | 0.41 MB/sec |
-| **Producer** | 100 | 10K | 1 | 100 | multi-queue | 527 msg/sec | 0.15 MB/sec |
-| **Producer** | 10 | 1M | 1,000 | 100 | single-queue | **62,927 msg/sec** | 18.00 MB/sec |
-| **Producer** | 10 | 1M | 1,000 | 100 | multi-queue | 49,663 msg/sec | 14.21 MB/sec |
-| **Producer** | 10 | 1M | 1,000 | 10 | multi-queue | 42,663 msg/sec | 12.29 MB/sec |
-| **Producer** | 10 | 1M | 10,000 | 10 | single-queue | 70,351 msg/sec | 19.68 MB/sec |
-| **Consumer** | 10 | 1M | 1,000 | 100 | single-queue | **31,922 msg/sec** | 16.25 MB/sec |
-| **Consumer** | 10 | 1M | 10,000 | 10 | single-queue | **105,974 msg/sec** | 53.70 MB/sec |
+All tests run with: `--threads 10 --partitions 10 --mode single-queue`
+
+| Test | Mode | Messages | Batch Size | Throughput | Bandwidth |
+|------|------|----------|------------|------------|-----------|
+| **T1** | Producer | 10,000 | 1 | 785 msg/sec | 0.22 MB/sec |
+| **T1** | Consumer | 10,000 | 1 | 456 msg/sec | 0.23 MB/sec |
+| **T2** | Producer | 10,000 | 10 | 7,677 msg/sec | 2.20 MB/sec |
+| **T2** | Consumer | 10,000 | 10 | 4,989 msg/sec | 2.53 MB/sec |
+| **T3** | Producer | 10,000 | 100 | 39,065 msg/sec | 11.18 MB/sec |
+| **T3** | Consumer | 10,000 | 100 | 30,079 msg/sec | 15.26 MB/sec |
+| **T4** | Producer | 10,000 | 1,000 | 85,862 msg/sec | 24.57 MB/sec |
+| **T4** | Consumer | 10,000 | 1,000 | **488,650 msg/sec** | **247.87 MB/sec** |
+| **T5** | Producer | 100,000 | 1,000 | **90,601 msg/sec** | **25.92 MB/sec** |
+| **T5** | Consumer | 100,000 | 1,000 | 84,530 msg/sec | 42.96 MB/sec |
 
 ### Key Observations
 
-- ✅ **Batch size matters:** Larger batches (1,000-10,000) dramatically improve throughput
-- ✅ **Consumer performance:** Scales well with batch size (82K msg/sec with 10K batches)
-- ✅ **Producer peak:** 62K msg/sec with optimal batch size (1,000)
+- ✅ **Batch size matters:** Larger batches (1,000) dramatically improve throughput
+- ✅ **Consumer performance:** Peaks at 488K msg/sec with batch size 1,000 (247 MB/sec bandwidth)
+- ✅ **Producer peak:** 90K msg/sec with batch size 1,000 on 100K messages
 - ⚠️ **Small batches:** Performance drops significantly with batch=1 (lock contention)
+- 📈 **Scalability:** Performance improves with larger message volumes (T4 vs T5)
 
-**Note:** All timing metrics exclude idle timeouts and measure actual message processing time (first message → last message).
+**Note:** All timing metrics are based on processing time (excludes idle time) and measure actual message processing (first message → last message).
 
 ### Run Your Own Benchmarks
 

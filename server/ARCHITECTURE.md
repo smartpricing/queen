@@ -417,7 +417,7 @@ effective_cache_size = 12GB  # 75% of RAM
 
 **Guarantees**:
 - ✅ Zero message loss (even if server crashes)
-- ✅ FIFO ordering preserved (within partitions)
+- ✅ FIFO ordering preserved (within partitions), if using one server
 - ✅ Duplicate detection (via transaction IDs)
 - ✅ Automatic recovery
 
@@ -439,6 +439,7 @@ export FILE_BUFFER_EVENTS_PER_FILE=10000
 # Network
 export PORT=6632
 export NUM_WORKERS=10
+export PG_SCHEMA=queen # default schema
 
 # Database
 export DB_POOL_SIZE=150              # Most important!
