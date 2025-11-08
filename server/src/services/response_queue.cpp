@@ -38,16 +38,40 @@ std::string ResponseRegistry::generate_uuid() const {
     return ss.str();
 }
 
-std::string ResponseRegistry::register_response(uWS::HttpResponse<false>* res, int worker_id) {
+std::string ResponseRegistry::register_response(uWS::HttpResponse<false>* res, int worker_id, 
+                                               AbortCallback on_abort) {
     std::string request_id = generate_uuid();
     auto entry = std::make_shared<ResponseEntry>(res, worker_id);
+    entry->on_abort = on_abort;
     
-    // Set up abort handler to mark response as invalid
-    res->onAborted([entry]() {
-        std::lock_guard<std::mutex> lock(entry->mutex);
-        entry->valid = false;
-        entry->response = nullptr;
-        spdlog::debug("Response aborted, marked as invalid");
+    // Set up abort handler to mark response as invalid AND remove from registry immediately
+    // Capture this, request_id by value, and entry by shared_ptr
+    res->onAborted([this, request_id, entry]() {
+        // Mark entry as invalid first
+        {
+            std::lock_guard<std::mutex> lock(entry->mutex);
+            entry->valid = false;
+            entry->response = nullptr;
+        }
+        
+        // Call user-provided abort callback (e.g., to remove intention from registry)
+        if (entry->on_abort) {
+            try {
+                entry->on_abort(request_id);
+            } catch (const std::exception& e) {
+                spdlog::error("Exception in abort callback for {}: {}", request_id, e.what());
+            }
+        }
+        
+        // Remove from registry immediately to prevent memory leak
+        {
+            std::lock_guard<std::mutex> lock(registry_mutex_);
+            auto it = responses_.find(request_id);
+            if (it != responses_.end()) {
+                responses_.erase(it);
+                spdlog::debug("Response {} aborted and removed from registry", request_id);
+            }
+        }
     });
     
     {

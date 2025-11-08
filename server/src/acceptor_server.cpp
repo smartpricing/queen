@@ -614,8 +614,13 @@ static void setup_worker_routes(uWS::App* app,
             }
             
             if (wait) {
-                // Register response in uWebSockets thread for long-polling
-            std::string request_id = global_response_registry->register_response(res, worker_id);
+                // Register response with abort callback to clean up intention on disconnect
+                std::string request_id = global_response_registry->register_response(res, worker_id,
+                    [](const std::string& req_id) {
+                        // Remove intention from registry when connection aborts
+                        global_poll_intention_registry->remove_intention(req_id);
+                        spdlog::info("SPOP: Connection aborted, removed poll intention {}", req_id);
+                    });
             
                 // Use Poll Intention Registry for long-polling
                 queen::PollIntention intention{
@@ -839,8 +844,13 @@ static void setup_worker_routes(uWS::App* app,
             }
             
             if (wait) {
-                // Register response in uWebSockets thread for long-polling
-            std::string request_id = global_response_registry->register_response(res, worker_id);
+                // Register response with abort callback to clean up intention on disconnect
+                std::string request_id = global_response_registry->register_response(res, worker_id,
+                    [](const std::string& req_id) {
+                        // Remove intention from registry when connection aborts
+                        global_poll_intention_registry->remove_intention(req_id);
+                        spdlog::info("QPOP: Connection aborted, removed poll intention {}", req_id);
+                    });
             
                 // Use Poll Intention Registry for long-polling
                 queen::PollIntention intention{
@@ -1046,8 +1056,13 @@ static void setup_worker_routes(uWS::App* app,
             if (!sub_from.empty()) options.subscription_from = sub_from;
             
             if (wait) {
-                // Register response in uWebSockets thread for long-polling
-            std::string request_id = global_response_registry->register_response(res, worker_id);
+                // Register response with abort callback to clean up intention on disconnect
+                std::string request_id = global_response_registry->register_response(res, worker_id,
+                    [](const std::string& req_id) {
+                        // Remove intention from registry when connection aborts
+                        global_poll_intention_registry->remove_intention(req_id);
+                        spdlog::info("POP: Connection aborted, removed poll intention {}", req_id);
+                    });
             
                 // Use Poll Intention Registry for long-polling
                 queen::PollIntention intention{
@@ -1956,6 +1971,9 @@ static void worker_thread(const Config& config, int worker_id, int num_workers,
                     global_async_db_pool,
                     global_db_thread_pool,
                     global_system_thread_pool,
+                    global_poll_intention_registry,
+                    global_stream_poll_registry,
+                    global_response_registry,
                     global_system_info.hostname,
                     global_system_info.port,
                     config.server.worker_id,

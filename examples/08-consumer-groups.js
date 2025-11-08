@@ -108,8 +108,17 @@ await queen
   .partition('user-456')
   .group('user-specific-analytics')
   .limit(1)
+  .autoAck(false)
   .consume(async (message) => {
     console.log(`Processing user-456 events:`, message.data)
+  })
+  .onSuccess(async (message) => {
+    console.log(`Successfully processed user-456 events:`, message.data)
+    await queen.ack(message, true, { group: 'user-specific-analytics' })
+  })
+  .onError(async (message, error) => {
+    console.error(`Error processing user-456 events:`, error)
+    await queen.ack(message, false, { group: 'user-specific-analytics', error: 'some error' })
   })
 
 // Cleanup

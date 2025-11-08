@@ -88,12 +88,15 @@ public:
  */
 class ResponseRegistry {
 public:
+    using AbortCallback = std::function<void(const std::string& request_id)>;
+    
     struct ResponseEntry {
         uWS::HttpResponse<false>* response;
         std::chrono::steady_clock::time_point created_at;
         std::atomic<bool> valid{true};
         std::mutex mutex;
         int worker_id;  // Track which worker owns this response
+        AbortCallback on_abort;  // Optional callback when connection aborts
         
         ResponseEntry(uWS::HttpResponse<false>* res, int wid) 
             : response(res), created_at(std::chrono::steady_clock::now()), worker_id(wid) {}
@@ -106,7 +109,8 @@ private:
     std::string generate_uuid() const;
     
 public:
-    std::string register_response(uWS::HttpResponse<false>* res, int worker_id);
+    std::string register_response(uWS::HttpResponse<false>* res, int worker_id, 
+                                  AbortCallback on_abort = nullptr);
     
     bool send_response(const std::string& request_id, const nlohmann::json& data, 
                       bool is_error = false, int status_code = 200);

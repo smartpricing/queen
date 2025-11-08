@@ -162,8 +162,13 @@ void StreamManager::handle_poll(uWS::HttpResponse<false>* res, uWS::HttpRequest*
                 return;
             }
             
-            // Register response in uWebSockets thread
-            std::string request_id = response_registry_->register_response(res, worker_id);
+            // Register response with abort callback to clean up intention on disconnect
+            std::string request_id = response_registry_->register_response(res, worker_id,
+                [this](const std::string& req_id) {
+                    // Remove intention from registry when connection aborts
+                    stream_intention_registry_->remove_intention(req_id);
+                    spdlog::info("Stream Poll: Connection aborted, removed stream poll intention {}", req_id);
+                });
             
             spdlog::info("[Worker {}] Stream poll request {}: stream={}, group={}, timeout={}ms", 
                          worker_id, request_id, stream_name, consumer_group, timeout);

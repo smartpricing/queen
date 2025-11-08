@@ -99,6 +99,16 @@
             </div>
           </div>
 
+          <!-- Registry Metrics Chart -->
+          <div class="chart-card-professional">
+            <div class="chart-header">
+              <h3 class="chart-title">Registries</h3>
+            </div>
+            <div class="chart-body">
+              <DetailedRegistryChart :data="data" :aggregation="selectedAggregation" />
+            </div>
+          </div>
+
           <!-- Stats Summary -->
           <div class="grid grid-cols-1 lg:grid-cols-3 gap-5">
             <div class="info-card-white">
@@ -140,6 +150,12 @@
                     {{ lastMetrics.database?.pool_active?.last || 0 }}
                   </span>
                 </div>
+                <div class="flex justify-between text-sm">
+                  <span class="text-gray-600 dark:text-gray-400">Poll Intentions</span>
+                  <span class="font-semibold font-mono text-blue-600 dark:text-blue-400">
+                    {{ lastMetrics.registries?.poll_intention?.last || 0 }}
+                  </span>
+                </div>
               </div>
             </div>
 
@@ -164,6 +180,12 @@
                     {{ lastMetrics.threadpool?.db?.queue_size?.max || 0 }}
                   </span>
                 </div>
+                <div class="flex justify-between text-sm">
+                  <span class="text-gray-600 dark:text-gray-400">Poll Intentions (max)</span>
+                  <span class="font-semibold font-mono text-blue-600 dark:text-blue-400">
+                    {{ lastMetrics.registries?.poll_intention?.max || 0 }}
+                  </span>
+                </div>
               </div>
             </div>
           </div>
@@ -182,6 +204,7 @@ import DetailedCpuChart from '../components/system-metrics/DetailedCpuChart.vue'
 import DetailedMemoryChart from '../components/system-metrics/DetailedMemoryChart.vue';
 import DetailedDatabaseChart from '../components/system-metrics/DetailedDatabaseChart.vue';
 import DetailedThreadPoolChart from '../components/system-metrics/DetailedThreadPoolChart.vue';
+import DetailedRegistryChart from '../components/system-metrics/DetailedRegistryChart.vue';
 
 const loading = ref(false);
 const error = ref(null);

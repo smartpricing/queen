@@ -47,6 +47,11 @@ struct MetricsSample {
     int system_threadpool_size;
     int system_threadpool_queue_size;
     
+    // Registries
+    int poll_intention_registry_size;
+    int stream_poll_intention_registry_size;
+    int response_registry_size;
+    
     // Uptime
     int uptime_seconds;
 };
@@ -83,6 +88,9 @@ struct AggregatedMetrics {
     AggregatedMetric db_threadpool_queue_size;
     AggregatedMetric system_threadpool_size;
     AggregatedMetric system_threadpool_queue_size;
+    AggregatedMetric poll_intention_registry_size;
+    AggregatedMetric stream_poll_intention_registry_size;
+    AggregatedMetric response_registry_size;
     int uptime_seconds;
     
     nlohmann::json to_json() const {
@@ -110,16 +118,29 @@ struct AggregatedMetrics {
                     {"queue_size", system_threadpool_queue_size.to_json()}
                 }}
             }},
+            {"registries", {
+                {"poll_intention", poll_intention_registry_size.to_json()},
+                {"stream_poll_intention", stream_poll_intention_registry_size.to_json()},
+                {"response", response_registry_size.to_json()}
+            }},
             {"uptime_seconds", uptime_seconds}
         };
     }
 };
+
+// Forward declarations
+class PollIntentionRegistry;
+class StreamPollIntentionRegistry;
+class ResponseRegistry;
 
 class MetricsCollector {
 private:
     std::shared_ptr<AsyncDbPool> db_pool_;
     std::shared_ptr<astp::ThreadPool> db_thread_pool_;
     std::shared_ptr<astp::ThreadPool> system_thread_pool_;
+    std::shared_ptr<PollIntentionRegistry> poll_intention_registry_;
+    std::shared_ptr<StreamPollIntentionRegistry> stream_poll_intention_registry_;
+    std::shared_ptr<ResponseRegistry> response_registry_;
     
     std::atomic<bool> running_{false};
     std::chrono::steady_clock::time_point start_time_;
@@ -142,6 +163,9 @@ public:
         std::shared_ptr<AsyncDbPool> db_pool,
         std::shared_ptr<astp::ThreadPool> db_thread_pool,
         std::shared_ptr<astp::ThreadPool> system_thread_pool,
+        std::shared_ptr<PollIntentionRegistry> poll_intention_registry,
+        std::shared_ptr<StreamPollIntentionRegistry> stream_poll_intention_registry,
+        std::shared_ptr<ResponseRegistry> response_registry,
         const std::string& hostname,
         int port,
         const std::string& worker_id = "worker-0",
