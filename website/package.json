@@ -1,0 +1,17 @@
+{
+  "name": "queen-mq-docs",
+  "version": "0.5.0",
+  "description": "Queen MQ - Modern PostgreSQL-backed Message Queue Documentation",
+  "type": "module",
+  "scripts": {
+    "dev": "vitepress dev",
+    "build": "vitepress build",
+    "preview": "vitepress preview"
+  },
+  "devDependencies": {
+    "vitepress": "^1.0.0-rc.31",
+    "vue": "^3.3.11"
+  },
+  "dependencies": {}
+}
+

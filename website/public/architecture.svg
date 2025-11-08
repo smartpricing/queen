@@ -1,0 +1,257 @@
+<svg width="1400" height="1800" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <style>
+      .title { font-family: Arial, sans-serif; font-size: 20px; font-weight: bold; fill: #2c3e50; }
+      .subtitle { font-family: Arial, sans-serif; font-size: 14px; fill: #34495e; }
+      .label { font-family: Arial, sans-serif; font-size: 13px; fill: #2c3e50; }
+      .small-label { font-family: Arial, sans-serif; font-size: 11px; fill: #555; }
+      .box { fill: #ecf0f1; stroke: #34495e; stroke-width: 2; }
+      .acceptor { fill: #3498db; stroke: #2980b9; stroke-width: 2; }
+      .worker { fill: #9b59b6; stroke: #8e44ad; stroke-width: 2; }
+      .timer { fill: #e74c3c; stroke: #c0392b; stroke-width: 2; }
+      .queue { fill: #f39c12; stroke: #d68910; stroke-width: 2; }
+      .threadpool { fill: #1abc9c; stroke: #16a085; stroke-width: 2; }
+      .registry { fill: #e67e22; stroke: #d35400; stroke-width: 2; }
+      .db-pool { fill: #95a5a6; stroke: #7f8c8d; stroke-width: 2; }
+      .database { fill: #27ae60; stroke: #229954; stroke-width: 2; }
+      .component { fill: #bdc3c7; stroke: #95a5a6; stroke-width: 2; }
+      .arrow { fill: none; stroke: #2c3e50; stroke-width: 2; marker-end: url(#arrowhead); }
+      .arrow-bi { fill: none; stroke: #2c3e50; stroke-width: 2; marker-end: url(#arrowhead); marker-start: url(#arrowhead-start); }
+      .text-white { fill: white; }
+    </style>
+    <marker id="arrowhead" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto">
+      <polygon points="0 0, 10 3, 0 6" fill="#2c3e50" />
+    </marker>
+    <marker id="arrowhead-start" markerWidth="10" markerHeight="10" refX="1" refY="3" orient="auto">
+      <polygon points="10 0, 0 3, 10 6" fill="#2c3e50" />
+    </marker>
+  </defs>
+
+  <!-- Title -->
+  <text x="700" y="30" text-anchor="middle" class="title">QUEEN MESSAGE QUEUE SERVER ARCHITECTURE</text>
+  <text x="700" y="50" text-anchor="middle" class="subtitle">Acceptor/Worker Pattern with uWebSockets</text>
+
+  <!-- Client Request -->
+  <rect x="600" y="70" width="200" height="50" class="box" rx="5"/>
+  <text x="700" y="100" text-anchor="middle" class="label">Client Request</text>
+  
+  <!-- Arrow to Acceptor -->
+  <path d="M 700 120 L 700 150" class="arrow"/>
+
+  <!-- UWS Acceptor -->
+  <rect x="500" y="150" width="400" height="80" class="acceptor" rx="5"/>
+  <text x="700" y="175" text-anchor="middle" class="label text-white">UWS ACCEPTOR THREAD</text>
+  <text x="700" y="195" text-anchor="middle" class="small-label text-white">• Main event loop (acceptor→run())</text>
+  <text x="700" y="210" text-anchor="middle" class="small-label text-white">• Listens on port 6632 • Round-robin to workers</text>
+
+  <!-- Arrows to Workers -->
+  <path d="M 600 230 L 250 280" class="arrow"/>
+  <path d="M 650 230 L 500 280" class="arrow"/>
+  <path d="M 750 230 L 900 280" class="arrow"/>
+  <path d="M 800 230 L 1150 280" class="arrow"/>
+
+  <!-- UWS Workers -->
+  <g id="worker0">
+    <rect x="150" y="280" width="200" height="140" class="worker" rx="5"/>
+    <text x="250" y="305" text-anchor="middle" class="label text-white">UWS WORKER 0</text>
+    <text x="250" y="325" text-anchor="middle" class="small-label text-white">• Event Loop</text>
+    <text x="250" y="340" text-anchor="middle" class="small-label text-white">• HTTP Routes</text>
+    <text x="250" y="355" text-anchor="middle" class="small-label text-white">• WS Handlers</text>
+    <rect x="180" y="370" width="140" height="35" class="timer" rx="3"/>
+    <text x="250" y="390" text-anchor="middle" class="small-label text-white">TIMER (25ms)</text>
+  </g>
+
+  <g id="worker1">
+    <rect x="400" y="280" width="200" height="140" class="worker" rx="5"/>
+    <text x="500" y="305" text-anchor="middle" class="label text-white">UWS WORKER 1</text>
+    <text x="500" y="325" text-anchor="middle" class="small-label text-white">• Event Loop</text>
+    <text x="500" y="340" text-anchor="middle" class="small-label text-white">• HTTP Routes</text>
+    <text x="500" y="355" text-anchor="middle" class="small-label text-white">• WS Handlers</text>
+    <rect x="430" y="370" width="140" height="35" class="timer" rx="3"/>
+    <text x="500" y="390" text-anchor="middle" class="small-label text-white">TIMER (25ms)</text>
+  </g>
+
+  <g id="worker2">
+    <rect x="800" y="280" width="200" height="140" class="worker" rx="5"/>
+    <text x="900" y="305" text-anchor="middle" class="label text-white">UWS WORKER 2</text>
+    <text x="900" y="325" text-anchor="middle" class="small-label text-white">• Event Loop</text>
+    <text x="900" y="340" text-anchor="middle" class="small-label text-white">• HTTP Routes</text>
+    <text x="900" y="355" text-anchor="middle" class="small-label text-white">• WS Handlers</text>
+    <rect x="830" y="370" width="140" height="35" class="timer" rx="3"/>
+    <text x="900" y="390" text-anchor="middle" class="small-label text-white">TIMER (25ms)</text>
+  </g>
+
+  <g id="worker-n">
+    <rect x="1050" y="280" width="200" height="140" class="worker" rx="5"/>
+    <text x="1150" y="305" text-anchor="middle" class="label text-white">UWS WORKER N</text>
+    <text x="1150" y="325" text-anchor="middle" class="small-label text-white">• Event Loop</text>
+    <text x="1150" y="340" text-anchor="middle" class="small-label text-white">• HTTP Routes</text>
+    <text x="1150" y="355" text-anchor="middle" class="small-label text-white">• WS Handlers</text>
+    <rect x="1080" y="370" width="140" height="35" class="timer" rx="3"/>
+    <text x="1150" y="390" text-anchor="middle" class="small-label text-white">TIMER (25ms)</text>
+  </g>
+
+  <text x="700" y="295" text-anchor="middle" class="small-label">...</text>
+
+  <!-- Arrows from timers to Response Queue -->
+  <path d="M 250 420 L 250 465 L 550 465" class="arrow"/>
+  <path d="M 500 420 L 500 450 L 550 450" class="arrow"/>
+  <path d="M 900 420 L 900 465 L 850 465" class="arrow"/>
+  <path d="M 1150 420 L 1150 465 L 850 465" class="arrow"/>
+
+  <!-- Global Response Queue -->
+  <rect x="550" y="440" width="300" height="70" class="queue" rx="5"/>
+  <text x="700" y="465" text-anchor="middle" class="label text-white">GLOBAL RESPONSE QUEUE</text>
+  <text x="700" y="482" text-anchor="middle" class="small-label text-white">Thread-safe std::queue&lt;ResponseItem&gt;</text>
+  <text x="700" y="498" text-anchor="middle" class="small-label text-white">Timers drain ← DB threads push</text>
+
+  <!-- Arrow from DB ThreadPool to Response Queue -->
+  <path d="M 1050 640 L 1050 480 L 850 480" class="arrow"/>
+
+  <!-- DB ThreadPool -->
+  <rect x="200" y="560" width="1000" height="200" class="threadpool" rx="5"/>
+  <text x="700" y="585" text-anchor="middle" class="label text-white">GLOBAL DB THREADPOOL (astp::ThreadPool)</text>
+  
+  <!-- Thread boxes -->
+  <rect x="230" y="600" width="100" height="50" class="worker" rx="3"/>
+  <text x="280" y="630" text-anchor="middle" class="small-label text-white">Thread 1</text>
+  
+  <rect x="360" y="600" width="100" height="50" class="worker" rx="3"/>
+  <text x="410" y="630" text-anchor="middle" class="small-label text-white">Thread 2</text>
+  
+  <rect x="490" y="600" width="100" height="50" class="worker" rx="3"/>
+  <text x="540" y="630" text-anchor="middle" class="small-label text-white">Thread 3</text>
+  
+  <text x="630" y="630" text-anchor="middle" class="label text-white">...</text>
+  
+  <rect x="700" y="600" width="100" height="50" class="worker" rx="3"/>
+  <text x="750" y="630" text-anchor="middle" class="small-label text-white">Poll 0</text>
+  
+  <rect x="830" y="600" width="100" height="50" class="worker" rx="3"/>
+  <text x="880" y="630" text-anchor="middle" class="small-label text-white">Poll 1</text>
+  
+  <rect x="960" y="600" width="100" height="50" class="worker" rx="3"/>
+  <text x="1010" y="630" text-anchor="middle" class="small-label text-white">Thread N</text>
+
+  <text x="240" y="680" text-anchor="start" class="small-label text-white">Jobs: PUSH • POP • ACK • Transactions</text>
+  <text x="240" y="700" text-anchor="start" class="small-label text-white">Poll Workers: Reserved threads (2)</text>
+  <text x="240" y="720" text-anchor="start" class="small-label text-white">DB Operations: Dynamic task execution</text>
+
+  <!-- Poll Worker details -->
+  <rect x="50" y="810" width="340" height="180" class="component" rx="5"/>
+  <text x="220" y="835" text-anchor="middle" class="label">POLL WORKER THREADS</text>
+  <text x="220" y="855" text-anchor="middle" class="small-label">Reserved from ThreadPool</text>
+  <text x="70" y="880" text-anchor="start" class="small-label">• Loop every 50ms (wake interval)</text>
+  <text x="70" y="900" text-anchor="start" class="small-label">• Check Poll Intention Registry</text>
+  <text x="70" y="920" text-anchor="start" class="small-label">• Group by queue/partition/consumer</text>
+  <text x="70" y="940" text-anchor="start" class="small-label">• Rate limit: 100ms initial DB query</text>
+  <text x="70" y="960" text-anchor="start" class="small-label">• Adaptive backoff: 100→200→...→2000ms</text>
+  <text x="70" y="980" text-anchor="start" class="small-label">• Timeout detection &amp; handling</text>
+
+  <!-- Poll Intention Registry -->
+  <rect x="450" y="810" width="340" height="180" class="registry" rx="5"/>
+  <text x="620" y="835" text-anchor="middle" class="label text-white">POLL INTENTION REGISTRY</text>
+  <text x="620" y="855" text-anchor="middle" class="small-label text-white">Shared, thread-safe</text>
+  <text x="470" y="880" text-anchor="start" class="small-label text-white">• Store long-poll requests</text>
+  <text x="470" y="900" text-anchor="start" class="small-label text-white">• Group by queue/partition/consumer</text>
+  <text x="470" y="920" text-anchor="start" class="small-label text-white">• Track timeouts &amp; deadlines</text>
+  <text x="470" y="940" text-anchor="start" class="small-label text-white">• In-flight group tracking</text>
+  <text x="470" y="965" text-anchor="start" class="small-label text-white">std::unordered_map&lt;</text>
+  <text x="485" y="980" text-anchor="start" class="small-label text-white">request_id → PollIntention</text>
+
+  <!-- DB Operations -->
+  <rect x="850" y="810" width="340" height="180" class="component" rx="5"/>
+  <text x="1020" y="835" text-anchor="middle" class="label">DB OPERATION THREADS</text>
+  <text x="1020" y="855" text-anchor="middle" class="small-label">Dynamic task execution</text>
+  <text x="870" y="880" text-anchor="start" class="small-label">• Execute DB queries</text>
+  <text x="870" y="900" text-anchor="start" class="small-label">• Get connection from pool</text>
+  <text x="870" y="920" text-anchor="start" class="small-label">• Return connection after use</text>
+  <text x="870" y="940" text-anchor="start" class="small-label">• Push results to Response Queue</text>
+  <text x="870" y="960" text-anchor="start" class="small-label">• Handle PUSH, POP, ACK, etc.</text>
+
+  <!-- Arrows Poll Worker <-> Registry -->
+  <path d="M 390 900 L 450 900" class="arrow-bi"/>
+
+  <!-- Arrows from workers to DB Pool -->
+  <path d="M 775 760 L 775 790 L 220 790 L 220 1050 L 300 1050" class="arrow"/>
+  <path d="M 1020 990 L 1020 1020 L 700 1020 L 700 1050" class="arrow"/>
+
+  <!-- Database Pool -->
+  <rect x="300" y="1050" width="800" height="150" class="db-pool" rx="5"/>
+  <text x="700" y="1075" text-anchor="middle" class="label text-white">GLOBAL DATABASE POOL (DatabasePool)</text>
+  <text x="700" y="1095" text-anchor="middle" class="small-label text-white">Thread-safe connection queue • Mutex + Condition Variable</text>
+  
+  <!-- Connection boxes -->
+  <rect x="360" y="1110" width="90" height="50" class="box" rx="3"/>
+  <text x="405" y="1140" text-anchor="middle" class="small-label">Conn 1</text>
+  
+  <rect x="470" y="1110" width="90" height="50" class="box" rx="3"/>
+  <text x="515" y="1140" text-anchor="middle" class="small-label">Conn 2</text>
+  
+  <rect x="580" y="1110" width="90" height="50" class="box" rx="3"/>
+  <text x="625" y="1140" text-anchor="middle" class="small-label">Conn 3</text>
+  
+  <text x="705" y="1140" text-anchor="middle" class="label">...</text>
+  
+  <rect x="750" y="1110" width="90" height="50" class="box" rx="3"/>
+  <text x="795" y="1140" text-anchor="middle" class="small-label">Conn 150</text>
+  
+  <text x="880" y="1135" text-anchor="start" class="small-label text-white">PGconn*</text>
+  <text x="880" y="1150" text-anchor="start" class="small-label text-white">libpq</text>
+
+  <!-- Arrow to PostgreSQL -->
+  <path d="M 700 1200 L 700 1250" class="arrow"/>
+
+  <!-- PostgreSQL Database -->
+  <rect x="550" y="1250" width="300" height="100" class="database" rx="5"/>
+  <text x="700" y="1275" text-anchor="middle" class="label text-white">PostgreSQL Database</text>
+  <text x="700" y="1300" text-anchor="middle" class="small-label text-white">• messages table</text>
+  <text x="700" y="1318" text-anchor="middle" class="small-label text-white">• queues • partitions • leases</text>
+  <text x="700" y="1336" text-anchor="middle" class="small-label text-white">• consumer_groups • analytics</text>
+
+  <!-- Additional System Components -->
+  <rect x="50" y="1400" width="1300" height="360" class="component" rx="5"/>
+  <text x="700" y="1430" text-anchor="middle" class="label">ADDITIONAL SYSTEM COMPONENTS</text>
+  
+  <!-- System ThreadPool -->
+  <rect x="80" y="1450" width="400" height="130" class="threadpool" rx="3"/>
+  <text x="280" y="1475" text-anchor="middle" class="label text-white">SYSTEM THREADPOOL</text>
+  <text x="100" y="1500" text-anchor="start" class="small-label text-white">Separate from DB pool</text>
+  <text x="100" y="1520" text-anchor="start" class="small-label text-white">• Metrics collection</text>
+  <text x="100" y="1540" text-anchor="start" class="small-label text-white">• Lease reclamation (every 5s)</text>
+  <text x="100" y="1560" text-anchor="start" class="small-label text-white">• Retention cleanup (every 5min)</text>
+
+  <!-- File Buffer Manager -->
+  <rect x="520" y="1450" width="400" height="130" class="queue" rx="3"/>
+  <text x="720" y="1475" text-anchor="middle" class="label text-white">FILE BUFFER MANAGER</text>
+  <text x="540" y="1500" text-anchor="start" class="small-label text-white">Durability layer</text>
+  <text x="540" y="1520" text-anchor="start" class="small-label text-white">• Write-ahead buffer before DB</text>
+  <text x="540" y="1540" text-anchor="start" class="small-label text-white">• Background flush to DB</text>
+  <text x="540" y="1560" text-anchor="start" class="small-label text-white">• Crash recovery on startup</text>
+
+  <!-- Response Registry -->
+  <rect x="960" y="1450" width="360" height="130" class="registry" rx="3"/>
+  <text x="1140" y="1475" text-anchor="middle" class="label text-white">RESPONSE REGISTRY</text>
+  <text x="980" y="1500" text-anchor="start" class="small-label text-white">Track HTTP response objects</text>
+  <text x="980" y="1520" text-anchor="start" class="small-label text-white">• Thread-safe access</text>
+  <text x="980" y="1540" text-anchor="start" class="small-label text-white">• Cleanup expired entries</text>
+  <text x="980" y="1560" text-anchor="start" class="small-label text-white">• Map request_id → response*</text>
+
+  <!-- Metrics Collector -->
+  <rect x="80" y="1600" width="400" height="130" class="box" rx="3"/>
+  <text x="280" y="1625" text-anchor="middle" class="label">METRICS COLLECTOR</text>
+  <text x="100" y="1650" text-anchor="start" class="small-label">• Track request counts</text>
+  <text x="100" y="1670" text-anchor="start" class="small-label">• Track message counts</text>
+  <text x="100" y="1690" text-anchor="start" class="small-label">• Per-worker statistics</text>
+  <text x="100" y="1710" text-anchor="start" class="small-label">• Prometheus-compatible metrics</text>
+
+  <!-- Key Characteristics -->
+  <rect x="520" y="1600" width="800" height="130" class="box" rx="3"/>
+  <text x="920" y="1625" text-anchor="middle" class="label">KEY CHARACTERISTICS</text>
+  <text x="540" y="1650" text-anchor="start" class="small-label">• Acceptor Pattern: 1 acceptor + N workers (default: 10)</text>
+  <text x="540" y="1670" text-anchor="start" class="small-label">• Non-blocking I/O: All HTTP/WS in event loops</text>
+  <text x="540" y="1690" text-anchor="start" class="small-label">• DB ThreadPool: Separate pool for blocking operations</text>
+  <text x="540" y="1710" text-anchor="start" class="small-label">• Poll Workers: 2 reserved threads, adaptive backoff (100→2000ms)</text>
+
+</svg>
+

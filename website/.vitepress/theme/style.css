@@ -1,0 +1,211 @@
+/**
+ * Customize default theme styling by overriding CSS variables:
+ * https://github.com/vuejs/vitepress/blob/main/src/client/theme-default/styles/vars.css
+ */
+
+/**
+ * Colors - Matching Queen Webapp Style
+ * Primary: Blue (#3b82f6)
+ * Secondary: Indigo (#6366f1)
+ * Accent: Purple (#a855f7)
+ */
+
+:root {
+  /* Brand Colors */
+  --vp-c-brand-1: #3b82f6;
+  --vp-c-brand-2: #2563eb;
+  --vp-c-brand-3: #1d4ed8;
+  --vp-c-brand-soft: rgba(59, 130, 246, 0.14);
+
+  /* Accent Colors */
+  --vp-c-indigo: #6366f1;
+  --vp-c-purple: #a855f7;
+
+  /* Interactive */
+  --vp-button-brand-bg: #3b82f6;
+  --vp-button-brand-hover-bg: #2563eb;
+  --vp-button-brand-active-bg: #1d4ed8;
+
+  /* Home Hero */
+  --vp-home-hero-name-color: transparent;
+  --vp-home-hero-name-background: linear-gradient(135deg, #3b82f6 0%, #6366f1 50%, #a855f7 100%);
+
+  /* Typography */
+  --vp-font-family-base: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  --vp-font-family-mono: 'JetBrains Mono', 'Courier New', monospace;
+}
+
+/**
+ * Dark Mode Colors
+ */
+.dark {
+  --vp-c-bg: #0f172a;
+  --vp-c-bg-alt: #1e293b;
+  --vp-c-bg-soft: #1e293b;
+  --vp-c-bg-mute: #334155;
+
+  --vp-c-divider: #334155;
+  --vp-c-border: #334155;
+
+  --vp-c-text-1: #f1f5f9;
+  --vp-c-text-2: #cbd5e1;
+  --vp-c-text-3: #94a3b8;
+
+  --vp-c-brand-1: #3b82f6;
+  --vp-c-brand-2: #60a5fa;
+  --vp-c-brand-3: #93c5fd;
+  --vp-c-brand-soft: rgba(59, 130, 246, 0.16);
+}
+
+/**
+ * Component: Button
+ */
+:root {
+  --vp-button-brand-border: transparent;
+  --vp-button-brand-text: white;
+}
+
+/**
+ * Component: Home
+ */
+:root {
+  --vp-home-hero-image-background-image: linear-gradient(135deg, #3b82f6 20%, #6366f1 60%, #a855f7 100%);
+  --vp-home-hero-image-filter: blur(44px);
+}
+
+/**
+ * Component: Custom Block
+ */
+:root {
+  --vp-custom-block-tip-border: transparent;
+  --vp-custom-block-tip-text: var(--vp-c-text-1);
+  --vp-custom-block-tip-bg: var(--vp-c-brand-soft);
+  --vp-custom-block-tip-code-bg: var(--vp-c-bg-mute);
+}
+
+/**
+ * Component: Badge
+ */
+:root {
+  --vp-badge-info-border: transparent;
+  --vp-badge-info-text: #3b82f6;
+  --vp-badge-info-bg: rgba(59, 130, 246, 0.14);
+}
+
+.dark {
+  --vp-badge-info-border: transparent;
+  --vp-badge-info-text: #60a5fa;
+  --vp-badge-info-bg: rgba(59, 130, 246, 0.16);
+}
+
+/**
+ * Custom Enhancements
+ */
+
+/* Hero gradient text animation */
+.name {
+  animation: gradient-shift 8s ease infinite;
+}
+
+@keyframes gradient-shift {
+  0%, 100% {
+    background-position: 0% 50%;
+  }
+  50% {
+    background-position: 100% 50%;
+  }
+}
+
+/* Code block enhancements */
+div[class*='language-'] {
+  background-color: var(--vp-c-bg-soft);
+  border-radius: 8px;
+  margin: 16px 0;
+}
+
+.dark div[class*='language-'] {
+  background-color: #1e293b;
+}
+
+/* Feature cards hover effect */
+.VPFeature {
+  transition: all 0.3s ease;
+}
+
+.VPFeature:hover {
+  transform: translateY(-4px);
+  box-shadow: 0 12px 24px rgba(59, 130, 246, 0.15);
+}
+
+.dark .VPFeature:hover {
+  box-shadow: 0 12px 24px rgba(59, 130, 246, 0.25);
+}
+
+/* Link colors */
+.vp-doc a {
+  color: var(--vp-c-brand-1);
+  text-decoration: none;
+  font-weight: 500;
+  transition: color 0.2s;
+}
+
+.vp-doc a:hover {
+  color: var(--vp-c-brand-2);
+  text-decoration: underline;
+}
+
+/* Logo styling */
+.VPNavBarTitle .logo {
+  margin-right: 8px;
+  height: 24px;
+  width: 24px;
+}
+
+/* Sidebar link active state */
+.VPSidebarItem.is-active > .item > .link .text {
+  font-weight: 600;
+  color: var(--vp-c-brand-1);
+}
+
+/* Custom container for stats/metrics */
+.custom-stats {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: 16px;
+  margin: 24px 0;
+}
+
+.custom-stat {
+  background: var(--vp-c-bg-soft);
+  padding: 20px;
+  border-radius: 8px;
+  text-align: center;
+  border: 1px solid var(--vp-c-border);
+}
+
+.custom-stat-value {
+  font-size: 2em;
+  font-weight: 700;
+  color: var(--vp-c-brand-1);
+  margin-bottom: 8px;
+}
+
+.custom-stat-label {
+  font-size: 0.9em;
+  color: var(--vp-c-text-2);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+/* Footer link styling */
+.VPFooter a {
+  color: var(--vp-c-brand-1);
+  text-decoration: none;
+  transition: color 0.2s;
+}
+
+.VPFooter a:hover {
+  color: var(--vp-c-brand-2);
+  text-decoration: underline;
+}
+
