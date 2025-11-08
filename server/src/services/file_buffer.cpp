@@ -587,7 +587,14 @@ void FileBufferManager::process_failover_events() {
             
             if (flush_batched_to_db(batch)) {
                 total_processed += batch_size;
-                pending_count_ -= batch_size;  // Decrement pending counter
+                
+                // Safely decrement pending counter (prevent underflow from recovery files)
+                size_t current_pending = pending_count_.load();
+                if (current_pending >= batch_size) {
+                    pending_count_ -= batch_size;
+                } else if (current_pending > 0) {
+                    pending_count_ = 0;
+                }
                 
                 // If this is the first success after being down, log recovery
                 if (!db_healthy_) {
@@ -704,7 +711,14 @@ void FileBufferManager::process_qos0_events() {
         
         if (flush_batched_to_db(batch)) {
             total_processed += batch.size();
-            pending_count_ -= batch.size();
+            
+            // Safely decrement pending counter (prevent underflow from recovery files)
+            size_t current_pending = pending_count_.load();
+            if (current_pending >= batch.size()) {
+                pending_count_ -= batch.size();
+            } else if (current_pending > 0) {
+                pending_count_ = 0;
+            }
             
             auto batch_duration = std::chrono::duration_cast<std::chrono::milliseconds>(
                 std::chrono::steady_clock::now() - batch_start

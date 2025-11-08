@@ -2408,12 +2408,22 @@ nlohmann::json AnalyticsManager::get_consumer_groups() {
                 group["maxTimeLag"] = time_lag_seconds;
             }
             
-            // Determine state
+            // Determine state (aggregate across partitions - worst state wins)
             std::string last_consumed_at = json_to_string(result[i]["last_consumed_at"]);
-            if (time_lag_seconds > 300) { // More than 5 minutes behind
+            std::string current_state = group["state"].get<std::string>();
+            
+            // Priority: Lagging > Stable > Dead
+            // If any partition is lagging, group is lagging
+            // If any partition is stable (has consumed), group is at least stable
+            // Only if ALL partitions never consumed is group dead
+            if (time_lag_seconds > 300) {
                 group["state"] = "Lagging";
-            } else if (last_consumed_at.empty()) {
-                group["state"] = "Dead";
+            } else if (!last_consumed_at.empty() && current_state == "Dead") {
+                // This partition has consumed, upgrade from Dead to Stable
+                group["state"] = "Stable";
+            } else if (last_consumed_at.empty() && current_state == "Stable") {
+                // Don't downgrade to Dead if we're already Stable
+                // (means another partition is active)
             }
         }
         

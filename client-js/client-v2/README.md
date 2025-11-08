@@ -370,6 +370,15 @@ await queen
   })
 ```
 
+**Server Default:** The server can be configured to change this default behavior:
+```bash
+# Make all new consumer groups skip history by default
+export DEFAULT_SUBSCRIPTION_MODE="new"
+./bin/queen-server
+```
+
+When `DEFAULT_SUBSCRIPTION_MODE="new"` is set, new consumer groups automatically skip historical messages unless you explicitly override with `.subscriptionMode('all')`.
+
 ### Subscription Mode: 'new'
 
 Skip all historical messages and only process messages that arrive **after** subscription:

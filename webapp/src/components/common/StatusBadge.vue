@@ -22,6 +22,8 @@ const props = defineProps({
 const statusConfig = {
   healthy: { class: 'badge-success', dot: 'bg-green-500', label: 'Healthy' },
   stable: { class: 'badge-success', dot: 'bg-green-500', label: 'Stable' },
+  lagging: { class: 'badge-warning', dot: 'bg-yellow-500', label: 'Lagging' },
+  dead: { class: 'bg-gray-100 text-gray-800 dark:bg-gray-700 dark:text-gray-300', dot: 'bg-gray-500', label: 'Dead' },
   warning: { class: 'badge-warning', dot: 'bg-yellow-500', label: 'Warning' },
   error: { class: 'badge-danger', dot: 'bg-red-500', label: 'Error' },
   unhealthy: { class: 'badge-danger', dot: 'bg-red-500', label: 'Unhealthy' },

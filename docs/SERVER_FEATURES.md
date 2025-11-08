@@ -161,35 +161,70 @@ await queen.queue('payments')
 
 ### 5. Subscription Modes
 
-#### Latest (Default)
-- Start consuming from latest messages
-- Skip historical messages
-- Best for real-time processing
+Control where new consumer groups start reading. Subscription modes only apply when a consumer group is **first created** - existing groups continue from their saved position.
 
-#### Earliest
-- Consume all messages from the beginning
-- Replay entire history
-- Best for data reprocessing
+#### Server Default (Configurable)
+
+**Default:** Process all messages from the beginning
+
+**Override with environment variable:**
+```bash
+export DEFAULT_SUBSCRIPTION_MODE="new"  # Skip historical messages by default
+./bin/queen-server
+```
+
+This is useful for:
+- Real-time systems where only new messages matter
+- Preventing accidental processing of large backlogs
+- Development/staging environments
+- Microservices that should only process events after deployment
+
+#### All Messages (Default Client Behavior)
+
+When no subscription mode is specified, consumer groups process all messages from the beginning:
+
+```javascript
+await queen.queue('orders')
+  .group('analytics-processor')
+  // No subscriptionMode = process ALL messages
+  .consume(async (msg) => { 
+    await updateAnalytics(msg.data)
+  })
+```
+
+**Best for:** Analytics, data migrations, backfilling, historical replay
+
+#### New Messages Only
+
+Skip all historical messages and only process messages that arrive after subscription:
+
+```javascript
+await queen.queue('orders')
+  .group('realtime-alerts')
+  .subscriptionMode('new')  // Skip history
+  .consume(async (msg) => { 
+    await sendAlert(msg.data)
+  })
+```
+
+**Best for:** Real-time notifications, monitoring, alerting
+
+**Aliases:** `.subscriptionMode('new-only')` or `.subscriptionFrom('now')`
 
 #### From Timestamp
-- Start from specific point in time
-- Replay from checkpoint
-- Best for recovery scenarios
 
-**Example:**
+Start processing from a specific point in time:
+
 ```javascript
-// Start from beginning
 await queen.queue('orders')
-  .group('reprocessor')
-  .subscriptionMode('earliest')
-  .consume(async (msg) => { /* ... */ })
-
-// Start from specific time
-await queen.queue('orders')
-  .group('recovery')
-  .subscriptionMode('from', '2024-01-01T00:00:00Z')
-  .consume(async (msg) => { /* ... */ })
+  .group('recovery-processor')
+  .subscriptionFrom('2025-01-01T00:00:00.000Z')  // ISO 8601 timestamp
+  .consume(async (msg) => { 
+    await reprocessOrder(msg.data)
+  })
 ```
+
+**Best for:** Debugging, recovery scenarios, replaying from specific incidents
 
 ### 6. Long Polling
 

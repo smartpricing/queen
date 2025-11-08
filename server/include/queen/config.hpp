@@ -188,6 +188,9 @@ struct QueueConfig {
     // Eviction
     int default_max_wait_time_seconds = 0;
     
+    // Consumer group subscription
+    std::string default_subscription_mode = "";  // "" = all (default), "new" = skip history, "new-only" = same as new
+    
     static QueueConfig from_env() {
         QueueConfig config;
         
@@ -240,6 +243,8 @@ struct QueueConfig {
         config.default_retention_enabled = get_env_bool("DEFAULT_RETENTION_ENABLED", false);
         
         config.default_max_wait_time_seconds = get_env_int("DEFAULT_MAX_WAIT_TIME_SECONDS", 0);
+        
+        config.default_subscription_mode = get_env_string("DEFAULT_SUBSCRIPTION_MODE", "");
         
         return config;
     }
@@ -457,6 +462,15 @@ struct FileBufferConfig {
             config.buffer_dir = env_dir;
         }
         // else: use default already set above
+        
+        // Ensure buffer_dir is never empty - fallback to platform default
+        if (config.buffer_dir.empty()) {
+            #ifdef __APPLE__
+                config.buffer_dir = "/tmp/queen";
+            #else
+                config.buffer_dir = "/var/lib/queen/buffers";
+            #endif
+        }
         
         config.flush_interval_ms = get_env_int("FILE_BUFFER_FLUSH_MS", 100);
         config.max_batch_size = get_env_int("FILE_BUFFER_MAX_BATCH", 100);

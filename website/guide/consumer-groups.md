@@ -86,7 +86,7 @@ Consumer groups are created automatically when first used:
 // First consumer in the group creates it
 await queen.queue('orders')
   .group('order-processor')
-  .subscribe('new_only')  // Start from new messages
+  .subscriptionMode('new')  // Start from new messages only
   .consume(async (message) => {
     await processOrder(message.data)
   })
@@ -94,46 +94,66 @@ await queen.queue('orders')
 
 ## Subscription Modes
 
-Control where a consumer group starts reading:
+Control where a consumer group starts reading when **first created**. Subscription modes only apply to new consumer groups - existing groups continue from their saved position.
 
-### 1. New Messages Only (Default)
+### Default Behavior
+
+**Server Default:** Process all messages including historical ones
+
+**You can change the server default:**
+```bash
+# Make all new consumer groups skip historical messages by default
+export DEFAULT_SUBSCRIPTION_MODE="new"
+./bin/queen-server
+```
+
+This is useful for real-time systems where only new messages matter, or to prevent accidental processing of large backlogs.
+
+### 1. New Messages Only
 
 ```javascript
 await queen.queue('events')
-  .group('new-consumer')
-  .subscribe('new_only')  // Default
+  .group('realtime-alerts')
+  .subscriptionMode('new')  // Skip all historical messages
   .consume(async (message) => {
-    // Only processes messages that arrive after subscription
+    // Only processes messages that arrive AFTER subscription
   })
 ```
 
-Use when: You only care about new events, not historical data.
+**Use when:** Real-time monitoring, alerts, or notifications where historical data isn't relevant.
 
-### 2. From Beginning
+**Aliases:** `.subscriptionMode('new-only')` or `.subscriptionFrom('now')`
+
+### 2. All Messages (Default)
 
 ```javascript
 await queen.queue('events')
-  .group('replay-consumer')
-  .subscribe('from_beginning')
+  .group('analytics')
+  // No subscriptionMode = process ALL messages
   .consume(async (message) => {
-    // Processes ALL messages from the start
+    // Processes ALL messages from the beginning
   })
 ```
 
-Use when: Replaying historical data, backfilling analytics, or testing.
+**Use when:** Analytics, backfilling data, or replaying historical events.
+
+**Note:** If server has `DEFAULT_SUBSCRIPTION_MODE="new"` set, you can explicitly request all messages:
+```javascript
+.subscriptionMode('all')  // Force process all messages even if server default is "new"
+```
 
 ### 3. From Timestamp
 
 ```javascript
 await queen.queue('events')
-  .group('historical-consumer')
-  .subscribe('from_timestamp', new Date('2025-01-01T00:00:00Z'))
+  .group('recovery-processor')
+  .subscriptionFrom('2025-01-01T00:00:00.000Z')
   .consume(async (message) => {
     // Processes messages from Jan 1, 2025 onwards
   })
 ```
 
-Use when: You need to start from a specific point in time.
+**Use when:** You need to start from a specific point in time for debugging or recovery.
 
 ## Consumer Group Patterns
 
@@ -142,28 +162,28 @@ Use when: You need to start from a specific point in time.
 Process the same events for different purposes:
 
 ```javascript
-// Purpose 1: Real-time analytics
+// Purpose 1: Real-time analytics (process all historical data)
 await queen.queue('user-events')
   .group('analytics')
-  .subscribe('from_beginning')  // Backfill historical data
+  // No subscriptionMode = process from beginning
   .consume(async (event) => {
     await metrics.track(event.data.userId, event.data.action)
   })
 
-// Purpose 2: Notification system
+// Purpose 2: Notification system (only new events)
 await queen.queue('user-events')
   .group('notifications')
-  .subscribe('new_only')  // Only new events
+  .subscriptionMode('new')  // Only new events
   .consume(async (event) => {
     if (event.data.action === 'purchase') {
       await sendPurchaseEmail(event.data.userId)
     }
   })
 
-// Purpose 3: Audit log
+// Purpose 3: Audit log (process all historical data)
 await queen.queue('user-events')
   .group('audit')
-  .subscribe('from_beginning')
+  // No subscriptionMode = process from beginning
   .consume(async (event) => {
     await auditLog.record(event.data)
   })
@@ -210,7 +230,7 @@ if (process.env.NODE_ENV === 'production') {
 if (process.env.NODE_ENV === 'development') {
   await queen.queue('tasks')
     .group('dev-workers')
-    .subscribe('from_beginning')  // Test with real data
+    // No subscriptionMode = process all messages for testing
     .consume(async (task) => {
       await testProcessTask(task.data)
     })
@@ -401,14 +421,13 @@ Use consumer groups to migrate data:
 // Create migration consumer group
 await queen.queue('user-data')
   .group('migration-to-new-system')
-  .subscribe('from_beginning')
+  // No subscriptionMode = process all historical data
   .batch(100)  // Process in batches
-  .consume(async (message) => {
+  .consume(async (messages) => {
     // Migrate data to new system
-    await newSystem.import(message.data)
-  })
-  .onSuccess(async (message) => {
-    await queen.ack(message, true)
+    for (const msg of messages) {
+      await newSystem.import(msg.data)
+    }
     
     // Track progress
     const lag = await queen.getConsumerGroupLag('user-data', 'migration-to-new-system')
@@ -422,9 +441,11 @@ Replay messages for debugging:
 
 ```javascript
 // Create debug consumer group
+const problemStartTime = '2025-10-28T14:30:00.000Z'
+
 await queen.queue('transactions')
   .group('debug-session-' + Date.now())
-  .subscribe('from_timestamp', problemStartTime)
+  .subscriptionFrom(problemStartTime)  // Start from specific timestamp
   .consume(async (message) => {
     // Replay and debug problematic messages
     console.log('Replaying:', message.data)
@@ -446,7 +467,7 @@ Build multiple aggregate views from same source:
 // Aggregate by customer
 await queen.queue('orders')
   .group('customer-aggregates')
-  .subscribe('from_beginning')
+  // No subscriptionMode = process all historical data
   .consume(async (order) => {
     await updateCustomerStats(order.data.customerId, order.data)
   })
@@ -454,7 +475,7 @@ await queen.queue('orders')
 // Aggregate by product
 await queen.queue('orders')
   .group('product-aggregates')
-  .subscribe('from_beginning')
+  // No subscriptionMode = process all historical data
   .consume(async (order) => {
     for (const item of order.data.items) {
       await updateProductStats(item.productId, item)
@@ -464,7 +485,7 @@ await queen.queue('orders')
 // Aggregate by region
 await queen.queue('orders')
   .group('region-aggregates')
-  .subscribe('from_beginning')
+  // No subscriptionMode = process all historical data
   .consume(async (order) => {
     await updateRegionStats(order.data.region, order.data)
   })
@@ -489,14 +510,31 @@ await queen.queue('orders')
 ### 2. Choose Appropriate Subscription Mode
 
 ```javascript
-// ✅ Good: New consumer, only new messages
-.group('new-feature').subscribe('new_only')
+// ✅ Good: Real-time features only need new messages
+.group('realtime-notifications').subscriptionMode('new')
 
-// ✅ Good: Backfill analytics from beginning
-.group('analytics-backfill').subscribe('from_beginning')
+// ✅ Good: Analytics needs all historical data
+.group('analytics-backfill')
+// No subscriptionMode = process all messages
 
 // ✅ Good: Recover from specific incident
-.group('recovery').subscribe('from_timestamp', incidentTime)
+.group('recovery').subscriptionFrom(incidentTime)
+
+// ✅ Good: Override server default if needed
+.group('explicit-all').subscriptionMode('all')  // Even if server default is "new"
+```
+
+**Server Default Configuration:**
+
+Consider setting a server-wide default to match your use case:
+
+```bash
+# Real-time system: Only new messages by default
+export DEFAULT_SUBSCRIPTION_MODE="new"
+./bin/queen-server
+
+# Analytics system: All messages by default (this is already the default)
+./bin/queen-server
 ```
 
 ### 3. Monitor Consumer Group Lag

@@ -33,6 +33,10 @@ struct PollIntention {
     std::chrono::steady_clock::time_point deadline;
     std::chrono::steady_clock::time_point created_at;
     
+    // Subscription options (for consumer groups)
+    std::optional<std::string> subscription_mode;
+    std::optional<std::string> subscription_from;
+    
     /**
      * Create a grouping key for batching intentions together
      * Intentions with the same key can be served by a single DB query

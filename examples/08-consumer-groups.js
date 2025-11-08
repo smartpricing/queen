@@ -96,7 +96,6 @@ await queen.queue(queueName).partition('user-456').push([
 
 await queen
   .queue(queueName)
-  .partition('user-123')
   .group('user-specific-analytics')
   .limit(1)
   .consume(async (message) => {

@@ -87,6 +87,15 @@ Consumer groups are a way to process messages for different purposes. Each consu
 
 Subscription modes are a way to control the message history that is processed. You can choose to process all messages (including historical ones), only new messages, or messages from a specific timestamp. Subscription modes are only available when using consumer groups.
 
+**Server Default:** By default, new consumer groups process all historical messages. You can change this server-wide:
+
+```bash
+export DEFAULT_SUBSCRIPTION_MODE="new"  # Skip historical messages by default
+./bin/queen-server
+```
+
+This is useful for real-time systems where only new messages matter, or to prevent accidental processing of large backlogs. Clients can still override with `.subscriptionMode()` if needed.
+
 ### Long polling (waiting for messages)
 
 The client works with the pull model for pop operations, meaning that you need to explicitly request messages from the queue. Pop and consume mehtods can "wait" server side for messages to be available. When the method is called with wait=true, the method will block until messages are available or the timeout is reached. When the timeout is reached, the method returns an empty array. Long polling is a very efficient way to wait for messages, and it is the recommended way to consume messages.

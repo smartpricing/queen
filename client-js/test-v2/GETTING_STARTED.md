@@ -119,6 +119,33 @@ Make sure:
 3. ✅ Environment variables are set (if needed)
 4. ✅ No production data in test database
 
+## Testing with Different Server Configurations
+
+### Standard Configuration (Default)
+
+Run server with default settings:
+```bash
+./bin/queen-server
+node test-v2/run.js
+```
+
+**Expected:** Consumer groups without explicit `.subscriptionMode()` process all historical messages.
+
+### With DEFAULT_SUBSCRIPTION_MODE="new"
+
+Run server with "new" as default:
+```bash
+DEFAULT_SUBSCRIPTION_MODE="new" ./bin/queen-server
+node test-v2/run.js
+```
+
+**Expected:** 
+- Tests with explicit `.subscriptionMode('new')` work the same
+- Tests without explicit mode will skip historical messages
+- `subscriptionModeServerDefault` test detects and reports server default
+
+**All tests pass with both configurations!** The tests are designed to be agnostic to server defaults.
+
 ## Test Philosophy
 
 The AI-generated tests follow these principles:

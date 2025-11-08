@@ -129,6 +129,7 @@ export async function testLoadConsumerGroup(client) {
     await client
     .queue('test-queue-v2-load-consumer-group')
     .group('test-consumer-group-a')
+    .subscriptionMode('from_beginning')
     .concurrency(10)
     .batch(10000)
     .wait(false)
@@ -153,6 +154,7 @@ export async function testLoadConsumerGroup(client) {
     await client
     .queue('test-queue-v2-load-consumer-group')
     .group('test-consumer-group-b')
+    .subscriptionMode('from_beginning')
     .concurrency(10)
     .batch(10000)
     .wait(false)

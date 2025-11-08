@@ -177,6 +177,27 @@ Queen now supports intelligent size-based batching that dynamically calculates r
 |----------|------|---------|-------------|
 | `DEFAULT_MAX_WAIT_TIME_SECONDS` | int | 0 | Maximum wait time before eviction (seconds) |
 
+### Consumer Group Subscription
+| Variable | Type | Default | Description |
+|----------|------|---------|-------------|
+| `DEFAULT_SUBSCRIPTION_MODE` | string | "" | Default subscription mode for new consumer groups. Options: `""` (all messages), `"new"` (skip history), `"new-only"` (same as "new"). **Note:** Only applies when client doesn't explicitly specify `.subscriptionMode()`. Existing consumer groups are not affected. |
+
+**Use Cases for `DEFAULT_SUBSCRIPTION_MODE="new"`:**
+- Prevent accidental processing of historical messages by new consumer groups
+- Real-time systems where only new messages matter
+- Development/staging environments to avoid backlog processing
+- Microservices that should only process events after deployment
+
+**Example:**
+```bash
+# Make all new consumer groups skip historical messages by default
+export DEFAULT_SUBSCRIPTION_MODE="new"
+./bin/queen-server
+
+# Client can still override if needed
+# .subscriptionMode('all')  // Force process all messages
+```
+
 ## System Events Configuration
 
 | Variable | Type | Default | Description |
@@ -379,6 +400,20 @@ export DB_POOL_SIZE=200
 export LOG_LEVEL=info
 export LOG_FORMAT=json
 export QUEEN_ENCRYPTION_KEY=0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
+```
+
+### Real-Time System (Skip Historical Messages)
+```bash
+export PORT=6632
+export HOST=0.0.0.0
+export PG_HOST=db.production.example.com
+export PG_USER=queen_user
+export PG_PASSWORD=secure_password
+export PG_DB=queen_production
+export PG_USE_SSL=true
+export DB_POOL_SIZE=200
+export LOG_LEVEL=info
+export DEFAULT_SUBSCRIPTION_MODE="new"  # New consumer groups skip historical messages
 ```
 
 ### High-Throughput Configuration

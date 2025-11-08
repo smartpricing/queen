@@ -633,7 +633,9 @@ static void setup_worker_routes(uWS::App* app,
                     .consumer_group = consumer_group,
                     .batch_size = batch,
                     .deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(timeout_ms),
-                    .created_at = std::chrono::steady_clock::now()
+                    .created_at = std::chrono::steady_clock::now(),
+                    .subscription_mode = options.subscription_mode,
+                    .subscription_from = options.subscription_from
                 };
                 
                 global_poll_intention_registry->register_intention(intention);
@@ -863,7 +865,9 @@ static void setup_worker_routes(uWS::App* app,
                     .consumer_group = consumer_group,
                     .batch_size = batch,
                     .deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(timeout_ms),
-                    .created_at = std::chrono::steady_clock::now()
+                    .created_at = std::chrono::steady_clock::now(),
+                    .subscription_mode = options.subscription_mode,
+                    .subscription_from = options.subscription_from
                 };
                 
                 global_poll_intention_registry->register_intention(intention);
@@ -1075,7 +1079,9 @@ static void setup_worker_routes(uWS::App* app,
                     .consumer_group = consumer_group,
                     .batch_size = batch,
                     .deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(timeout_ms),
-                    .created_at = std::chrono::steady_clock::now()
+                    .created_at = std::chrono::steady_clock::now(),
+                    .subscription_mode = options.subscription_mode,
+                    .subscription_from = options.subscription_from
                 };
                 
                 global_poll_intention_registry->register_intention(intention);

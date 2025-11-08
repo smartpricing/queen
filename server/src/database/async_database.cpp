@@ -542,6 +542,11 @@ bool AsyncDbPool::ensureConnectionHealthy(PGconn* conn) {
     // Send a simple ping query
     if (!PQsendQuery(conn, "SELECT 1")) {
         spdlog::warn("[AsyncDbPool] Connection failed health check (send), attempting reset...");
+        // Even though PQsendQuery failed, drain any pending results to clear connection state
+        PGresult* drain;
+        while ((drain = PQgetResult(conn)) != nullptr) {
+            PQclear(drain);
+        }
         return asyncReset(conn, statement_timeout_ms_, lock_timeout_ms_, 
                         idle_in_transaction_timeout_ms_, schema_);
     }
@@ -612,6 +617,11 @@ bool AsyncDbPool::ensureConnectionHealthy(PGconn* conn) {
                 waitForSocket(conn, true);
                 if (!PQconsumeInput(conn)) {
                     spdlog::warn("[AsyncDbPool] Failed to consume input, attempting reset...");
+                    // Drain any pending results before reset
+                    PGresult* drain;
+                    while ((drain = PQgetResult(conn)) != nullptr) {
+                        PQclear(drain);
+                    }
                     return asyncReset(conn, statement_timeout_ms_, lock_timeout_ms_, 
                                     idle_in_transaction_timeout_ms_, schema_);
                 }

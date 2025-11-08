@@ -371,6 +371,7 @@ export async function consumerGroup(client) {
     
     await client
     .queue('test-queue-v2-consume-group')
+    .subscriptionMode('from_beginning')
     .group('test-group-01')
     .batch(messagesToPush)
     .limit(1)
@@ -381,6 +382,7 @@ export async function consumerGroup(client) {
 
     await client
     .queue('test-queue-v2-consume-group')
+    .subscriptionMode('from_beginning')
     .group('test-group-02')
     .batch(messagesToPush)
     .limit(1)
@@ -414,6 +416,7 @@ export async function consumerGroupWithPartition(client) {
     await client
     .queue('test-queue-v2-consume-group-with-partition')
     .partition('test-partition-01')
+    .subscriptionMode('from_beginning')
     .group('test-group-01')
     .batch(messagesToPush)
     .limit(1)
@@ -425,6 +428,7 @@ export async function consumerGroupWithPartition(client) {
     await client
     .queue('test-queue-v2-consume-group-with-partition')
     .partition('test-partition-01')
+    .subscriptionMode('from_beginning')
     .group('test-group-02')
     .batch(messagesToPush)
     .limit(1)
@@ -462,6 +466,7 @@ export async function manualAck(client) {
     await client
     .queue('test-queue-v2-manual-ack')
     .concurrency(10)
+    .subscriptionMode('from_beginning')
     .batch(1000)
     .wait(false)
     .limit(1)
@@ -514,6 +519,7 @@ export async function retries(client) {
     await client
     .queue('test-queue-v2-retries')
     .concurrency(1)
+    .subscriptionMode('from_beginning')
     .batch(100)
     .wait(false)
     .limit(300)  // Allow up to 300 messages (3 batches of 100)
@@ -554,6 +560,7 @@ export async function retriesConsumerGroup(client) {
     .queue('test-queue-v2-retries-consumer-group')
     .group('test-group-01')
     .concurrency(1)
+    .subscriptionMode('from_beginning')
     .batch(100)
     .wait(false)
     .limit(300)  // Allow up to 300 messages (3 batches of 100)
@@ -574,6 +581,7 @@ export async function retriesConsumerGroup(client) {
     .queue('test-queue-v2-retries-consumer-group')
     .group('test-group-02')
     .concurrency(1)
+    .subscriptionMode('from_beginning')
     .batch(100)
     .wait(false)
     .limit(100)  // Allow up to 300 messages (3 batches of 100)
@@ -607,6 +615,7 @@ export async function autoRenewLease(client) {
     .queue('test-queue-v2-auto-renew-lease')
     .batch(1)
     .wait(false)
+    .subscriptionMode('from_beginning')
     .limit(1)
     .each()
     .consume(async msg => {
@@ -633,6 +642,7 @@ export async function autoRenewLease(client) {
     await client
     .queue('test-queue-v2-auto-renew-lease')
     .batch(1)
+    .subscriptionMode('from_beginning')
     .wait(false)
     .limit(1)
     .renewLease(true, 1000)

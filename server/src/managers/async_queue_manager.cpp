@@ -1696,11 +1696,24 @@ std::string AsyncQueueManager::acquire_partition_lease(
         std::string initial_cursor_id = "00000000-0000-0000-0000-000000000000";
         std::string initial_cursor_timestamp_sql = "NULL";
         
+        // Apply default subscription mode from config if not explicitly provided
+        std::optional<std::string> effective_subscription_mode = options.subscription_mode;
+        std::optional<std::string> effective_subscription_from = options.subscription_from;
+        
         if (consumer_group != "__QUEUE_MODE__" && 
-            (options.subscription_mode.has_value() || options.subscription_from.has_value())) {
+            !effective_subscription_mode.has_value() && 
+            !effective_subscription_from.has_value() &&
+            !config_.default_subscription_mode.empty()) {
+            effective_subscription_mode = config_.default_subscription_mode;
+            spdlog::debug("Applying default subscription mode '{}' for consumer group '{}'", 
+                         config_.default_subscription_mode, consumer_group);
+        }
+        
+        if (consumer_group != "__QUEUE_MODE__" && 
+            (effective_subscription_mode.has_value() || effective_subscription_from.has_value())) {
             
-            std::string sub_mode = options.subscription_mode.value_or("");
-            std::string sub_from = options.subscription_from.value_or("");
+            std::string sub_mode = effective_subscription_mode.value_or("");
+            std::string sub_from = effective_subscription_from.value_or("");
             
             // For 'new', 'new-only', or 'now' - start from latest message
             if (sub_mode == "new" || sub_mode == "new-only" || sub_from == "now") {
@@ -1739,13 +1752,13 @@ std::string AsyncQueueManager::acquire_partition_lease(
         
         spdlog::debug("Consumer group '{}' exists: {}, has subscription options: {}", 
                      consumer_group, consumer_exists, 
-                     (options.subscription_mode.has_value() || options.subscription_from.has_value()));
+                     (effective_subscription_mode.has_value() || effective_subscription_from.has_value()));
         
         std::string sql;
         std::vector<std::string> params;
         
         if (!consumer_exists && consumer_group != "__QUEUE_MODE__" && 
-            (options.subscription_mode.has_value() || options.subscription_from.has_value())) {
+            (effective_subscription_mode.has_value() || effective_subscription_from.has_value())) {
             // New consumer group with subscription preferences
             spdlog::debug("Creating new consumer group '{}' with cursor at: {}", consumer_group, initial_cursor_id);
             

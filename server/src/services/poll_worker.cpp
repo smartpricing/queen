@@ -285,6 +285,8 @@ void poll_worker_loop(
                                     PopOptions opts;
                                     opts.wait = false;
                                     opts.batch = total_batch;
+                                    opts.subscription_mode = batch_copy[0].subscription_mode;
+                                    opts.subscription_from = batch_copy[0].subscription_from;
                                     
                                     if (batch_copy[0].partition_name.has_value()) {
                                         // Specific partition
@@ -307,6 +309,8 @@ void poll_worker_loop(
                                     PopOptions opts;
                                     opts.wait = false;
                                     opts.batch = total_batch;
+                                    opts.subscription_mode = batch_copy[0].subscription_mode;
+                                    opts.subscription_from = batch_copy[0].subscription_from;
                                     
                                     result = async_queue_manager->pop_messages_filtered(
                                         batch_copy[0].namespace_name,
