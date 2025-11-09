@@ -37,7 +37,7 @@ export async function subscriptionModeNew(client) {
     }
 
     // Wait a bit to ensure messages are stored
-    await new Promise(resolve => setTimeout(resolve, 100))
+    await new Promise(resolve => setTimeout(resolve, 10000))
 
     // Consumer Group 1: Explicit 'all' mode (should get all messages including historical)
     // Note: We explicitly use 'all' to work with any server default
@@ -45,7 +45,7 @@ export async function subscriptionModeNew(client) {
     await client
         .queue('test-queue-v2-subscription-mode-new')
         .group('group-all')
-        .subscriptionMode('from_beginning')
+        .subscriptionMode('all')
         .batch(10)
         .wait(false)
         .limit(1)
@@ -154,7 +154,7 @@ export async function subscriptionModeNewOnly(client) {
             .push([{ data: { id: i, type: 'historical' } }])
     }
 
-    await new Promise(resolve => setTimeout(resolve, 100))
+    await new Promise(resolve => setTimeout(resolve, 10000))
 
     // Consumer with 'new-only' mode (should skip historical messages)
     // Use pop() to avoid infinite loop when no messages
@@ -227,7 +227,7 @@ export async function subscriptionFromNow(client) {
             .push([{ data: { id: i, type: 'historical' } }])
     }
 
-    await new Promise(resolve => setTimeout(resolve, 100))
+    await new Promise(resolve => setTimeout(resolve, 10000))
 
     // Consumer with 'now' subscriptionFrom (should skip historical messages)
     // Use pop() to avoid infinite loop when no messages
@@ -360,7 +360,7 @@ export async function subscriptionModeAll(client) {
     await client
         .queue('test-queue-v2-subscription-mode-all')
         .group('group-default')
-        .subscriptionMode('from_beginning')
+        .subscriptionMode('all')
         .batch(10)
         .wait(false)
         .limit(1)
@@ -374,7 +374,7 @@ export async function subscriptionModeAll(client) {
     await client
         .queue('test-queue-v2-subscription-mode-all')
         .group('group-explicit-all')
-        .subscriptionMode('from_beginning')
+        .subscriptionMode('all')
         .batch(10)
         .wait(false)
         .limit(1)
@@ -419,7 +419,7 @@ export async function subscriptionModeServerDefault(client) {
     await client
         .queue('test-queue-v2-server-default')
         .group('group-detect-default')
-        .subscriptionMode('from_beginning')
+        .subscriptionMode('all')
         .batch(10)
         .wait(false)
         .limit(1)
@@ -435,6 +435,7 @@ export async function subscriptionModeServerDefault(client) {
         serverDefault = 'new'
     }
 
+    await new Promise(resolve => setTimeout(resolve, 10000))
     // Test that subscriptionMode('new') works correctly
     const newModeMessages = await client
         .queue('test-queue-v2-server-default')

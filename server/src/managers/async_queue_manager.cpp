@@ -1715,26 +1715,16 @@ std::string AsyncQueueManager::acquire_partition_lease(
             std::string sub_mode = effective_subscription_mode.value_or("");
             std::string sub_from = effective_subscription_from.value_or("");
             
-            // For 'new', 'new-only', or 'now' - start from latest message
+            // For 'new', 'new-only', or 'now' - start from slightly before NOW()
             if (sub_mode == "new" || sub_mode == "new-only" || sub_from == "now") {
-                std::string latest_sql = R"(
-                    SELECT m.id, m.created_at
-                    FROM queen.messages m
-                    JOIN queen.partitions p ON m.partition_id = p.id
-                    JOIN queen.queues q ON p.queue_id = q.id
-                    WHERE q.name = $1 AND p.name = $2
-                    ORDER BY m.created_at DESC, m.id DESC
-                    LIMIT 1
-                )";
-                
-                sendQueryParamsAsync(conn, latest_sql, {queue_name, partition_name});
-                auto latest_result = getTuplesResult(conn);
-                
-                if (PQntuples(latest_result.get()) > 0) {
-                    initial_cursor_id = PQgetvalue(latest_result.get(), 0, 0);
-                    initial_cursor_timestamp_sql = "'" + std::string(PQgetvalue(latest_result.get(), 0, 1)) + "'";
-                    spdlog::debug("Subscription mode '{}' - starting from latest message: {}", sub_mode, initial_cursor_id);
-                }
+                // Use NOW() - (max_poll_interval * 2) as cursor to include messages that triggered this first pop
+                // 2x multiplier provides safety margin for: polling delays, network latency, processing time
+                // Use minimal UUID to satisfy CHECK constraint (non-zero UUID needs non-NULL timestamp)
+                int lookback_ms = config_.max_poll_interval * 2;  // e.g., 2000ms * 2 = 4000ms = 4 seconds
+                initial_cursor_id = "00000000-0000-0000-0000-000000000001";
+                initial_cursor_timestamp_sql = "NOW() - INTERVAL '" + std::to_string(lookback_ms) + " milliseconds'";
+                spdlog::debug("Subscription mode '{}' - starting from NOW() - {}ms (max_poll_interval={} * 2) to include recent messages", 
+                             sub_mode, lookback_ms, config_.max_poll_interval);
             }
         }
         

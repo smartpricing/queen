@@ -114,15 +114,53 @@ This is useful for real-time systems where only new messages matter, or to preve
 ```javascript
 await queen.queue('events')
   .group('realtime-alerts')
-  .subscriptionMode('new')  // Skip all historical messages
+  .subscriptionMode('new')  // Skip historical messages
   .consume(async (message) => {
-    // Only processes messages that arrive AFTER subscription
+    // Processes messages from subscription time (with lookback)
   })
 ```
 
 **Use when:** Real-time monitoring, alerts, or notifications where historical data isn't relevant.
 
 **Aliases:** `.subscriptionMode('new-only')` or `.subscriptionFrom('now')`
+
+#### How NEW Mode Works
+
+NEW mode uses a **lookback window** to ensure the first message isn't skipped:
+
+```javascript
+// Timeline example:
+09:59:58 - Message M1 arrives
+10:00:00 - M1 triggers client.pop()
+10:00:02 - Server creates consumer
+          - Lookback window: 4 seconds (configurable)
+          - Cursor set to: 09:59:58 (10:00:02 - 4 seconds)
+          - M1 is captured ✓
+```
+
+**Why the lookback?**
+- Client polling has delays (network latency, polling intervals)
+- Without lookback: the message that triggered the first pop would be skipped
+- With lookback: messages within the window are considered "new"
+
+**Lookback calculation:** `max_poll_interval × 2` (server config)
+
+```bash
+# Default: 2000ms max polling → 4 second lookback
+export QUEUE_MAX_POLL_INTERVAL=2000
+
+# Faster polling → shorter lookback
+export QUEUE_MAX_POLL_INTERVAL=1000  # → 2 second lookback
+
+# Slower polling → longer lookback  
+export QUEUE_MAX_POLL_INTERVAL=5000  # → 10 second lookback
+```
+
+**Trade-offs:**
+- ✅ First message isn't skipped
+- ✅ Handles polling delays gracefully
+- ⚠️ May capture other recent messages within lookback window
+- ✅ Genuinely old messages (beyond lookback) are skipped
 
 ### 2. All Messages (Default)
 

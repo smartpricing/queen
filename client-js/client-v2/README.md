@@ -381,10 +381,10 @@ When `DEFAULT_SUBSCRIPTION_MODE="new"` is set, new consumer groups automatically
 
 ### Subscription Mode: 'new'
 
-Skip all historical messages and only process messages that arrive **after** subscription:
+Skip historical messages and process messages that arrive **near** subscription time:
 
 ```javascript
-// Only process NEW messages, skip historical backlog
+// Process recent messages (not historical backlog)
 await queen
   .queue('events')
   .group('realtime-monitor')
@@ -395,9 +395,39 @@ await queen
 ```
 
 **What happens:**
-1. Consumer subscribes at `T0`
-2. All messages before `T0` are skipped
-3. Only messages arriving after `T0` are processed
+1. Consumer subscribes at `T0` (e.g., 10:00:00)
+2. Server applies a lookback window (default: 4 seconds)
+3. Messages from `T0 - 4 seconds` onwards are processed
+4. Older historical messages are skipped
+
+**Why the lookback window?**
+
+The lookback ensures the **first message isn't skipped**. Here's why:
+
+```javascript
+// Timeline:
+09:59:58 - Message M1 arrives
+10:00:00 - M1 triggers client.pop()
+10:00:02 - Server creates consumer (2 second delay from network, polling)
+          - Without lookback: M1 would be skipped (before 10:00:02)
+          - With 4s lookback: M1 is captured (after 09:59:58) ✓
+```
+
+**Lookback window configuration:**
+
+The lookback is automatically calculated as **`max_poll_interval × 2`** (server-side config):
+
+```bash
+# Server configuration (default: 2000ms → 4 second lookback)
+export QUEUE_MAX_POLL_INTERVAL=2000  # 2 second max polling → 4s lookback
+export QUEUE_MAX_POLL_INTERVAL=5000  # 5 second max polling → 10s lookback
+```
+
+**Trade-offs:**
+- ✅ Ensures first/triggering message is not skipped
+- ✅ Handles network delays and polling intervals
+- ⚠️ May capture other recent messages within the lookback window (not truly "future-only")
+- ✅ Still excludes genuinely historical messages (older than lookback)
 
 ### Subscription Mode: 'new-only'
 
@@ -506,11 +536,19 @@ await queen
 - Subsequent consumers in the same group inherit the same position
 - To change subscription mode, use a different group name
 
+⏰ **NEW mode lookback window:**
+- NEW mode isn't truly "future-only" - it has a lookback window (default 4 seconds)
+- This ensures the message that triggered the first pop isn't skipped
+- Messages within the lookback window are considered "new" even if they arrived before subscription
+- Older messages (beyond the lookback) are skipped as historical
+- The lookback adapts to server's `QUEUE_MAX_POLL_INTERVAL` configuration
+
 💡 **Best Practices:**
-- Use `'new'` for real-time monitoring and alerting
-- Use default (all) for batch processing and analytics
-- Use timestamps for replay/debugging scenarios
+- Use `'new'` for real-time monitoring (skip historical backlog)
+- Use default (all) for batch processing and full history replay
+- Use timestamps for precise replay/debugging scenarios
 - Name groups descriptively based on their subscription mode
+- Configure `QUEUE_MAX_POLL_INTERVAL` based on your client's polling frequency
 
 ---
 
