@@ -272,10 +272,23 @@ void poll_worker_loop(
                         // Capture everything by value (including shared_ptrs)
                         thread_pool->push([=]() {
                             try {
-                                // Calculate total batch size for all waiting clients
-                                int total_batch = 0;
-                                for (const auto& intention : batch_copy) {
-                                    total_batch += intention.batch_size;
+                                // Calculate batch size based on consumer group mode
+                                // For consumer groups: use original batch size (don't sum) - partition lease protection ensures fair distribution
+                                // For queue mode: sum all batch sizes to fetch enough messages for all waiting clients
+                                int total_batch;
+                                if (batch_copy[0].consumer_group != "__QUEUE_MODE__") {
+                                    // Consumer group mode: use first intention's batch size (don't batch requests)
+                                    total_batch = batch_copy[0].batch_size;
+                                    spdlog::debug("Consumer group '{}': using original batch size {} (not summing {} intentions)",
+                                                batch_copy[0].consumer_group, total_batch, batch_copy.size());
+                                } else {
+                                    // Queue mode: sum all batch sizes
+                                    total_batch = 0;
+                                    for (const auto& intention : batch_copy) {
+                                        total_batch += intention.batch_size;
+                                    }
+                                    spdlog::debug("Queue mode: summed batch size {} from {} intentions",
+                                                total_batch, batch_copy.size());
                                 }
                                 
                                 // Execute the actual pop with locking

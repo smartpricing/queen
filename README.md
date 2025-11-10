@@ -24,7 +24,7 @@ Why "Queen"? Because years ago, when I first read the word "queue" in my mind, I
 
 [QUICKSTART](docs/QUICKSTART.md)
 
-Latest server production version is **0.6.0**.
+Latest server production version is **0.6.1**.
 
 ---
 
