@@ -1008,8 +1008,8 @@ std::vector<PushResult> AsyncQueueManager::push_messages(const std::vector<PushI
                     LEFT JOIN queen.partition_consumers pc ON pc.partition_id = p.id
                       AND pc.consumer_group = '__QUEUE_MODE__'
                     WHERE p.queue_id = q.id
-                      AND (pc.last_consumed_created_at IS NULL 
-                           OR m.created_at > pc.last_consumed_created_at
+                           AND (pc.last_consumed_created_at IS NULL 
+                                OR m.created_at > pc.last_consumed_created_at
                            OR (m.created_at = pc.last_consumed_created_at AND m.id > pc.last_consumed_id))
                   ) as current_depth
                 FROM queen.queues q
@@ -1949,8 +1949,8 @@ PopResult AsyncQueueManager::pop_messages_from_partition(
         std::string where_clause = R"(
             WHERE q.name = $1 AND p.name = $2 AND pc.consumer_group = $3
               AND pc.worker_id = $4 AND pc.lease_expires_at > NOW()
-              AND (pc.last_consumed_created_at IS NULL 
-                   OR m.created_at > pc.last_consumed_created_at
+                   AND (pc.last_consumed_created_at IS NULL 
+                        OR m.created_at > pc.last_consumed_created_at
                    OR (m.created_at = pc.last_consumed_created_at AND m.id > pc.last_consumed_id))
         )";
         
@@ -2154,8 +2154,8 @@ PopResult AsyncQueueManager::pop_messages_from_queue(
                       WHERE m2.partition_id = p.id
                         AND m2.created_at > NOW() - INTERVAL '1 second' * $3
                   )
-                  AND (pc.last_consumed_created_at IS NULL
-                       OR m.created_at > pc.last_consumed_created_at
+                       AND (pc.last_consumed_created_at IS NULL
+                            OR m.created_at > pc.last_consumed_created_at
                        OR (m.created_at = pc.last_consumed_created_at AND m.id > pc.last_consumed_id))
                 GROUP BY p.id, p.name
                 HAVING COUNT(m.id) > 0
@@ -2174,8 +2174,8 @@ PopResult AsyncQueueManager::pop_messages_from_queue(
                 WHERE q.name = $1
                   AND (pc.lease_expires_at IS NULL OR pc.lease_expires_at <= NOW())
                   AND m.id IS NOT NULL
-                  AND (pc.last_consumed_created_at IS NULL
-                       OR m.created_at > pc.last_consumed_created_at
+                       AND (pc.last_consumed_created_at IS NULL
+                            OR m.created_at > pc.last_consumed_created_at
                        OR (m.created_at = pc.last_consumed_created_at AND m.id > pc.last_consumed_id))
                 GROUP BY p.id, p.name
                 HAVING COUNT(m.id) > 0
