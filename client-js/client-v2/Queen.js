@@ -358,6 +358,44 @@ export class Queen {
   }
 
   // ===========================
+  // Consumer Group Management
+  // ===========================
+
+  /**
+   * Delete a consumer group and optionally its subscription metadata
+   * @param {string} consumerGroup - Consumer group name
+   * @param {boolean} deleteMetadata - Whether to delete subscription metadata (default: true)
+   * @returns {Promise<object>}
+   */
+  async deleteConsumerGroup(consumerGroup, deleteMetadata = true) {
+    logger.log('Queen.deleteConsumerGroup', { consumerGroup, deleteMetadata })
+    
+    const url = `/api/v1/consumer-groups/${encodeURIComponent(consumerGroup)}?deleteMetadata=${deleteMetadata}`
+    const response = await this.#httpClient.delete(url)
+    
+    logger.log('Queen.deleteConsumerGroup', { success: true, consumerGroup })
+    return response
+  }
+
+  /**
+   * Update subscription timestamp for a consumer group
+   * @param {string} consumerGroup - Consumer group name
+   * @param {string} timestamp - New subscription timestamp (ISO 8601)
+   * @returns {Promise<object>}
+   */
+  async updateConsumerGroupTimestamp(consumerGroup, timestamp) {
+    logger.log('Queen.updateConsumerGroupTimestamp', { consumerGroup, timestamp })
+    
+    const url = `/api/v1/consumer-groups/${encodeURIComponent(consumerGroup)}/subscription`
+    const response = await this.#httpClient.post(url, {
+      subscriptionTimestamp: timestamp
+    })
+    
+    logger.log('Queen.updateConsumerGroupTimestamp', { success: true, consumerGroup })
+    return response
+  }
+
+  // ===========================
   // Streaming API
   // ===========================
 

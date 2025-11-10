@@ -51,6 +51,17 @@ public:
         const std::string& subscription_timestamp_sql
     );
     
+    // Consumer group management
+    void delete_consumer_group(
+        const std::string& consumer_group,
+        bool delete_metadata = true
+    );
+    
+    void update_consumer_group_subscription(
+        const std::string& consumer_group,
+        const std::string& new_timestamp
+    );
+    
 private:
     std::shared_ptr<AsyncDbPool> async_db_pool_;
     std::shared_ptr<FileBufferManager> file_buffer_manager_;

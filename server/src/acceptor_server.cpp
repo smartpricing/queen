@@ -1780,6 +1780,57 @@ static void setup_worker_routes(uWS::App* app,
         }
     });
     
+    // DELETE /api/v1/consumer-groups/:group - Delete consumer group and metadata
+    app->del("/api/v1/consumer-groups/:group", [async_queue_manager](auto* res, auto* req) {
+        try {
+            std::string consumer_group = std::string(req->getParameter(0));
+            bool delete_metadata = get_query_param_bool(req, "deleteMetadata", true);
+            
+            async_queue_manager->delete_consumer_group(consumer_group, delete_metadata);
+            
+            nlohmann::json response = {
+                {"success", true},
+                {"consumerGroup", consumer_group},
+                {"metadataDeleted", delete_metadata}
+            };
+            send_json_response(res, response);
+        } catch (const std::exception& e) {
+            send_error_response(res, e.what(), 500);
+        }
+    });
+    
+    // POST /api/v1/consumer-groups/:group/subscription - Update subscription timestamp
+    app->post("/api/v1/consumer-groups/:group/subscription", [async_queue_manager](auto* res, auto* req) {
+        std::string consumer_group = std::string(req->getParameter(0));
+        
+        read_json_body(res,
+            [res, async_queue_manager, consumer_group](const nlohmann::json& body) {
+                try {
+                    if (!body.contains("subscriptionTimestamp")) {
+                        send_error_response(res, "Missing subscriptionTimestamp in request body", 400);
+                        return;
+                    }
+                    
+                    std::string new_timestamp = body["subscriptionTimestamp"].get<std::string>();
+                    
+                    async_queue_manager->update_consumer_group_subscription(consumer_group, new_timestamp);
+                    
+                    nlohmann::json response = {
+                        {"success", true},
+                        {"consumerGroup", consumer_group},
+                        {"subscriptionTimestamp", new_timestamp}
+                    };
+                    send_json_response(res, response);
+                } catch (const std::exception& e) {
+                    send_error_response(res, e.what(), 500);
+                }
+            },
+            [res](const std::string& error) {
+                send_error_response(res, error, 400);
+            }
+        );
+    });
+    
     // GET /api/v1/status/buffers - File buffer stats
     app->get("/api/v1/status/buffers", [file_buffer, worker_id](auto* res, auto* req) {
         try {

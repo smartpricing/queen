@@ -7,6 +7,7 @@
  * - Tests explicitly specify subscriptionMode when testing specific behavior
  * - Tests that rely on server default are marked as such
  * - subscriptionModeServerDefault() detects and validates the server's default
+ * - Each test cleans up consumer group metadata at the start (v0.5.5+ feature)
  * 
  * To test with different server configurations:
  * 
@@ -19,9 +20,20 @@
  *    node run.js subscription
  * 
  * All tests should pass with either configuration.
+ * 
+ * NOTE: Tests use client.deleteConsumerGroup() to ensure clean state.
+ * This deletes both partition_consumers and consumer_groups_metadata tables.
  */
 
 export async function subscriptionModeNew(client) {
+    // Clean up any existing consumer groups from previous test runs
+    try {
+        await client.deleteConsumerGroup('group-all', true)
+        await client.deleteConsumerGroup('group-new-only', true)
+    } catch (e) {
+        // Ignore errors if groups don't exist
+    }
+
     // Create queue
     const queue = await client.queue('test-queue-v2-subscription-mode-new').create()
     if (!queue.configured) {
@@ -140,6 +152,13 @@ export async function subscriptionModeNew(client) {
 }
 
 export async function subscriptionModeNewOnly(client) {
+    // Clean up any existing consumer groups from previous test runs
+    try {
+        await client.deleteConsumerGroup('group-new-only', true)
+    } catch (e) {
+        // Ignore errors if group doesn't exist
+    }
+
     // Create queue
     const queue = await client.queue('test-queue-v2-subscription-mode-new-only').create()
     if (!queue.configured) {
@@ -213,6 +232,13 @@ export async function subscriptionModeNewOnly(client) {
 }
 
 export async function subscriptionFromNow(client) {
+    // Clean up any existing consumer groups from previous test runs
+    try {
+        await client.deleteConsumerGroup('group-from-now', true)
+    } catch (e) {
+        // Ignore errors if group doesn't exist
+    }
+
     // Create queue
     const queue = await client.queue('test-queue-v2-subscription-from-now').create()
     if (!queue.configured) {
@@ -398,6 +424,14 @@ export async function subscriptionModeAll(client) {
 export async function subscriptionModeServerDefault(client) {
     // Test that verifies server DEFAULT_SUBSCRIPTION_MODE configuration
     // This test detects what the server default is and validates it works correctly
+    
+    // Clean up any existing consumer groups from previous test runs
+    try {
+        await client.deleteConsumerGroup('group-detect-default', true)
+        await client.deleteConsumerGroup('group-explicit-new', true)
+    } catch (e) {
+        // Ignore errors if groups don't exist
+    }
     
     const queue = await client.queue('test-queue-v2-server-default').create()
     if (!queue.configured) {

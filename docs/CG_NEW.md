@@ -63,6 +63,14 @@ All changes have been implemented and the server compiles successfully. Here's w
 - ✅ Color-coded badges (NEW=green, ALL=blue, TIMESTAMP=yellow)
 - ✅ Shows mode, subscription timestamp, and time since subscription
 - ✅ Conditional display (only shows when metadata exists)
+- ✅ Delete button with "delete metadata" checkbox
+- ✅ Edit timestamp button with modal dialog
+
+### 8. JavaScript Client (client-js/client-v2/Queen.js)
+- ✅ Added `deleteConsumerGroup(group, deleteMetadata)` method
+- ✅ Added `updateConsumerGroupTimestamp(group, timestamp)` method
+- ✅ Enables programmatic consumer group management
+- ✅ Test cleanup: subscription tests now delete metadata before running
 
 ---
 
@@ -506,6 +514,30 @@ if (consumer_group != "__QUEUE_MODE__") {
 ---
 
 ## 🧪 Testing Strategy
+
+### Test Cleanup (Important!)
+
+All subscription tests now include cleanup at the start to ensure clean state:
+
+```javascript
+export async function subscriptionModeNew(client) {
+    // Clean up any existing consumer groups from previous test runs
+    try {
+        await client.deleteConsumerGroup('group-all', true)
+        await client.deleteConsumerGroup('group-new-only', true)
+    } catch (e) {
+        // Ignore errors if groups don't exist
+    }
+    
+    // Continue with test...
+}
+```
+
+**Why this is necessary:**
+- Consumer group metadata persists across test runs
+- Without cleanup, subsequent tests would use old subscription timestamps
+- Would cause NEW mode tests to fail (get historical messages)
+- `deleteMetadata: true` ensures complete cleanup
 
 ### Test 1: Basic NEW Mode - Single Partition
 ```javascript

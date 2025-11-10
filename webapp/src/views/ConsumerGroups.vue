@@ -184,11 +184,34 @@
               Consumer Group Details
             </p>
           </div>
-          <button @click="closeDetail" class="close-btn">
-            <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" />
-            </svg>
-          </button>
+          <div class="flex items-center gap-2">
+            <button 
+              v-if="selectedGroup.subscriptionMode"
+              @click="openEditTimestamp"
+              class="btn btn-secondary text-sm"
+              title="Update subscription timestamp"
+            >
+              <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
+              </svg>
+              Edit Timestamp
+            </button>
+            <button 
+              @click="confirmDelete"
+              class="btn btn-danger text-sm"
+              title="Delete consumer group"
+            >
+              <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+              </svg>
+              Delete
+            </button>
+            <button @click="closeDetail" class="close-btn">
+              <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" />
+              </svg>
+            </button>
+          </div>
         </div>
 
         <div class="modal-body">
@@ -262,6 +285,32 @@
             </div>
           </div>
 
+          <!-- Delete Options -->
+          <div class="delete-options-card">
+            <div class="flex items-center gap-2 mb-3">
+              <svg class="w-5 h-5 text-red-600 dark:text-red-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+              </svg>
+              <h3 class="text-sm font-semibold text-gray-900 dark:text-white">Danger Zone</h3>
+            </div>
+            <div class="flex items-center justify-between">
+              <div>
+                <p class="text-sm font-medium text-gray-900 dark:text-gray-100">Delete Consumer Group</p>
+                <p class="text-xs text-gray-500 dark:text-gray-400 mt-1">
+                  Permanently remove this consumer group and optionally its subscription metadata
+                </p>
+              </div>
+              <label class="flex items-center gap-2 text-sm">
+                <input
+                  v-model="deleteMetadata"
+                  type="checkbox"
+                  class="rounded border-gray-300 dark:border-gray-600 text-purple-600 focus:ring-purple-500"
+                />
+                <span class="text-gray-700 dark:text-gray-300">Delete metadata too</span>
+              </label>
+            </div>
+          </div>
+
           <!-- Per-Queue Details -->
           <div v-for="(queueData, queueName) in selectedGroup.queues" :key="queueName" class="queue-section">
             <h3 class="queue-title">
@@ -309,6 +358,63 @@
         </div>
       </div>
     </div>
+
+    <!-- Edit Timestamp Modal -->
+    <div v-if="showEditTimestamp" class="modal-overlay" @click="showEditTimestamp = false">
+      <div class="modal-content-small" @click.stop>
+        <div class="modal-header">
+          <div>
+            <h2 class="text-xl font-bold text-gray-900 dark:text-gray-100">
+              Update Subscription Timestamp
+            </h2>
+            <p class="text-sm text-gray-500 dark:text-gray-400 mt-1">
+              {{ selectedGroup.name }}
+            </p>
+          </div>
+          <button @click="showEditTimestamp = false" class="close-btn">
+            <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" />
+            </svg>
+          </button>
+        </div>
+
+        <div class="modal-body">
+          <div class="mb-4">
+            <label class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+              New Subscription Timestamp
+            </label>
+            <input
+              v-model="newTimestamp"
+              type="datetime-local"
+              class="input w-full"
+              step="1"
+            />
+            <p class="text-xs text-gray-500 dark:text-gray-400 mt-2">
+              ⚠️ Updating the timestamp will affect what messages are considered "new" for this consumer group.
+              Messages with created_at > this timestamp will be consumed.
+            </p>
+          </div>
+
+          <div class="flex gap-3 justify-end">
+            <button
+              @click="showEditTimestamp = false"
+              class="btn btn-secondary"
+              :disabled="actionLoading"
+            >
+              Cancel
+            </button>
+            <button
+              @click="handleUpdateTimestamp"
+              class="btn btn-primary"
+              :disabled="actionLoading || !newTimestamp"
+            >
+              <span v-if="actionLoading">Updating...</span>
+              <span v-else>Update Timestamp</span>
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
   </div>
 </template>
 
@@ -326,6 +432,10 @@ const consumerGroups = ref([]);
 const searchQuery = ref('');
 const statusFilter = ref('');
 const selectedGroup = ref(null);
+const showEditTimestamp = ref(false);
+const newTimestamp = ref('');
+const deleteMetadata = ref(true);
+const actionLoading = ref(false);
 
 const filteredGroups = computed(() => {
   let filtered = consumerGroups.value;
@@ -400,6 +510,58 @@ function formatDurationSince(timestamp) {
   }
 }
 
+function confirmDelete() {
+  const message = deleteMetadata.value
+    ? `Delete consumer group "${selectedGroup.value.name}" and all its subscription metadata?\n\nThis will:\n- Remove all partition consumer state\n- Delete subscription metadata\n- Cannot be undone`
+    : `Delete consumer group "${selectedGroup.value.name}" (keeping metadata)?\n\nThis will:\n- Remove all partition consumer state\n- Preserve subscription metadata for future use\n- Cannot be undone`;
+  
+  if (confirm(message)) {
+    handleDelete();
+  }
+}
+
+async function handleDelete() {
+  if (!selectedGroup.value) return;
+  
+  actionLoading.value = true;
+  try {
+    await consumersApi.deleteConsumerGroup(selectedGroup.value.name, deleteMetadata.value);
+    closeDetail();
+    await loadData(); // Refresh the list
+  } catch (err) {
+    alert(`Failed to delete consumer group: ${err.message}`);
+  } finally {
+    actionLoading.value = false;
+  }
+}
+
+async function handleUpdateTimestamp() {
+  if (!selectedGroup.value || !newTimestamp.value) return;
+  
+  actionLoading.value = true;
+  try {
+    await consumersApi.updateSubscriptionTimestamp(selectedGroup.value.name, newTimestamp.value);
+    showEditTimestamp.value = false;
+    newTimestamp.value = '';
+    await loadData(); // Refresh the list
+  } catch (err) {
+    alert(`Failed to update timestamp: ${err.message}`);
+  } finally {
+    actionLoading.value = false;
+  }
+}
+
+function openEditTimestamp() {
+  if (selectedGroup.value?.subscriptionTimestamp) {
+    // Pre-fill with current timestamp in ISO format
+    newTimestamp.value = new Date(selectedGroup.value.subscriptionTimestamp).toISOString().slice(0, 19);
+  } else {
+    // Default to now
+    newTimestamp.value = new Date().toISOString().slice(0, 19);
+  }
+  showEditTimestamp.value = true;
+}
+
 async function loadData() {
   loading.value = true;
   error.value = null;
@@ -448,6 +610,12 @@ onUnmounted(() => {
   box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.3), 0 10px 10px -5px rgba(0, 0, 0, 0.2);
 }
 
+.modal-content-small {
+  @apply bg-white dark:bg-[#161b22] border border-gray-200/40 dark:border-gray-800/40;
+  @apply rounded-xl max-w-lg w-full flex flex-col;
+  box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.3), 0 10px 10px -5px rgba(0, 0, 0, 0.2);
+}
+
 .modal-header {
   @apply flex justify-between items-start p-5 border-b border-gray-200/80 dark:border-gray-800/80;
 }
@@ -477,6 +645,11 @@ onUnmounted(() => {
 
 .subscription-info-card {
   @apply bg-purple-50/50 dark:bg-purple-900/10 border border-purple-200/40 dark:border-purple-800/30;
+  @apply rounded-lg p-4 mb-6;
+}
+
+.delete-options-card {
+  @apply bg-red-50/50 dark:bg-red-900/10 border border-red-200/40 dark:border-red-800/30;
   @apply rounded-lg p-4 mb-6;
 }
 

@@ -1700,6 +1700,19 @@ const dlq = await queen.queue('q').dlq('consumer-group').limit(10).get()
 const dlq = await queen.queue('q').dlq().from('2025-01-01').to('2025-01-31').get()
 ```
 
+### Consumer Group Management
+
+```javascript
+// Delete a consumer group (including metadata)
+await queen.deleteConsumerGroup('my-group')
+
+// Delete consumer group but keep subscription metadata
+await queen.deleteConsumerGroup('my-group', false)
+
+// Update subscription timestamp
+await queen.updateConsumerGroupTimestamp('my-group', '2025-11-10T10:00:00Z')
+```
+
 ### Shutdown
 
 ```javascript

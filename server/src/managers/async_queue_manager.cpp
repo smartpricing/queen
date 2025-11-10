@@ -87,6 +87,70 @@ std::string AsyncQueueManager::generate_transaction_id() {
 
 // --- Consumer Group Subscription Metadata ---
 
+void AsyncQueueManager::delete_consumer_group(
+    const std::string& consumer_group,
+    bool delete_metadata
+) {
+    auto conn = async_db_pool_->acquire();
+    if (!conn) {
+        throw std::runtime_error("Failed to acquire DB connection");
+    }
+    
+    try {
+        // Delete partition consumers
+        std::string delete_pc_sql = R"(
+            DELETE FROM queen.partition_consumers
+            WHERE consumer_group = $1
+        )";
+        sendQueryParamsAsync(conn.get(), delete_pc_sql, {consumer_group});
+        getCommandResult(conn.get());
+        
+        // Delete metadata if requested
+        if (delete_metadata) {
+            std::string delete_metadata_sql = R"(
+                DELETE FROM queen.consumer_groups_metadata
+                WHERE consumer_group = $1
+            )";
+            sendQueryParamsAsync(conn.get(), delete_metadata_sql, {consumer_group});
+            getCommandResult(conn.get());
+            spdlog::info("Deleted consumer group '{}' and its metadata", consumer_group);
+        } else {
+            spdlog::info("Deleted consumer group '{}' (metadata preserved)", consumer_group);
+        }
+    } catch (const std::exception& e) {
+        spdlog::error("Failed to delete consumer group '{}': {}", consumer_group, e.what());
+        throw;
+    }
+}
+
+void AsyncQueueManager::update_consumer_group_subscription(
+    const std::string& consumer_group,
+    const std::string& new_timestamp
+) {
+    auto conn = async_db_pool_->acquire();
+    if (!conn) {
+        throw std::runtime_error("Failed to acquire DB connection");
+    }
+    
+    try {
+        std::string update_sql = R"(
+            UPDATE queen.consumer_groups_metadata
+            SET subscription_timestamp = $2::timestamptz
+            WHERE consumer_group = $1
+        )";
+        
+        sendQueryParamsAsync(conn.get(), update_sql, {consumer_group, new_timestamp});
+        getCommandResult(conn.get());
+        
+        spdlog::info("Updated subscription timestamp for consumer group '{}' to {}", 
+                    consumer_group, new_timestamp);
+    } catch (const std::exception& e) {
+        spdlog::error("Failed to update subscription timestamp for '{}': {}", 
+                     consumer_group, e.what());
+        throw;
+    }
+}
+
 void AsyncQueueManager::record_consumer_group_subscription(
     const std::string& consumer_group,
     const std::string& queue_name,
