@@ -126,41 +126,34 @@ await queen.queue('events')
 
 #### How NEW Mode Works
 
-NEW mode uses a **lookback window** to ensure the first message isn't skipped:
+NEW mode tracks **when the consumer group first subscribes** and uses that timestamp consistently:
 
 ```javascript
 // Timeline example:
-09:59:58 - Message M1 arrives
-10:00:00 - M1 triggers client.pop()
-10:00:02 - Server creates consumer
-          - Lookback window: 4 seconds (configurable)
-          - Cursor set to: 09:59:58 (10:00:02 - 4 seconds)
-          - M1 is captured ✓
+10:00:00 - Client makes first pop() call
+         → Server records: subscription_timestamp = 10:00:00
+         → Consumer processes partition P1
+
+10:10:00 - New partition P2 is created, messages arrive
+
+10:15:00 - Consumer discovers P2 via pop()
+         → Server looks up: subscription_timestamp = 10:00:00 (original time)
+         → Cursor set to: 10:00:00
+         → Messages from 10:10:00 are captured ✓
 ```
 
-**Why the lookback?**
-- Client polling has delays (network latency, polling intervals)
-- Without lookback: the message that triggered the first pop would be skipped
-- With lookback: messages within the window are considered "new"
+**Why it works:**
+- Queen stores subscription metadata in a dedicated table (`consumer_groups_metadata`)
+- The subscription timestamp is set on the **first pop request** (`NOW()`)
+- All subsequent partitions/queues discovered use the **same original timestamp**
+- Ensures consistent "NEW" behavior across the entire consumer group
 
-**Lookback calculation:** `max_poll_interval × 2` (server config)
-
-```bash
-# Default: 2000ms max polling → 4 second lookback
-export QUEUE_MAX_POLL_INTERVAL=2000
-
-# Faster polling → shorter lookback
-export QUEUE_MAX_POLL_INTERVAL=1000  # → 2 second lookback
-
-# Slower polling → longer lookback  
-export QUEUE_MAX_POLL_INTERVAL=5000  # → 10 second lookback
-```
-
-**Trade-offs:**
-- ✅ First message isn't skipped
-- ✅ Handles polling delays gracefully
-- ⚠️ May capture other recent messages within lookback window
-- ✅ Genuinely old messages (beyond lookback) are skipped
+**Benefits:**
+- ✅ **Consistent**: All partitions use the same subscription time
+- ✅ **No skipping**: New partitions discovered later work correctly
+- ✅ **True NEW semantics**: Only messages arriving after first pop
+- ✅ **Works with wildcards**: Namespace/task filters maintain subscription time
+- ✅ **No artificial lookback**: Clean, precise behavior
 
 ### 2. All Messages (Default)
 

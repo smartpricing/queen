@@ -11,6 +11,59 @@
 
 **Benefit:** Captures the exact moment of the pop request, ensuring consistent subscription time across all partitions discovered by a consumer group.
 
+**Status:** ✅ **IMPLEMENTED & COMPILED SUCCESSFULLY**
+
+---
+
+## ✅ Implementation Complete!
+
+All changes have been implemented and the server compiles successfully. Here's what was done:
+
+### 1. Database Schema (async_queue_manager.cpp, lines 271-285)
+- ✅ Created `consumer_groups_metadata` table
+- ✅ UUID primary key for easy API operations (future DELETE by ID)
+- ✅ UNIQUE constraint on (consumer_group, queue, partition, namespace, task)
+- ✅ Uses empty strings (not NULL) for wildcards
+- ✅ Index for fast lookups
+
+### 2. Helper Function (async_queue_manager.cpp, lines 90-141)
+- ✅ `record_consumer_group_subscription()` public function
+- ✅ Idempotent UPSERT with DO NOTHING on conflict
+- ✅ Non-fatal error handling (logs warnings but doesn't crash)
+- ✅ Uses empty strings for wildcards (queue='', partition='', etc.)
+
+### 3. Pop Routes (acceptor_server.cpp)
+- ✅ Route 1: `/api/v1/pop/queue/:queue/partition/:partition` (lines 616-637)
+- ✅ Route 2: `/api/v1/pop/queue/:queue` (lines 871-892)
+- ✅ Route 3: `/api/v1/pop` wildcard (lines 1108-1131)
+- ✅ All routes record metadata at the start of the request
+- ✅ Uses `NOW()` for 'new' mode (no lookback!)
+- ✅ Uses epoch `'1970-01-01'` for 'all' mode
+- ✅ Uses custom timestamp for 'timestamp' mode
+- ✅ Respects server default mode if no mode specified
+
+### 4. Lease Acquisition (async_queue_manager.cpp, lines 1776-1817)
+- ✅ Queries `consumer_groups_metadata` table before setting cursor
+- ✅ Tries partition-specific match first, then queue-level match
+- ✅ Uses found subscription_timestamp for cursor initialization
+- ✅ Falls back to default behavior if no metadata found (backward compatible)
+
+### 5. Public API (async_queue_manager.hpp, lines 43-52)
+- ✅ Added public function declaration
+- ✅ Makes metadata recording accessible from route handlers
+
+### 6. Analytics API (analyticsManager.cpp, lines 2302-2356)
+- ✅ Enhanced consumer groups query with LEFT JOIN to metadata table
+- ✅ Exposes subscriptionMode, subscriptionTimestamp, subscriptionCreatedAt
+- ✅ Backward compatible (null for pre-v0.5.5 consumers)
+
+### 7. Frontend Display (webapp/src/views/ConsumerGroups.vue)
+- ✅ Added subscription mode badges in table view
+- ✅ Added subscription info card in detail modal
+- ✅ Color-coded badges (NEW=green, ALL=blue, TIMESTAMP=yellow)
+- ✅ Shows mode, subscription timestamp, and time since subscription
+- ✅ Conditional display (only shows when metadata exists)
+
 ---
 
 ## 🐛 Problem Statement
@@ -50,39 +103,38 @@ Create a new table that tracks when a consumer group first subscribes, storing:
 
 ```sql
 CREATE TABLE IF NOT EXISTS queen.consumer_groups_metadata (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     consumer_group TEXT NOT NULL,
-    queue_name TEXT,              -- NULL for wildcard
-    partition_name TEXT,           -- NULL for all partitions
-    namespace TEXT,                -- NULL for no namespace filter
-    task TEXT,                     -- NULL for no task filter
-    subscription_mode TEXT NOT NULL,  -- 'new', 'all', 'timestamp'
-    subscription_timestamp TIMESTAMPTZ NOT NULL,  -- When this CG first subscribed
+    queue_name TEXT NOT NULL DEFAULT '',        -- Empty string for wildcard
+    partition_name TEXT NOT NULL DEFAULT '',     -- Empty string for all partitions
+    namespace TEXT NOT NULL DEFAULT '',          -- Empty string for no namespace filter
+    task TEXT NOT NULL DEFAULT '',               -- Empty string for no task filter
+    subscription_mode TEXT NOT NULL,             -- 'new', 'all', 'timestamp'
+    subscription_timestamp TIMESTAMPTZ NOT NULL, -- When this CG first subscribed
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    
-    PRIMARY KEY (consumer_group, COALESCE(queue_name, ''), COALESCE(partition_name, ''), 
-                 COALESCE(namespace, ''), COALESCE(task, ''))
+    UNIQUE (consumer_group, queue_name, partition_name, namespace, task)
 );
 
-CREATE INDEX idx_consumer_groups_metadata_lookup ON queen.consumer_groups_metadata(
-    consumer_group, queue_name, namespace, task
-);
+CREATE INDEX IF NOT EXISTS idx_consumer_groups_metadata_lookup 
+ON queen.consumer_groups_metadata(consumer_group, queue_name, namespace, task);
 ```
 
 **Why this schema?**
 
 1. **Primary Key Design:**
-   - Composite key includes all dimensions (group, queue, partition, namespace, task)
-   - `COALESCE(..., '')` handles NULLs in primary key (PostgreSQL requirement)
+   - UUID surrogate key for easy API access (e.g., DELETE by ID)
+   - UNIQUE constraint ensures one record per (group, queue, partition, namespace, task) combination
+   - Uses empty strings (`''`) instead of NULL for wildcards
    - Each unique combination is tracked separately
 
 2. **Partition Handling:**
-   - `partition_name = NULL` means "all partitions in this queue"
+   - `partition_name = ''` means "all partitions in this queue"
    - `partition_name = 'p1'` means "only partition p1"
-   - When looking up, we search for NULL partition first (most general), then specific partition
+   - When looking up, we search for empty string first (most general), then specific partition
 
 3. **Wildcard Support:**
-   - `queue_name = NULL, namespace = 'ns'` means "all queues in namespace 'ns'"
-   - `queue_name = NULL, task = 't'` means "all queues with task 't'"
+   - `queue_name = '', namespace = 'ns'` means "all queues in namespace 'ns'"
+   - `queue_name = '', task = 't'` means "all queues with task 't'"
 
 ---
 
@@ -113,15 +165,14 @@ INSERT INTO queen.consumer_groups_metadata (
     subscription_mode, subscription_timestamp, created_at
 ) VALUES (
     $1,  -- consumer_group
-    $2,  -- queue_name (or NULL for wildcard)
-    $3,  -- partition_name (or NULL for all partitions)
-    $4,  -- namespace (or NULL)
-    $5,  -- task (or NULL)
+    $2,  -- queue_name (or '' for wildcard)
+    $3,  -- partition_name (or '' for all partitions)
+    $4,  -- namespace (or '')
+    $5,  -- task (or '')
     $6,  -- subscription_mode ('new', 'all', 'timestamp')
-    $7,  -- subscription_timestamp (calculated based on mode)
+    <timestamp_expression>,  -- subscription_timestamp (calculated based on mode)
     NOW()
-) ON CONFLICT (consumer_group, COALESCE(queue_name, ''), COALESCE(partition_name, ''), 
-               COALESCE(namespace, ''), COALESCE(task, ''))
+) ON CONFLICT (consumer_group, queue_name, partition_name, namespace, task)
 DO NOTHING;
 ```
 
@@ -252,17 +303,16 @@ if (!consumer_exists) {
 
 std::string create_cg_metadata_sql = R"(
     CREATE TABLE IF NOT EXISTS queen.consumer_groups_metadata (
+        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
         consumer_group TEXT NOT NULL,
-        queue_name TEXT,
-        partition_name TEXT,
-        namespace TEXT,
-        task TEXT,
+        queue_name TEXT NOT NULL DEFAULT '',
+        partition_name TEXT NOT NULL DEFAULT '',
+        namespace TEXT NOT NULL DEFAULT '',
+        task TEXT NOT NULL DEFAULT '',
         subscription_mode TEXT NOT NULL,
         subscription_timestamp TIMESTAMPTZ NOT NULL,
         created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-        
-        PRIMARY KEY (consumer_group, COALESCE(queue_name, ''), COALESCE(partition_name, ''), 
-                     COALESCE(namespace, ''), COALESCE(task, ''))
+        UNIQUE (consumer_group, queue_name, partition_name, namespace, task)
     )
 )";
 
@@ -630,17 +680,16 @@ queue('q1').group('cg')  # Should still use 'all' (from metadata)
 ```sql
 -- Run this migration
 CREATE TABLE IF NOT EXISTS queen.consumer_groups_metadata (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     consumer_group TEXT NOT NULL,
-    queue_name TEXT,
-    partition_name TEXT,
-    namespace TEXT,
-    task TEXT,
+    queue_name TEXT NOT NULL DEFAULT '',
+    partition_name TEXT NOT NULL DEFAULT '',
+    namespace TEXT NOT NULL DEFAULT '',
+    task TEXT NOT NULL DEFAULT '',
     subscription_mode TEXT NOT NULL,
     subscription_timestamp TIMESTAMPTZ NOT NULL,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    
-    PRIMARY KEY (consumer_group, COALESCE(queue_name, ''), COALESCE(partition_name, ''), 
-                 COALESCE(namespace, ''), COALESCE(task, ''))
+    UNIQUE (consumer_group, queue_name, partition_name, namespace, task)
 );
 
 CREATE INDEX IF NOT EXISTS idx_consumer_groups_metadata_lookup 
@@ -648,7 +697,64 @@ ON queen.consumer_groups_metadata(consumer_group, queue_name, namespace, task);
 
 -- No data migration needed (table starts empty)
 -- Existing consumers will work fine (no metadata = default behavior)
+
+-- Future API endpoints can use:
+-- DELETE FROM queen.consumer_groups_metadata WHERE id = '<uuid>';
+-- Much simpler than deleting by all 5 fields!
 ```
+
+---
+
+## 📡 API Changes
+
+### Consumer Groups Endpoint
+
+The `/api/v1/consumer-groups` endpoint now includes subscription metadata:
+
+**Updated Response:**
+```json
+[
+  {
+    "name": "realtime-alerts",
+    "topics": ["events", "notifications"],
+    "members": 3,
+    "totalLag": 5,
+    "maxTimeLag": 42,
+    "state": "Stable",
+    "subscriptionMode": "new",                    // ← NEW
+    "subscriptionTimestamp": "2025-11-10T10:00:00Z",  // ← NEW
+    "subscriptionCreatedAt": "2025-11-10T10:00:00Z",  // ← NEW
+    "queues": { ... }
+  }
+]
+```
+
+**New fields:**
+- `subscriptionMode`: `'new'`, `'all'`, `'timestamp'`, or `null` (for old consumers)
+- `subscriptionTimestamp`: When the consumer group first subscribed (ISO 8601)
+- `subscriptionCreatedAt`: When the metadata record was created
+
+**Implementation:**
+- Added LEFT JOIN to `consumer_groups_metadata` in the query
+- Fields are `null` for consumer groups created before v0.5.5 (backward compatible)
+
+### Frontend Display
+
+The Consumer Groups page now displays subscription information:
+
+**In Table View:**
+- Subscription mode badge next to consumer group name
+- Color coded: NEW (green), ALL (blue), TIMESTAMP (yellow)
+
+**In Detail Modal:**
+- ✅ Subscription Info card with purple theme
+- ✅ Shows: Mode, Subscribed At timestamp, Time Since Subscription
+- ✅ Explanatory text based on mode
+- ✅ Only shows for consumer groups with metadata (v0.5.5+)
+
+**Files Modified:**
+- `webapp/src/views/ConsumerGroups.vue` - Added subscription info display
+- `server/src/managers/analyticsManager.cpp` - Enhanced API to include metadata
 
 ---
 
@@ -659,15 +765,16 @@ ON queen.consumer_groups_metadata(consumer_group, queue_name, namespace, task);
 3. ✅ **Phase 3:** Monitor for 24 hours
 4. ✅ **Phase 4:** Deploy to production
 5. ✅ **Phase 5:** Update documentation
+6. ✅ **Phase 6:** Frontend displays subscription metadata
 
 ---
 
-## 📝 Documentation Updates Needed
+## 📝 Documentation Updates
 
-- `docs/SUBSCRIPTION_MODES.md` - Update NEW mode behavior explanation
-- `client-js/client-v2/README.md` - Update lookback window explanation to mention per-CG tracking
-- `website/guide/consumer-groups.md` - Update NEW mode section
-- `server/ENV_VARIABLES.md` - Update `QUEUE_MAX_POLL_INTERVAL` description (now only for first pop)
+- ✅ `docs/SUBSCRIPTION_MODES.md` - Added subscription metadata tracking section
+- ✅ `client-js/client-v2/README.md` - Removed lookback window, explained metadata tracking
+- ✅ `website/guide/consumer-groups.md` - Updated NEW mode section with consistency explanation
+- ✅ `server/ENV_VARIABLES.md` - Removed `QUEUE_MAX_POLL_INTERVAL` connection to NEW mode
 
 ---
 

@@ -2337,10 +2337,22 @@ nlohmann::json AnalyticsManager::get_consumer_groups() {
                       )
                     ORDER BY m.created_at ASC
                     LIMIT 1
-                )::integer as time_lag_seconds
+                )::integer as time_lag_seconds,
+                -- Join subscription metadata
+                cgm.subscription_mode,
+                cgm.subscription_timestamp,
+                cgm.created_at as subscription_created_at
             FROM queen.partition_consumers pc
             JOIN queen.partitions p ON p.id = pc.partition_id
             JOIN queen.queues q ON q.id = p.queue_id
+            LEFT JOIN queen.consumer_groups_metadata cgm 
+                ON cgm.consumer_group = pc.consumer_group
+                AND (
+                    (cgm.queue_name = q.name AND cgm.partition_name = p.name)
+                    OR (cgm.queue_name = q.name AND cgm.partition_name = '')
+                    OR (cgm.queue_name = '' AND cgm.namespace = q.namespace)
+                    OR (cgm.queue_name = '' AND cgm.task = q.task)
+                )
             ORDER BY pc.consumer_group, q.name, p.name
         )";
         
@@ -2364,7 +2376,10 @@ nlohmann::json AnalyticsManager::get_consumer_groups() {
                     {"members", 0},
                     {"totalLag", 0},
                     {"maxTimeLag", 0},
-                    {"state", "Stable"}
+                    {"state", "Stable"},
+                    {"subscriptionMode", result[i]["subscription_mode"]},
+                    {"subscriptionTimestamp", result[i]["subscription_timestamp"]},
+                    {"subscriptionCreatedAt", result[i]["subscription_created_at"]}
                 };
             }
             

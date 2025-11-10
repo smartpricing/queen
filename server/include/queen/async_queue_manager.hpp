@@ -40,6 +40,17 @@ public:
         const std::string& trace_id = ""
     );
     
+    // Consumer group subscription metadata tracking
+    void record_consumer_group_subscription(
+        const std::string& consumer_group,
+        const std::string& queue_name,
+        const std::string& partition_name,
+        const std::string& namespace_name,
+        const std::string& task_name,
+        const std::string& subscription_mode,
+        const std::string& subscription_timestamp_sql
+    );
+    
 private:
     std::shared_ptr<AsyncDbPool> async_db_pool_;
     std::shared_ptr<FileBufferManager> file_buffer_manager_;

@@ -96,9 +96,39 @@
                   class="cursor-pointer"
                 >
                   <td>
-                    <div class="font-medium text-gray-900 dark:text-gray-100">{{ group.name }}</div>
-                    <div class="text-xs text-gray-500 dark:text-gray-400 md:hidden">
-                      {{ group.topics.length }} topic{{ group.topics.length !== 1 ? 's' : '' }}
+                    <div class="flex items-center gap-2">
+                      <div>
+                        <div class="font-medium text-gray-900 dark:text-gray-100">{{ group.name }}</div>
+                        <div class="flex items-center gap-2 md:hidden">
+                          <span class="text-xs text-gray-500 dark:text-gray-400">
+                            {{ group.topics.length }} topic{{ group.topics.length !== 1 ? 's' : '' }}
+                          </span>
+                          <span 
+                            v-if="group.subscriptionMode"
+                            class="badge text-xs"
+                            :class="{
+                              'badge-success': group.subscriptionMode === 'new',
+                              'badge-info': group.subscriptionMode === 'all',
+                              'badge-warning': group.subscriptionMode === 'timestamp'
+                            }"
+                            :title="`Subscription mode: ${group.subscriptionMode}`"
+                          >
+                            {{ group.subscriptionMode }}
+                          </span>
+                        </div>
+                      </div>
+                      <span 
+                        v-if="group.subscriptionMode"
+                        class="badge text-xs hidden md:inline-flex"
+                        :class="{
+                          'badge-success': group.subscriptionMode === 'new',
+                          'badge-info': group.subscriptionMode === 'all',
+                          'badge-warning': group.subscriptionMode === 'timestamp'
+                        }"
+                        :title="`Subscription mode: ${group.subscriptionMode}`"
+                      >
+                        {{ group.subscriptionMode }}
+                      </span>
                     </div>
                   </td>
                   <td class="hidden md:table-cell">
@@ -120,7 +150,7 @@
                     {{ formatNumber(group.totalLag) }}
                   </td>
                   <td class="text-right font-medium">
-                    {{ group.maxTimeLag > 0 ? formatDuration(group.maxTimeLag) : '0ms' }}
+                    {{ group.maxTimeLag > 0 ? formatDuration(group.maxTimeLag * 1000) : '0ms' }}
                   </td>
                   <td class="text-right">
                     <StatusBadge :status="group.state" />
@@ -178,7 +208,57 @@
             </div>
             <div class="stat-card">
               <div class="stat-label">Max Time Lag</div>
-              <div class="stat-value">{{ selectedGroup.maxTimeLag > 0 ? formatDuration(selectedGroup.maxTimeLag) : '0ms' }}</div>
+              <div class="stat-value">{{ selectedGroup.maxTimeLag > 0 ? formatDuration(selectedGroup.maxTimeLag * 1000) : '0ms' }}</div>
+            </div>
+          </div>
+
+          <!-- Subscription Info -->
+          <div v-if="selectedGroup.subscriptionMode" class="subscription-info-card">
+            <div class="flex items-center gap-2 mb-3">
+              <svg class="w-5 h-5 text-purple-600 dark:text-purple-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
+              </svg>
+              <h3 class="text-sm font-semibold text-gray-900 dark:text-white">Subscription Info</h3>
+            </div>
+            <div class="grid grid-cols-1 md:grid-cols-3 gap-3">
+              <div>
+                <div class="text-xs text-gray-500 dark:text-gray-400 mb-1">Mode</div>
+                <div class="flex items-center gap-2">
+                  <span 
+                    class="badge text-xs"
+                    :class="{
+                      'badge-success': selectedGroup.subscriptionMode === 'new',
+                      'badge-info': selectedGroup.subscriptionMode === 'all',
+                      'badge-warning': selectedGroup.subscriptionMode === 'timestamp'
+                    }"
+                  >
+                    {{ selectedGroup.subscriptionMode.toUpperCase() }}
+                  </span>
+                </div>
+              </div>
+              <div>
+                <div class="text-xs text-gray-500 dark:text-gray-400 mb-1">Subscribed At</div>
+                <div class="text-sm font-mono text-gray-900 dark:text-gray-100">
+                  {{ formatTimestamp(selectedGroup.subscriptionTimestamp) }}
+                </div>
+              </div>
+              <div>
+                <div class="text-xs text-gray-500 dark:text-gray-400 mb-1">Time Since Subscription</div>
+                <div class="text-sm font-medium text-gray-900 dark:text-gray-100">
+                  {{ formatDurationSince(selectedGroup.subscriptionCreatedAt) }}
+                </div>
+              </div>
+            </div>
+            <div class="mt-3 text-xs text-gray-600 dark:text-gray-400">
+              <span v-if="selectedGroup.subscriptionMode === 'new'">
+                ℹ️ Processing messages that arrived after {{ formatTimestamp(selectedGroup.subscriptionTimestamp) }}
+              </span>
+              <span v-else-if="selectedGroup.subscriptionMode === 'all'">
+                ℹ️ Processing all messages from the beginning
+              </span>
+              <span v-else-if="selectedGroup.subscriptionMode === 'timestamp'">
+                ℹ️ Processing messages from the specified timestamp onwards
+              </span>
             </div>
           </div>
 
@@ -215,7 +295,7 @@
                       {{ formatNumber(partition.offsetLag) }}
                     </td>
                     <td class="text-right font-medium" :class="partition.timeLagSeconds > 300 ? 'text-red-600 dark:text-red-400' : 'text-gray-900 dark:text-gray-100'">
-                      {{ partition.timeLagSeconds > 0 ? formatDuration(partition.timeLagSeconds) : '0ms' }}
+                      {{ partition.timeLagSeconds > 0 ? formatDuration(partition.timeLagSeconds * 1000) : '0ms' }}
                     </td>
                     <td class="text-center">
                       <span v-if="partition.leaseActive" class="badge badge-success text-xs">Active</span>
@@ -291,6 +371,35 @@ function closeDetail() {
   selectedGroup.value = null;
 }
 
+function formatTimestamp(timestamp) {
+  if (!timestamp) return 'N/A';
+  try {
+    const date = new Date(timestamp);
+    return date.toLocaleString('en-US', { 
+      year: 'numeric', 
+      month: 'short', 
+      day: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit',
+      second: '2-digit'
+    });
+  } catch (e) {
+    return timestamp;
+  }
+}
+
+function formatDurationSince(timestamp) {
+  if (!timestamp) return 'N/A';
+  try {
+    const date = new Date(timestamp);
+    const now = new Date();
+    const milliseconds = now - date;
+    return formatDuration(milliseconds);
+  } catch (e) {
+    return 'N/A';
+  }
+}
+
 async function loadData() {
   loading.value = true;
   error.value = null;
@@ -364,6 +473,11 @@ onUnmounted(() => {
 
 .stat-value {
   @apply text-xl font-bold text-blue-600 dark:text-blue-400 tracking-tight;
+}
+
+.subscription-info-card {
+  @apply bg-purple-50/50 dark:bg-purple-900/10 border border-purple-200/40 dark:border-purple-800/30;
+  @apply rounded-lg p-4 mb-6;
 }
 
 .queue-section {

@@ -93,7 +93,7 @@ When a queue/consumer group consistently returns empty results, the system autom
 |----------|------|---------|-------------|
 | `QUEUE_BACKOFF_THRESHOLD` | int | 1 | Number of consecutive empty pops before backoff starts (1 = immediate backoff) |
 | `QUEUE_BACKOFF_MULTIPLIER` | double | 2.0 | Exponential backoff multiplier (interval *= multiplier) |
-| `QUEUE_MAX_POLL_INTERVAL` | int | 2000 | Maximum poll interval after backoff (ms). Also affects NEW subscription mode lookback: `lookback = max_poll_interval × 2` |
+| `QUEUE_MAX_POLL_INTERVAL` | int | 2000 | Maximum poll interval after backoff (ms) - caps the exponential backoff growth |
 
 #### Legacy Variables *(Not Currently Used)*
 

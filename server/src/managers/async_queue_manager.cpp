@@ -85,6 +85,55 @@ std::string AsyncQueueManager::generate_transaction_id() {
     return generate_uuid();
 }
 
+// --- Consumer Group Subscription Metadata ---
+
+void AsyncQueueManager::record_consumer_group_subscription(
+    const std::string& consumer_group,
+    const std::string& queue_name,
+    const std::string& partition_name,
+    const std::string& namespace_name,
+    const std::string& task_name,
+    const std::string& subscription_mode,
+    const std::string& subscription_timestamp_sql
+) {
+    auto conn = async_db_pool_->acquire();
+    if (!conn) {
+        spdlog::warn("Failed to acquire DB connection for recording CG subscription");
+        return; // Non-fatal - continue with pop
+    }
+    
+    std::string upsert_sql = R"(
+        INSERT INTO queen.consumer_groups_metadata (
+            consumer_group, queue_name, partition_name, namespace, task,
+            subscription_mode, subscription_timestamp, created_at
+        ) VALUES (
+            $1, $2, $3, $4, $5, $6, 
+            )" + subscription_timestamp_sql + R"(, 
+            NOW()
+        ) ON CONFLICT (consumer_group, queue_name, partition_name, namespace, task)
+        DO NOTHING
+    )";
+    
+    std::vector<std::string> params = {
+        consumer_group,
+        queue_name,
+        partition_name,
+        namespace_name,
+        task_name,
+        subscription_mode
+    };
+    
+    try {
+        sendQueryParamsAsync(conn.get(), upsert_sql, params);
+        getCommandResult(conn.get());
+        spdlog::debug("Recorded CG subscription: group={}, mode={}, queue={}, partition={}", 
+                     consumer_group, subscription_mode, queue_name, partition_name);
+    } catch (const std::exception& e) {
+        spdlog::warn("Failed to record CG subscription (non-fatal): {}", e.what());
+        // Non-fatal - continue with pop even if metadata recording fails
+    }
+}
+
 // --- Schema Initialization ---
 
 bool AsyncQueueManager::initialize_schema() {
@@ -218,6 +267,22 @@ bool AsyncQueueManager::initialize_schema() {
                      AND last_consumed_created_at IS NOT NULL)
                 )
             );
+            
+            CREATE TABLE IF NOT EXISTS queen.consumer_groups_metadata (
+                id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+                consumer_group TEXT NOT NULL,
+                queue_name TEXT NOT NULL DEFAULT '',
+                partition_name TEXT NOT NULL DEFAULT '',
+                namespace TEXT NOT NULL DEFAULT '',
+                task TEXT NOT NULL DEFAULT '',
+                subscription_mode TEXT NOT NULL,
+                subscription_timestamp TIMESTAMPTZ NOT NULL,
+                created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                UNIQUE (consumer_group, queue_name, partition_name, namespace, task)
+            );
+            
+            CREATE INDEX IF NOT EXISTS idx_consumer_groups_metadata_lookup 
+            ON queen.consumer_groups_metadata(consumer_group, queue_name, namespace, task);
             
             CREATE TABLE IF NOT EXISTS queen.messages_consumed (
                 id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -1709,22 +1774,46 @@ std::string AsyncQueueManager::acquire_partition_lease(
                          config_.default_subscription_mode, consumer_group);
         }
         
-        if (consumer_group != "__QUEUE_MODE__" && 
-            (effective_subscription_mode.has_value() || effective_subscription_from.has_value())) {
+        // Query consumer group subscription metadata to get original subscription timestamp
+        if (consumer_group != "__QUEUE_MODE__") {
+            std::string metadata_sql = R"(
+                SELECT subscription_mode, subscription_timestamp
+                FROM queen.consumer_groups_metadata
+                WHERE consumer_group = $1
+                  AND (
+                      (queue_name = $2 AND partition_name = $3)
+                      OR (queue_name = $2 AND partition_name = '')
+                  )
+                ORDER BY 
+                    CASE 
+                        WHEN partition_name != '' THEN 1
+                        WHEN queue_name != '' THEN 2
+                        ELSE 3
+                    END
+                LIMIT 1
+            )";
             
-            std::string sub_mode = effective_subscription_mode.value_or("");
-            std::string sub_from = effective_subscription_from.value_or("");
+            sendQueryParamsAsync(conn, metadata_sql, {consumer_group, queue_name, partition_name});
+            auto metadata_result = getTuplesResult(conn);
             
-            // For 'new', 'new-only', or 'now' - start from slightly before NOW()
-            if (sub_mode == "new" || sub_mode == "new-only" || sub_from == "now") {
-                // Use NOW() - (max_poll_interval * 2) as cursor to include messages that triggered this first pop
-                // 2x multiplier provides safety margin for: polling delays, network latency, processing time
-                // Use minimal UUID to satisfy CHECK constraint (non-zero UUID needs non-NULL timestamp)
-                int lookback_ms = config_.max_poll_interval * 2;  // e.g., 2000ms * 2 = 4000ms = 4 seconds
-                initial_cursor_id = "00000000-0000-0000-0000-000000000001";
-                initial_cursor_timestamp_sql = "NOW() - INTERVAL '" + std::to_string(lookback_ms) + " milliseconds'";
-                spdlog::debug("Subscription mode '{}' - starting from NOW() - {}ms (max_poll_interval={} * 2) to include recent messages", 
-                             sub_mode, lookback_ms, config_.max_poll_interval);
+            if (PQntuples(metadata_result.get()) > 0) {
+                std::string found_mode = PQgetvalue(metadata_result.get(), 0, 0);
+                std::string found_timestamp = PQgetvalue(metadata_result.get(), 0, 1);
+                
+                if (found_mode == "new" || found_mode == "new-only") {
+                    initial_cursor_id = "00000000-0000-0000-0000-000000000001";
+                    initial_cursor_timestamp_sql = "'" + found_timestamp + "'";
+                    spdlog::debug("Using subscription timestamp from metadata: {} (mode={})", 
+                                 found_timestamp, found_mode);
+                } else if (found_mode == "timestamp") {
+                    initial_cursor_id = "00000000-0000-0000-0000-000000000001";
+                    initial_cursor_timestamp_sql = "'" + found_timestamp + "'";
+                    spdlog::debug("Using custom subscription timestamp from metadata: {}", found_timestamp);
+                }
+                // For 'all' mode, keep default: (00..00, NULL)
+            } else {
+                spdlog::debug("No subscription metadata found for consumer group '{}', using default behavior", 
+                             consumer_group);
             }
         }
         

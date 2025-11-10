@@ -613,6 +613,29 @@ static void setup_worker_routes(uWS::App* app,
                 options.subscription_from = sub_from;
             }
             
+            // Record consumer group subscription metadata (for NEW mode support)
+            if (consumer_group != "__QUEUE_MODE__") {
+                std::string effective_sub_mode = sub_mode.empty() ? config.queue.default_subscription_mode : sub_mode;
+                std::string subscription_mode_value;
+                std::string subscription_timestamp_sql;
+                
+                if (effective_sub_mode == "new" || effective_sub_mode == "new-only" || sub_from == "now") {
+                    subscription_mode_value = "new";
+                    subscription_timestamp_sql = "NOW()";
+                } else if (!sub_from.empty() && sub_from != "now") {
+                    subscription_mode_value = "timestamp";
+                    subscription_timestamp_sql = "'" + sub_from + "'::timestamptz";
+                } else {
+                    subscription_mode_value = "all";
+                    subscription_timestamp_sql = "'1970-01-01 00:00:00+00'";
+                }
+                
+                async_queue_manager->record_consumer_group_subscription(
+                    consumer_group, queue_name, partition_name, "", "", 
+                    subscription_mode_value, subscription_timestamp_sql
+                );
+            }
+            
             if (wait) {
                 // Register response with abort callback to clean up intention on disconnect
                 std::string request_id = global_response_registry->register_response(res, worker_id,
@@ -845,6 +868,29 @@ static void setup_worker_routes(uWS::App* app,
                 options.subscription_from = sub_from;
             }
             
+            // Record consumer group subscription metadata (for NEW mode support)
+            if (consumer_group != "__QUEUE_MODE__") {
+                std::string effective_sub_mode = sub_mode.empty() ? config.queue.default_subscription_mode : sub_mode;
+                std::string subscription_mode_value;
+                std::string subscription_timestamp_sql;
+                
+                if (effective_sub_mode == "new" || effective_sub_mode == "new-only" || sub_from == "now") {
+                    subscription_mode_value = "new";
+                    subscription_timestamp_sql = "NOW()";
+                } else if (!sub_from.empty() && sub_from != "now") {
+                    subscription_mode_value = "timestamp";
+                    subscription_timestamp_sql = "'" + sub_from + "'::timestamptz";
+                } else {
+                    subscription_mode_value = "all";
+                    subscription_timestamp_sql = "'1970-01-01 00:00:00+00'";
+                }
+                
+                async_queue_manager->record_consumer_group_subscription(
+                    consumer_group, queue_name, "", "", "",  // No specific partition (queue-level)
+                    subscription_mode_value, subscription_timestamp_sql
+                );
+            }
+            
             if (wait) {
                 // Register response with abort callback to clean up intention on disconnect
                 std::string request_id = global_response_registry->register_response(res, worker_id,
@@ -1058,6 +1104,31 @@ static void setup_worker_routes(uWS::App* app,
             if (!sub_mode.empty()) options.subscription_mode = sub_mode;
             std::string sub_from = get_query_param(req, "subscriptionFrom", "");
             if (!sub_from.empty()) options.subscription_from = sub_from;
+            
+            // Record consumer group subscription metadata (for NEW mode support)
+            if (consumer_group != "__QUEUE_MODE__") {
+                std::string effective_sub_mode = sub_mode.empty() ? config.queue.default_subscription_mode : sub_mode;
+                std::string subscription_mode_value;
+                std::string subscription_timestamp_sql;
+                
+                if (effective_sub_mode == "new" || effective_sub_mode == "new-only" || sub_from == "now") {
+                    subscription_mode_value = "new";
+                    subscription_timestamp_sql = "NOW()";
+                } else if (!sub_from.empty() && sub_from != "now") {
+                    subscription_mode_value = "timestamp";
+                    subscription_timestamp_sql = "'" + sub_from + "'::timestamptz";
+                } else {
+                    subscription_mode_value = "all";
+                    subscription_timestamp_sql = "'1970-01-01 00:00:00+00'";
+                }
+                
+                async_queue_manager->record_consumer_group_subscription(
+                    consumer_group, "", "", 
+                    namespace_name.value_or(""), 
+                    task_name.value_or(""),
+                    subscription_mode_value, subscription_timestamp_sql
+                );
+            }
             
             if (wait) {
                 // Register response with abort callback to clean up intention on disconnect

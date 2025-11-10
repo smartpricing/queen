@@ -395,39 +395,33 @@ await queen
 ```
 
 **What happens:**
-1. Consumer subscribes at `T0` (e.g., 10:00:00)
-2. Server applies a lookback window (default: 4 seconds)
-3. Messages from `T0 - 4 seconds` onwards are processed
-4. Older historical messages are skipped
+1. Consumer makes first pop at `T0` (e.g., 10:00:00)
+2. Server records `subscription_timestamp = T0` in metadata table
+3. Only messages with `created_at > T0` are processed
+4. All historical messages are skipped
 
-**Why the lookback window?**
+**How it ensures consistency across partitions:**
 
-The lookback ensures the **first message isn't skipped**. Here's why:
+Queen tracks subscription time separately from partition-level cursors:
 
 ```javascript
 // Timeline:
-09:59:58 - Message M1 arrives
-10:00:00 - M1 triggers client.pop()
-10:00:02 - Server creates consumer (2 second delay from network, polling)
-          - Without lookback: M1 would be skipped (before 10:00:02)
-          - With 4s lookback: M1 is captured (after 09:59:58) ✓
+10:00:00 - First pop() call
+         → Metadata recorded: subscription_timestamp = 10:00:00
+
+// Consumer processes partition P1 for 10 minutes
+
+10:10:00 - New partition P2 is created, messages arrive
+10:15:00 - Consumer discovers P2 via pop()
+         → Uses ORIGINAL subscription_timestamp (10:00:00)
+         → Messages from 10:10:00 are captured! ✓
 ```
 
-**Lookback window configuration:**
-
-The lookback is automatically calculated as **`max_poll_interval × 2`** (server-side config):
-
-```bash
-# Server configuration (default: 2000ms → 4 second lookback)
-export QUEUE_MAX_POLL_INTERVAL=2000  # 2 second max polling → 4s lookback
-export QUEUE_MAX_POLL_INTERVAL=5000  # 5 second max polling → 10s lookback
-```
-
-**Trade-offs:**
-- ✅ Ensures first/triggering message is not skipped
-- ✅ Handles network delays and polling intervals
-- ⚠️ May capture other recent messages within the lookback window (not truly "future-only")
-- ✅ Still excludes genuinely historical messages (older than lookback)
+**Key benefits:**
+- ✅ **Consistent**: All partitions use the same subscription timestamp
+- ✅ **No skipping**: New partitions discovered later are processed correctly
+- ✅ **True NEW semantics**: Only messages after first pop request
+- ✅ **Works with wildcards**: Namespace/task filters maintain subscription time
 
 ### Subscription Mode: 'new-only'
 
@@ -536,19 +530,18 @@ await queen
 - Subsequent consumers in the same group inherit the same position
 - To change subscription mode, use a different group name
 
-⏰ **NEW mode lookback window:**
-- NEW mode isn't truly "future-only" - it has a lookback window (default 4 seconds)
-- This ensures the message that triggered the first pop isn't skipped
-- Messages within the lookback window are considered "new" even if they arrived before subscription
-- Older messages (beyond the lookback) are skipped as historical
-- The lookback adapts to server's `QUEUE_MAX_POLL_INTERVAL` configuration
+⏰ **NEW mode subscription tracking:**
+- NEW mode tracks when the consumer group **first subscribes** (first pop request)
+- This subscription timestamp is used consistently across all partitions
+- Ensures new partitions discovered later don't skip messages
+- Stored in `consumer_groups_metadata` table on the server
 
 💡 **Best Practices:**
 - Use `'new'` for real-time monitoring (skip historical backlog)
 - Use default (all) for batch processing and full history replay
 - Use timestamps for precise replay/debugging scenarios
 - Name groups descriptively based on their subscription mode
-- Configure `QUEUE_MAX_POLL_INTERVAL` based on your client's polling frequency
+- Be aware that "NEW" means messages after the **first pop request**, not the first message arrival
 
 ---
 

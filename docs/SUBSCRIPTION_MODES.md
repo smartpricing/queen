@@ -283,6 +283,44 @@ WHERE consumer_group = 'your-group';
 - `last_consumed_created_at`: Timestamp of last processed message
 - When both are NULL → consumer group starts from beginning
 
+### Subscription Metadata Tracking
+
+Since v0.5.5, Queen also tracks consumer group subscriptions in a separate metadata table:
+
+```sql
+SELECT 
+  consumer_group,
+  queue_name,
+  partition_name,
+  subscription_mode,
+  subscription_timestamp,
+  created_at
+FROM queen.consumer_groups_metadata
+WHERE consumer_group = 'your-group';
+```
+
+**How it works:**
+
+1. **First pop** - When a consumer group makes its first pop request:
+   - Metadata is recorded with `subscription_timestamp = NOW()`
+   - This timestamp represents when the consumer group "subscribed"
+   
+2. **Subsequent pops** - For new partitions or queues:
+   - The **original subscription_timestamp** is reused
+   - All partitions use the same subscription time
+   - Ensures consistent "NEW" mode behavior
+
+3. **NEW mode behavior:**
+   - Cursor set to: `(minimal_uuid, subscription_timestamp)`
+   - Only messages with `created_at > subscription_timestamp` are consumed
+   - True "NEW" semantics - only messages arriving **after** subscription
+
+**Benefits:**
+- ✅ Consistent subscription time across all partitions
+- ✅ New partitions discovered later don't skip messages
+- ✅ True real-time semantics (no arbitrary lookback)
+- ✅ Works with namespace/task wildcards
+
 ## Troubleshooting
 
 ### Problem: Consumer group processes old messages despite subscriptionMode('new')
@@ -302,13 +340,19 @@ Or use a unique group name each time for testing:
 
 ### Problem: Want to reset existing consumer group
 
-**Solution:** Either delete and recreate with new subscription mode, or manually update the cursor:
+**Solution:** Delete both partition consumers AND subscription metadata, then recreate:
 
 ```sql
--- Option 1: Delete (will start fresh)
+-- Delete partition-level state
 DELETE FROM queen.partition_consumers WHERE consumer_group = 'processor';
 
--- Option 2: Skip to latest message
+-- Delete subscription metadata (v0.5.5+)
+DELETE FROM queen.consumer_groups_metadata WHERE consumer_group = 'processor';
+```
+
+**Alternative:** Manually update the cursor and metadata:
+```sql
+-- Option 1: Skip to latest message on all partitions
 UPDATE queen.partition_consumers
 SET 
   last_consumed_created_at = NOW(),
@@ -316,6 +360,11 @@ SET
     SELECT MAX(id) FROM queen.messages m 
     WHERE m.partition_id = partition_consumers.partition_id
   )
+WHERE consumer_group = 'processor';
+
+-- Update subscription metadata to NOW
+UPDATE queen.consumer_groups_metadata
+SET subscription_timestamp = NOW()
 WHERE consumer_group = 'processor';
 ```
 
