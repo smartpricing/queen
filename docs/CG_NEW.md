@@ -1,5 +1,18 @@
 # 🎯 Implementation Plan: Consumer Groups Subscription Metadata Table
 
+## 📌 Solution Summary
+
+**Key Improvement:** Record subscription metadata at the **HTTP route level** (in `acceptor_server.cpp`) instead of deep in the queue manager. This allows us to use `NOW()` directly without artificial lookback, giving true "NEW" mode semantics.
+
+**Files Modified:**
+- `acceptor_server.cpp` - All 3 pop routes (record metadata with NOW())
+- `async_queue_manager.cpp` - Schema creation + helper function + lease acquisition query
+- `async_queue_manager.hpp` - Function declarations
+
+**Benefit:** Captures the exact moment of the pop request, ensuring consistent subscription time across all partitions discovered by a consumer group.
+
+---
+
 ## 🐛 Problem Statement
 
 **Current Bug:**
@@ -75,22 +88,33 @@ CREATE INDEX idx_consumer_groups_metadata_lookup ON queen.consumer_groups_metada
 
 ## 🔄 Flow Changes
 
-### Phase 1: Record Subscription at Pop Time
+### Phase 1: Record Subscription at Pop Route Level
 
-**Location:** Before calling `acquire_partition_lease` in pop flow
+**Location:** In HTTP route handlers (`acceptor_server.cpp`) - at the **start** of each pop route
 
-**When:** Every pop request with a consumer group
+**Routes to modify:**
+1. `GET /api/v1/pop/queue/:queue/partition/:partition` (line ~585)
+2. `GET /api/v1/pop/queue/:queue` (line ~818)
+3. `GET /api/v1/pop` (line ~1038) - wildcard (namespace/task)
+
+**When:** Every pop request with a consumer group (before calling `pop_messages_*`)
+
+**Why at route level?**
+- ✅ Captures the **exact moment** the client calls pop (true subscription time)
+- ✅ Can use `NOW()` directly (no artificial lookback needed)
+- ✅ True "NEW" mode semantics - only messages arriving **after** the pop call
+- ✅ Access to all parameters: queue, partition, namespace, task, subscription_mode
 
 **Logic:**
 ```sql
--- UPSERT with DO NOTHING
+-- UPSERT with DO NOTHING (idempotent)
 INSERT INTO queen.consumer_groups_metadata (
     consumer_group, queue_name, partition_name, namespace, task,
     subscription_mode, subscription_timestamp, created_at
 ) VALUES (
     $1,  -- consumer_group
-    $2,  -- queue_name (or NULL)
-    $3,  -- partition_name (or NULL if popping from whole queue)
+    $2,  -- queue_name (or NULL for wildcard)
+    $3,  -- partition_name (or NULL for all partitions)
     $4,  -- namespace (or NULL)
     $5,  -- task (or NULL)
     $6,  -- subscription_mode ('new', 'all', 'timestamp')
@@ -102,11 +126,12 @@ DO NOTHING;
 ```
 
 **Subscription Timestamp Calculation:**
-- If `subscription_mode = 'new'`: `NOW() - INTERVAL '(max_poll_interval * 2) milliseconds'`
-- If `subscription_mode = 'all'`: `'1970-01-01 00:00:00+00'` (epoch, means process all)
+- If `subscription_mode = 'new'` or `'new-only'`: **`NOW()`** ← Key change! No lookback!
+- If `subscription_mode = 'all'` or `'from_beginning'`: `'1970-01-01 00:00:00+00'` (epoch)
 - If `subscription_mode = 'timestamp'`: Use provided `subscriptionFrom` value
+- If **no mode specified**: Use server's `DEFAULT_SUBSCRIPTION_MODE` from config
 
-**Important:** This INSERT happens **before** acquiring the lease, so the timestamp is set on the **very first pop**.
+**Important:** This INSERT happens at the HTTP handler level, **before** calling `pop_messages_*`, ensuring the timestamp is captured on the **very first pop** with precise timing.
 
 ---
 
@@ -179,33 +204,42 @@ if (!consumer_exists) {
 **Location:** `initialize_schema()` function (around line 90-250)
 **Action:** Add `consumer_groups_metadata` table creation
 
-### 2. Pop Flow - Record Subscription
+### 2. Pop Routes - Record Subscription (NEW APPROACH!)
 
-**File:** `server/src/managers/async_queue_manager.cpp`
-**Function:** `pop_messages_from_queue()` (around line 2000-2400)
-**Action:** 
-- Before calling `acquire_partition_lease()`
+**File:** `server/src/acceptor_server.cpp`
+**Location:** All 3 pop route handlers (lines ~585, ~818, ~1038)
+**Action:**
+- At the **start** of each route handler (right after try block)
+- If `consumer_group` is present and not `__QUEUE_MODE__`
 - Insert into `consumer_groups_metadata` with DO NOTHING
-- Calculate subscription_timestamp based on mode
+- Calculate subscription_timestamp: `NOW()` for 'new', epoch for 'all', or custom timestamp
+- Use async_queue_manager's database connection
 
-**OR (better location):**
+**Routes to modify:**
+1. `GET /api/v1/pop/queue/:queue/partition/:partition` (line ~585)
+2. `GET /api/v1/pop/queue/:queue` (line ~818)  
+3. `GET /api/v1/pop` (line ~1038)
 
-**Function:** `pop_messages_from_partition()` (around line 1900-2000)
-**Action:** Same as above, but at partition level
+**Why here?** Route handlers capture the exact moment of the pop request, giving true subscription time without artificial lookback.
 
 ### 3. Lease Acquisition - Query Subscription
 
 **File:** `server/src/managers/async_queue_manager.cpp`  
 **Function:** `acquire_partition_lease()` (around line 1670-1850)
 **Action:**
-- Remove current `NOW() - max_poll_interval * 2` logic
+- Remove current `NOW() - max_poll_interval * 2` logic (lines 1718-1728)
 - Query `consumer_groups_metadata` table
 - Use found `subscription_timestamp` instead
+- Need to pass namespace/task context to this function
 
-### 4. Header File
+### 4. Function Signature Update
+
+**File:** `server/src/managers/async_queue_manager.cpp`
+**Function:** `acquire_partition_lease()`
+**Action:** Add optional parameters for namespace and task (for metadata lookup)
 
 **File:** `server/include/queen/async_queue_manager.hpp`
-**Action:** No changes needed (private functions)
+**Action:** Update function signature to include namespace and task parameters
 
 ---
 
@@ -245,34 +279,95 @@ sendQueryAsync(conn, create_cg_index_sql);
 getCommandResult(conn);
 ```
 
-### Step 2: Record Subscription in Pop
+### Step 2: Record Subscription in Pop Routes
 
-**Location:** At the start of `pop_messages_from_partition()` or `pop_messages_from_queue()`
+**Location:** In `acceptor_server.cpp`, at the start of each pop route handler
+
+**Pattern for all 3 routes:**
 
 ```cpp
-// Only for consumer groups (not __QUEUE_MODE__)
-if (consumer_group != "__QUEUE_MODE__" && options.subscription_mode.has_value()) {
-    std::string sub_mode = options.subscription_mode.value();
-    std::string subscription_timestamp_sql;
-    
-    // Calculate subscription timestamp based on mode
-    if (sub_mode == "new" || sub_mode == "new-only") {
-        int lookback_ms = config_.max_poll_interval * 2;
-        subscription_timestamp_sql = "NOW() - INTERVAL '" + std::to_string(lookback_ms) + " milliseconds'";
-    } else if (sub_mode == "all" || sub_mode == "from_beginning") {
-        subscription_timestamp_sql = "'1970-01-01 00:00:00+00'";  // Epoch
-    } else {
-        // timestamp mode - use subscriptionFrom value
-        subscription_timestamp_sql = "'" + options.subscription_from.value() + "'";
+// Example: GET /api/v1/pop/queue/:queue/partition/:partition
+app->get("/api/v1/pop/queue/:queue/partition/:partition", 
+  [async_queue_manager, config, worker_id](auto* res, auto* req) {
+    try {
+        // Parse parameters
+        std::string queue_name = req->getParameter(0);
+        std::string partition_name = req->getParameter(1);
+        std::string consumer_group = ...; // from query params
+        
+        // --- NEW CODE: Record subscription metadata ---
+        if (!consumer_group.empty() && consumer_group != "__QUEUE_MODE__") {
+            // Get subscription mode from query params or use server default
+            std::string sub_mode = ...; // from query params or config.default_subscription_mode
+            std::optional<std::string> sub_from = ...; // from query params
+            
+            // Determine subscription mode and timestamp
+            std::string subscription_mode_value;
+            std::string subscription_timestamp_sql;
+            
+            if (sub_mode == "new" || sub_mode == "new-only" || sub_from == "now") {
+                subscription_mode_value = "new";
+                subscription_timestamp_sql = "NOW()";  // ← Key: Use NOW() directly!
+            } else if (sub_mode == "all" || sub_mode == "from_beginning" || sub_mode.empty()) {
+                subscription_mode_value = "all";
+                subscription_timestamp_sql = "'1970-01-01 00:00:00+00'";  // Epoch
+            } else if (sub_from.has_value()) {
+                subscription_mode_value = "timestamp";
+                subscription_timestamp_sql = "'" + sub_from.value() + "'::timestamptz";
+            }
+            
+            // Upsert into metadata table (idempotent with DO NOTHING)
+            async_queue_manager->record_consumer_group_subscription(
+                consumer_group,
+                queue_name,
+                partition_name,
+                "", // namespace (if applicable for this route)
+                "", // task (if applicable for this route)
+                subscription_mode_value,
+                subscription_timestamp_sql
+            );
+        }
+        // --- END NEW CODE ---
+        
+        // Continue with normal pop logic...
+        auto result = async_queue_manager->pop_messages_from_partition(...);
+        
+    } catch (...) { ... }
+});
+```
+
+**Create helper function in AsyncQueueManager:**
+
+```cpp
+// In async_queue_manager.cpp
+void AsyncQueueManager::record_consumer_group_subscription(
+    const std::string& consumer_group,
+    const std::string& queue_name,
+    const std::string& partition_name,
+    const std::string& namespace_name,
+    const std::string& task_name,
+    const std::string& subscription_mode,
+    const std::string& subscription_timestamp_sql
+) {
+    auto conn = async_db_pool_->acquire();
+    if (!conn) {
+        spdlog::warn("Failed to acquire DB connection for recording CG subscription");
+        return; // Non-fatal - continue with pop
     }
     
-    // Upsert into metadata table (DO NOTHING on conflict)
     std::string upsert_sql = R"(
         INSERT INTO queen.consumer_groups_metadata (
             consumer_group, queue_name, partition_name, namespace, task,
             subscription_mode, subscription_timestamp, created_at
         ) VALUES (
-            $1, $2, $3, $4, $5, $6, )" + subscription_timestamp_sql + R"(, NOW()
+            $1, 
+            NULLIF($2, ''), 
+            NULLIF($3, ''), 
+            NULLIF($4, ''), 
+            NULLIF($5, ''),
+            $6, 
+            )" + subscription_timestamp_sql + R"(, 
+            NOW()
         ) ON CONFLICT (consumer_group, COALESCE(queue_name, ''), COALESCE(partition_name, ''), 
                        COALESCE(namespace, ''), COALESCE(task, ''))
         DO NOTHING
@@ -280,15 +375,21 @@ if (consumer_group != "__QUEUE_MODE__" && options.subscription_mode.has_value())
     
     std::vector<std::string> params = {
         consumer_group,
-        queue_name.empty() ? "" : queue_name,      // NULL handling
-        partition_name.empty() ? "" : partition_name,
-        namespace_name.empty() ? "" : namespace_name,
-        task_name.empty() ? "" : task_name,
-        sub_mode
+        queue_name,
+        partition_name,
+        namespace_name,
+        task_name,
+        subscription_mode
     };
     
-    sendQueryParamsAsync(conn, upsert_sql, params);
-    getCommandResult(conn);
+    try {
+        sendQueryParamsAsync(conn, upsert_sql, params);
+        getCommandResult(conn);
+        spdlog::debug("Recorded CG subscription: group={}, mode={}", consumer_group, subscription_mode);
+    } catch (const std::exception& e) {
+        spdlog::warn("Failed to record CG subscription (non-fatal): {}", e.what());
+        // Non-fatal - continue with pop even if metadata recording fails
+    }
 }
 ```
 
@@ -491,16 +592,34 @@ queue('q1').group('cg')  # Should still use 'all' (from metadata)
 
 ## 📋 Implementation Checklist
 
+### Schema & Core Logic
 - [ ] **Step 1:** Create `consumer_groups_metadata` table in `initialize_schema()`
-- [ ] **Step 2:** Add subscription recording in pop flow (before lease acquisition)
-- [ ] **Step 3:** Modify `acquire_partition_lease()` to query metadata instead of using NOW()
-- [ ] **Step 4:** Handle namespace/task context (need to pass to acquire_partition_lease)
-- [ ] **Step 5:** Test basic NEW mode (single partition)
-- [ ] **Step 6:** Test NEW mode with new partition (the bug fix!)
-- [ ] **Step 7:** Test namespace/task wildcards
-- [ ] **Step 8:** Test multiple consumer groups
-- [ ] **Step 9:** Test backward compatibility (no metadata)
-- [ ] **Step 10:** Update documentation
+- [ ] **Step 2:** Add `record_consumer_group_subscription()` helper function to AsyncQueueManager
+- [ ] **Step 3:** Add function declaration to `async_queue_manager.hpp`
+
+### Route Modifications (acceptor_server.cpp)
+- [ ] **Step 4:** Modify route 1: `GET /api/v1/pop/queue/:queue/partition/:partition` (line ~585)
+- [ ] **Step 5:** Modify route 2: `GET /api/v1/pop/queue/:queue` (line ~818)
+- [ ] **Step 6:** Modify route 3: `GET /api/v1/pop` (line ~1038)
+
+### Lease Acquisition
+- [ ] **Step 7:** Modify `acquire_partition_lease()` to query metadata instead of using NOW()
+- [ ] **Step 8:** Update function signature to accept namespace/task parameters
+- [ ] **Step 9:** Update all call sites to pass namespace/task
+
+### Testing
+- [ ] **Step 10:** Test basic NEW mode (single partition)
+- [ ] **Step 11:** Test NEW mode with new partition (the bug fix!)
+- [ ] **Step 12:** Test namespace/task wildcards
+- [ ] **Step 13:** Test multiple consumer groups
+- [ ] **Step 14:** Test backward compatibility (no metadata)
+- [ ] **Step 15:** Test server default mode behavior
+
+### Documentation
+- [ ] **Step 16:** Update `docs/SUBSCRIPTION_MODES.md`
+- [ ] **Step 17:** Update `client-js/client-v2/README.md`
+- [ ] **Step 18:** Update `website/guide/consumer-groups.md`
+- [ ] **Step 19:** Update `server/ENV_VARIABLES.md` (remove max_poll_interval connection)
 
 ---
 
@@ -570,15 +689,27 @@ After implementation:
 
 ```javascript
 // Timeline:
-10:00:00 - Consumer group 'cg1' created, subscribes with mode='new'
-          - subscription_timestamp recorded: 10:00:00 - 4s = 09:59:56
-10:00:00 - Processes partition P1 for 10 minutes...
+10:00:00 - Client calls /api/v1/pop for consumer group 'cg1' with mode='new'
+          → Route handler records: subscription_timestamp = NOW() = 10:00:00 ✓
+          → Consumer starts processing partition P1
+          
+10:00:00-10:10:00 - Processes partition P1 for 10 minutes...
+
 10:10:00 - New partition P2 is created, messages M1, M2, M3 arrive
-10:15:00 - Consumer tries to pop from P2 (first time on this partition)
-          - Queries metadata: finds subscription_timestamp = 09:59:56
-          - Cursor set to: 09:59:56 (NOT NOW())
-          - Messages M1, M2, M3 from 10:10:00 are CAPTURED! ✅
+
+10:15:00 - Same consumer calls /api/v1/pop again for partition P2
+          → Route handler tries to record metadata: DO NOTHING (already exists)
+          → acquire_partition_lease() queries metadata: finds subscription_timestamp = 10:00:00
+          → Cursor set to: 10:00:00 (uses ORIGINAL subscription time, not NOW())
+          → Messages M1, M2, M3 from 10:10:00 are CAPTURED! ✅
+          → (M1-M3 created at 10:10:00 > cursor 10:00:00 → matched!)
 ```
+
+**Key Benefits:**
+- ✅ **True "NEW" semantics** - only messages after subscription (no artificial lookback)
+- ✅ **Consistent across partitions** - all partitions use the same subscription time
+- ✅ **Simpler logic** - just use NOW() at the pop route level
+- ✅ **Accurate** - captures exact moment of client's first pop request
 
 The bug is fixed! 🎉
 
