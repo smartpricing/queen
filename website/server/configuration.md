@@ -21,10 +21,27 @@ DB_POOL_SIZE=50
 ## Performance Tuning
 
 ```bash
-NUM_WORKERS=10              # Worker threads
+NUM_WORKERS=10              # HTTP worker threads
 DB_POOL_SIZE=150            # Database connections
-NUM_POLL_WORKERS=4          # Long-polling threads
-NUM_BACKGROUND_THREADS=8    # Background services
+POLL_WORKER_COUNT=10        # Long-polling worker threads (scale for load)
+```
+
+### Long-Polling Scaling
+
+Scale poll workers based on concurrent waiting clients:
+
+```bash
+# Low load (< 20 clients)
+POLL_WORKER_COUNT=2
+
+# Medium load (20-100 clients)  
+POLL_WORKER_COUNT=10
+
+# High load (100-200 clients)
+POLL_WORKER_COUNT=20
+
+# Very high load (200+ clients)
+POLL_WORKER_COUNT=50
 ```
 
 ## Features

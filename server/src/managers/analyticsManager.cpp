@@ -2372,7 +2372,6 @@ nlohmann::json AnalyticsManager::get_consumer_groups() {
                 consumer_groups_map[consumer_group] = {
                     {"name", consumer_group},
                     {"topics", nlohmann::json::array()},
-                    {"queues", nlohmann::json::object()},
                     {"members", 0},
                     {"totalLag", 0},
                     {"maxTimeLag", 0},
@@ -2397,25 +2396,7 @@ nlohmann::json AnalyticsManager::get_consumer_groups() {
                 group["topics"].push_back(queue_name);
             }
             
-            // Track per-queue data
-            if (!group["queues"].contains(queue_name)) {
-                group["queues"][queue_name] = {
-                    {"partitions", nlohmann::json::array()}
-                };
-            }
-            
-            std::string lease_expires = json_to_string(result[i]["lease_expires_at"]);
-            group["queues"][queue_name]["partitions"].push_back({
-                {"partition", result[i]["partition_name"]},
-                {"workerId", result[i]["worker_id"]},
-                {"lastConsumedAt", result[i]["last_consumed_at"]},
-                {"totalConsumed", json_to_int(result[i]["total_messages_consumed"])},
-                {"offsetLag", offset_lag},
-                {"timeLagSeconds", time_lag_seconds},
-                {"leaseActive", !lease_expires.empty()}
-            });
-            
-            // Aggregate stats
+            // Aggregate stats (no longer storing detailed partition data)
             group["members"] = group["members"].get<int>() + 1;
             group["totalLag"] = group["totalLag"].get<int>() + offset_lag;
             
@@ -2451,6 +2432,146 @@ nlohmann::json AnalyticsManager::get_consumer_groups() {
         return groups_array;
     } catch (const std::exception& e) {
         spdlog::error("Error in get_consumer_groups: {}", e.what());
+        throw;
+    }
+}
+
+nlohmann::json AnalyticsManager::get_consumer_group_details(const std::string& consumer_group) {
+    try {
+        auto conn = async_db_pool_->acquire();
+        
+        std::string query = R"(
+            SELECT 
+                pc.consumer_group,
+                q.name as queue_name,
+                p.name as partition_name,
+                pc.worker_id,
+                pc.last_consumed_at,
+                pc.last_consumed_id,
+                pc.last_consumed_created_at,
+                pc.total_messages_consumed,
+                pc.total_batches_consumed,
+                pc.lease_expires_at,
+                pc.lease_acquired_at,
+                -- Calculate lag: count messages after last consumed
+                (
+                    SELECT COUNT(*)
+                    FROM queen.messages m
+                    WHERE m.partition_id = pc.partition_id
+                      AND (
+                          pc.last_consumed_created_at IS NULL
+                          OR m.created_at > pc.last_consumed_created_at
+                          OR (DATE_TRUNC('milliseconds', m.created_at) = DATE_TRUNC('milliseconds', pc.last_consumed_created_at) 
+                              AND m.id > pc.last_consumed_id)
+                      )
+                )::integer as offset_lag,
+                -- Calculate time lag: age of oldest unprocessed message
+                (
+                    SELECT EXTRACT(EPOCH FROM (NOW() - m.created_at))::integer
+                    FROM queen.messages m
+                    WHERE m.partition_id = pc.partition_id
+                      AND (
+                          pc.last_consumed_created_at IS NULL
+                          OR m.created_at > pc.last_consumed_created_at
+                          OR (DATE_TRUNC('milliseconds', m.created_at) = DATE_TRUNC('milliseconds', pc.last_consumed_created_at) 
+                              AND m.id > pc.last_consumed_id)
+                      )
+                    ORDER BY m.created_at ASC
+                    LIMIT 1
+                )::integer as time_lag_seconds
+            FROM queen.partition_consumers pc
+            JOIN queen.partitions p ON p.id = pc.partition_id
+            JOIN queen.queues q ON q.id = p.queue_id
+            WHERE pc.consumer_group = $1
+            ORDER BY q.name, p.name
+        )";
+        
+        auto result = exec_query_params_json(conn.get(), query, {consumer_group});
+        
+        // Group by queue
+        nlohmann::json queues = nlohmann::json::object();
+        
+        for (int i = 0; i < result.size(); i++) {
+            std::string queue_name = json_to_string(result[i]["queue_name"]);
+            int offset_lag = json_to_int(result[i]["offset_lag"]);
+            int time_lag_seconds = json_to_int(result[i]["time_lag_seconds"]);
+            
+            // Initialize queue if not exists
+            if (!queues.contains(queue_name)) {
+                queues[queue_name] = {
+                    {"partitions", nlohmann::json::array()}
+                };
+            }
+            
+            std::string lease_expires = json_to_string(result[i]["lease_expires_at"]);
+            queues[queue_name]["partitions"].push_back({
+                {"partition", result[i]["partition_name"]},
+                {"workerId", result[i]["worker_id"]},
+                {"lastConsumedAt", result[i]["last_consumed_at"]},
+                {"totalConsumed", json_to_int(result[i]["total_messages_consumed"])},
+                {"offsetLag", offset_lag},
+                {"timeLagSeconds", time_lag_seconds},
+                {"leaseActive", !lease_expires.empty()}
+            });
+        }
+        
+        return queues;
+    } catch (const std::exception& e) {
+        spdlog::error("Error in get_consumer_group_details: {}", e.what());
+        throw;
+    }
+}
+
+nlohmann::json AnalyticsManager::get_lagging_partitions(int min_lag_seconds) {
+    try {
+        auto conn = async_db_pool_->acquire();
+        
+        std::string query = R"(
+            WITH consumer_lag AS (
+                SELECT 
+                    pc.consumer_group,
+                    q.name as queue_name,
+                    p.name as partition_name,
+                    p.id as partition_id,
+                    pc.worker_id,
+                    pc.last_consumed_at,
+                    -- Find oldest unconsumed message
+                    MIN(m.created_at) as oldest_unconsumed_at,
+                    COUNT(m.id) as unconsumed_count,
+                    EXTRACT(EPOCH FROM (NOW() - MIN(m.created_at)))::integer as lag_seconds
+                FROM queen.partition_consumers pc
+                JOIN queen.partitions p ON p.id = pc.partition_id
+                JOIN queen.queues q ON q.id = p.queue_id
+                LEFT JOIN queen.messages m ON m.partition_id = pc.partition_id
+                    AND (
+                        pc.last_consumed_created_at IS NULL
+                        OR m.created_at > pc.last_consumed_created_at
+                        OR (DATE_TRUNC('milliseconds', m.created_at) = DATE_TRUNC('milliseconds', pc.last_consumed_created_at) 
+                            AND m.id > pc.last_consumed_id)
+                    )
+                GROUP BY pc.consumer_group, q.name, p.name, p.id, pc.worker_id, pc.last_consumed_at
+            )
+            SELECT 
+                consumer_group,
+                queue_name,
+                partition_name,
+                partition_id,
+                worker_id,
+                unconsumed_count as offset_lag,
+                lag_seconds as time_lag_seconds,
+                ROUND(lag_seconds / 3600.0, 2) as lag_hours,
+                oldest_unconsumed_at,
+                last_consumed_at
+            FROM consumer_lag
+            WHERE lag_seconds > $1 AND lag_seconds IS NOT NULL
+            ORDER BY lag_seconds DESC
+        )";
+        
+        auto result = exec_query_params_json(conn.get(), query, {std::to_string(min_lag_seconds)});
+        
+        return result;
+    } catch (const std::exception& e) {
+        spdlog::error("Error in get_lagging_partitions: {}", e.what());
         throw;
     }
 }

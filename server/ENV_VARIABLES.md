@@ -54,7 +54,21 @@ This document lists all environment variables supported by the Queen C++ server.
 
 ### Long Polling
 
-The system uses a sophisticated two-layer optimization strategy:
+The system uses dedicated poll worker threads that execute pop operations directly for semantic correctness and scalability.
+
+#### Worker Configuration
+
+| Variable | Type | Default | Description |
+|----------|------|---------|-------------|
+| `POLL_WORKER_COUNT` | int | 2 | Number of dedicated poll worker threads. Scale this for higher loads (2-50 workers typical). Each worker can handle ~5-10 active groups efficiently. |
+
+**Scaling Guidelines:**
+- Low load (< 20 clients): 2-5 workers
+- Medium load (20-100 clients): 5-10 workers
+- High load (100-200 clients): 10-20 workers
+- Very high load (200+ clients): 20-50 workers
+
+**Architecture:** Each poll worker executes pop operations directly in its own thread. This ensures **one intention = one pop = one lease**, providing proper semantic guarantees for both queue mode and consumer groups.
 
 #### 1. Dual-Interval Rate Limiting *(Active)*
 
@@ -94,6 +108,7 @@ When a queue/consumer group consistently returns empty results, the system autom
 | `QUEUE_BACKOFF_THRESHOLD` | int | 1 | Number of consecutive empty pops before backoff starts (1 = immediate backoff) |
 | `QUEUE_BACKOFF_MULTIPLIER` | double | 2.0 | Exponential backoff multiplier (interval *= multiplier) |
 | `QUEUE_MAX_POLL_INTERVAL` | int | 2000 | Maximum poll interval after backoff (ms) - caps the exponential backoff growth |
+| `QUEUE_BACKOFF_CLEANUP_THRESHOLD` | int | 3600 | Cleanup inactive backoff state entries after N seconds (reduces memory overhead) |
 
 #### Legacy Variables *(Not Currently Used)*
 

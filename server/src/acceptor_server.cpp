@@ -1770,10 +1770,36 @@ static void setup_worker_routes(uWS::App* app,
         }
     });
     
-    // GET /api/v1/consumer-groups - Consumer groups
+    // GET /api/v1/consumer-groups - Consumer groups summary
     app->get("/api/v1/consumer-groups", [analytics_manager](auto* res, auto* req) {
         try {
             auto response = analytics_manager->get_consumer_groups();
+            send_json_response(res, response);
+        } catch (const std::exception& e) {
+            send_error_response(res, e.what(), 500);
+        }
+    });
+    
+    // GET /api/v1/consumer-groups/lagging - Get lagging partitions
+    app->get("/api/v1/consumer-groups/lagging", [analytics_manager](auto* res, auto* req) {
+        try {
+            int min_lag_seconds = 3600; // Default: 1 hour
+            std::string lag_param = get_query_param(req, "minLagSeconds");
+            if (!lag_param.empty()) {
+                min_lag_seconds = std::stoi(lag_param);
+            }
+            auto response = analytics_manager->get_lagging_partitions(min_lag_seconds);
+            send_json_response(res, response);
+        } catch (const std::exception& e) {
+            send_error_response(res, e.what(), 500);
+        }
+    });
+    
+    // GET /api/v1/consumer-groups/:group - Consumer group details (partitions)
+    app->get("/api/v1/consumer-groups/:group", [analytics_manager](auto* res, auto* req) {
+        try {
+            std::string consumer_group = std::string(req->getParameter(0));
+            auto response = analytics_manager->get_consumer_group_details(consumer_group);
             send_json_response(res, response);
         } catch (const std::exception& e) {
             send_error_response(res, e.what(), 500);
@@ -2144,11 +2170,10 @@ static void worker_thread(const Config& config, int worker_id, int num_workers,
         if (worker_id == 0) {
             spdlog::info("[Worker 0] Starting long-polling poll workers...");
             queen::init_long_polling(
-                global_db_thread_pool,
                 global_poll_intention_registry,
                 async_queue_manager,
                 worker_response_queues,  // All worker queues (poll workers will route to correct one)
-                2,  // 2 poll workers
+                config.queue.poll_worker_count,  // Number of poll workers (configurable via POLL_WORKER_COUNT env var)
                 config.queue.poll_worker_interval,
                 config.queue.poll_db_interval,
                 config.queue.backoff_threshold,

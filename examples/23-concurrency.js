@@ -6,7 +6,7 @@ await queen.queue('test-concurrency-queue').delete()
 await queen.queue('test-concurrency-queue').create()
 
 await queen.queue('test-concurrency-queue').push([
-    { data: { message: 'Hello, world!' } },
+    { data: { message: 'Hello, world 1!' } },
     { data: { message: 'Hello, world 2!' } },
     { data: { message: 'Hello, world 3!' } },
     { data: { message: 'Hello, world 4!' } },
@@ -15,6 +15,7 @@ await queen.queue('test-concurrency-queue').push([
     { data: { message: 'Hello, world 7!' } },
     { data: { message: 'Hello, world 8!' } },
     { data: { message: 'Hello, world 9!' } },
+    { data: { message: 'Hello, world 10!' } },
 ])
 
 await queen
@@ -22,7 +23,7 @@ await queen
 .group('test-concurrency-group')
 .subscriptionMode('all')
 .concurrency(10)
-.batch(10)
+.batch(3)
 .limit(10)
 .autoAck(false)
 .consume(async (message) => {

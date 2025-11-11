@@ -47,6 +47,131 @@
           </div>
         </div>
 
+        <!-- Lagging Partitions Filter -->
+        <div class="chart-card">
+          <div class="chart-header">
+            <div class="flex items-center gap-2">
+              <svg class="w-5 h-5 text-orange-600 dark:text-orange-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+              </svg>
+              <h3 class="text-lg font-semibold text-gray-900 dark:text-white">Lagging Partitions</h3>
+              <span v-if="laggingPartitions.length > 0" class="badge badge-warning text-xs">
+                {{ laggingPartitions.length }}
+              </span>
+            </div>
+            <button
+              @click="toggleLaggingFilter"
+              class="btn btn-secondary text-sm"
+            >
+              {{ showLaggingFilter ? 'Hide' : 'Show' }}
+            </button>
+          </div>
+
+          <div v-if="showLaggingFilter" class="chart-body">
+            <!-- Lag Threshold Slider -->
+            <div class="mb-6">
+              <div class="flex items-center justify-between mb-3">
+                <label class="text-sm font-medium text-gray-700 dark:text-gray-300">
+                  Minimum Lag Threshold: <span class="text-purple-600 dark:text-purple-400 font-semibold">{{ getLagLabel(lagThreshold) }}</span>
+                </label>
+                <button
+                  @click="loadLaggingPartitions"
+                  class="btn btn-primary text-sm"
+                  :disabled="laggingLoading"
+                >
+                  <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+                  </svg>
+                  {{ laggingLoading ? 'Loading...' : 'Refresh' }}
+                </button>
+              </div>
+              
+              <div class="flex items-center gap-4">
+                <input
+                  v-model.number="lagThreshold"
+                  type="range"
+                  min="600"
+                  max="86400"
+                  step="600"
+                  class="flex-1 h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer dark:bg-gray-700"
+                  @change="loadLaggingPartitions"
+                />
+                <div class="text-xs text-gray-500 dark:text-gray-400 w-24 text-right">
+                  10m - 24h
+                </div>
+              </div>
+              
+              <div class="flex justify-between text-xs text-gray-500 dark:text-gray-400 mt-2">
+                <button @click="lagThreshold = 600; loadLaggingPartitions()" class="hover:text-purple-600 dark:hover:text-purple-400">10 min</button>
+                <button @click="lagThreshold = 1800; loadLaggingPartitions()" class="hover:text-purple-600 dark:hover:text-purple-400">30 min</button>
+                <button @click="lagThreshold = 3600; loadLaggingPartitions()" class="hover:text-purple-600 dark:hover:text-purple-400">1 hour</button>
+                <button @click="lagThreshold = 21600; loadLaggingPartitions()" class="hover:text-purple-600 dark:hover:text-purple-400">6 hours</button>
+                <button @click="lagThreshold = 43200; loadLaggingPartitions()" class="hover:text-purple-600 dark:hover:text-purple-400">12 hours</button>
+                <button @click="lagThreshold = 86400; loadLaggingPartitions()" class="hover:text-purple-600 dark:hover:text-purple-400">24 hours</button>
+              </div>
+            </div>
+
+            <!-- Loading State -->
+            <div v-if="laggingLoading" class="flex items-center justify-center py-12">
+              <LoadingSpinner />
+              <span class="ml-3 text-gray-500 dark:text-gray-400">Loading lagging partitions...</span>
+            </div>
+
+            <!-- Results Table -->
+            <div v-else-if="laggingPartitions.length > 0" class="table-container scrollbar-thin">
+              <table class="table">
+                <thead>
+                  <tr>
+                    <th>Consumer Group</th>
+                    <th>Queue</th>
+                    <th>Partition</th>
+                    <th>Worker ID</th>
+                    <th class="text-right">Offset Lag</th>
+                    <th class="text-right">Time Lag</th>
+                    <th class="text-right">Lag Hours</th>
+                    <th>Oldest Unconsumed</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr v-for="partition in laggingPartitions" :key="`${partition.consumer_group}-${partition.queue_name}-${partition.partition_name}`">
+                    <td>
+                      <span class="font-medium text-gray-900 dark:text-gray-100">{{ partition.consumer_group }}</span>
+                    </td>
+                    <td>
+                      <span class="badge badge-info text-xs">{{ partition.queue_name }}</span>
+                    </td>
+                    <td class="font-medium">{{ partition.partition_name }}</td>
+                    <td>
+                      <code class="worker-id">{{ partition.worker_id || 'N/A' }}</code>
+                    </td>
+                    <td class="text-right font-medium text-orange-600 dark:text-orange-400">
+                      {{ formatNumber(partition.offset_lag) }}
+                    </td>
+                    <td class="text-right font-medium text-red-600 dark:text-red-400">
+                      {{ formatDuration(partition.time_lag_seconds * 1000) }}
+                    </td>
+                    <td class="text-right font-semibold">
+                      {{ partition.lag_hours }}h
+                    </td>
+                    <td class="text-sm">
+                      {{ formatTimestamp(partition.oldest_unconsumed_at) }}
+                    </td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+
+            <!-- Empty State -->
+            <div v-else class="text-center py-12 text-gray-500 text-sm">
+              <svg class="w-12 h-12 mx-auto mb-3 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
+              </svg>
+              <p class="font-medium">No lagging partitions found</p>
+              <p class="text-xs mt-2">All partitions are within the {{ getLagLabel(lagThreshold) }} threshold</p>
+            </div>
+          </div>
+        </div>
+
         <LoadingSpinner v-if="loading && !consumerGroups.length" />
 
         <div v-else-if="error" class="error-card">
@@ -311,8 +436,14 @@
             </div>
           </div>
 
+          <!-- Loading Details -->
+          <div v-if="detailsLoading" class="flex items-center justify-center py-12">
+            <LoadingSpinner />
+            <span class="ml-3 text-gray-500 dark:text-gray-400">Loading partition details...</span>
+          </div>
+
           <!-- Per-Queue Details -->
-          <div v-for="(queueData, queueName) in selectedGroup.queues" :key="queueName" class="queue-section">
+          <div v-else-if="selectedGroupDetails" v-for="(queueData, queueName) in selectedGroupDetails" :key="queueName" class="queue-section">
             <h3 class="queue-title">
               <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10" />
@@ -325,16 +456,58 @@
               <table class="detail-table">
                 <thead>
                   <tr>
-                    <th>Partition</th>
-                    <th>Worker ID</th>
-                    <th class="text-right">Consumed</th>
-                    <th class="text-right">Offset Lag</th>
-                    <th class="text-right">Time Lag</th>
-                    <th class="text-center">Lease</th>
+                    <th class="sortable" @click="sortPartitions('partition')">
+                      <div class="sort-header">
+                        Partition
+                        <span v-if="sortColumn === 'partition'" class="sort-icon">
+                          {{ sortDirection === 'asc' ? '↑' : '↓' }}
+                        </span>
+                      </div>
+                    </th>
+                    <th class="sortable" @click="sortPartitions('workerId')">
+                      <div class="sort-header">
+                        Worker ID
+                        <span v-if="sortColumn === 'workerId'" class="sort-icon">
+                          {{ sortDirection === 'asc' ? '↑' : '↓' }}
+                        </span>
+                      </div>
+                    </th>
+                    <th class="text-right sortable" @click="sortPartitions('totalConsumed')">
+                      <div class="sort-header justify-end">
+                        Consumed
+                        <span v-if="sortColumn === 'totalConsumed'" class="sort-icon">
+                          {{ sortDirection === 'asc' ? '↑' : '↓' }}
+                        </span>
+                      </div>
+                    </th>
+                    <th class="text-right sortable" @click="sortPartitions('offsetLag')">
+                      <div class="sort-header justify-end">
+                        Offset Lag
+                        <span v-if="sortColumn === 'offsetLag'" class="sort-icon">
+                          {{ sortDirection === 'asc' ? '↑' : '↓' }}
+                        </span>
+                      </div>
+                    </th>
+                    <th class="text-right sortable" @click="sortPartitions('timeLagSeconds')">
+                      <div class="sort-header justify-end">
+                        Time Lag
+                        <span v-if="sortColumn === 'timeLagSeconds'" class="sort-icon">
+                          {{ sortDirection === 'asc' ? '↑' : '↓' }}
+                        </span>
+                      </div>
+                    </th>
+                    <th class="text-center sortable" @click="sortPartitions('leaseActive')">
+                      <div class="sort-header justify-center">
+                        Lease
+                        <span v-if="sortColumn === 'leaseActive'" class="sort-icon">
+                          {{ sortDirection === 'asc' ? '↑' : '↓' }}
+                        </span>
+                      </div>
+                    </th>
                   </tr>
                 </thead>
                 <tbody>
-                  <tr v-for="partition in queueData.partitions" :key="partition.partition">
+                  <tr v-for="partition in getSortedPartitions(queueData.partitions)" :key="partition.partition">
                     <td class="font-medium">{{ partition.partition }}</td>
                     <td>
                       <code class="worker-id">{{ partition.workerId || 'N/A' }}</code>
@@ -432,10 +605,18 @@ const consumerGroups = ref([]);
 const searchQuery = ref('');
 const statusFilter = ref('');
 const selectedGroup = ref(null);
+const selectedGroupDetails = ref(null);
+const detailsLoading = ref(false);
 const showEditTimestamp = ref(false);
 const newTimestamp = ref('');
 const deleteMetadata = ref(true);
 const actionLoading = ref(false);
+const sortColumn = ref('partition');
+const sortDirection = ref('asc');
+const showLaggingFilter = ref(false);
+const lagThreshold = ref(3600); // Default: 1 hour in seconds
+const laggingPartitions = ref([]);
+const laggingLoading = ref(false);
 
 const filteredGroups = computed(() => {
   let filtered = consumerGroups.value;
@@ -473,12 +654,74 @@ function clearFilters() {
   statusFilter.value = '';
 }
 
-function selectGroup(group) {
+async function selectGroup(group) {
   selectedGroup.value = group;
+  selectedGroupDetails.value = null;
+  detailsLoading.value = true;
+  sortColumn.value = 'partition';
+  sortDirection.value = 'asc';
+  
+  try {
+    // Fetch detailed partition data
+    const details = await consumersApi.getConsumerGroupDetails(group.name);
+    selectedGroupDetails.value = details;
+  } catch (err) {
+    console.error('Error loading consumer group details:', err);
+    alert(`Failed to load consumer group details: ${err.message}`);
+    selectedGroup.value = null;
+  } finally {
+    detailsLoading.value = false;
+  }
 }
 
 function closeDetail() {
   selectedGroup.value = null;
+  selectedGroupDetails.value = null;
+  sortColumn.value = 'partition';
+  sortDirection.value = 'asc';
+}
+
+function sortPartitions(column) {
+  if (sortColumn.value === column) {
+    sortDirection.value = sortDirection.value === 'asc' ? 'desc' : 'asc';
+  } else {
+    sortColumn.value = column;
+    sortDirection.value = 'asc';
+  }
+}
+
+function getSortedPartitions(partitions) {
+  if (!partitions || !Array.isArray(partitions)) return [];
+  
+  const sorted = [...partitions].sort((a, b) => {
+    let aVal = a[sortColumn.value];
+    let bVal = b[sortColumn.value];
+    
+    // Handle numeric columns
+    if (['totalConsumed', 'offsetLag', 'timeLagSeconds'].includes(sortColumn.value)) {
+      aVal = Number(aVal) || 0;
+      bVal = Number(bVal) || 0;
+    }
+    
+    // Handle boolean columns
+    if (sortColumn.value === 'leaseActive') {
+      aVal = aVal ? 1 : 0;
+      bVal = bVal ? 1 : 0;
+    }
+    
+    // Handle null/undefined values for string columns
+    if (sortColumn.value === 'workerId') {
+      aVal = aVal || '';
+      bVal = bVal || '';
+    }
+    
+    // Compare values
+    if (aVal < bVal) return sortDirection.value === 'asc' ? -1 : 1;
+    if (aVal > bVal) return sortDirection.value === 'asc' ? 1 : -1;
+    return 0;
+  });
+  
+  return sorted;
 }
 
 function formatTimestamp(timestamp) {
@@ -574,6 +817,37 @@ async function loadData() {
     console.error('Consumer groups error:', err);
   } finally {
     loading.value = false;
+  }
+}
+
+async function loadLaggingPartitions() {
+  laggingLoading.value = true;
+  
+  try {
+    const result = await consumersApi.getLaggingPartitions(lagThreshold.value);
+    laggingPartitions.value = result;
+  } catch (err) {
+    console.error('Error loading lagging partitions:', err);
+    alert(`Failed to load lagging partitions: ${err.message}`);
+  } finally {
+    laggingLoading.value = false;
+  }
+}
+
+function getLagLabel(seconds) {
+  if (seconds < 3600) {
+    return `${Math.round(seconds / 60)} minutes`;
+  } else if (seconds < 86400) {
+    return `${Math.round(seconds / 3600)} hour${Math.round(seconds / 3600) !== 1 ? 's' : ''}`;
+  } else {
+    return `${Math.round(seconds / 86400)} day${Math.round(seconds / 86400) !== 1 ? 's' : ''}`;
+  }
+}
+
+function toggleLaggingFilter() {
+  showLaggingFilter.value = !showLaggingFilter.value;
+  if (showLaggingFilter.value && laggingPartitions.value.length === 0) {
+    loadLaggingPartitions();
   }
 }
 
@@ -681,6 +955,23 @@ onUnmounted(() => {
 .detail-table th {
   @apply py-2.5 px-4 font-semibold text-left text-xs uppercase tracking-wider text-gray-500 dark:text-gray-400;
   letter-spacing: 0.05em;
+}
+
+.detail-table th.sortable {
+  @apply cursor-pointer select-none;
+  transition: background-color 0.15s ease;
+}
+
+.detail-table th.sortable:hover {
+  @apply bg-gray-100/80 dark:bg-gray-700/50;
+}
+
+.sort-header {
+  @apply flex items-center gap-1.5;
+}
+
+.sort-icon {
+  @apply text-purple-600 dark:text-purple-400 font-bold text-sm;
 }
 
 .detail-table td {

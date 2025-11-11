@@ -135,6 +135,9 @@ struct QueueConfig {
     int default_batch_size = 1;
     int batch_insert_size = 1000;
     
+    // Long polling - Worker configuration
+    int poll_worker_count = 10;          // Number of dedicated poll worker threads (scale for higher loads)
+    
     // Long polling - Dual-interval rate limiting (ACTIVE)
     int poll_worker_interval = 50;       // 50ms - How often poll workers wake up to check registry (in-memory, cheap)
     int poll_db_interval = 100;          // 100ms - Initial DB query interval (aggressive first attempt, then backoff)
@@ -198,6 +201,9 @@ struct QueueConfig {
         config.max_timeout = get_env_int("MAX_TIMEOUT", 60000);
         config.default_batch_size = get_env_int("DEFAULT_BATCH_SIZE", 1);
         config.batch_insert_size = get_env_int("BATCH_INSERT_SIZE", 1000);
+        
+        // Long polling - Worker configuration
+        config.poll_worker_count = get_env_int("POLL_WORKER_COUNT", 2);
         
         // Long polling - Dual-interval rate limiting
         config.poll_worker_interval = get_env_int("POLL_WORKER_INTERVAL", 50);

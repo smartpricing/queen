@@ -1,7 +1,7 @@
 import apiClient from './client';
 
 export const consumersApi = {
-  // Get consumer groups from dedicated endpoint
+  // Get consumer groups summary (without partition details)
   getConsumerGroups: async () => {
     try {
       const response = await apiClient.get('/api/v1/consumer-groups');
@@ -9,6 +9,28 @@ export const consumersApi = {
     } catch (error) {
       console.error('Error fetching consumer groups:', error);
       return [];
+    }
+  },
+  
+  // Get consumer group details (partition data)
+  getConsumerGroupDetails: async (consumerGroup) => {
+    try {
+      const response = await apiClient.get(`/api/v1/consumer-groups/${encodeURIComponent(consumerGroup)}`);
+      return response.data || {};
+    } catch (error) {
+      console.error('Error fetching consumer group details:', error);
+      throw error;
+    }
+  },
+  
+  // Get lagging partitions
+  getLaggingPartitions: async (minLagSeconds) => {
+    try {
+      const response = await apiClient.get(`/api/v1/consumer-groups/lagging?minLagSeconds=${minLagSeconds}`);
+      return response.data || [];
+    } catch (error) {
+      console.error('Error fetching lagging partitions:', error);
+      throw error;
     }
   },
   

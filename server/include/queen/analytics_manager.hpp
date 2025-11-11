@@ -89,6 +89,8 @@ public:
     
     // Consumer Groups
     nlohmann::json get_consumer_groups();
+    nlohmann::json get_consumer_group_details(const std::string& consumer_group);
+    nlohmann::json get_lagging_partitions(int min_lag_seconds);
     
 private:
     // Helper methods

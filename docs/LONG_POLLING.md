@@ -62,11 +62,15 @@ Benefits:
 └─────────────────────────────────────────────────────────────┘
                             ↓
 ┌─────────────────────────────────────────────────────────────┐
-│              POLL WORKERS (2-4 threads)                      │
+│          POLL WORKERS (2-50 dedicated threads)               │
 │  1. Wake every 50ms                                          │
 │  2. Group intentions by (queue, partition, group)            │
-│  3. Execute non-blocking POP queries                         │
-│  4. Distribute results to waiting clients                    │
+│  3. Execute POP queries directly (one per client)            │
+│  4. Each client gets own lease and messages                  │
+│  5. Distribute results to waiting clients                    │
+│                                                              │
+│  ✅ SEMANTIC GUARANTEE:                                      │
+│     One intention = One pop = One lease                      │
 └─────────────────────────────────────────────────────────────┘
                             ↓
 ┌─────────────────────────────────────────────────────────────┐
@@ -164,7 +168,7 @@ std::string grouping_key() const {
 
 ### 3. Poll Worker Loop
 
-Each poll worker runs this loop continuously:
+Each poll worker runs this loop continuously in its own dedicated thread:
 
 ```cpp
 void poll_worker_loop(int worker_id, int total_workers, ...) {
@@ -207,22 +211,30 @@ void poll_worker_loop(int worker_id, int total_workers, ...) {
                 continue;  // Another worker is handling this
             }
             
-            // Execute POP query
-            auto result = execute_pop_query(intentions[0]);
-            
-            if (result.messages.size() > 0) {
-                // Success! Distribute messages to waiting clients
-                distribute_messages(result.messages, intentions);
-                backoff.consecutive_empty_pops = 0;
-                backoff.current_interval_ms = base_interval;
-            } else {
-                // No messages - apply backoff
-                backoff.consecutive_empty_pops++;
-                if (backoff.consecutive_empty_pops >= backoff_threshold) {
-                    backoff.current_interval_ms = std::min(
-                        backoff.current_interval_ms * backoff_multiplier,
-                        max_poll_interval_ms
-                    );
+            // ✅ SEMANTIC GUARANTEE: Process each intention independently
+            // Each client gets its own pop operation with its own lease
+            for (const auto& intention : intentions) {
+                PopOptions opts;
+                opts.batch = intention.batch_size;  // Use THIS client's batch size
+                
+                // Execute POP query for THIS client
+                auto result = execute_pop_query(intention, opts);
+                
+                if (!result.messages.empty()) {
+                    // Send to THIS client only
+                    send_to_single_client(intention, result);
+                    registry->remove_intention(intention.request_id);
+                    backoff.consecutive_empty_pops = 0;
+                    backoff.current_interval_ms = base_interval;
+                } else {
+                    // No messages - increment backoff
+                    backoff.consecutive_empty_pops++;
+                    if (backoff.consecutive_empty_pops >= backoff_threshold) {
+                        backoff.current_interval_ms = std::min(
+                            backoff.current_interval_ms * backoff_multiplier,
+                            max_poll_interval_ms
+                        );
+                    }
                 }
             }
             
@@ -233,6 +245,13 @@ void poll_worker_loop(int worker_id, int total_workers, ...) {
     }
 }
 ```
+
+**Key Changes in Architecture:**
+- ✅ Each intention gets **its own pop operation** with **its own lease**
+- ✅ No sharing of leases across HTTP connections
+- ✅ Proper semantic guarantees for both queue and bus modes
+- ✅ Natural partition distribution across clients
+- ✅ Scales via worker count (not ThreadPool indirection)
 
 ### 4. Exponential Backoff
 
@@ -362,52 +381,66 @@ curl "http://localhost:6632/api/v1/pop?namespace=billing&wait=true&timeout=30000
 
 | Resource | Usage | Notes |
 |----------|-------|-------|
-| Poll Worker Threads | 2-4 | Configurable |
-| Database Connections | 2-4 | One per poll worker |
+| Poll Worker Threads | 2-50 | Configurable via `POLL_WORKER_COUNT` |
+| Database Connections | 0 per worker | Uses shared pool |
 | Memory per Intention | ~200 bytes | Registry overhead |
 | CPU (empty queues) | <1% | Due to backoff |
-| CPU (active queues) | 5-10% | Query processing |
+| CPU (active queues) | 5-15% | Query processing, scales with workers |
 
 ## Configuration
 
 ### Environment Variables
 
 ```bash
-# Poll worker settings
+# Poll worker configuration
+export POLL_WORKER_COUNT=10           # Number of poll worker threads (scale for load)
+
+# Poll worker timing
 export POLL_WORKER_INTERVAL=50        # How often to check registry (ms)
 export POLL_DB_INTERVAL=100           # Min time between DB queries (ms)
-export POLL_MAX_INTERVAL=2000         # Max backoff interval (ms)
+export QUEUE_MAX_POLL_INTERVAL=2000   # Max backoff interval (ms)
 
 # Backoff settings
-export POLL_BACKOFF_THRESHOLD=5       # Empty pops before backoff
-export POLL_BACKOFF_MULTIPLIER=2.0    # Backoff multiplier
-
-# Cleanup settings
-export POLL_BACKOFF_CLEANUP_INACTIVE_THRESHOLD=300  # Cleanup after 300s inactive
+export QUEUE_BACKOFF_THRESHOLD=1      # Empty pops before backoff (1 = immediate)
+export QUEUE_BACKOFF_MULTIPLIER=2.0   # Backoff multiplier
+export QUEUE_BACKOFF_CLEANUP_THRESHOLD=3600  # Cleanup after 3600s inactive
 ```
 
 ### Tuning Guidelines
 
-**For high-volume queues:**
+**For high-volume queues (many active clients):**
 ```bash
+export POLL_WORKER_COUNT=20           # More workers for parallelism
 export POLL_WORKER_INTERVAL=25        # Check more frequently
 export POLL_DB_INTERVAL=50            # Query more frequently
-export POLL_BACKOFF_THRESHOLD=10      # More tolerant of empty results
+export QUEUE_BACKOFF_THRESHOLD=10     # More tolerant of empty results
 ```
 
-**For low-volume queues:**
+**For low-volume queues (few clients):**
 ```bash
+export POLL_WORKER_COUNT=5            # Fewer workers needed
 export POLL_WORKER_INTERVAL=100       # Check less frequently
 export POLL_DB_INTERVAL=200           # Query less frequently
-export POLL_BACKOFF_THRESHOLD=3       # Backoff quickly
-export POLL_MAX_INTERVAL=5000         # Longer max backoff
+export QUEUE_BACKOFF_THRESHOLD=1      # Backoff quickly (immediate)
+export QUEUE_MAX_POLL_INTERVAL=5000   # Longer max backoff
 ```
 
-**For many queues:**
+**For many concurrent clients:**
 ```bash
-# Increase number of poll workers
-# In code: init_long_polling(..., 4, ...)  // 4 poll workers
+# Scale poll workers based on active groups
+# Rule of thumb: Each worker handles ~5-10 groups efficiently
+export POLL_WORKER_COUNT=30           # For 150-300 active groups
 ```
+
+**Scaling Guidelines:**
+
+| Concurrent Waiting Clients | Active Groups | Recommended Workers |
+|----------------------------|---------------|---------------------|
+| < 20 | < 10 | 2-5 |
+| 20-50 | 10-30 | 5-10 |
+| 50-100 | 30-60 | 10-20 |
+| 100-200 | 60-120 | 20-40 |
+| 200+ | 120+ | 40-50 |
 
 ## Advanced Topics
 
