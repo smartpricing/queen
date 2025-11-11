@@ -2,22 +2,6 @@
   <div class="page-professional">
     <div class="page-content">
       <div class="page-inner">
-        <!-- Info Card -->
-        <div class="info-card">
-          <div class="flex gap-3">
-            <svg class="w-5 h-5 flex-shrink-0 mt-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
-            </svg>
-            <div class="text-sm">
-              <p class="font-semibold mb-1 text-gray-900 dark:text-white">Consumer Groups Overview</p>
-              <p class="text-gray-700 dark:text-gray-300">
-                Consumer groups enable multiple consumers to process messages in parallel without duplication. 
-                Each group maintains its own consumption cursor per partition.
-              </p>
-            </div>
-          </div>
-        </div>
-
         <!-- Filters -->
         <div class="filter-card">
           <div class="flex flex-col sm:flex-row gap-3">
@@ -68,57 +52,105 @@
           </div>
 
           <div v-if="showLaggingFilter" class="chart-body">
-            <!-- Lag Threshold Slider -->
+            <!-- Lag Threshold Selector -->
             <div class="mb-6">
-              <div class="flex items-center justify-between mb-3">
+              <div class="mb-3">
                 <label class="text-sm font-medium text-gray-700 dark:text-gray-300">
                   Minimum Lag Threshold: <span class="text-purple-600 dark:text-purple-400 font-semibold">{{ getLagLabel(lagThreshold) }}</span>
                 </label>
+              </div>
+              
+              <div class="flex items-center justify-between gap-3">
+                <div class="flex flex-wrap gap-2">
+                <button 
+                  @click="lagThreshold = 60; loadLaggingPartitions()" 
+                  class="lag-threshold-btn"
+                  :class="{ 'active': lagThreshold === 60 }"
+                >
+                  1m
+                </button>
+                <button 
+                  @click="lagThreshold = 300; loadLaggingPartitions()" 
+                  class="lag-threshold-btn"
+                  :class="{ 'active': lagThreshold === 300 }"
+                >
+                  5m
+                </button>
+                <button 
+                  @click="lagThreshold = 600; loadLaggingPartitions()" 
+                  class="lag-threshold-btn"
+                  :class="{ 'active': lagThreshold === 600 }"
+                >
+                  10m
+                </button>
+                <button 
+                  @click="lagThreshold = 1800; loadLaggingPartitions()" 
+                  class="lag-threshold-btn"
+                  :class="{ 'active': lagThreshold === 1800 }"
+                >
+                  30m
+                </button>
+                <button 
+                  @click="lagThreshold = 3600; loadLaggingPartitions()" 
+                  class="lag-threshold-btn"
+                  :class="{ 'active': lagThreshold === 3600 }"
+                >
+                  1h
+                </button>
+                <button 
+                  @click="lagThreshold = 10800; loadLaggingPartitions()" 
+                  class="lag-threshold-btn"
+                  :class="{ 'active': lagThreshold === 10800 }"
+                >
+                  3h
+                </button>
+                <button 
+                  @click="lagThreshold = 21600; loadLaggingPartitions()" 
+                  class="lag-threshold-btn"
+                  :class="{ 'active': lagThreshold === 21600 }"
+                >
+                  6h
+                </button>
+                <button 
+                  @click="lagThreshold = 43200; loadLaggingPartitions()" 
+                  class="lag-threshold-btn"
+                  :class="{ 'active': lagThreshold === 43200 }"
+                >
+                  12h
+                </button>
+                <button 
+                  @click="lagThreshold = 86400; loadLaggingPartitions()" 
+                  class="lag-threshold-btn"
+                  :class="{ 'active': lagThreshold === 86400 }"
+                >
+                  24h
+                </button>
+                </div>
+                
                 <button
                   @click="loadLaggingPartitions"
-                  class="btn btn-primary text-sm"
+                  class="btn btn-primary text-xs whitespace-nowrap px-2.5 py-1"
                   :disabled="laggingLoading"
                 >
-                  <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
                   </svg>
                   {{ laggingLoading ? 'Loading...' : 'Refresh' }}
                 </button>
               </div>
-              
-              <div class="flex items-center gap-4">
-                <input
-                  v-model.number="lagThreshold"
-                  type="range"
-                  min="600"
-                  max="86400"
-                  step="600"
-                  class="flex-1 h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer dark:bg-gray-700"
-                  @change="loadLaggingPartitions"
-                />
-                <div class="text-xs text-gray-500 dark:text-gray-400 w-24 text-right">
-                  10m - 24h
-                </div>
-              </div>
-              
-              <div class="flex justify-between text-xs text-gray-500 dark:text-gray-400 mt-2">
-                <button @click="lagThreshold = 600; loadLaggingPartitions()" class="hover:text-purple-600 dark:hover:text-purple-400">10 min</button>
-                <button @click="lagThreshold = 1800; loadLaggingPartitions()" class="hover:text-purple-600 dark:hover:text-purple-400">30 min</button>
-                <button @click="lagThreshold = 3600; loadLaggingPartitions()" class="hover:text-purple-600 dark:hover:text-purple-400">1 hour</button>
-                <button @click="lagThreshold = 21600; loadLaggingPartitions()" class="hover:text-purple-600 dark:hover:text-purple-400">6 hours</button>
-                <button @click="lagThreshold = 43200; loadLaggingPartitions()" class="hover:text-purple-600 dark:hover:text-purple-400">12 hours</button>
-                <button @click="lagThreshold = 86400; loadLaggingPartitions()" class="hover:text-purple-600 dark:hover:text-purple-400">24 hours</button>
-              </div>
-            </div>
-
-            <!-- Loading State -->
-            <div v-if="laggingLoading" class="flex items-center justify-center py-12">
-              <LoadingSpinner />
-              <span class="ml-3 text-gray-500 dark:text-gray-400">Loading lagging partitions...</span>
             </div>
 
             <!-- Results Table -->
-            <div v-else-if="laggingPartitions.length > 0" class="table-container scrollbar-thin">
+            <div v-if="laggingPartitions.length > 0 || laggingLoading" class="relative">
+              <!-- Loading Overlay -->
+              <div v-if="laggingLoading" class="absolute inset-0 bg-white/60 dark:bg-gray-900/60 backdrop-blur-sm z-10 flex items-center justify-center rounded-lg">
+                <div class="flex items-center gap-2 bg-white dark:bg-gray-800 px-4 py-2 rounded-lg shadow-lg border border-gray-200 dark:border-gray-700">
+                  <LoadingSpinner />
+                  <span class="text-sm text-gray-700 dark:text-gray-300">Loading...</span>
+                </div>
+              </div>
+              
+              <div class="table-container scrollbar-thin">
               <table class="table">
                 <thead>
                   <tr>
@@ -159,10 +191,11 @@
                   </tr>
                 </tbody>
               </table>
+              </div>
             </div>
 
             <!-- Empty State -->
-            <div v-else class="text-center py-12 text-gray-500 text-sm">
+            <div v-else-if="!laggingLoading" class="text-center py-12 text-gray-500 text-sm">
               <svg class="w-12 h-12 mx-auto mb-3 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
               </svg>
@@ -189,7 +222,7 @@
             <div class="metric-value-sm text-blue-600 dark:text-blue-400">{{ stats.totalConsumers }}</div>
           </div>
           <div class="metric-card-compact">
-            <span class="metric-label-sm">TOPICS MONITORED</span>
+            <span class="metric-label-sm">QUEUES MONITORED</span>
             <div class="metric-value-sm text-indigo-600 dark:text-indigo-400">{{ stats.totalTopics }}</div>
           </div>
           <div class="metric-card-compact">
@@ -205,18 +238,60 @@
               <table class="table">
               <thead>
                 <tr>
-                  <th>Consumer Group</th>
-                  <th class="hidden md:table-cell">Topics</th>
-                  <th class="text-right">Members</th>
-                  <th class="text-right hidden lg:table-cell">Offset Lag</th>
-                  <th class="text-right">Time Lag</th>
-                  <th class="text-right">State</th>
+                  <th class="sortable-header" @click="sortGroups('name')">
+                    <div class="sort-header-main">
+                      Consumer Group
+                      <span v-if="groupSortColumn === 'name'" class="sort-icon">
+                        {{ groupSortDirection === 'asc' ? '↑' : '↓' }}
+                      </span>
+                    </div>
+                  </th>
+                  <th class="hidden md:table-cell sortable-header" @click="sortGroups('queueName')">
+                    <div class="sort-header-main">
+                      Queue
+                      <span v-if="groupSortColumn === 'queueName'" class="sort-icon">
+                        {{ groupSortDirection === 'asc' ? '↑' : '↓' }}
+                      </span>
+                    </div>
+                  </th>
+                  <th class="text-right sortable-header" @click="sortGroups('members')">
+                    <div class="sort-header-main justify-end">
+                      Members
+                      <span v-if="groupSortColumn === 'members'" class="sort-icon">
+                        {{ groupSortDirection === 'asc' ? '↑' : '↓' }}
+                      </span>
+                    </div>
+                  </th>
+                  <th class="text-right hidden lg:table-cell sortable-header" @click="sortGroups('totalLag')">
+                    <div class="sort-header-main justify-end">
+                      Offset Lag
+                      <span v-if="groupSortColumn === 'totalLag'" class="sort-icon">
+                        {{ groupSortDirection === 'asc' ? '↑' : '↓' }}
+                      </span>
+                    </div>
+                  </th>
+                  <th class="text-right sortable-header" @click="sortGroups('maxTimeLag')">
+                    <div class="sort-header-main justify-end">
+                      Time Lag
+                      <span v-if="groupSortColumn === 'maxTimeLag'" class="sort-icon">
+                        {{ groupSortDirection === 'asc' ? '↑' : '↓' }}
+                      </span>
+                    </div>
+                  </th>
+                  <th class="text-right sortable-header" @click="sortGroups('state')">
+                    <div class="sort-header-main justify-end">
+                      State
+                      <span v-if="groupSortColumn === 'state'" class="sort-icon">
+                        {{ groupSortDirection === 'asc' ? '↑' : '↓' }}
+                      </span>
+                    </div>
+                  </th>
                 </tr>
               </thead>
               <tbody>
                 <tr 
                   v-for="group in filteredGroups" 
-                  :key="group.name"
+                  :key="`${group.name}-${group.queueName}`"
                   @click="selectGroup(group)"
                   class="cursor-pointer"
                 >
@@ -225,9 +300,7 @@
                       <div>
                         <div class="font-medium text-gray-900 dark:text-gray-100">{{ group.name }}</div>
                         <div class="flex items-center gap-2 md:hidden">
-                          <span class="text-xs text-gray-500 dark:text-gray-400">
-                            {{ group.topics.length }} topic{{ group.topics.length !== 1 ? 's' : '' }}
-                          </span>
+                          <span class="badge badge-info text-xs">{{ group.queueName }}</span>
                           <span 
                             v-if="group.subscriptionMode"
                             class="badge text-xs"
@@ -257,18 +330,9 @@
                     </div>
                   </td>
                   <td class="hidden md:table-cell">
-                    <div class="flex flex-wrap gap-1">
-                      <span
-                        v-for="topic in group.topics.slice(0, 2)"
-                        :key="topic"
-                        class="badge badge-info text-xs"
-                      >
-                        {{ topic }}
-                      </span>
-                      <span v-if="group.topics.length > 2" class="text-xs text-gray-500">
-                        +{{ group.topics.length - 2 }} more
-                      </span>
-                    </div>
+                    <span class="badge badge-info text-xs">
+                      {{ group.queueName }}
+                    </span>
                   </td>
                   <td class="text-right font-medium">{{ group.members }}</td>
                   <td class="text-right font-medium hidden lg:table-cell">
@@ -307,6 +371,9 @@
             </h2>
             <p class="text-sm text-gray-500 dark:text-gray-400 mt-1">
               Consumer Group Details
+              <span v-if="selectedGroup.queueName" class="text-purple-600 dark:text-purple-400 font-medium">
+                • Queue: {{ selectedGroup.queueName }}
+              </span>
             </p>
           </div>
           <div class="flex items-center gap-2">
@@ -343,12 +410,12 @@
           <!-- Summary Stats -->
           <div class="grid grid-cols-2 lg:grid-cols-4 gap-3 mb-6">
             <div class="stat-card">
-              <div class="stat-label">Total Members</div>
+              <div class="stat-label">Partitions</div>
               <div class="stat-value">{{ selectedGroup.members }}</div>
             </div>
             <div class="stat-card">
-              <div class="stat-label">Topics</div>
-              <div class="stat-value">{{ selectedGroup.topics.length }}</div>
+              <div class="stat-label">Queue</div>
+              <div class="stat-value text-base">{{ selectedGroup.queueName || 'All' }}</div>
             </div>
             <div class="stat-card">
               <div class="stat-label">Total Lag</div>
@@ -617,6 +684,8 @@ const showLaggingFilter = ref(false);
 const lagThreshold = ref(3600); // Default: 1 hour in seconds
 const laggingPartitions = ref([]);
 const laggingLoading = ref(false);
+const groupSortColumn = ref('name');
+const groupSortDirection = ref('asc');
 
 const filteredGroups = computed(() => {
   let filtered = consumerGroups.value;
@@ -625,6 +694,7 @@ const filteredGroups = computed(() => {
     const search = searchQuery.value.toLowerCase();
     filtered = filtered.filter(g => 
       g.name.toLowerCase().includes(search) ||
+      (g.queueName && g.queueName.toLowerCase().includes(search)) ||
       g.topics.some(t => t.toLowerCase().includes(search))
     );
   }
@@ -633,16 +703,45 @@ const filteredGroups = computed(() => {
     filtered = filtered.filter(g => g.state === statusFilter.value);
   }
   
+  // Apply sorting
+  filtered = [...filtered].sort((a, b) => {
+    let aVal = a[groupSortColumn.value];
+    let bVal = b[groupSortColumn.value];
+    
+    // Handle numeric columns
+    if (['members', 'totalLag', 'maxTimeLag'].includes(groupSortColumn.value)) {
+      aVal = Number(aVal) || 0;
+      bVal = Number(bVal) || 0;
+    }
+    
+    // Handle string columns (case-insensitive)
+    if (['name', 'queueName', 'state'].includes(groupSortColumn.value)) {
+      aVal = (aVal || '').toLowerCase();
+      bVal = (bVal || '').toLowerCase();
+    }
+    
+    // Compare values
+    if (aVal < bVal) return groupSortDirection.value === 'asc' ? -1 : 1;
+    if (aVal > bVal) return groupSortDirection.value === 'asc' ? 1 : -1;
+    return 0;
+  });
+  
   return filtered;
 });
 
 const stats = computed(() => {
   const groups = consumerGroups.value;
   
+  // Count unique consumer group names (since we now have one row per group+queue combo)
+  const uniqueGroupNames = new Set(groups.map(g => g.name));
+  const uniqueStableGroups = new Set(
+    groups.filter(g => g.state === 'Stable').map(g => g.name)
+  );
+  
   return {
-    activeGroups: groups.filter(g => g.state === 'Stable').length,
+    activeGroups: uniqueStableGroups.size,
     totalConsumers: groups.reduce((sum, g) => sum + g.members, 0),
-    totalTopics: new Set(groups.flatMap(g => g.topics)).size,
+    totalTopics: new Set(groups.map(g => g.queueName)).size,
     avgLag: groups.length > 0 
       ? Math.round(groups.reduce((sum, g) => sum + g.totalLag, 0) / groups.length)
       : 0,
@@ -652,6 +751,15 @@ const stats = computed(() => {
 function clearFilters() {
   searchQuery.value = '';
   statusFilter.value = '';
+}
+
+function sortGroups(column) {
+  if (groupSortColumn.value === column) {
+    groupSortDirection.value = groupSortDirection.value === 'asc' ? 'desc' : 'asc';
+  } else {
+    groupSortColumn.value = column;
+    groupSortDirection.value = 'asc';
+  }
 }
 
 async function selectGroup(group) {
@@ -664,7 +772,17 @@ async function selectGroup(group) {
   try {
     // Fetch detailed partition data
     const details = await consumersApi.getConsumerGroupDetails(group.name);
-    selectedGroupDetails.value = details;
+    
+    // If a specific queue is selected (queueName exists), filter to show only that queue
+    if (group.queueName && details) {
+      const filteredDetails = {};
+      if (details[group.queueName]) {
+        filteredDetails[group.queueName] = details[group.queueName];
+      }
+      selectedGroupDetails.value = filteredDetails;
+    } else {
+      selectedGroupDetails.value = details;
+    }
   } catch (err) {
     console.error('Error loading consumer group details:', err);
     alert(`Failed to load consumer group details: ${err.message}`);
@@ -836,11 +954,14 @@ async function loadLaggingPartitions() {
 
 function getLagLabel(seconds) {
   if (seconds < 3600) {
-    return `${Math.round(seconds / 60)} minutes`;
+    const minutes = Math.round(seconds / 60);
+    return `${minutes} minute${minutes !== 1 ? 's' : ''}`;
   } else if (seconds < 86400) {
-    return `${Math.round(seconds / 3600)} hour${Math.round(seconds / 3600) !== 1 ? 's' : ''}`;
+    const hours = Math.round(seconds / 3600);
+    return `${hours} hour${hours !== 1 ? 's' : ''}`;
   } else {
-    return `${Math.round(seconds / 86400)} day${Math.round(seconds / 86400) !== 1 ? 's' : ''}`;
+    const days = Math.round(seconds / 86400);
+    return `${days} day${days !== 1 ? 's' : ''}`;
   }
 }
 
@@ -989,5 +1110,32 @@ onUnmounted(() => {
 .worker-id {
   @apply bg-indigo-100 dark:bg-indigo-900/30 text-indigo-700 dark:text-indigo-300;
   @apply px-2 py-1 rounded text-xs font-mono;
+}
+
+.sortable-header {
+  @apply cursor-pointer select-none;
+  transition: background-color 0.15s ease;
+}
+
+.sortable-header:hover {
+  @apply bg-gray-50 dark:bg-gray-800/30;
+}
+
+.sort-header-main {
+  @apply flex items-center gap-1.5;
+}
+
+.lag-threshold-btn {
+  @apply px-2.5 py-1 rounded text-xs font-medium;
+  @apply bg-gray-100 dark:bg-gray-800 text-gray-700 dark:text-gray-300;
+  @apply border border-gray-200 dark:border-gray-700;
+  @apply hover:bg-gray-200 dark:hover:bg-gray-700;
+  @apply transition-all duration-150;
+}
+
+.lag-threshold-btn.active {
+  @apply bg-purple-600 dark:bg-purple-600 text-white;
+  @apply border-purple-600 dark:border-purple-600;
+  @apply hover:bg-purple-700 dark:hover:bg-purple-700;
 }
 </style>

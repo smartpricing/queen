@@ -2358,7 +2358,7 @@ nlohmann::json AnalyticsManager::get_consumer_groups() {
         
         auto result = exec_query_json(conn.get(), query);
         
-        // Group by consumer group
+        // Group by consumer group AND queue name (so each group+queue combination gets its own row)
         std::map<std::string, nlohmann::json> consumer_groups_map;
         
         for (int i = 0; i < result.size(); i++) {
@@ -2367,11 +2367,18 @@ nlohmann::json AnalyticsManager::get_consumer_groups() {
             int offset_lag = json_to_int(result[i]["offset_lag"]);
             int time_lag_seconds = json_to_int(result[i]["time_lag_seconds"]);
             
-            // Initialize consumer group if not exists
-            if (consumer_groups_map.find(consumer_group) == consumer_groups_map.end()) {
-                consumer_groups_map[consumer_group] = {
+            // Create a unique key for consumer_group + queue_name combination
+            std::string group_queue_key = consumer_group + "|" + queue_name;
+            
+            // Initialize consumer group+queue combination if not exists
+            if (consumer_groups_map.find(group_queue_key) == consumer_groups_map.end()) {
+                nlohmann::json topics_array = nlohmann::json::array();
+                topics_array.push_back(queue_name);
+                
+                consumer_groups_map[group_queue_key] = {
                     {"name", consumer_group},
-                    {"topics", nlohmann::json::array()},
+                    {"topics", topics_array},
+                    {"queueName", queue_name},  // Add explicit queue name field
                     {"members", 0},
                     {"totalLag", 0},
                     {"maxTimeLag", 0},
@@ -2382,21 +2389,9 @@ nlohmann::json AnalyticsManager::get_consumer_groups() {
                 };
             }
             
-            auto& group = consumer_groups_map[consumer_group];
+            auto& group = consumer_groups_map[group_queue_key];
             
-            // Add queue to topics if not already present
-            bool queue_exists = false;
-            for (const auto& topic : group["topics"]) {
-                if (topic == queue_name) {
-                    queue_exists = true;
-                    break;
-                }
-            }
-            if (!queue_exists) {
-                group["topics"].push_back(queue_name);
-            }
-            
-            // Aggregate stats (no longer storing detailed partition data)
+            // Aggregate stats for this consumer group + queue combination
             group["members"] = group["members"].get<int>() + 1;
             group["totalLag"] = group["totalLag"].get<int>() + offset_lag;
             
@@ -2425,7 +2420,7 @@ nlohmann::json AnalyticsManager::get_consumer_groups() {
         
         // Convert map to array
         nlohmann::json groups_array = nlohmann::json::array();
-        for (const auto& [group_name, group_data] : consumer_groups_map) {
+        for (const auto& [group_key, group_data] : consumer_groups_map) {
             groups_array.push_back(group_data);
         }
         
