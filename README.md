@@ -22,6 +22,10 @@ Why "Queen"? Because years ago, when I first read the word "queue" in my mind, I
 
 ---
 
+[Queen MQ Documentation Website](https://smartpricing.github.io/queen/)
+
+---
+
 [QUICKSTART](documentation/QUICKSTART.md)
 
 Latest server production version is **0.6.5**.
