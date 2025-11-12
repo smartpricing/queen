@@ -289,10 +289,11 @@ void poll_worker_loop(
                                 spdlog::info("Poll worker {} fulfilled intention {} with {} messages (group '{}')",
                                            worker_id, intention.request_id, result.messages.size(), key);
                             } else {
-                                // No messages for this client
+                                // No messages for this client - queue is empty, no point trying remaining intentions
                                 empty_pops++;
-                                spdlog::debug("Poll worker {} - no messages for intention {} (group '{}')",
+                                spdlog::debug("Poll worker {} - no messages for intention {} (group '{}'), breaking early to avoid unnecessary DB queries",
                                             worker_id, intention.request_id, key);
+                                break; // Exit early - if queue is empty now, it will be empty for remaining intentions
                             }
                         }
                         
@@ -306,8 +307,8 @@ void poll_worker_loop(
                             }
                             backoff_state.consecutive_empty_pops = 0;
                             backoff_state.current_interval_ms = poll_db_interval_ms;
-                        } else if (empty_pops == static_cast<int>(batch.size())) {
-                            // All pops were empty - increment backoff
+                        } else if (successful_pops == 0 && empty_pops > 0) {
+                            // No successful pops (queue is empty) - increment backoff
                             backoff_state.consecutive_empty_pops++;
                             
                             if (backoff_state.consecutive_empty_pops >= backoff_threshold) {
