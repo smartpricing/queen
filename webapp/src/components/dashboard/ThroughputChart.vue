@@ -100,14 +100,36 @@ const chartData = computed(() => {
     });
   }
   
+  // Determine if we need to show dates (time range > 24 hours)
+  const showDates = isMultiDay();
+  
   return {
-    labels: throughput.map(t => {
-      const date = new Date(t.timestamp);
-      return date.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' });
-    }),
+    labels: throughput.map(t => formatTimestamp(t.timestamp, showDates)),
     datasets,
   };
 });
+
+function isMultiDay() {
+  if (!props.data?.timeRange?.from || !props.data?.timeRange?.to) return false;
+  const from = new Date(props.data.timeRange.from);
+  const to = new Date(props.data.timeRange.to);
+  const diffHours = (to - from) / (1000 * 60 * 60);
+  return diffHours > 24;
+}
+
+function formatTimestamp(ts, showDate) {
+  const date = new Date(ts);
+  if (showDate) {
+    return date.toLocaleString('en-US', { 
+      month: 'short', 
+      day: 'numeric',
+      hour: '2-digit', 
+      minute: '2-digit' 
+    });
+  } else {
+    return date.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' });
+  }
+}
 
 // Create gradient for bars - professional blue theme
 function createGradientBars(color) {
@@ -152,8 +174,9 @@ const chartOptions = {
         display: false,
       },
       ticks: {
-        maxRotation: 0,
-        autoSkipPadding: 20,
+        maxRotation: 45,
+        minRotation: 0,
+        autoSkipPadding: 30,
         font: {
           size: 11,
           family: 'Inter, -apple-system, sans-serif',

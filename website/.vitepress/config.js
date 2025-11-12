@@ -136,8 +136,7 @@ export default defineConfig({
         {
           text: 'API Reference',
           items: [
-            { text: 'HTTP API', link: '/api/http' },
-            { text: 'WebSocket API', link: '/api/websocket' }
+            { text: 'HTTP API', link: '/api/http' }
           ]
         }
       ]

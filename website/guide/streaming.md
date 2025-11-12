@@ -1,6 +1,6 @@
 # Streaming
 
-Real-time message streaming with WebSocket support for building aggregation pipelines and processing messages as they arrive.
+Real-time message streaming with windows support for building aggregation pipelines and processing messages as they arrive.
 
 ## Coming Soon
 

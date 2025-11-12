@@ -1532,47 +1532,68 @@ nlohmann::json AnalyticsManager::get_status(const StatusFilters& filters) {
         std::string from_iso, to_iso;
         get_time_range(filters.from, filters.to, from_iso, to_iso, 1);
         
+        // Calculate dynamic bucket size based on time range
+        std::tm tm_from = {}, tm_to = {};
+        std::istringstream ss_from(from_iso), ss_to(to_iso);
+        ss_from >> std::get_time(&tm_from, "%Y-%m-%dT%H:%M:%S");
+        ss_to >> std::get_time(&tm_to, "%Y-%m-%dT%H:%M:%S");
+        
+        auto time_from = std::chrono::system_clock::from_time_t(std::mktime(&tm_from));
+        auto time_to = std::chrono::system_clock::from_time_t(std::mktime(&tm_to));
+        auto duration_minutes = std::chrono::duration_cast<std::chrono::minutes>(time_to - time_from).count();
+        
+        // Calculate bucket size: target ~100 points, minimum 1 minute
+        int bucket_minutes = std::max(1, (int)std::ceil(duration_minutes / 100.0));
+        int bucket_seconds = bucket_minutes * 60;
+        
+        spdlog::debug("Analytics query: duration={}min, bucket={}min, target_points=~{}", 
+                      duration_minutes, bucket_minutes, duration_minutes / bucket_minutes);
+        
         std::string filter_clause = build_filter_clause(filters.queue, filters.namespace_name, filters.task);
         
-        // Query 1: Throughput per minute
+        // Query 1: Throughput with dynamic bucketing
         std::string throughput_query = R"(
-            WITH time_series AS (
-                SELECT generate_series(
-                    DATE_TRUNC('minute', $1::timestamptz),
-                    DATE_TRUNC('minute', $2::timestamptz),
-                    '1 minute'::interval
-                ) AS minute
-            ),
-            ingested_per_minute AS (
+            WITH bucketed_ingested AS (
                 SELECT 
-                    DATE_TRUNC('minute', m.created_at) as minute,
+                    TO_TIMESTAMP(FLOOR(EXTRACT(EPOCH FROM m.created_at) / )" + 
+                    std::to_string(bucket_seconds) + R"() * )" + 
+                    std::to_string(bucket_seconds) + R"() AS bucket,
                     COUNT(DISTINCT m.id) as messages_ingested
                 FROM queen.messages m
                 JOIN queen.partitions p ON p.id = m.partition_id
                 JOIN queen.queues q ON q.id = p.queue_id
                 WHERE m.created_at >= $1::timestamptz
                     AND m.created_at <= $2::timestamptz )" + filter_clause + R"(
-                GROUP BY DATE_TRUNC('minute', m.created_at)
+                GROUP BY bucket
             ),
-            processed_per_minute AS (
+            bucketed_processed AS (
                 SELECT 
-                    DATE_TRUNC('minute', mc.acked_at) as minute,
+                    TO_TIMESTAMP(FLOOR(EXTRACT(EPOCH FROM mc.acked_at) / )" + 
+                    std::to_string(bucket_seconds) + R"() * )" + 
+                    std::to_string(bucket_seconds) + R"() AS bucket,
                     SUM(mc.messages_completed) as messages_processed
                 FROM queen.messages_consumed mc
                 JOIN queen.partitions p ON p.id = mc.partition_id
                 JOIN queen.queues q ON q.id = p.queue_id
                 WHERE mc.acked_at >= $1::timestamptz
                     AND mc.acked_at <= $2::timestamptz )" + filter_clause + R"(
-                GROUP BY DATE_TRUNC('minute', mc.acked_at)
+                GROUP BY bucket
+            ),
+            all_buckets AS (
+                SELECT DISTINCT bucket FROM (
+                    SELECT bucket FROM bucketed_ingested
+                    UNION
+                    SELECT bucket FROM bucketed_processed
+                ) combined
             )
             SELECT 
-                ts.minute,
-                COALESCE(ipm.messages_ingested, 0) as messages_ingested,
-                COALESCE(ppm.messages_processed, 0) as messages_processed
-            FROM time_series ts
-            LEFT JOIN ingested_per_minute ipm ON ipm.minute = ts.minute
-            LEFT JOIN processed_per_minute ppm ON ppm.minute = ts.minute
-            ORDER BY ts.minute DESC
+                ab.bucket as minute,
+                COALESCE(bi.messages_ingested, 0) as messages_ingested,
+                COALESCE(bp.messages_processed, 0) as messages_processed
+            FROM all_buckets ab
+            LEFT JOIN bucketed_ingested bi ON bi.bucket = ab.bucket
+            LEFT JOIN bucketed_processed bp ON bp.bucket = ab.bucket
+            ORDER BY ab.bucket DESC
         )";
         
         auto throughput_result = exec_query_params_json(conn.get(), throughput_query, {from_iso, to_iso});
@@ -1585,8 +1606,8 @@ nlohmann::json AnalyticsManager::get_status(const StatusFilters& filters) {
                 {"timestamp", throughput_result[i]["minute"]},
                 {"ingested", ingested},
                 {"processed", processed},
-                {"ingestedPerSecond", std::round((ingested / 60.0) * 100) / 100},
-                {"processedPerSecond", std::round((processed / 60.0) * 100) / 100}
+                {"ingestedPerSecond", std::round((ingested / (double)bucket_seconds) * 100) / 100},
+                {"processedPerSecond", std::round((processed / (double)bucket_seconds) * 100) / 100}
             });
         }
         
@@ -1753,6 +1774,8 @@ nlohmann::json AnalyticsManager::get_status(const StatusFilters& filters) {
                 {"from", from_iso},
                 {"to", to_iso}
             }},
+            {"bucketMinutes", bucket_minutes},
+            {"pointCount", throughput_result.size()},
             {"throughput", throughput},
             {"queues", queues},
             {"messages", messages},
@@ -2188,6 +2211,24 @@ nlohmann::json AnalyticsManager::get_system_metrics(const SystemMetricsFilters& 
         std::string from_iso, to_iso;
         get_time_range(filters.from, filters.to, from_iso, to_iso, 1);
         
+        // Calculate dynamic bucket size based on time range
+        // Parse the ISO timestamps to calculate duration in minutes
+        std::tm tm_from = {}, tm_to = {};
+        std::istringstream ss_from(from_iso), ss_to(to_iso);
+        ss_from >> std::get_time(&tm_from, "%Y-%m-%dT%H:%M:%S");
+        ss_to >> std::get_time(&tm_to, "%Y-%m-%dT%H:%M:%S");
+        
+        auto time_from = std::chrono::system_clock::from_time_t(std::mktime(&tm_from));
+        auto time_to = std::chrono::system_clock::from_time_t(std::mktime(&tm_to));
+        auto duration_minutes = std::chrono::duration_cast<std::chrono::minutes>(time_to - time_from).count();
+        
+        // Calculate bucket size: target ~100 points, minimum 1 minute
+        int bucket_minutes = std::max(1, (int)std::ceil(duration_minutes / 100.0));
+        std::string bucket_interval = std::to_string(bucket_minutes) + " minutes";
+        
+        spdlog::debug("System metrics query: duration={}min, bucket={}min, target_points=~{}", 
+                      duration_minutes, bucket_minutes, duration_minutes / bucket_minutes);
+        
         // Build filter clause
         std::string where_clause = "";
         std::vector<std::string> params = {from_iso, to_iso};
@@ -2203,19 +2244,137 @@ nlohmann::json AnalyticsManager::get_system_metrics(const SystemMetricsFilters& 
             params.push_back(filters.worker_id);
         }
         
-        // Query for system metrics - grouped by replica
+        // Query for system metrics with dynamic bucketing
+        // Re-aggregate the already-aggregated data:
+        // - avg: weighted average using sample_count
+        // - min: minimum of mins
+        // - max: maximum of maxes
+        // - last: last value in bucket (by timestamp)
         std::string query = R"(
+            WITH bucketed_data AS (
+                SELECT 
+                    TO_TIMESTAMP(FLOOR(EXTRACT(EPOCH FROM timestamp) / )" + 
+                    std::to_string(bucket_minutes * 60) + R"() * )" + 
+                    std::to_string(bucket_minutes * 60) + R"() AS bucket_timestamp,
+                    hostname,
+                    port,
+                    worker_id,
+                    timestamp,
+                    sample_count,
+                    metrics
+                FROM queen.system_metrics 
+                WHERE timestamp >= $1::timestamptz
+                    AND timestamp <= $2::timestamptz )" + where_clause + R"(
+            )
             SELECT 
-                timestamp,
+                bucket_timestamp as timestamp,
                 hostname,
                 port,
                 worker_id,
-                sample_count,
-                metrics
- FROM queen.system_metrics 
-            WHERE timestamp >= $1::timestamptz
-                AND timestamp <= $2::timestamptz )" + where_clause + R"(
-            ORDER BY hostname, port, timestamp ASC
+                SUM(sample_count) as sample_count,
+                jsonb_build_object(
+                    'cpu', jsonb_build_object(
+                        'user_us', jsonb_build_object(
+                            'avg', SUM((metrics->'cpu'->'user_us'->>'avg')::numeric * sample_count) / NULLIF(SUM(sample_count), 0),
+                            'min', MIN((metrics->'cpu'->'user_us'->>'min')::numeric),
+                            'max', MAX((metrics->'cpu'->'user_us'->>'max')::numeric),
+                            'last', (array_agg((metrics->'cpu'->'user_us'->>'last')::numeric ORDER BY timestamp DESC))[1]
+                        ),
+                        'system_us', jsonb_build_object(
+                            'avg', SUM((metrics->'cpu'->'system_us'->>'avg')::numeric * sample_count) / NULLIF(SUM(sample_count), 0),
+                            'min', MIN((metrics->'cpu'->'system_us'->>'min')::numeric),
+                            'max', MAX((metrics->'cpu'->'system_us'->>'max')::numeric),
+                            'last', (array_agg((metrics->'cpu'->'system_us'->>'last')::numeric ORDER BY timestamp DESC))[1]
+                        )
+                    ),
+                    'memory', jsonb_build_object(
+                        'rss_bytes', jsonb_build_object(
+                            'avg', SUM((metrics->'memory'->'rss_bytes'->>'avg')::numeric * sample_count) / NULLIF(SUM(sample_count), 0),
+                            'min', MIN((metrics->'memory'->'rss_bytes'->>'min')::numeric),
+                            'max', MAX((metrics->'memory'->'rss_bytes'->>'max')::numeric),
+                            'last', (array_agg((metrics->'memory'->'rss_bytes'->>'last')::numeric ORDER BY timestamp DESC))[1]
+                        ),
+                        'virtual_bytes', jsonb_build_object(
+                            'avg', SUM((metrics->'memory'->'virtual_bytes'->>'avg')::numeric * sample_count) / NULLIF(SUM(sample_count), 0),
+                            'min', MIN((metrics->'memory'->'virtual_bytes'->>'min')::numeric),
+                            'max', MAX((metrics->'memory'->'virtual_bytes'->>'max')::numeric),
+                            'last', (array_agg((metrics->'memory'->'virtual_bytes'->>'last')::numeric ORDER BY timestamp DESC))[1]
+                        )
+                    ),
+                    'database', jsonb_build_object(
+                        'pool_size', jsonb_build_object(
+                            'avg', SUM((metrics->'database'->'pool_size'->>'avg')::numeric * sample_count) / NULLIF(SUM(sample_count), 0),
+                            'min', MIN((metrics->'database'->'pool_size'->>'min')::numeric),
+                            'max', MAX((metrics->'database'->'pool_size'->>'max')::numeric),
+                            'last', (array_agg((metrics->'database'->'pool_size'->>'last')::numeric ORDER BY timestamp DESC))[1]
+                        ),
+                        'pool_idle', jsonb_build_object(
+                            'avg', SUM((metrics->'database'->'pool_idle'->>'avg')::numeric * sample_count) / NULLIF(SUM(sample_count), 0),
+                            'min', MIN((metrics->'database'->'pool_idle'->>'min')::numeric),
+                            'max', MAX((metrics->'database'->'pool_idle'->>'max')::numeric),
+                            'last', (array_agg((metrics->'database'->'pool_idle'->>'last')::numeric ORDER BY timestamp DESC))[1]
+                        ),
+                        'pool_active', jsonb_build_object(
+                            'avg', SUM((metrics->'database'->'pool_active'->>'avg')::numeric * sample_count) / NULLIF(SUM(sample_count), 0),
+                            'min', MIN((metrics->'database'->'pool_active'->>'min')::numeric),
+                            'max', MAX((metrics->'database'->'pool_active'->>'max')::numeric),
+                            'last', (array_agg((metrics->'database'->'pool_active'->>'last')::numeric ORDER BY timestamp DESC))[1]
+                        )
+                    ),
+                    'threadpool', jsonb_build_object(
+                        'db', jsonb_build_object(
+                            'pool_size', jsonb_build_object(
+                                'avg', SUM((metrics->'threadpool'->'db'->'pool_size'->>'avg')::numeric * sample_count) / NULLIF(SUM(sample_count), 0),
+                                'min', MIN((metrics->'threadpool'->'db'->'pool_size'->>'min')::numeric),
+                                'max', MAX((metrics->'threadpool'->'db'->'pool_size'->>'max')::numeric),
+                                'last', (array_agg((metrics->'threadpool'->'db'->'pool_size'->>'last')::numeric ORDER BY timestamp DESC))[1]
+                            ),
+                            'queue_size', jsonb_build_object(
+                                'avg', SUM((metrics->'threadpool'->'db'->'queue_size'->>'avg')::numeric * sample_count) / NULLIF(SUM(sample_count), 0),
+                                'min', MIN((metrics->'threadpool'->'db'->'queue_size'->>'min')::numeric),
+                                'max', MAX((metrics->'threadpool'->'db'->'queue_size'->>'max')::numeric),
+                                'last', (array_agg((metrics->'threadpool'->'db'->'queue_size'->>'last')::numeric ORDER BY timestamp DESC))[1]
+                            )
+                        ),
+                        'system', jsonb_build_object(
+                            'pool_size', jsonb_build_object(
+                                'avg', SUM((metrics->'threadpool'->'system'->'pool_size'->>'avg')::numeric * sample_count) / NULLIF(SUM(sample_count), 0),
+                                'min', MIN((metrics->'threadpool'->'system'->'pool_size'->>'min')::numeric),
+                                'max', MAX((metrics->'threadpool'->'system'->'pool_size'->>'max')::numeric),
+                                'last', (array_agg((metrics->'threadpool'->'system'->'pool_size'->>'last')::numeric ORDER BY timestamp DESC))[1]
+                            ),
+                            'queue_size', jsonb_build_object(
+                                'avg', SUM((metrics->'threadpool'->'system'->'queue_size'->>'avg')::numeric * sample_count) / NULLIF(SUM(sample_count), 0),
+                                'min', MIN((metrics->'threadpool'->'system'->'queue_size'->>'min')::numeric),
+                                'max', MAX((metrics->'threadpool'->'system'->'queue_size'->>'max')::numeric),
+                                'last', (array_agg((metrics->'threadpool'->'system'->'queue_size'->>'last')::numeric ORDER BY timestamp DESC))[1]
+                            )
+                        )
+                    ),
+                    'registries', jsonb_build_object(
+                        'poll_intention', jsonb_build_object(
+                            'avg', SUM((metrics->'registries'->'poll_intention'->>'avg')::numeric * sample_count) / NULLIF(SUM(sample_count), 0),
+                            'min', MIN((metrics->'registries'->'poll_intention'->>'min')::numeric),
+                            'max', MAX((metrics->'registries'->'poll_intention'->>'max')::numeric),
+                            'last', (array_agg((metrics->'registries'->'poll_intention'->>'last')::numeric ORDER BY timestamp DESC))[1]
+                        ),
+                        'stream_poll_intention', jsonb_build_object(
+                            'avg', SUM((metrics->'registries'->'stream_poll_intention'->>'avg')::numeric * sample_count) / NULLIF(SUM(sample_count), 0),
+                            'min', MIN((metrics->'registries'->'stream_poll_intention'->>'min')::numeric),
+                            'max', MAX((metrics->'registries'->'stream_poll_intention'->>'max')::numeric),
+                            'last', (array_agg((metrics->'registries'->'stream_poll_intention'->>'last')::numeric ORDER BY timestamp DESC))[1]
+                        ),
+                        'response', jsonb_build_object(
+                            'avg', SUM((metrics->'registries'->'response'->>'avg')::numeric * sample_count) / NULLIF(SUM(sample_count), 0),
+                            'min', MIN((metrics->'registries'->'response'->>'min')::numeric),
+                            'max', MAX((metrics->'registries'->'response'->>'max')::numeric),
+                            'last', (array_agg((metrics->'registries'->'response'->>'last')::numeric ORDER BY timestamp DESC))[1]
+                        )
+                    )
+                ) as metrics
+            FROM bucketed_data
+            GROUP BY bucket_timestamp, hostname, port, worker_id
+            ORDER BY hostname, port, bucket_timestamp ASC
         )";
         
         auto result = exec_query_params_json(conn.get(), query, params);
@@ -2285,7 +2444,9 @@ nlohmann::json AnalyticsManager::get_system_metrics(const SystemMetricsFilters& 
                 {"to", to_iso}
             }},
             {"replicas", replicas_array},
-            {"replicaCount", replicas_array.size()}
+            {"replicaCount", replicas_array.size()},
+            {"bucketMinutes", bucket_minutes},
+            {"pointCount", result.size()}
         };
         
         return response;

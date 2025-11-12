@@ -69,6 +69,9 @@ const chartData = computed(() => {
   });
   const sortedTimestamps = Array.from(allTimestamps).sort();
 
+  // Determine if we need to show dates (time range > 24 hours)
+  const showDates = isMultiDay();
+
   // Create datasets for each replica
   replicas.forEach((replica, replicaIndex) => {
     const colorScheme = replicaColors[replicaIndex % replicaColors.length];
@@ -97,13 +100,32 @@ const chartData = computed(() => {
   });
 
   return {
-    labels: sortedTimestamps.map(ts => {
-      const date = new Date(ts);
-      return date.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' });
-    }),
+    labels: sortedTimestamps.map(ts => formatTimestamp(ts, showDates)),
     datasets,
   };
 });
+
+function isMultiDay() {
+  if (!props.data?.timeRange?.from || !props.data?.timeRange?.to) return false;
+  const from = new Date(props.data.timeRange.from);
+  const to = new Date(props.data.timeRange.to);
+  const diffHours = (to - from) / (1000 * 60 * 60);
+  return diffHours > 24;
+}
+
+function formatTimestamp(ts, showDate) {
+  const date = new Date(ts);
+  if (showDate) {
+    return date.toLocaleString('en-US', { 
+      month: 'short', 
+      day: 'numeric',
+      hour: '2-digit', 
+      minute: '2-digit' 
+    });
+  } else {
+    return date.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' });
+  }
+}
 
 const chartOptions = {
   responsive: true,
@@ -136,6 +158,12 @@ const chartOptions = {
       borderWidth: 1,
       displayColors: true,
       callbacks: {
+        title: function(context) {
+          if (context[0]?.label) {
+            return context[0].label;
+          }
+          return '';
+        },
         label: function(context) {
           const value = context.parsed.y;
           return `${context.dataset.label}: ${value.toFixed(0)} MB`;
@@ -153,8 +181,9 @@ const chartOptions = {
         font: {
           size: 11,
         },
-        maxRotation: 0,
-        autoSkipPadding: 20,
+        maxRotation: 45,
+        minRotation: 0,
+        autoSkipPadding: 30,
       },
     },
     y: {

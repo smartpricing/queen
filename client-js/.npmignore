@@ -13,8 +13,8 @@ node_modules
 migrations/
 examples/
 assets/
-client-js/test/
-client-js/benchmark/
+test-v2/
+benchmark/
 
 # Build artifacts (except webapp/dist which we WANT)
 *.tgz

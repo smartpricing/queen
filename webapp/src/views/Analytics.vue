@@ -6,12 +6,16 @@
         <div class="filter-card">
           <AnalyticsFilters
           v-model:time-range="timeRange"
+          v-model:custom-mode="customMode"
+          v-model:custom-from="customFrom"
+          v-model:custom-to="customTo"
           v-model:queue="queueFilter"
           v-model:namespace="namespaceFilter"
           v-model:task="taskFilter"
           :queues="allQueues"
           :namespaces="namespaces"
           :tasks="tasks"
+          @apply-custom-range="applyCustomRange"
           />
         </div>
 
@@ -173,6 +177,9 @@ import LoadingSpinner from '../components/common/LoadingSpinner.vue';
 const loading = ref(false);
 const error = ref(null);
 const timeRange = ref('1h');
+const customMode = ref(false);
+const customFrom = ref('');
+const customTo = ref('');
 const queueFilter = ref('');
 const namespaceFilter = ref('');
 const taskFilter = ref('');
@@ -197,32 +204,70 @@ const filteredQueues = computed(() => {
   return queues;
 });
 
+function formatDateTimeLocal(date) {
+  // Format: yyyy-MM-ddTHH:mm
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const day = String(date.getDate()).padStart(2, '0');
+  const hours = String(date.getHours()).padStart(2, '0');
+  const minutes = String(date.getMinutes()).padStart(2, '0');
+  return `${year}-${month}-${day}T${hours}:${minutes}`;
+}
+
+function applyCustomRange() {
+  if (!customFrom.value || !customTo.value) {
+    error.value = 'Please select both FROM and TO dates';
+    return;
+  }
+  
+  const fromDate = new Date(customFrom.value);
+  const toDate = new Date(customTo.value);
+  
+  if (fromDate >= toDate) {
+    error.value = 'FROM date must be before TO date';
+    return;
+  }
+  
+  loadData();
+}
+
 async function loadData() {
   loading.value = true;
   error.value = null;
   
   try {
-    const now = new Date();
-    const from = new Date(now);
+    let from, to;
     
-    switch (timeRange.value) {
-      case '1h':
-        from.setHours(from.getHours() - 1);
-        break;
-      case '6h':
-        from.setHours(from.getHours() - 6);
-        break;
-      case '24h':
-        from.setHours(from.getHours() - 24);
-        break;
-      case '7d':
-        from.setDate(from.getDate() - 7);
-        break;
+    if (customMode.value && customFrom.value && customTo.value) {
+      // Use custom range
+      from = new Date(customFrom.value);
+      to = new Date(customTo.value);
+    } else {
+      // Use quick range
+      const now = new Date();
+      from = new Date(now);
+      
+      switch (timeRange.value) {
+        case '1h':
+          from.setHours(from.getHours() - 1);
+          break;
+        case '6h':
+          from.setHours(from.getHours() - 6);
+          break;
+        case '24h':
+          from.setHours(from.getHours() - 24);
+          break;
+        case '7d':
+          from.setDate(from.getDate() - 7);
+          break;
+      }
+      
+      to = now;
     }
     
     const params = {
       from: from.toISOString(),
-      to: now.toISOString(),
+      to: to.toISOString(),
     };
     
     if (queueFilter.value) params.queue = queueFilter.value;
@@ -248,8 +293,41 @@ async function loadData() {
   }
 }
 
-watch([timeRange, queueFilter, namespaceFilter, taskFilter], () => {
+// Watch for changes - handle both quick and custom modes
+watch(timeRange, () => {
+  if (!customMode.value) {
+    loadData();
+  }
+});
+
+watch([queueFilter, namespaceFilter, taskFilter], () => {
   loadData();
+});
+
+watch(customMode, (newValue) => {
+  if (newValue) {
+    // Initialize with current range when entering custom mode
+    const now = new Date();
+    const from = new Date(now);
+    
+    switch (timeRange.value) {
+      case '1h':
+        from.setHours(from.getHours() - 1);
+        break;
+      case '6h':
+        from.setHours(from.getHours() - 6);
+        break;
+      case '24h':
+        from.setHours(from.getHours() - 24);
+        break;
+      case '7d':
+        from.setDate(from.getDate() - 7);
+        break;
+    }
+    
+    customTo.value = formatDateTimeLocal(now);
+    customFrom.value = formatDateTimeLocal(from);
+  }
 });
 
 onMounted(() => {

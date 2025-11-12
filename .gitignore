@@ -12,6 +12,8 @@ server/vendor
 server/build
 server/bin
 
+client-js/node_modules
+
 client-cpp/bin
 
 helm

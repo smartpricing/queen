@@ -42,7 +42,7 @@ features:
   
   - icon: 📡
     title: Streaming
-    details: Real-time message streaming with WebSocket support. Build aggregation pipelines and process messages as they arrive.
+    details: Real-time message streaming. Build aggregation pipelines and process messages as they arrive.
     link: /guide/streaming
   
   - icon: ⏱️

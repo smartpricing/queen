@@ -22,7 +22,7 @@ Kafka-style consumer groups allow multiple groups to process the same messages i
 Atomic operations across queues with exactly-once delivery guarantees. Chain push and ack operations together to build reliable workflows that never lose or duplicate messages.
 
 ### 📡 Streaming
-Real-time message streaming with WebSocket support. Build aggregation pipelines and process messages as they arrive with partitioned streams and filtering capabilities.
+Real-time message streaming. Build aggregation pipelines and process messages as they arrive with partitioned streams and filtering capabilities.
 
 ### ⏱️ Long Polling
 Efficient server-side waiting for messages. No busy loops, no wasted resources. Messages are delivered instantly when they become available.

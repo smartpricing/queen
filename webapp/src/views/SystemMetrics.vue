@@ -4,21 +4,60 @@
       <div class="page-inner">
         <!-- Header with Time Range Selector -->
         <div class="filter-card">
-          <div class="flex items-center justify-between">
-            <h2 class="text-lg font-semibold text-gray-900 dark:text-white">System Metrics</h2>
-            
-            <!-- Time Range Selector -->
-            <div class="flex items-center gap-2">
+          <div class="flex flex-col gap-4">
+            <div class="flex items-center justify-between">
+              <h2 class="text-lg font-semibold text-gray-900 dark:text-white">System Metrics</h2>
+              
+              <!-- Quick Time Range Selector -->
+              <div class="flex items-center gap-2">
+                <button
+                  v-for="range in timeRanges"
+                  :key="range.value"
+                  @click="selectQuickRange(range.value)"
+                  :class="[
+                    'time-range-btn',
+                    selectedTimeRange === range.value && !customMode ? 'time-range-active' : 'time-range-inactive'
+                  ]"
+                >
+                  {{ range.label }}
+                </button>
+                <button
+                  @click="toggleCustomMode"
+                  :class="[
+                    'time-range-btn',
+                    customMode ? 'time-range-active' : 'time-range-inactive'
+                  ]"
+                >
+                  Custom
+                </button>
+              </div>
+            </div>
+
+            <!-- Custom Date/Time Range -->
+            <div v-if="customMode" class="flex items-center gap-3 pt-2 border-t border-gray-200 dark:border-gray-700">
+              <div class="flex items-center gap-2">
+                <label class="text-sm font-medium text-gray-700 dark:text-gray-300">From:</label>
+                <input
+                  v-model="customFrom"
+                  type="datetime-local"
+                  class="datetime-input"
+                  @change="onCustomDateChange"
+                />
+              </div>
+              <div class="flex items-center gap-2">
+                <label class="text-sm font-medium text-gray-700 dark:text-gray-300">To:</label>
+                <input
+                  v-model="customTo"
+                  type="datetime-local"
+                  class="datetime-input"
+                  @change="onCustomDateChange"
+                />
+              </div>
               <button
-                v-for="range in timeRanges"
-                :key="range.value"
-                @click="selectedTimeRange = range.value"
-                :class="[
-                  'time-range-btn',
-                  selectedTimeRange === range.value ? 'time-range-active' : 'time-range-inactive'
-                ]"
+                @click="applyCustomRange"
+                class="px-4 py-2 bg-blue-500 hover:bg-blue-600 text-white text-sm font-medium rounded-lg transition-colors"
               >
-                {{ range.label }}
+                Apply
               </button>
             </div>
           </div>
@@ -123,8 +162,12 @@
                   <span class="font-semibold font-mono text-xs">{{ formatTimeRange() }}</span>
                 </div>
                 <div class="flex justify-between text-sm">
-                  <span class="text-gray-600 dark:text-gray-400">Sample Interval</span>
-                  <span class="font-semibold font-mono">60 seconds</span>
+                  <span class="text-gray-600 dark:text-gray-400">Bucket Size</span>
+                  <span class="font-semibold font-mono">{{ formatBucketSize() }}</span>
+                </div>
+                <div class="flex justify-between text-sm">
+                  <span class="text-gray-600 dark:text-gray-400">Data Points</span>
+                  <span class="font-semibold font-mono">{{ data?.pointCount || 0 }}</span>
                 </div>
               </div>
             </div>
@@ -218,6 +261,9 @@ const timeRanges = [
 ];
 
 const selectedTimeRange = ref(60); // Default 1 hour
+const customMode = ref(false);
+const customFrom = ref('');
+const customTo = ref('');
 
 const aggregationTypes = [
   { label: 'Average', value: 'avg' },
@@ -252,18 +298,86 @@ function formatMemory(value) {
   return Math.round(value / 1024 / 1024) + ' MB';
 }
 
+function formatBucketSize() {
+  if (!data.value?.bucketMinutes) return '1 min';
+  const minutes = data.value.bucketMinutes;
+  if (minutes === 1) return '1 min';
+  if (minutes < 60) return `${minutes} min`;
+  const hours = Math.floor(minutes / 60);
+  const remainingMinutes = minutes % 60;
+  if (remainingMinutes === 0) return `${hours}h`;
+  return `${hours}h ${remainingMinutes}m`;
+}
+
+function selectQuickRange(minutes) {
+  customMode.value = false;
+  selectedTimeRange.value = minutes;
+  loadData();
+}
+
+function toggleCustomMode() {
+  customMode.value = !customMode.value;
+  if (customMode.value) {
+    // Initialize with current range
+    const now = new Date();
+    const from = new Date(now.getTime() - selectedTimeRange.value * 60 * 1000);
+    customTo.value = formatDateTimeLocal(now);
+    customFrom.value = formatDateTimeLocal(from);
+  }
+}
+
+function formatDateTimeLocal(date) {
+  // Format: yyyy-MM-ddTHH:mm
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const day = String(date.getDate()).padStart(2, '0');
+  const hours = String(date.getHours()).padStart(2, '0');
+  const minutes = String(date.getMinutes()).padStart(2, '0');
+  return `${year}-${month}-${day}T${hours}:${minutes}`;
+}
+
+function onCustomDateChange() {
+  // Auto-apply when dates change (optional, you can remove this if you prefer manual apply only)
+}
+
+function applyCustomRange() {
+  if (!customFrom.value || !customTo.value) {
+    error.value = 'Please select both FROM and TO dates';
+    return;
+  }
+  
+  const fromDate = new Date(customFrom.value);
+  const toDate = new Date(customTo.value);
+  
+  if (fromDate >= toDate) {
+    error.value = 'FROM date must be before TO date';
+    return;
+  }
+  
+  loadData();
+}
+
 async function loadData() {
   loading.value = true;
   error.value = null;
 
   try {
-    // Calculate time range
-    const now = new Date();
-    const from = new Date(now.getTime() - selectedTimeRange.value * 60 * 1000);
+    let from, to;
+    
+    if (customMode.value && customFrom.value && customTo.value) {
+      // Use custom range
+      from = new Date(customFrom.value);
+      to = new Date(customTo.value);
+    } else {
+      // Use quick range
+      const now = new Date();
+      from = new Date(now.getTime() - selectedTimeRange.value * 60 * 1000);
+      to = now;
+    }
 
     const response = await systemMetricsApi.getSystemMetrics({
       from: from.toISOString(),
-      to: now.toISOString(),
+      to: to.toISOString(),
     });
 
     data.value = response.data;
@@ -275,9 +389,11 @@ async function loadData() {
   }
 }
 
-// Watch for time range changes
+// Watch for time range changes (only when not in custom mode)
 watch(selectedTimeRange, () => {
-  loadData();
+  if (!customMode.value) {
+    loadData();
+  }
 });
 
 onMounted(() => {
@@ -402,6 +518,34 @@ onUnmounted(() => {
 
 .dark .error-card {
   color: #fca5a5;
+}
+
+.datetime-input {
+  padding: 0.5rem 0.75rem;
+  border-radius: 0.5rem;
+  border: 1px solid rgba(0, 0, 0, 0.1);
+  font-size: 0.875rem;
+  font-family: ui-monospace, monospace;
+  background: white;
+  color: #374151;
+  transition: border-color 0.2s ease;
+}
+
+.datetime-input:focus {
+  outline: none;
+  border-color: #3b82f6;
+  box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.1);
+}
+
+.dark .datetime-input {
+  background: rgba(31, 41, 55, 0.5);
+  color: #e5e7eb;
+  border-color: rgba(255, 255, 255, 0.1);
+}
+
+.dark .datetime-input:focus {
+  border-color: #3b82f6;
+  box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.2);
 }
 </style>
 
