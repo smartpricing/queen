@@ -22,7 +22,7 @@ Why "Queen"? Because years ago, when I first read the word "queue" in my mind, I
 
 ---
 
-[QUICKSTART](docs/QUICKSTART.md)
+[QUICKSTART](documentation/QUICKSTART.md)
 
 Latest server production version is **0.6.5**.
 
@@ -57,9 +57,9 @@ Main documentation:
 - [Client Guide JS](client-js/client-v2/README.md)
 - [Client Guide C++](client-cpp/README.md)
 - [Server Guide](server/README.md)
-- [Streaming Guide](docs/STREAMING_USAGE.md)
+- [Streaming Guide](documentation/STREAMING_USAGE.md)
 - [API Reference](server/API.md)
-- [Message Retention & Cleanup](docs/RETENTION.md)
+- [Message Retention & Cleanup](documentation/RETENTION.md)
 - [Webapp](webapp/README.md)
 - [Expose the Webapp behind a proxy](proxy/README.md)
 

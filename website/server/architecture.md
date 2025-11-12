@@ -32,4 +32,4 @@ Client → Acceptor → Worker → AsyncQueueManager → AsyncDbPool → Postgre
 
 ![Architecture](/architecture.svg)
 
-[Complete architecture documentation](https://github.com/smartpricing/queen/blob/master/docs/ARCHITECTURE.md)
+[Complete architecture documentation](https://github.com/smartpricing/queen/blob/master/documentation/ARCHITECTURE.md)

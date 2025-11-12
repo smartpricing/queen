@@ -7,7 +7,7 @@ Real-time message streaming with windows support for building aggregation pipeli
 This page is under construction. For now, see:
 
 - [Streaming Examples](/clients/examples/streaming)
-- [Source Documentation](https://github.com/smartpricing/queen/tree/master/docs)
+- [Source Documentation](https://github.com/smartpricing/queen/tree/master/documentation)
 
 ## Quick Example
 

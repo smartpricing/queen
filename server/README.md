@@ -912,8 +912,8 @@ See [ENV_VARIABLES.md](ENV_VARIABLES.md) for the complete list of all 100+ confi
 - [ENV_VARIABLES.md](ENV_VARIABLES.md) - Complete environment variable reference
 - [API.md](API.md) - HTTP API documentation
 - [../README.md](../README.md) - Main project README
-- [../docs/STREAMING_USAGE.md](../docs/STREAMING_USAGE.md) - Streaming guide
-- [../docs/RETENTION.md](../docs/RETENTION.md) - Retention & cleanup
+- [../documentation/STREAMING_USAGE.md](../documentation/STREAMING_USAGE.md) - Streaming guide
+- [../documentation/RETENTION.md](../documentation/RETENTION.md) - Retention & cleanup
 
 ### Technical Documentation
 - [ASYNC_DATABASE_IMPLEMENTATION.md](ASYNC_DATABASE_IMPLEMENTATION.md) - AsyncDbPool internals
