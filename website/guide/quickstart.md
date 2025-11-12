@@ -31,7 +31,7 @@ docker run -p 6632:6632 --network queen \
   -e PG_DB=postgres \
   -e DB_POOL_SIZE=20 \
   -e NUM_WORKERS=2 \
-  smartnessai/queen-mq:0.5.0
+  smartnessai/queen-mq:0.6.5
 ```
 
 :::tip Production Ready

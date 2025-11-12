@@ -9,7 +9,7 @@ docker run -p 6632:6632 \
   -e PG_HOST=postgres \
   -e PG_PASSWORD=password \
   -e DB_POOL_SIZE=50 \
-  smartnessai/queen-mq:0.5.0
+  smartnessai/queen-mq:0.6.5
 ```
 
 ## Kubernetes
