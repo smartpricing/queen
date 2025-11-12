@@ -3,7 +3,7 @@ import { defineConfig } from 'vitepress'
 export default defineConfig({
   title: 'Queen MQ',
   description: 'Modern PostgreSQL-backed Message Queue System',
-  base: '/',
+  base: '/docs/',
   head: [
     ['link', { rel: 'icon', type: 'image/svg+xml', href: '/queen-logo.svg' }],
     ['meta', { name: 'theme-color', content: '#3b82f6' }],
