@@ -98,6 +98,7 @@ private:
     void get_time_range(const std::string& from_str, const std::string& to_str,
                        std::string& from_iso, std::string& to_iso, int default_hours = 1);
     std::string build_filter_clause(const std::string& queue, const std::string& ns, const std::string& task);
+    int calculate_bucket_minutes(int duration_minutes);
 };
 
 } // namespace queen

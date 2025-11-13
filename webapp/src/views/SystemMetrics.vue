@@ -34,28 +34,28 @@
             </div>
 
             <!-- Custom Date/Time Range -->
-            <div v-if="customMode" class="flex items-center gap-3 pt-2 border-t border-gray-200 dark:border-gray-700">
-              <div class="flex items-center gap-2">
-                <label class="text-sm font-medium text-gray-700 dark:text-gray-300">From:</label>
-                <input
-                  v-model="customFrom"
-                  type="datetime-local"
-                  class="datetime-input"
-                  @change="onCustomDateChange"
+            <div v-if="customMode" class="flex flex-col sm:flex-row items-start sm:items-center gap-3 pt-2 border-t border-gray-200 dark:border-gray-700">
+              <div class="flex items-center gap-2 flex-1 w-full sm:w-auto">
+                <label class="text-sm font-medium text-gray-700 dark:text-gray-300 whitespace-nowrap">From:</label>
+                <DateTimePicker
+                  :model-value="customFromISO"
+                  @update:model-value="onCustomFromChange"
+                  placeholder="Select start date"
+                  :show-presets="true"
                 />
               </div>
-              <div class="flex items-center gap-2">
-                <label class="text-sm font-medium text-gray-700 dark:text-gray-300">To:</label>
-                <input
-                  v-model="customTo"
-                  type="datetime-local"
-                  class="datetime-input"
-                  @change="onCustomDateChange"
+              <div class="flex items-center gap-2 flex-1 w-full sm:w-auto">
+                <label class="text-sm font-medium text-gray-700 dark:text-gray-300 whitespace-nowrap">To:</label>
+                <DateTimePicker
+                  :model-value="customToISO"
+                  @update:model-value="onCustomToChange"
+                  placeholder="Select end date"
+                  :show-presets="true"
                 />
               </div>
               <button
                 @click="applyCustomRange"
-                class="px-4 py-2 bg-blue-500 hover:bg-blue-600 text-white text-sm font-medium rounded-lg transition-colors"
+                class="px-4 py-2 bg-emerald-500 hover:bg-emerald-600 text-white text-sm font-medium rounded-lg transition-colors whitespace-nowrap"
               >
                 Apply
               </button>
@@ -189,13 +189,13 @@
                 </div>
                 <div class="flex justify-between text-sm">
                   <span class="text-gray-600 dark:text-gray-400">DB Active</span>
-                  <span class="font-semibold font-mono text-blue-600 dark:text-blue-400">
+                  <span class="font-semibold font-mono text-emerald-600 dark:text-emerald-400">
                     {{ lastMetrics.database?.pool_active?.last || 0 }}
                   </span>
                 </div>
                 <div class="flex justify-between text-sm">
                   <span class="text-gray-600 dark:text-gray-400">Poll Intentions</span>
-                  <span class="font-semibold font-mono text-blue-600 dark:text-blue-400">
+                  <span class="font-semibold font-mono text-emerald-600 dark:text-emerald-400">
                     {{ lastMetrics.registries?.poll_intention?.last || 0 }}
                   </span>
                 </div>
@@ -225,7 +225,7 @@
                 </div>
                 <div class="flex justify-between text-sm">
                   <span class="text-gray-600 dark:text-gray-400">Poll Intentions (max)</span>
-                  <span class="font-semibold font-mono text-blue-600 dark:text-blue-400">
+                  <span class="font-semibold font-mono text-emerald-600 dark:text-emerald-400">
                     {{ lastMetrics.registries?.poll_intention?.max || 0 }}
                   </span>
                 </div>
@@ -243,6 +243,7 @@ import { ref, computed, onMounted, onUnmounted, watch } from 'vue';
 import { systemMetricsApi } from '../api/system-metrics';
 
 import LoadingSpinner from '../components/common/LoadingSpinner.vue';
+import DateTimePicker from '../components/common/DateTimePicker.vue';
 import DetailedCpuChart from '../components/system-metrics/DetailedCpuChart.vue';
 import DetailedMemoryChart from '../components/system-metrics/DetailedMemoryChart.vue';
 import DetailedDatabaseChart from '../components/system-metrics/DetailedDatabaseChart.vue';
@@ -264,6 +265,8 @@ const selectedTimeRange = ref(60); // Default 1 hour
 const customMode = ref(false);
 const customFrom = ref('');
 const customTo = ref('');
+const customFromISO = ref('');
+const customToISO = ref('');
 
 const aggregationTypes = [
   { label: 'Average', value: 'avg' },
@@ -323,6 +326,8 @@ function toggleCustomMode() {
     const from = new Date(now.getTime() - selectedTimeRange.value * 60 * 1000);
     customTo.value = formatDateTimeLocal(now);
     customFrom.value = formatDateTimeLocal(from);
+    customFromISO.value = from.toISOString();
+    customToISO.value = now.toISOString();
   }
 }
 
@@ -336,18 +341,30 @@ function formatDateTimeLocal(date) {
   return `${year}-${month}-${day}T${hours}:${minutes}`;
 }
 
-function onCustomDateChange() {
-  // Auto-apply when dates change (optional, you can remove this if you prefer manual apply only)
+function onCustomFromChange(isoString) {
+  customFromISO.value = isoString;
+  if (isoString) {
+    const date = new Date(isoString);
+    customFrom.value = formatDateTimeLocal(date);
+  }
+}
+
+function onCustomToChange(isoString) {
+  customToISO.value = isoString;
+  if (isoString) {
+    const date = new Date(isoString);
+    customTo.value = formatDateTimeLocal(date);
+  }
 }
 
 function applyCustomRange() {
-  if (!customFrom.value || !customTo.value) {
+  if (!customFromISO.value || !customToISO.value) {
     error.value = 'Please select both FROM and TO dates';
     return;
   }
   
-  const fromDate = new Date(customFrom.value);
-  const toDate = new Date(customTo.value);
+  const fromDate = new Date(customFromISO.value);
+  const toDate = new Date(customToISO.value);
   
   if (fromDate >= toDate) {
     error.value = 'FROM date must be before TO date';
@@ -364,10 +381,10 @@ async function loadData() {
   try {
     let from, to;
     
-    if (customMode.value && customFrom.value && customTo.value) {
+    if (customMode.value && customFromISO.value && customToISO.value) {
       // Use custom range
-      from = new Date(customFrom.value);
-      to = new Date(customTo.value);
+      from = new Date(customFromISO.value);
+      to = new Date(customToISO.value);
     } else {
       // Use quick range
       const now = new Date();
@@ -425,9 +442,9 @@ onUnmounted(() => {
 }
 
 .time-range-active {
-  background: rgba(59, 130, 246, 0.1);
-  color: #3b82f6;
-  border: 1px solid rgba(59, 130, 246, 0.2);
+  background: rgba(5, 150, 105, 0.1);
+  color: #059669;
+  border: 1px solid rgba(5, 150, 105, 0.2);
 }
 
 .time-range-inactive {
@@ -445,7 +462,7 @@ onUnmounted(() => {
 }
 
 .time-range-active:hover {
-  background: rgba(59, 130, 246, 0.15);
+  background: rgba(5, 150, 105, 0.15);
 }
 
 .time-range-inactive:hover {
@@ -467,16 +484,16 @@ onUnmounted(() => {
 }
 
 .agg-type-active {
-  background: rgba(59, 130, 246, 0.12);
+  background: rgba(5, 150, 105, 0.12);
   color: #2563eb;
-  border: 1px solid rgba(59, 130, 246, 0.3);
-  box-shadow: 0 1px 2px 0 rgba(59, 130, 246, 0.1);
+  border: 1px solid rgba(5, 150, 105, 0.3);
+  box-shadow: 0 1px 2px 0 rgba(5, 150, 105, 0.1);
 }
 
 .dark .agg-type-active {
-  background: rgba(59, 130, 246, 0.18);
-  color: #60a5fa;
-  border: 1px solid rgba(59, 130, 246, 0.4);
+  background: rgba(5, 150, 105, 0.18);
+  color: #10b981;
+  border: 1px solid rgba(5, 150, 105, 0.4);
 }
 
 .agg-type-inactive {
@@ -491,11 +508,11 @@ onUnmounted(() => {
 }
 
 .agg-type-active:hover {
-  background: rgba(59, 130, 246, 0.15);
+  background: rgba(5, 150, 105, 0.15);
 }
 
 .dark .agg-type-active:hover {
-  background: rgba(59, 130, 246, 0.2);
+  background: rgba(5, 150, 105, 0.2);
 }
 
 .agg-type-inactive:hover {
@@ -533,8 +550,8 @@ onUnmounted(() => {
 
 .datetime-input:focus {
   outline: none;
-  border-color: #3b82f6;
-  box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.1);
+  border-color: #059669;
+  box-shadow: 0 0 0 3px rgba(5, 150, 105, 0.1);
 }
 
 .dark .datetime-input {
@@ -544,8 +561,8 @@ onUnmounted(() => {
 }
 
 .dark .datetime-input:focus {
-  border-color: #3b82f6;
-  box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.2);
+  border-color: #059669;
+  box-shadow: 0 0 0 3px rgba(5, 150, 105, 0.2);
 }
 </style>
 

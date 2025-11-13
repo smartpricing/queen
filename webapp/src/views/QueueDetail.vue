@@ -53,7 +53,7 @@
             </div>
             <div class="metric-card-compact">
               <span class="metric-label-sm">PROCESSING</span>
-              <div class="metric-value-sm text-blue-600 dark:text-blue-400">{{ formatNumber(statusData?.totals?.messages?.processing || 0) }}</div>
+              <div class="metric-value-sm text-emerald-600 dark:text-emerald-400">{{ formatNumber(statusData?.totals?.messages?.processing || 0) }}</div>
             </div>
             <div class="metric-card-compact">
               <span class="metric-label-sm">COMPLETED</span>
@@ -119,7 +119,7 @@
               <table class="table">
                 <thead>
                   <tr>
-                    <th @click="sortPartitions('name')" class="cursor-pointer hover:text-blue-600 dark:hover:text-blue-400 transition-colors">
+                    <th @click="sortPartitions('name')" class="cursor-pointer hover:text-emerald-600 dark:hover:text-emerald-400 transition-colors">
                       <div class="flex items-center gap-1">
                         Partition
                         <svg class="w-3 h-3 transition-transform" :class="getPartitionSortClass('name')" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -127,7 +127,7 @@
                         </svg>
                       </div>
                     </th>
-                    <th @click="sortPartitions('pending')" class="text-right cursor-pointer hover:text-blue-600 dark:hover:text-blue-400 transition-colors">
+                    <th @click="sortPartitions('pending')" class="text-right cursor-pointer hover:text-emerald-600 dark:hover:text-emerald-400 transition-colors">
                       <div class="flex items-center justify-end gap-1">
                         Pending
                         <svg class="w-3 h-3 transition-transform" :class="getPartitionSortClass('pending')" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -135,7 +135,7 @@
                         </svg>
                       </div>
                     </th>
-                    <th @click="sortPartitions('processing')" class="text-right cursor-pointer hover:text-blue-600 dark:hover:text-blue-400 transition-colors">
+                    <th @click="sortPartitions('processing')" class="text-right cursor-pointer hover:text-emerald-600 dark:hover:text-emerald-400 transition-colors">
                       <div class="flex items-center justify-end gap-1">
                         Processing
                         <svg class="w-3 h-3 transition-transform" :class="getPartitionSortClass('processing')" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -143,7 +143,7 @@
                         </svg>
                       </div>
                     </th>
-                    <th @click="sortPartitions('completed')" class="text-right cursor-pointer hover:text-blue-600 dark:hover:text-blue-400 transition-colors">
+                    <th @click="sortPartitions('completed')" class="text-right cursor-pointer hover:text-emerald-600 dark:hover:text-emerald-400 transition-colors">
                       <div class="flex items-center justify-end gap-1">
                         Completed
                         <svg class="w-3 h-3 transition-transform" :class="getPartitionSortClass('completed')" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -151,7 +151,7 @@
                         </svg>
                       </div>
                     </th>
-                    <th @click="sortPartitions('failed')" class="text-right cursor-pointer hover:text-blue-600 dark:hover:text-blue-400 transition-colors">
+                    <th @click="sortPartitions('failed')" class="text-right cursor-pointer hover:text-emerald-600 dark:hover:text-emerald-400 transition-colors">
                       <div class="flex items-center justify-end gap-1">
                         Failed
                         <svg class="w-3 h-3 transition-transform" :class="getPartitionSortClass('failed')" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -410,7 +410,7 @@ onMounted(() => {
 }
 
 .partition-section :deep(.table tbody tr:hover) {
-  @apply bg-blue-50/50 dark:bg-blue-900/10;
+  @apply bg-emerald-50/50 dark:bg-emerald-900/10;
 }
 
 .partition-section :deep(.table tbody td) {

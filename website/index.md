@@ -20,63 +20,51 @@ hero:
       link: https://hub.docker.com/r/smartnessai/queen-mq
 
 features:
-  - icon: 🚀
-    title: High Performance
+  - title: High Performance
     details: Handle 200K+ messages/sec with proper batching. Built with C++17, uWebSockets, and async PostgreSQL for minimal latency.
     link: /server/benchmarks
   
-  - icon: 🎯
-    title: Unlimited FIFO Partitions
+  - title: Unlimited FIFO Partitions
     details: Create as many ordered partitions as you need. Messages in each partition are guaranteed to be processed in order with automatic lock management.
     link: /guide/queues-partitions
   
-  - icon: 👥
-    title: Consumer Groups
+  - title: Consumer Groups
     details: Kafka-style consumer groups with independent position tracking. Process the same messages for different purposes with replay from any timestamp.
     link: /guide/consumer-groups
   
-  - icon: 🔄
-    title: Transactions
+  - title: Transactions
     details: Atomic operations across queues with exactly-once delivery guarantees. Chain push and ack operations to build reliable workflows.
     link: /guide/transactions
   
-  - icon: 📡
-    title: Streaming
+  - title: Streaming
     details: Real-time message streaming. Build aggregation pipelines and process messages as they arrive.
     link: /guide/streaming
   
-  - icon: ⏱️
-    title: Long Polling
+  - title: Long Polling
     details: Efficient server-side waiting for messages. No busy loops, no wasted resources. Messages delivered instantly when available.
     link: /guide/long-polling
   
-  - icon: 🛡️
-    title: Zero Message Loss
+  - title: Zero Message Loss
     details: Automatic failover to disk when PostgreSQL is unavailable. Automatic replay when database recovers. Survives crashes and restarts.
     link: /guide/failover
   
-  - icon: 💀
-    title: Dead Letter Queue
+  - title: Dead Letter Queue
     details: Automatic handling of failed messages. Configurable retry limits and DLQ routing. Debug and replay failed messages easily.
     link: /guide/dlq
   
-  - icon: 🔐
-    title: Message Encryption
+  - title: Message Encryption
     details: Optional at-rest encryption at the database level. Secure your sensitive messages with per-queue encryption configuration.
     link: /guide/queues-partitions
   
-  - icon: 📊
-    title: Beautiful Dashboard
+  - title: Beautiful Dashboard
     details: Modern Vue 3 web interface with real-time metrics, message browser, trace explorer, and analytics. Monitor everything in one place.
     link: /webapp/overview
   
-  - icon: 🔍
-    title: Message Tracing
+  - title: Message Tracing
     details: End-to-end tracing across queues and workflows. Debug complex distributed systems with visual trace timelines.
     link: /guide/tracing
   
-  - icon: 🌐
-    title: Multi-Language Clients
+  - title: Multi-Language Clients
     details: JavaScript and C++ clients with idiomatic APIs. Or use the HTTP API directly from any language. Python client coming soon.
     link: /clients/javascript
 ---
@@ -90,6 +78,58 @@ features:
   margin: 2rem 0;
 }
 </style>
+
+## 📚 Documentation
+
+<div class="doc-links">
+  <a href="./guide/quickstart" class="doc-link">
+    <div class="doc-link-title">
+      <span class="doc-link-icon">🚀</span>
+      Quick Start
+    </div>
+    <div>Get started in minutes</div>
+  </a>
+  
+  <a href="./clients/javascript" class="doc-link">
+    <div class="doc-link-title">
+      <span class="doc-link-icon">💻</span>
+      Client Libraries
+    </div>
+    <div>JS, C++, and HTTP API</div>
+  </a>
+  
+  <a href="./server/installation" class="doc-link">
+    <div class="doc-link-title">
+      <span class="doc-link-icon">⚙️</span>
+      Server Setup
+    </div>
+    <div>Install and configure</div>
+  </a>
+  
+  <a href="./server/deployment" class="doc-link">
+    <div class="doc-link-title">
+      <span class="doc-link-icon">☸️</span>
+      Deployment
+    </div>
+    <div>Docker, K8s, systemd</div>
+  </a>
+  
+  <a href="./webapp/overview" class="doc-link">
+    <div class="doc-link-title">
+      <span class="doc-link-icon">📊</span>
+      Web Dashboard
+    </div>
+    <div>Monitor and manage</div>
+  </a>
+  
+  <a href="./guide/comparison" class="doc-link">
+    <div class="doc-link-title">
+      <span class="doc-link-icon">⚖️</span>
+      Comparison
+    </div>
+    <div>vs Kafka, RabbitMQ, NATS</div>
+  </a>
+</div>
 
 ## Why We Built Queen MQ
 
@@ -166,7 +206,9 @@ await queen.queue('orders')
     await processOrder(message.data)
   })
   .onSuccess(async (message) => {
-    await queen.ack(message, true)
+    await queen.ack(message, true, { group: 'order-processor' })
+  }).onError(async (message, error) => {
+    await queen.ack(message, false, { group: 'order-processor' })
   })
 ```
 
@@ -247,7 +289,7 @@ docker run --name postgres --network queen \
 
 docker run -p 6632:6632 --network queen \
   -e PG_HOST=postgres -e PG_PASSWORD=postgres \
-  smartnessai/queen-mq:0.6.5
+  smartnessai/queen-mq:0.6.6
 
 # Install client
 npm install queen-mq

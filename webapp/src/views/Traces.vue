@@ -51,16 +51,16 @@
         <!-- Results -->
         <div v-else-if="currentTraceName && traces.length > 0" class="space-y-4">
           <!-- Summary -->
-          <div class="bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-700/30 rounded-lg p-4">
+          <div class="bg-emerald-50 dark:bg-emerald-900/20 border border-emerald-200 dark:border-emerald-700/30 rounded-lg p-4">
             <div class="flex items-center gap-3">
-              <svg class="w-5 h-5 text-blue-600 dark:text-blue-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <svg class="w-5 h-5 text-emerald-600 dark:text-emerald-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
               </svg>
               <div class="flex-1">
-                <p class="text-sm font-semibold text-blue-900 dark:text-blue-100">
-                  Found {{ totalTraces }} trace{{ totalTraces !== 1 ? 's' : '' }} for: <span class="font-mono">{{ currentTraceName }}</span>
+                <p class="text-sm font-semibold text-emerald-900 dark:text-emerald-100">
+                  Found {{ totalTraces }} trace{{ totalTraces !== 1 ? 's' : '' }} for: <span>{{ currentTraceName }}</span>
                 </p>
-                <p class="text-xs text-blue-700 dark:text-blue-300 mt-1">
+                <p class="text-xs text-emerald-700 dark:text-emerald-300 mt-1">
                   {{ uniqueMessages }} unique message{{ uniqueMessages !== 1 ? 's' : '' }} • {{ uniqueQueues }} queue{{ uniqueQueues !== 1 ? 's' : '' }}
                 </p>
               </div>
@@ -136,14 +136,14 @@
                     
                     <!-- Partition -->
                     <td class="py-3 px-4">
-                      <span class="text-xs font-mono text-gray-600 dark:text-gray-400">
+                      <span class="text-xs text-gray-600 dark:text-gray-400">
                         {{ trace.partition_name || 'Unknown' }}
                       </span>
                     </td>
                     
                     <!-- Transaction ID -->
                     <td class="py-3 px-4">
-                      <span class="text-xs font-mono text-gray-600 dark:text-gray-400">
+                      <span class="text-xs text-gray-600 dark:text-gray-400">
                         {{ trace.transaction_id }}
                       </span>
                     </td>
@@ -157,7 +157,7 @@
                           class="inline-block px-2 py-0.5 text-xs rounded-full whitespace-nowrap"
                           :class="name === currentTraceName 
                             ? 'bg-rose-100 dark:bg-rose-900 text-rose-700 dark:text-rose-300 font-medium'
-                            : 'bg-blue-100 dark:bg-blue-900 text-blue-700 dark:text-blue-300'"
+                            : 'bg-emerald-100 dark:bg-emerald-900 text-emerald-700 dark:text-emerald-300'"
                         >
                           {{ name }}
                         </span>
@@ -234,7 +234,7 @@
               <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9.172 16.172a4 4 0 015.656 0M9 10h.01M15 10h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
             </svg>
             <p class="text-lg font-medium mb-2">No traces found</p>
-            <p class="text-sm">No traces found for trace name: <span class="font-mono">{{ currentTraceName }}</span></p>
+            <p class="text-sm">No traces found for trace name: <span>{{ currentTraceName }}</span></p>
           </div>
         </div>
 
@@ -286,7 +286,7 @@
                     >
                       <!-- Trace Name -->
                       <td class="py-3 px-4">
-                        <span class="text-sm font-medium text-gray-900 dark:text-gray-100 font-mono">
+                        <span class="text-sm font-medium text-gray-900 dark:text-gray-100">
                           {{ traceName.trace_name }}
                         </span>
                       </td>
@@ -518,7 +518,7 @@ function nextNamesPage() {
 
 function getEventColor(eventType) {
   const colors = {
-    info: 'bg-blue-500',
+    info: 'bg-emerald-500',
     processing: 'bg-green-500',
     step: 'bg-purple-500',
     error: 'bg-red-500',

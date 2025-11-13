@@ -169,7 +169,7 @@
               <div class="text-xs text-gray-500 dark:text-gray-400 mt-1">Windows Consumed</div>
             </div>
             <div class="text-center">
-              <div class="text-2xl font-bold text-blue-600 dark:text-blue-400">
+              <div class="text-2xl font-bold text-emerald-600 dark:text-emerald-400">
                 {{ stream.sourceQueues?.length || 0 }}
               </div>
               <div class="text-xs text-gray-500 dark:text-gray-400 mt-1">Source Queues</div>
@@ -344,7 +344,7 @@ onMounted(() => {
 }
 
 .badge-info {
-  @apply bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400;
+  @apply bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400;
   @apply px-2 py-0.5 rounded text-xs font-medium;
 }
 

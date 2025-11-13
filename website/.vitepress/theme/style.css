@@ -1,34 +1,36 @@
 /**
- * Customize default theme styling by overriding CSS variables:
- * https://github.com/vuejs/vitepress/blob/main/src/client/theme-default/styles/vars.css
+ * Queen MQ Custom Theme
+ * Sophisticated emerald green palette inspired by the Queen logo
+ * Design philosophy: Natural, elegant, regal
  */
 
 /**
- * Colors - Matching Queen Webapp Style
- * Primary: Blue (#3b82f6)
- * Secondary: Indigo (#6366f1)
- * Accent: Purple (#a855f7)
+ * Color Palette
+ * Primary: Rich Emerald (#059669) - Main brand color
+ * Secondary: Forest Green (#047857) - Depth and contrast
+ * Accent: Jade (#0d9488) - Interactive elements
+ * Light: Spring Green (#34d399) - Dark mode highlights
  */
 
 :root {
-  /* Brand Colors */
-  --vp-c-brand-1: #3b82f6;
-  --vp-c-brand-2: #2563eb;
-  --vp-c-brand-3: #1d4ed8;
-  --vp-c-brand-soft: rgba(59, 130, 246, 0.14);
+  /* Brand Colors - Emerald Green Palette */
+  --vp-c-brand-1: #059669;
+  --vp-c-brand-2: #047857;
+  --vp-c-brand-3: #065f46;
+  --vp-c-brand-soft: rgba(5, 150, 105, 0.12);
 
   /* Accent Colors */
-  --vp-c-indigo: #6366f1;
-  --vp-c-purple: #a855f7;
+  --vp-c-jade: #0d9488;
+  --vp-c-spring: #34d399;
 
-  /* Interactive */
-  --vp-button-brand-bg: #3b82f6;
-  --vp-button-brand-hover-bg: #2563eb;
-  --vp-button-brand-active-bg: #1d4ed8;
+  /* Interactive Elements */
+  --vp-button-brand-bg: #059669;
+  --vp-button-brand-hover-bg: #047857;
+  --vp-button-brand-active-bg: #065f46;
 
-  /* Home Hero */
+  /* Home Hero - Elegant green gradient */
   --vp-home-hero-name-color: transparent;
-  --vp-home-hero-name-background: linear-gradient(135deg, #3b82f6 0%, #6366f1 50%, #a855f7 100%);
+  --vp-home-hero-name-background: linear-gradient(135deg, #059669 0%, #0d9488 50%, #047857 100%);
 
   /* Typography */
   --vp-font-family-base: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
@@ -36,7 +38,7 @@
 }
 
 /**
- * Dark Mode Colors
+ * Dark Mode - Enhanced greens for contrast
  */
 .dark {
   --vp-c-bg: #0f172a;
@@ -51,10 +53,11 @@
   --vp-c-text-2: #cbd5e1;
   --vp-c-text-3: #94a3b8;
 
-  --vp-c-brand-1: #3b82f6;
-  --vp-c-brand-2: #60a5fa;
-  --vp-c-brand-3: #93c5fd;
-  --vp-c-brand-soft: rgba(59, 130, 246, 0.16);
+  /* Brighter greens for dark mode visibility */
+  --vp-c-brand-1: #10b981;
+  --vp-c-brand-2: #34d399;
+  --vp-c-brand-3: #6ee7b7;
+  --vp-c-brand-soft: rgba(16, 185, 129, 0.16);
 }
 
 /**
@@ -66,10 +69,10 @@
 }
 
 /**
- * Component: Home
+ * Component: Home Hero
  */
 :root {
-  --vp-home-hero-image-background-image: linear-gradient(135deg, #3b82f6 20%, #6366f1 60%, #a855f7 100%);
+  --vp-home-hero-image-background-image: linear-gradient(135deg, #059669 20%, #0d9488 60%, #047857 100%);
   --vp-home-hero-image-filter: blur(44px);
 }
 
@@ -88,23 +91,24 @@
  */
 :root {
   --vp-badge-info-border: transparent;
-  --vp-badge-info-text: #3b82f6;
-  --vp-badge-info-bg: rgba(59, 130, 246, 0.14);
+  --vp-badge-info-text: #059669;
+  --vp-badge-info-bg: rgba(5, 150, 105, 0.12);
 }
 
 .dark {
   --vp-badge-info-border: transparent;
-  --vp-badge-info-text: #60a5fa;
-  --vp-badge-info-bg: rgba(59, 130, 246, 0.16);
+  --vp-badge-info-text: #34d399;
+  --vp-badge-info-bg: rgba(16, 185, 129, 0.16);
 }
 
 /**
  * Custom Enhancements
  */
 
-/* Hero gradient text animation */
+/* Hero gradient text animation - subtle natural movement */
 .name {
-  animation: gradient-shift 8s ease infinite;
+  animation: gradient-shift 10s ease infinite;
+  background-size: 200% 200%;
 }
 
 @keyframes gradient-shift {
@@ -121,37 +125,80 @@ div[class*='language-'] {
   background-color: var(--vp-c-bg-soft);
   border-radius: 8px;
   margin: 16px 0;
+  border-left: 3px solid var(--vp-c-brand-1);
 }
 
 .dark div[class*='language-'] {
   background-color: #1e293b;
 }
 
-/* Feature cards hover effect */
+/* Feature cards - elegant hover with green glow */
 .VPFeature {
-  transition: all 0.3s ease;
+  transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+  border: 1px solid transparent;
 }
 
 .VPFeature:hover {
   transform: translateY(-4px);
-  box-shadow: 0 12px 24px rgba(59, 130, 246, 0.15);
+  border-color: var(--vp-c-brand-1);
+  box-shadow: 0 12px 24px rgba(5, 150, 105, 0.15);
 }
 
 .dark .VPFeature:hover {
-  box-shadow: 0 12px 24px rgba(59, 130, 246, 0.25);
+  border-color: var(--vp-c-brand-2);
+  box-shadow: 0 12px 24px rgba(16, 185, 129, 0.25);
 }
 
-/* Link colors */
+/* Feature card icon and title on same line */
+.VPFeature .VPLink {
+  display: flex;
+  flex-direction: column;
+}
+
+.VPFeature .icon {
+  font-size: 1.25rem;
+  margin-bottom: 0;
+  margin-right: 0.5rem;
+  display: inline-block;
+  width: auto;
+  height: auto;
+  flex-shrink: 0;
+}
+
+.VPFeature .box {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+}
+
+.VPFeature .box > :first-child {
+  display: flex;
+  align-items: center;
+  flex-direction: row;
+  margin-bottom: 0.5rem;
+}
+
+.VPFeature .title {
+  display: inline;
+  line-height: 1.25rem;
+}
+
+.VPFeature .details {
+  text-align: left;
+}
+
+/* Link colors - natural green emphasis */
 .vp-doc a {
   color: var(--vp-c-brand-1);
   text-decoration: none;
   font-weight: 500;
-  transition: color 0.2s;
+  transition: color 0.2s ease;
+  border-bottom: 1px solid transparent;
 }
 
 .vp-doc a:hover {
   color: var(--vp-c-brand-2);
-  text-decoration: underline;
+  border-bottom-color: var(--vp-c-brand-2);
 }
 
 /* Logo styling */
@@ -159,12 +206,18 @@ div[class*='language-'] {
   margin-right: 8px;
   height: 24px;
   width: 24px;
+  filter: drop-shadow(0 0 8px rgba(5, 150, 105, 0.3));
 }
 
-/* Sidebar link active state */
+/* Sidebar link active state - green accent */
 .VPSidebarItem.is-active > .item > .link .text {
   font-weight: 600;
   color: var(--vp-c-brand-1);
+}
+
+.VPSidebarItem.is-active > .item > .link {
+  border-left: 3px solid var(--vp-c-brand-1);
+  padding-left: 12px;
 }
 
 /* Custom container for stats/metrics */
@@ -181,6 +234,12 @@ div[class*='language-'] {
   border-radius: 8px;
   text-align: center;
   border: 1px solid var(--vp-c-border);
+  transition: all 0.3s ease;
+}
+
+.custom-stat:hover {
+  border-color: var(--vp-c-brand-1);
+  transform: translateY(-2px);
 }
 
 .custom-stat-value {
@@ -201,7 +260,7 @@ div[class*='language-'] {
 .VPFooter a {
   color: var(--vp-c-brand-1);
   text-decoration: none;
-  transition: color 0.2s;
+  transition: color 0.2s ease;
 }
 
 .VPFooter a:hover {
@@ -209,3 +268,123 @@ div[class*='language-'] {
   text-decoration: underline;
 }
 
+/* Nav bar - subtle green accent on hover */
+.VPNavBar .VPNavBarMenu .VPNavBarMenuLink:hover {
+  color: var(--vp-c-brand-1);
+}
+
+/* Table of contents active item */
+.VPDocAsideOutline .outline-link.active {
+  color: var(--vp-c-brand-1);
+  font-weight: 600;
+}
+
+/* Search button accent */
+.DocSearch-Button {
+  transition: all 0.2s ease;
+}
+
+.DocSearch-Button:hover {
+  border-color: var(--vp-c-brand-1);
+}
+
+/* Badges - green variants */
+.vp-badge.tip {
+  background-color: var(--vp-c-brand-soft);
+  color: var(--vp-c-brand-1);
+  border: 1px solid var(--vp-c-brand-1);
+}
+
+/* Warning/Danger blocks - keep their colors but add green for tips */
+.custom-block.tip {
+  border-color: var(--vp-c-brand-1);
+}
+
+.custom-block.tip .custom-block-title {
+  color: var(--vp-c-brand-1);
+}
+
+/* Documentation links grid (from home page) */
+.doc-links {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: 1rem;
+  margin: 2rem 0;
+}
+
+.doc-link {
+  display: flex;
+  flex-direction: column;
+  padding: 1.5rem;
+  border: 1px solid var(--vp-c-divider);
+  border-radius: 8px;
+  text-decoration: none;
+  color: var(--vp-c-text-1);
+  background-color: var(--vp-c-bg-soft);
+  transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.doc-link:hover {
+  border-color: var(--vp-c-brand-1);
+  box-shadow: 0 4px 12px rgba(5, 150, 105, 0.15);
+  transform: translateY(-2px);
+  text-decoration: none;
+}
+
+.dark .doc-link:hover {
+  box-shadow: 0 4px 12px rgba(16, 185, 129, 0.25);
+}
+
+.doc-link-icon {
+  font-size: 1.25rem;
+  margin-right: 0.5rem;
+  display: inline-block;
+  flex-shrink: 0;
+}
+
+.doc-link-title {
+  font-weight: 600;
+  display: flex;
+  align-items: center;
+  margin-bottom: 0.5rem;
+  color: var(--vp-c-text-1);
+  font-size: 1.1rem;
+}
+
+.doc-link > div:last-child {
+  color: var(--vp-c-text-2);
+  font-size: 0.9rem;
+  text-align: left;
+  margin-left: 1.75rem;
+}
+
+/* Subtle green accent on code inline */
+.vp-doc :not(pre) > code {
+  background-color: var(--vp-c-bg-soft);
+  color: var(--vp-c-brand-1);
+  padding: 3px 6px;
+  border-radius: 4px;
+  font-size: 0.9em;
+}
+
+/* Scrollbar styling - green accent */
+::-webkit-scrollbar-thumb {
+  background-color: rgba(5, 150, 105, 0.3);
+  border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background-color: rgba(5, 150, 105, 0.5);
+}
+
+/* Selection color - green highlight */
+::selection {
+  background-color: rgba(5, 150, 105, 0.3);
+  color: inherit;
+}
+
+/* Focus rings - green */
+:focus-visible {
+  outline: 2px solid var(--vp-c-brand-1);
+  outline-offset: 2px;
+}

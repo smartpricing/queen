@@ -31,7 +31,7 @@ docker run -p 6632:6632 --network queen \
   -e PG_DB=postgres \
   -e DB_POOL_SIZE=20 \
   -e NUM_WORKERS=2 \
-  smartnessai/queen-mq:0.6.5
+  smartnessai/queen-mq:0.6.6
 ```
 
 :::tip Production Ready
@@ -318,7 +318,7 @@ Make sure PostgreSQL is accessible and the database exists.
 
 - Check the [Server Troubleshooting](/server/troubleshooting) guide
 - Review [Examples](/clients/examples/basic) for common patterns
-- Visit our [GitHub repository](https://github.com/smartnessai/queen)
+- Visit our [GitHub repository](https://github.com/smartpricing/queen)
 - Connect with us on [LinkedIn](https://www.linkedin.com/company/smartness-com/)
 
 ---

@@ -170,13 +170,13 @@
           <div class="metric-card-top">
             <div class="flex items-center justify-between mb-0.5">
               <span class="metric-label">ACTIVE WINDOWS</span>
-              <div :class="streamStats?.activeLeases > 0 ? 'text-blue-500' : 'text-gray-400 dark:text-gray-500'">
+              <div :class="streamStats?.activeLeases > 0 ? 'text-emerald-500' : 'text-gray-400 dark:text-gray-500'">
                 <svg class="w-4 h-4" fill="currentColor" viewBox="0 0 20 20">
                   <circle cx="10" cy="10" r="4"/>
                 </svg>
               </div>
             </div>
-            <div class="metric-value text-blue-600 dark:text-blue-400">{{ formatNumber(streamStats?.activeLeases || 0) }}</div>
+            <div class="metric-value text-emerald-600 dark:text-emerald-400">{{ formatNumber(streamStats?.activeLeases || 0) }}</div>
             <div class="metric-subtext-bottom">{{ formatNumber(streamStats?.avgLeaseTime || 0) }}s avg time</div>
           </div>
         </div>
@@ -426,13 +426,13 @@ function navigateToStreams() {
 .dashboard-professional {
   @apply min-h-screen bg-gray-50 dark:bg-[#0d1117];
   background-image: 
-    radial-gradient(at 0% 0%, rgba(59, 130, 246, 0.03) 0px, transparent 50%),
+    radial-gradient(at 0% 0%, rgba(5, 150, 105, 0.03) 0px, transparent 50%),
     radial-gradient(at 100% 0%, rgba(99, 102, 241, 0.03) 0px, transparent 50%);
 }
 
 .dark .dashboard-professional {
   background-image: 
-    radial-gradient(at 0% 0%, rgba(59, 130, 246, 0.05) 0px, transparent 50%),
+    radial-gradient(at 0% 0%, rgba(5, 150, 105, 0.05) 0px, transparent 50%),
     radial-gradient(at 100% 0%, rgba(99, 102, 241, 0.05) 0px, transparent 50%);
 }
 
@@ -472,12 +472,12 @@ function navigateToStreams() {
 
 .metric-card-clickable:hover {
   box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.08), 0 2px 4px -1px rgba(0, 0, 0, 0.04);
-  border-color: rgba(59, 130, 246, 0.4);
+  border-color: rgba(5, 150, 105, 0.4);
 }
 
 .dark .metric-card-clickable:hover {
   box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.5), 0 2px 4px -1px rgba(0, 0, 0, 0.3);
-  border-color: rgba(59, 130, 246, 0.5);
+  border-color: rgba(5, 150, 105, 0.5);
 }
 
 .metric-card {
@@ -510,12 +510,12 @@ function navigateToStreams() {
 .metric-card-clickable:hover .card-arrow,
 .chart-card-clickable:hover .card-arrow {
   transform: translateX(2px);
-  color: #3b82f6;
+  color: #059669;
 }
 
 .dark .metric-card-clickable:hover .card-arrow,
 .dark .chart-card-clickable:hover .card-arrow {
-  color: #60a5fa;
+  color: #10b981;
 }
 
 .metric-value {
@@ -547,12 +547,12 @@ function navigateToStreams() {
 
 .chart-card-clickable:hover {
   box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.08), 0 2px 4px -1px rgba(0, 0, 0, 0.04);
-  border-color: rgba(59, 130, 246, 0.4);
+  border-color: rgba(5, 150, 105, 0.4);
 }
 
 .dark .chart-card-clickable:hover {
   box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.5), 0 2px 4px -1px rgba(0, 0, 0, 0.3);
-  border-color: rgba(59, 130, 246, 0.5);
+  border-color: rgba(5, 150, 105, 0.5);
 }
 
 .chart-header {

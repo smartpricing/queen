@@ -24,7 +24,7 @@ docker run -p 6632:6632 --network queen \
   -e PG_DB=postgres \
   -e DB_POOL_SIZE=20 \
   -e NUM_WORKERS=2 \
-  smartnessai/queen-mq:0.6.5
+  smartnessai/queen-mq:0.6.6
 ```
 
 That's it! Queen is running at `http://localhost:6632`.
@@ -71,7 +71,7 @@ docker run -p 6632:6632 \
   -e DB_POOL_SIZE=50 \
   -e NUM_WORKERS=10 \
   -e PORT=6632 \
-  smartnessai/queen-mq:0.6.5
+  smartnessai/queen-mq:0.6.6
 ```
 
 ### Option 2: Build from Source
@@ -135,7 +135,7 @@ services:
       retries: 5
 
   queen:
-    image: smartnessai/queen-mq:0.6.5
+    image: smartnessai/queen-mq:0.6.6
     depends_on:
       postgres:
         condition: service_healthy
@@ -176,7 +176,7 @@ docker run -p 6632:6632 \
   -e PG_USER=queen \
   -e PG_PASSWORD=your-password \
   -e PG_DB=queen \
-  smartnessai/queen-mq:0.6.5
+  smartnessai/queen-mq:0.6.6
 ```
 
 Queen will automatically create the required tables on first run.

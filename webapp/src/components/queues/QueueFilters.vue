@@ -13,16 +13,16 @@
       </div>
       
       <!-- Namespace Filter -->
-      <select
-        v-model="localNamespace"
-        @change="onNamespaceChange"
-        class="input sm:w-48"
-      >
-        <option value="">All Namespaces</option>
-        <option v-for="ns in namespaces" :key="ns.namespace" :value="ns.namespace">
-          {{ ns.namespace }} ({{ ns.queues }})
-        </option>
-      </select>
+      <div class="sm:w-48">
+        <CustomSelect
+          v-model="localNamespace"
+          @update:model-value="onNamespaceChange"
+          :options="namespaceOptions"
+          placeholder="All Namespaces"
+          :clearable="true"
+          :searchable="true"
+        />
+      </div>
       
       <!-- Clear Filters -->
       <button
@@ -51,7 +51,8 @@
 </style>
 
 <script setup>
-import { ref, watch } from 'vue';
+import { ref, watch, computed } from 'vue';
+import CustomSelect from '../common/CustomSelect.vue';
 
 const props = defineProps({
   search: String,
@@ -63,6 +64,14 @@ const emit = defineEmits(['update:search', 'update:namespace']);
 
 const localSearch = ref(props.search || '');
 const localNamespace = ref(props.namespace || '');
+
+const namespaceOptions = computed(() => [
+  { value: '', label: 'All Namespaces' },
+  ...(props.namespaces || []).map(ns => ({ 
+    value: ns.namespace, 
+    label: `${ns.namespace} (${ns.queues})` 
+  }))
+]);
 
 watch(() => props.search, (newVal) => {
   localSearch.value = newVal || '';
@@ -76,8 +85,9 @@ function onSearchChange() {
   emit('update:search', localSearch.value);
 }
 
-function onNamespaceChange() {
-  emit('update:namespace', localNamespace.value);
+function onNamespaceChange(value) {
+  localNamespace.value = value;
+  emit('update:namespace', value);
 }
 
 function clearFilters() {

@@ -14,12 +14,15 @@
               />
             </div>
             
-            <select v-model="namespaceFilter" class="input sm:w-48">
-              <option value="">All Namespaces</option>
-              <option v-for="ns in namespaces" :key="ns.namespace" :value="ns.namespace">
-                {{ ns.namespace }} ({{ ns.queues }})
-              </option>
-            </select>
+            <div class="sm:w-48">
+              <CustomSelect
+                v-model="namespaceFilter"
+                :options="namespaceOptions"
+                placeholder="All Namespaces"
+                :clearable="true"
+                :searchable="true"
+              />
+            </div>
             
             <button
               v-if="searchQuery || namespaceFilter"
@@ -51,7 +54,7 @@
               <table class="table">
               <thead>
                 <tr>
-                  <th @click="sortBy('name')" class="cursor-pointer hover:text-blue-600 dark:hover:text-blue-400 transition-colors">
+                  <th @click="sortBy('name')" class="cursor-pointer hover:text-emerald-600 dark:hover:text-emerald-400 transition-colors">
                     <div class="flex items-center gap-1">
                       Queue Name
                       <svg class="w-3 h-3 transition-transform" :class="getSortClass('name')" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2">
@@ -59,7 +62,7 @@
                       </svg>
                     </div>
                   </th>
-                  <th @click="sortBy('namespace')" class="hidden md:table-cell cursor-pointer hover:text-blue-600 dark:hover:text-blue-400 transition-colors">
+                  <th @click="sortBy('namespace')" class="hidden md:table-cell cursor-pointer hover:text-emerald-600 dark:hover:text-emerald-400 transition-colors">
                     <div class="flex items-center gap-1">
                       Namespace
                       <svg class="w-3 h-3 transition-transform" :class="getSortClass('namespace')" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2">
@@ -67,7 +70,7 @@
                       </svg>
                     </div>
                   </th>
-                  <th @click="sortBy('partitions')" class="text-right cursor-pointer hover:text-blue-600 dark:hover:text-blue-400 transition-colors">
+                  <th @click="sortBy('partitions')" class="text-right cursor-pointer hover:text-emerald-600 dark:hover:text-emerald-400 transition-colors">
                     <div class="flex items-center justify-end gap-1">
                       Partitions
                       <svg class="w-3 h-3 transition-transform" :class="getSortClass('partitions')" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2">
@@ -75,7 +78,7 @@
                       </svg>
                     </div>
                   </th>
-                  <th @click="sortBy('pending')" class="text-right cursor-pointer hover:text-blue-600 dark:hover:text-blue-400 transition-colors">
+                  <th @click="sortBy('pending')" class="text-right cursor-pointer hover:text-emerald-600 dark:hover:text-emerald-400 transition-colors">
                     <div class="flex items-center justify-end gap-1">
                       Pending
                       <svg class="w-3 h-3 transition-transform" :class="getSortClass('pending')" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2">
@@ -83,7 +86,7 @@
                       </svg>
                     </div>
                   </th>
-                  <th @click="sortBy('processing')" class="text-right hidden sm:table-cell cursor-pointer hover:text-blue-600 dark:hover:text-blue-400 transition-colors">
+                  <th @click="sortBy('processing')" class="text-right hidden sm:table-cell cursor-pointer hover:text-emerald-600 dark:hover:text-emerald-400 transition-colors">
                     <div class="flex items-center justify-end gap-1">
                       Processing
                       <svg class="w-3 h-3 transition-transform" :class="getSortClass('processing')" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2">
@@ -91,7 +94,7 @@
                       </svg>
                     </div>
                   </th>
-                  <th @click="sortBy('total')" class="text-right cursor-pointer hover:text-blue-600 dark:hover:text-blue-400 transition-colors">
+                  <th @click="sortBy('total')" class="text-right cursor-pointer hover:text-emerald-600 dark:hover:text-emerald-400 transition-colors">
                     <div class="flex items-center justify-end gap-1">
                       Total
                       <svg class="w-3 h-3 transition-transform" :class="getSortClass('total')" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2">
@@ -208,6 +211,7 @@ import { queuesApi } from '../api/queues';
 import { resourcesApi } from '../api/resources';
 import { formatNumber } from '../utils/formatters';
 
+import CustomSelect from '../components/common/CustomSelect.vue';
 import CreateQueueModal from '../components/queues/CreateQueueModal.vue';
 import ConfirmDialog from '../components/common/ConfirmDialog.vue';
 import LoadingSpinner from '../components/common/LoadingSpinner.vue';
@@ -228,6 +232,14 @@ const itemsPerPage = 20;
 const showCreateModal = ref(false);
 const showDeleteConfirm = ref(false);
 const queueToDelete = ref(null);
+
+const namespaceOptions = computed(() => [
+  { value: '', label: 'All Namespaces' },
+  ...(namespaces.value || []).map(ns => ({ 
+    value: ns.namespace, 
+    label: `${ns.namespace} (${ns.queues})` 
+  }))
+]);
 
 const filteredQueues = computed(() => {
   let filtered = queues.value;
@@ -376,13 +388,13 @@ onUnmounted(() => {
 .page-professional {
   @apply min-h-screen bg-gray-50 dark:bg-[#0d1117];
   background-image: 
-    radial-gradient(at 0% 0%, rgba(59, 130, 246, 0.03) 0px, transparent 50%),
+    radial-gradient(at 0% 0%, rgba(5, 150, 105, 0.03) 0px, transparent 50%),
     radial-gradient(at 100% 0%, rgba(99, 102, 241, 0.03) 0px, transparent 50%);
 }
 
 .dark .page-professional {
   background-image: 
-    radial-gradient(at 0% 0%, rgba(59, 130, 246, 0.05) 0px, transparent 50%),
+    radial-gradient(at 0% 0%, rgba(5, 150, 105, 0.05) 0px, transparent 50%),
     radial-gradient(at 100% 0%, rgba(99, 102, 241, 0.05) 0px, transparent 50%);
 }
 

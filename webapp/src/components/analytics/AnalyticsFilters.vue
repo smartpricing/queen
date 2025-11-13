@@ -30,28 +30,28 @@
       </div>
 
       <!-- Custom Date/Time Range -->
-      <div v-if="customMode" class="flex items-center gap-3 pt-2 border-t border-gray-200 dark:border-gray-700">
-        <div class="flex items-center gap-2">
-          <label class="text-sm font-medium text-gray-700 dark:text-gray-300">From:</label>
-          <input
-            :value="customFrom"
-            @input="$emit('update:customFrom', $event.target.value)"
-            type="datetime-local"
-            class="datetime-input"
+      <div v-if="customMode" class="flex flex-col sm:flex-row items-start sm:items-center gap-3 pt-2 border-t border-gray-200 dark:border-gray-700">
+        <div class="flex items-center gap-2 flex-1 w-full sm:w-auto">
+          <label class="text-sm font-medium text-gray-700 dark:text-gray-300 whitespace-nowrap">From:</label>
+          <DateTimePicker
+            :model-value="customFrom"
+            @update:model-value="$emit('update:customFrom', $event)"
+            placeholder="Select start date"
+            :show-presets="true"
           />
         </div>
-        <div class="flex items-center gap-2">
-          <label class="text-sm font-medium text-gray-700 dark:text-gray-300">To:</label>
-          <input
-            :value="customTo"
-            @input="$emit('update:customTo', $event.target.value)"
-            type="datetime-local"
-            class="datetime-input"
+        <div class="flex items-center gap-2 flex-1 w-full sm:w-auto">
+          <label class="text-sm font-medium text-gray-700 dark:text-gray-300 whitespace-nowrap">To:</label>
+          <DateTimePicker
+            :model-value="customTo"
+            @update:model-value="$emit('update:customTo', $event)"
+            placeholder="Select end date"
+            :show-presets="true"
           />
         </div>
         <button
           @click="$emit('applyCustomRange')"
-          class="px-4 py-2 bg-blue-500 hover:bg-blue-600 text-white text-sm font-medium rounded-lg transition-colors"
+          class="px-4 py-2 bg-emerald-500 hover:bg-emerald-600 text-white text-sm font-medium rounded-lg transition-colors whitespace-nowrap"
         >
           Apply
         </button>
@@ -60,40 +60,40 @@
       <!-- Second Row: Filters -->
       <div class="flex flex-col sm:flex-row gap-3">
         <!-- Queue Filter -->
-        <select
-          :value="queue"
-          @change="$emit('update:queue', $event.target.value)"
-          class="input flex-1 sm:w-48"
-        >
-          <option value="">All Queues</option>
-          <option v-for="q in queues" :key="q.id" :value="q.name">
-            {{ q.name }}
-          </option>
-        </select>
+        <div class="flex-1 sm:w-48">
+          <CustomSelect
+            :model-value="queue"
+            @update:model-value="$emit('update:queue', $event)"
+            :options="queueOptions"
+            placeholder="All Queues"
+            :clearable="true"
+            :searchable="true"
+          />
+        </div>
         
         <!-- Namespace Filter -->
-        <select
-          :value="namespace"
-          @change="$emit('update:namespace', $event.target.value)"
-          class="input sm:w-40"
-        >
-          <option value="">All Namespaces</option>
-          <option v-for="ns in namespaces" :key="ns.namespace" :value="ns.namespace">
-            {{ ns.namespace }}
-          </option>
-        </select>
+        <div class="sm:w-40">
+          <CustomSelect
+            :model-value="namespace"
+            @update:model-value="$emit('update:namespace', $event)"
+            :options="namespaceOptions"
+            placeholder="All Namespaces"
+            :clearable="true"
+            :searchable="true"
+          />
+        </div>
         
         <!-- Task Filter -->
-        <select
-          :value="task"
-          @change="$emit('update:task', $event.target.value)"
-          class="input sm:w-40"
-        >
-          <option value="">All Tasks</option>
-          <option v-for="t in tasks" :key="t.task" :value="t.task">
-            {{ t.task }}
-          </option>
-        </select>
+        <div class="sm:w-40">
+          <CustomSelect
+            :model-value="task"
+            @update:model-value="$emit('update:task', $event)"
+            :options="taskOptions"
+            placeholder="All Tasks"
+            :clearable="true"
+            :searchable="true"
+          />
+        </div>
         
         <!-- Clear Filters -->
         <button
@@ -110,6 +110,10 @@
 
 
 <script setup>
+import { computed } from 'vue';
+import CustomSelect from '../common/CustomSelect.vue';
+import DateTimePicker from '../common/DateTimePicker.vue';
+
 const props = defineProps({
   timeRange: String,
   customMode: Boolean,
@@ -141,6 +145,22 @@ const timeRanges = [
   { label: '7d', value: '7d' },
 ];
 
+// Transform arrays into options for CustomSelect
+const queueOptions = computed(() => [
+  { value: '', label: 'All Queues' },
+  ...(props.queues || []).map(q => ({ value: q.name, label: q.name }))
+]);
+
+const namespaceOptions = computed(() => [
+  { value: '', label: 'All Namespaces' },
+  ...(props.namespaces || []).map(ns => ({ value: ns.namespace, label: ns.namespace }))
+]);
+
+const taskOptions = computed(() => [
+  { value: '', label: 'All Tasks' },
+  ...(props.tasks || []).map(t => ({ value: t.task, label: t.task }))
+]);
+
 function selectQuickRange(value) {
   emit('update:customMode', false);
   emit('update:timeRange', value);
@@ -168,9 +188,9 @@ function clearFilters() {
 }
 
 .time-range-active {
-  background: rgba(59, 130, 246, 0.1);
-  color: #3b82f6;
-  border: 1px solid rgba(59, 130, 246, 0.2);
+  background: rgba(5, 150, 105, 0.1);
+  color: #059669;
+  border: 1px solid rgba(5, 150, 105, 0.2);
 }
 
 .time-range-inactive {
@@ -188,7 +208,7 @@ function clearFilters() {
 }
 
 .time-range-active:hover {
-  background: rgba(59, 130, 246, 0.15);
+  background: rgba(5, 150, 105, 0.15);
 }
 
 .time-range-inactive:hover {
@@ -212,8 +232,8 @@ function clearFilters() {
 
 .datetime-input:focus {
   outline: none;
-  border-color: #3b82f6;
-  box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.1);
+  border-color: #059669;
+  box-shadow: 0 0 0 3px rgba(5, 150, 105, 0.1);
 }
 
 .dark .datetime-input {
@@ -223,8 +243,8 @@ function clearFilters() {
 }
 
 .dark .datetime-input:focus {
-  border-color: #3b82f6;
-  box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.2);
+  border-color: #059669;
+  box-shadow: 0 0 0 3px rgba(5, 150, 105, 0.2);
 }
 </style>
 

@@ -14,12 +14,15 @@
               />
             </div>
             
-            <select v-model="statusFilter" class="input sm:w-48">
-              <option value="">All States</option>
-              <option value="Stable">Stable</option>
-              <option value="Lagging">Lagging</option>
-              <option value="Dead">Dead</option>
-            </select>
+            <div class="sm:w-48">
+              <CustomSelect
+                v-model="statusFilter"
+                :options="statusOptions"
+                placeholder="All States"
+                :clearable="true"
+                :searchable="false"
+              />
+            </div>
             
             <button
               v-if="searchQuery || statusFilter"
@@ -219,7 +222,7 @@
           </div>
           <div class="metric-card-compact">
             <span class="metric-label-sm">TOTAL CONSUMERS</span>
-            <div class="metric-value-sm text-blue-600 dark:text-blue-400">{{ stats.totalConsumers }}</div>
+            <div class="metric-value-sm text-emerald-600 dark:text-emerald-400">{{ stats.totalConsumers }}</div>
           </div>
           <div class="metric-card-compact">
             <span class="metric-label-sm">QUEUES MONITORED</span>
@@ -623,11 +626,11 @@
             <label class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
               New Subscription Timestamp
             </label>
-            <input
-              v-model="newTimestamp"
-              type="datetime-local"
-              class="input w-full"
-              step="1"
+            <DateTimePicker
+              v-model="newTimestampISO"
+              placeholder="Select subscription timestamp"
+              :show-presets="true"
+              :clearable="false"
             />
             <p class="text-xs text-gray-500 dark:text-gray-400 mt-2">
               ⚠️ Updating the timestamp will affect what messages are considered "new" for this consumer group.
@@ -646,7 +649,7 @@
             <button
               @click="handleUpdateTimestamp"
               class="btn btn-primary"
-              :disabled="actionLoading || !newTimestamp"
+              :disabled="actionLoading || !newTimestampISO"
             >
               <span v-if="actionLoading">Updating...</span>
               <span v-else>Update Timestamp</span>
@@ -663,6 +666,8 @@ import { ref, computed, onMounted, onUnmounted } from 'vue';
 import { consumersApi } from '../api/consumers';
 import { formatNumber, formatDuration } from '../utils/formatters';
 
+import CustomSelect from '../components/common/CustomSelect.vue';
+import DateTimePicker from '../components/common/DateTimePicker.vue';
 import StatusBadge from '../components/common/StatusBadge.vue';
 import LoadingSpinner from '../components/common/LoadingSpinner.vue';
 
@@ -676,8 +681,16 @@ const selectedGroupDetails = ref(null);
 const detailsLoading = ref(false);
 const showEditTimestamp = ref(false);
 const newTimestamp = ref('');
+const newTimestampISO = ref('');
 const deleteMetadata = ref(true);
 const actionLoading = ref(false);
+
+const statusOptions = [
+  { value: '', label: 'All States' },
+  { value: 'Stable', label: 'Stable' },
+  { value: 'Lagging', label: 'Lagging' },
+  { value: 'Dead', label: 'Dead' }
+];
 const sortColumn = ref('partition');
 const sortDirection = ref('asc');
 const showLaggingFilter = ref(false);
@@ -897,13 +910,24 @@ async function handleDelete() {
 }
 
 async function handleUpdateTimestamp() {
-  if (!selectedGroup.value || !newTimestamp.value) return;
+  if (!selectedGroup.value || !newTimestampISO.value) return;
   
   actionLoading.value = true;
   try {
-    await consumersApi.updateSubscriptionTimestamp(selectedGroup.value.name, newTimestamp.value);
+    // Convert ISO string to datetime-local format for the API
+    const date = new Date(newTimestampISO.value);
+    const year = date.getFullYear();
+    const month = String(date.getMonth() + 1).padStart(2, '0');
+    const day = String(date.getDate()).padStart(2, '0');
+    const hours = String(date.getHours()).padStart(2, '0');
+    const minutes = String(date.getMinutes()).padStart(2, '0');
+    const seconds = String(date.getSeconds()).padStart(2, '0');
+    const formattedTimestamp = `${year}-${month}-${day}T${hours}:${minutes}:${seconds}`;
+    
+    await consumersApi.updateSubscriptionTimestamp(selectedGroup.value.name, formattedTimestamp);
     showEditTimestamp.value = false;
     newTimestamp.value = '';
+    newTimestampISO.value = '';
     await loadData(); // Refresh the list
   } catch (err) {
     alert(`Failed to update timestamp: ${err.message}`);
@@ -915,10 +939,14 @@ async function handleUpdateTimestamp() {
 function openEditTimestamp() {
   if (selectedGroup.value?.subscriptionTimestamp) {
     // Pre-fill with current timestamp in ISO format
-    newTimestamp.value = new Date(selectedGroup.value.subscriptionTimestamp).toISOString().slice(0, 19);
+    const timestamp = new Date(selectedGroup.value.subscriptionTimestamp).toISOString();
+    newTimestamp.value = timestamp.slice(0, 19);
+    newTimestampISO.value = timestamp;
   } else {
     // Default to now
-    newTimestamp.value = new Date().toISOString().slice(0, 19);
+    const now = new Date().toISOString();
+    newTimestamp.value = now.slice(0, 19);
+    newTimestampISO.value = now;
   }
   showEditTimestamp.value = true;
 }
@@ -1025,7 +1053,7 @@ onUnmounted(() => {
 }
 
 .stat-card {
-  @apply bg-blue-50/50 dark:bg-blue-900/10 border border-blue-200/40 dark:border-blue-800/30;
+  @apply bg-emerald-50/50 dark:bg-emerald-900/10 border border-emerald-200/40 dark:border-emerald-800/30;
   @apply rounded-lg p-4;
 }
 
@@ -1035,7 +1063,7 @@ onUnmounted(() => {
 }
 
 .stat-value {
-  @apply text-xl font-bold text-blue-600 dark:text-blue-400 tracking-tight;
+  @apply text-xl font-bold text-emerald-600 dark:text-emerald-400 tracking-tight;
 }
 
 .subscription-info-card {
@@ -1054,7 +1082,7 @@ onUnmounted(() => {
 
 .queue-title {
   @apply flex items-center gap-2 text-base font-semibold text-gray-900 dark:text-white mb-3;
-  @apply p-3 bg-gray-50/80 dark:bg-gray-800/30 rounded-lg border-l-2 border-blue-500;
+  @apply p-3 bg-gray-50/80 dark:bg-gray-800/30 rounded-lg border-l-2 border-emerald-500;
 }
 
 .partition-count {

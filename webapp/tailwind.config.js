@@ -7,13 +7,14 @@ export default {
   theme: {
     extend: {
       colors: {
-        // Primary brand colors - Professional Blue & Indigo theme
-        'queen-blue': '#3b82f6',         // blue-500
-        'queen-indigo': '#6366f1',       // indigo-500
-        'queen-sky': '#0ea5e9',          // sky-500
-        // Aliases for primary/secondary
-        'primary': '#3b82f6',
-        'secondary': '#6366f1',
+        // Primary brand colors - Emerald green theme matching documentation website
+        'queen-primary': '#059669',      // emerald-600 - Rich emerald
+        'queen-secondary': '#0d9488',    // teal-600 - Jade accent
+        'queen-emerald': '#059669',      // emerald-600
+        'queen-jade': '#0d9488',         // teal-600
+        // Aliases for convenience
+        'primary': '#059669',
+        'secondary': '#0d9488',
       },
       fontFamily: {
         sans: ['Inter', '-apple-system', 'BlinkMacSystemFont', 'Segoe UI', 'sans-serif'],

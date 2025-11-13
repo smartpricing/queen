@@ -29,7 +29,7 @@
           selectedMetrics.systemPoolSize ? 'metric-toggle-active-blue' : 'metric-toggle-inactive'
         ]"
       >
-        <div :class="['metric-dot', selectedMetrics.systemPoolSize ? 'bg-blue-500' : 'bg-gray-400']"></div>
+        <div :class="['metric-dot', selectedMetrics.systemPoolSize ? 'bg-emerald-500' : 'bg-gray-400']"></div>
         System Pool Size
       </button>
       <button
@@ -101,7 +101,7 @@ function getNestedValue(obj, path) {
 
 // Colors for different replicas
 const replicaColors = [
-  { dbPool: 'rgba(107, 114, 128, 1)', dbQueue: 'rgba(245, 158, 11, 1)', sysPool: 'rgba(59, 130, 246, 1)', sysQueue: 'rgba(34, 197, 94, 1)' },
+  { dbPool: 'rgba(107, 114, 128, 1)', dbQueue: 'rgba(245, 158, 11, 1)', sysPool: 'rgba(5, 150, 105, 1)', sysQueue: 'rgba(34, 197, 94, 1)' },
   { dbPool: 'rgba(156, 163, 175, 1)', dbQueue: 'rgba(251, 191, 36, 1)', sysPool: 'rgba(147, 197, 253, 1)', sysQueue: 'rgba(134, 239, 172, 1)' },
   { dbPool: 'rgba(75, 85, 99, 1)', dbQueue: 'rgba(217, 119, 6, 1)', sysPool: 'rgba(96, 165, 250, 1)', sysQueue: 'rgba(74, 222, 128, 1)' },
 ];
@@ -366,9 +366,9 @@ const chartOptions = {
 }
 
 .metric-toggle-active-blue {
-  background: rgba(59, 130, 246, 0.1);
-  color: #3b82f6;
-  border: 1px solid rgba(59, 130, 246, 0.2);
+  background: rgba(5, 150, 105, 0.1);
+  color: #059669;
+  border: 1px solid rgba(5, 150, 105, 0.2);
 }
 
 .metric-toggle-active-green {

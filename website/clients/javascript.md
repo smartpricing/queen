@@ -1,6 +1,6 @@
-# JavaScript Client
+# JavaScript Client Guide
 
-Complete API reference for the Queen MQ JavaScript/Node.js client library.
+Complete guide for the Queen MQ JavaScript/Node.js client library.
 
 ## Installation
 
@@ -8,49 +8,29 @@ Complete API reference for the Queen MQ JavaScript/Node.js client library.
 npm install queen-mq
 ```
 
-**Requirements:** Node.js 22+
+**Requirements:** Node.js 22+ (required for native fetch and modern JS features)
 
-## Quick Start
+## Table of Contents
+
+[[toc]]
+
+## Getting Started
+
+### Import and Connect
 
 ```javascript
 import { Queen } from 'queen-mq'
 
+// Single server
 const queen = new Queen('http://localhost:6632')
 
-// Create queue
-await queen.queue('tasks').create()
-
-// Push messages
-await queen.queue('tasks').push([
-  { data: { task: 'send-email' } }
-])
-
-// Consume messages
-await queen.queue('tasks').consume(async (message) => {
-  console.log('Processing:', message.data)
-})
-```
-
-## Connection
-
-### Single Server
-
-```javascript
-const queen = new Queen('http://localhost:6632')
-```
-
-### Multiple Servers (High Availability)
-
-```javascript
+// Multiple servers (high availability)
 const queen = new Queen([
   'http://server1:6632',
   'http://server2:6632'
 ])
-```
 
-### Full Configuration
-
-```javascript
+// Full configuration
 const queen = new Queen({
   urls: ['http://server1:6632', 'http://server2:6632'],
   timeoutMillis: 30000,
@@ -60,16 +40,22 @@ const queen = new Queen({
 })
 ```
 
-## Queue Operations
+## Queue Management
 
 ### Create Queue
 
 ```javascript
-await queen.queue('orders')
+// Simple creation
+await queen.queue('my-tasks').create()
+
+// With configuration
+await queen.queue('my-tasks')
   .config({
-    leaseTime: 60,
-    retryLimit: 3,
-    priority: 5,
+    leaseTime: 60,           // 60 seconds to process
+    retryLimit: 3,           // Max 3 retries
+    priority: 5,             // Priority level (0-10)
+    dlqAfterMaxRetries: true, // Auto move to DLQ after max retries
+    retentionSeconds: 86400, // Keep messages 24 hours
     encryptionEnabled: false
   })
   .create()
@@ -78,14 +64,12 @@ await queen.queue('orders')
 ### Delete Queue
 
 ```javascript
-await queen.queue('orders').delete()
+await queen.queue('my-tasks').delete()
 ```
 
-### Get Queue Info
-
-```javascript
-const info = await queen.getQueueInfo('orders')
-```
+::: danger Warning
+This deletes all messages, partitions, and consumer group state. Cannot be undone!
+:::
 
 ## Pushing Messages
 
@@ -93,19 +77,18 @@ const info = await queen.getQueueInfo('orders')
 
 ```javascript
 await queen.queue('tasks').push([
-  { data: { task: 'process-order', orderId: 123 } }
+  { data: { task: 'send-email', to: 'user@example.com' } }
 ])
 ```
 
-### With Partition
+### Multiple Messages
 
 ```javascript
-await queen.queue('tasks')
-  .partition('customer-123')
-  .push([
-    { data: { action: 'create' } },
-    { data: { action: 'update' } }
-  ])
+await queen.queue('tasks').push([
+  { data: { task: 'send-email', to: 'alice@example.com' } },
+  { data: { task: 'send-email', to: 'bob@example.com' } },
+  { data: { task: 'resize-image', id: 123 } }
+])
 ```
 
 ### With Custom Transaction ID
@@ -113,8 +96,8 @@ await queen.queue('tasks')
 ```javascript
 await queen.queue('tasks').push([
   {
-    transactionId: 'unique-id-123',
-    data: { ... }
+    transactionId: 'unique-id-123',  // Auto-generated if not provided
+    data: { task: 'process-order', orderId: 456 }
   }
 ])
 ```
@@ -124,13 +107,13 @@ await queen.queue('tasks').push([
 ```javascript
 await queen.queue('tasks').push([...])
   .onSuccess(async (messages) => {
-    console.log('Pushed:', messages)
+    console.log('Pushed successfully:', messages)
   })
   .onDuplicate(async (messages) => {
-    console.warn('Duplicates detected')
+    console.warn('Duplicate transaction IDs detected')
   })
   .onError(async (messages, error) => {
-    console.error('Failed:', error)
+    console.error('Push failed:', error)
   })
 ```
 
@@ -138,32 +121,34 @@ await queen.queue('tasks').push([...])
 
 ### Basic Consume
 
+The easiest way to process messages continuously:
+
 ```javascript
-await queen.queue('tasks').consume(async (message) => {
+await queen.queue('my-tasks').consume(async (message) => {
+  console.log('Processing:', message.data)
+  
+  // Do your work
   await processTask(message.data)
+  
+  // Auto-ack on success, auto-nack on error
 })
 ```
 
-### With Consumer Group
-
-```javascript
-await queen.queue('events')
-  .group('analytics')
-  .subscribe('from_beginning')
-  .consume(async (message) => {
-    await updateAnalytics(message.data)
-  })
-```
+**What happens:**
+1. Consumer pulls messages from the queue
+2. Your function processes each message
+3. If successful → message marked as complete ✅
+4. If error → message goes back for retry 🔄
 
 ### With Configuration
 
 ```javascript
 await queen.queue('tasks')
-  .concurrency(10)      // 10 parallel workers
-  .batch(20)            // Fetch 20 at a time
-  .autoAck(false)       // Manual ack
-  .renewLease(true, 5000)  // Auto-renew every 5s
-  .each()               // Process individually
+  .concurrency(10)          // 10 parallel workers
+  .batch(20)                // Fetch 20 at a time
+  .autoAck(false)           // Manual ack
+  .renewLease(true, 5000)   // Auto-renew every 5s
+  .each()                   // Process individually
   .consume(async (message) => {
     await process(message.data)
   })
@@ -176,29 +161,302 @@ await queen.queue('tasks')
   })
 ```
 
-## Pop Operations
+### Process Limited Messages
 
-### Basic Pop
+```javascript
+// Process exactly 100 messages then stop
+await queen.queue('tasks')
+  .limit(100)
+  .consume(async (message) => {
+    await processMessage(message.data)
+  })
+```
+
+### Batch Processing
+
+```javascript
+// Process messages in batches
+await queen.queue('events')
+  .batch(10)
+  .consume(async (messages) => {
+    // messages is an array of 10 messages
+    for (const msg of messages) {
+      await process(msg)
+    }
+  })
+```
+
+## Pop vs Consume
+
+### The Consume Way (Recommended)
+
+**Use when:** Long-running worker that continuously processes messages.
+
+```javascript
+await queen.queue('tasks').consume(async (message) => {
+  // Auto-loops, auto-ack, long-polling built-in
+})
+```
+
+### The Pop Way
+
+**Use when:** Manual control over message fetching.
 
 ```javascript
 const messages = await queen.queue('tasks').pop()
+
+if (messages.length > 0) {
+  const message = messages[0]
+  
+  try {
+    await processMessage(message.data)
+    await queen.ack(message, true)
+  } catch (error) {
+    await queen.ack(message, false, { error: error.message })
+  }
+}
 ```
 
-### With Long Polling
+### Pop with Long Polling
 
 ```javascript
+// Wait up to 30 seconds for messages
 const messages = await queen.queue('tasks')
+  .batch(10)
   .wait(true)
   .timeout(30000)
   .pop()
 ```
 
-### With Batch
+## Partitions
+
+Use partitions for ordering guarantees. Messages in the same partition are processed in order.
+
+### Push to Partition
 
 ```javascript
-const messages = await queen.queue('tasks')
-  .batch(10)
-  .pop()
+await queen.queue('user-events')
+  .partition('user-123')
+  .push([
+    { data: { event: 'login', timestamp: Date.now() } },
+    { data: { event: 'purchase', orderId: 456 } },
+    { data: { event: 'logout', timestamp: Date.now() } }
+  ])
+```
+
+### Consume from Partition
+
+```javascript
+await queen.queue('user-events')
+  .partition('user-123')
+  .consume(async (message) => {
+    // Messages processed in exact order
+    console.log('User 123:', message.data.event)
+  })
+```
+
+**Important:** Messages in different partitions are independent.
+
+## Consumer Groups
+
+Consumer groups enable:
+- Multiple workers sharing the same queue
+- Fan-out patterns (same message to multiple groups)
+- Message replay from any point
+
+### Basic Consumer Group
+
+```javascript
+// Worker 1 in group "processors"
+await queen.queue('emails')
+  .group('processors')
+  .consume(async (message) => {
+    console.log('Worker 1 processing:', message.data)
+  })
+
+// Worker 2 in SAME group (shares the load)
+await queen.queue('emails')
+  .group('processors')
+  .consume(async (message) => {
+    console.log('Worker 2 processing:', message.data)
+  })
+```
+
+Messages are distributed between workers. Each message goes to only ONE worker.
+
+### Multiple Consumer Groups (Fan-Out)
+
+```javascript
+// Group 1: Send emails
+await queen.queue('notifications')
+  .group('email-sender')
+  .consume(async (message) => {
+    await sendEmail(message.data)
+  })
+
+// Group 2: Log to analytics (processes THE SAME messages)
+await queen.queue('notifications')
+  .group('analytics')
+  .consume(async (message) => {
+    await trackEvent(message.data)
+  })
+```
+
+Every message is processed by BOTH groups independently! 🎉
+
+### Subscription Modes
+
+Control whether consumer groups process historical messages or only new ones.
+
+**Default Behavior (Process All Messages):**
+
+```javascript
+await queen.queue('events')
+  .group('new-analytics')
+  .consume(async (message) => {
+    // Processes ALL messages, including historical
+  })
+```
+
+**Skip Historical Messages:**
+
+```javascript
+await queen.queue('events')
+  .group('realtime-monitor')
+  .subscriptionMode('new')  // Skip history
+  .consume(async (message) => {
+    // Only processes messages arriving after subscription
+  })
+```
+
+**Subscribe from Specific Timestamp:**
+
+```javascript
+const startTime = '2025-10-28T10:00:00.000Z'
+
+await queen.queue('events')
+  .group('replay-from-10am')
+  .subscriptionFrom(startTime)
+  .consume(async (message) => {
+    // Process messages from 10am onwards
+  })
+```
+
+**Server Default:**
+
+The server can be configured to change default subscription behavior:
+```bash
+export DEFAULT_SUBSCRIPTION_MODE="new"
+./bin/queen-server
+```
+
+When set, new consumer groups automatically skip historical messages unless you explicitly override with `.subscriptionMode('all')`.
+
+## Transactions
+
+Transactions ensure atomic operations. Either everything succeeds or nothing does.
+
+### Basic Transaction: Ack + Push
+
+```javascript
+// Pop a message
+const messages = await queen.queue('raw-data').batch(1).pop()
+
+if (messages.length > 0) {
+  const message = messages[0]
+  
+  // Process it
+  const processed = await transformData(message.data)
+  
+  // Atomically: ack input AND push output
+  await queen.transaction()
+    .ack(message)                    // Complete input
+    .queue('processed-data')
+    .push([{ data: processed }])     // Push to next queue
+    .commit()
+}
+
+// If commit fails, NOTHING happens. Message stays in raw-data!
+```
+
+### Multi-Queue Pipeline
+
+```javascript
+const messages = await queen.queue('queue-a').batch(1).pop()
+
+// Atomic: ack from A, push to B and C
+await queen.transaction()
+  .ack(messages[0])
+  .queue('queue-b')
+  .push([{ data: { step: 2, value: messages[0].data.value * 2 } }])
+  .queue('queue-c')
+  .push([{ data: { step: 2, value: messages[0].data.value * 2 } }])
+  .commit()
+```
+
+### Transaction with Consumer
+
+```javascript
+await queen.queue('source')
+  .autoAck(false)  // Must disable auto-ack
+  .consume(async (message) => {
+    // Do work
+    const result = await processMessage(message.data)
+    
+    // Transactionally ack and push result
+    await queen.transaction()
+      .ack(message)
+      .queue('destination')
+      .push([{ data: result }])
+      .commit()
+  })
+```
+
+## Client-Side Buffering
+
+Buffering batches messages for 10x-100x faster throughput!
+
+### How It Works
+
+1. Messages collect in a local buffer
+2. Buffer flushes when it reaches count OR time threshold
+3. All buffered messages sent in one HTTP request
+
+```javascript
+// Buffer up to 100 messages OR 1 second
+await queen.queue('logs')
+  .buffer({ messageCount: 100, timeMillis: 1000 })
+  .push([
+    { data: { level: 'info', message: 'User logged in' } }
+  ])
+```
+
+### High-Throughput Example
+
+```javascript
+// Send 10,000 messages super fast
+for (let i = 0; i < 10000; i++) {
+  await queen.queue('events')
+    .buffer({ messageCount: 500, timeMillis: 100 })
+    .push([{ data: { id: i, timestamp: Date.now() } }])
+}
+
+// Flush remaining buffered messages
+await queen.flushAllBuffers()
+```
+
+### Manual Flush
+
+```javascript
+// Flush all buffers
+await queen.flushAllBuffers()
+
+// Flush specific queue
+await queen.queue('my-queue').flushBuffer()
+
+// Get buffer statistics
+const stats = queen.getBufferStats()
+console.log('Buffers:', stats)
 ```
 
 ## Acknowledgment
@@ -215,60 +473,312 @@ await queen.ack(message, true)
 await queen.ack(message, false)
 ```
 
-### With Options
+### With Error Context
 
 ```javascript
 await queen.ack(message, false, {
-  reason: 'Invalid data',
-  skipRetry: true  // Go directly to DLQ
+  error: 'Invalid data format',
+  details: { field: 'email', reason: 'not a valid email' }
 })
 ```
 
-## Transactions
+### Batch ACK
 
 ```javascript
-await queen.transaction()
-  .ack(inputMessage)
-  .queue('output')
-  .partition('workflow-1')
-  .push([{ data: result }])
-  .commit()
+// Ack multiple messages at once
+await queen.ack([msg1, msg2, msg3], true)
 ```
 
-## Streaming
+## Dead Letter Queue
+
+### Enable DLQ
 
 ```javascript
-await queen.queue('events')
-  .stream()
-  .subscribe(async (message) => {
-    console.log('Real-time:', message.data)
+await queen.queue('risky-business')
+  .config({
+    retryLimit: 3,
+    dlqAfterMaxRetries: true  // Auto-move to DLQ after 3 failures
+  })
+  .create()
+```
+
+### Query DLQ
+
+```javascript
+const dlq = await queen.queue('risky-business')
+  .dlq()
+  .limit(10)
+  .get()
+
+console.log(`Found ${dlq.total} failed messages`)
+
+for (const message of dlq.messages) {
+  console.log('Failed:', message.data)
+  console.log('Error:', message.errorMessage)
+  console.log('Failed at:', message.dlqTimestamp)
+}
+```
+
+### DLQ with Time Range
+
+```javascript
+const dlq = await queen.queue('risky-business')
+  .dlq()
+  .from('2025-01-01')
+  .to('2025-01-31')
+  .limit(100)
+  .get()
+```
+
+## Lease Renewal
+
+Keep locks active during long-running tasks.
+
+### Automatic Lease Renewal
+
+```javascript
+await queen.queue('long-tasks')
+  .renewLease(true, 60000)  // Renew every 60 seconds
+  .consume(async (message) => {
+    // Even if this takes 30 minutes, lease keeps renewing!
+    await processVeryLongTask(message.data)
   })
 ```
 
-## Complete Guide
+### Manual Lease Renewal
 
-For comprehensive examples and patterns, see:
+```javascript
+const messages = await queen.queue('long-tasks').pop()
+const message = messages[0]
 
-- [Quick Start](/guide/quickstart)
-- [Basic Concepts](/guide/concepts)
-- [Examples](/clients/examples/basic)
-- [Source README](https://github.com/smartpricing/queen/blob/master/client-js/client-v2/README.md)
+// Start renewal
+const timer = setInterval(async () => {
+  await queen.renew(message)
+  console.log('Lease renewed')
+}, 30000)
 
-## TypeScript Support
-
-Full TypeScript definitions included:
-
-```typescript
-import { Queen, Message, QueueConfig } from 'queen-mq'
-
-const queen: Queen = new Queen('http://localhost:6632')
-
-interface OrderData {
-  orderId: number
-  amount: number
+try {
+  await processVeryLongTask(message.data)
+  await queen.ack(message, true)
+} finally {
+  clearInterval(timer)
 }
+```
 
-const message: Message<OrderData> = await queen.queue('orders').pop()
+## Message Tracing
+
+Record breadcrumbs as messages flow through your system.
+
+### Basic Tracing
+
+```javascript
+await queen.queue('orders').consume(async (msg) => {
+  // Record trace event
+  await msg.trace({
+    data: { text: 'Order processing started' }
+  })
+  
+  const order = await processOrder(msg.data)
+  
+  await msg.trace({
+    data: { 
+      text: 'Order processed successfully',
+      orderId: order.id,
+      total: order.total
+    }
+  })
+})
+```
+
+### Trace Names (Connect the Dots)
+
+Link traces across multiple messages:
+
+```javascript
+// Service 1: Order Service
+await queen.queue('orders').consume(async (msg) => {
+  const orderId = msg.data.orderId
+  
+  await msg.trace({
+    traceName: `order-${orderId}`,  // Link traces
+    data: { text: 'Order created', service: 'orders' }
+  })
+  
+  await queen.queue('inventory').push([{
+    data: { orderId, items: msg.data.items }
+  }])
+})
+
+// Service 2: Inventory Service
+await queen.queue('inventory').consume(async (msg) => {
+  const orderId = msg.data.orderId
+  
+  await msg.trace({
+    traceName: `order-${orderId}`,  // Same name = connected!
+    data: { text: 'Stock checked', service: 'inventory' }
+  })
+})
+```
+
+**In the dashboard:**
+- Search for `order-12345`
+- See the ENTIRE workflow across all services! 🎉
+
+### Event Types
+
+Organize traces with event types:
+
+```javascript
+await msg.trace({
+  eventType: 'info',  // Blue in UI
+  data: { text: 'Started processing' }
+})
+
+await msg.trace({
+  eventType: 'error',  // Red in UI
+  data: { text: 'Validation failed', reason: 'Invalid email' }
+})
+
+await msg.trace({
+  eventType: 'processing',  // Green in UI
+  data: { text: 'Sending email' }
+})
+```
+
+## Namespaces & Tasks
+
+Logical grouping with wildcard filtering.
+
+### Namespaces
+
+```javascript
+// Create queues with namespaces
+await queen.queue('billing-invoices').namespace('accounting').create()
+await queen.queue('billing-receipts').namespace('accounting').create()
+
+// Consume from ALL queues in the namespace
+await queen.queue()
+  .namespace('accounting')
+  .consume(async (message) => {
+    // Receives from BOTH billing-invoices AND billing-receipts
+  })
+```
+
+### Tasks
+
+```javascript
+// Create queues with tasks
+await queen.queue('video-uploads').task('video-processing').create()
+await queen.queue('image-uploads').task('image-processing').create()
+
+// Consume by task type
+await queen.queue()
+  .task('video-processing')
+  .consume(async (message) => {
+    // Only video processing messages
+  })
+```
+
+### Combining Namespace + Task
+
+```javascript
+await queen.queue()
+  .namespace('media')
+  .task('urgent-processing')
+  .consume(async (message) => {
+    // Only urgent media processing from media namespace
+  })
+```
+
+## Advanced Configuration
+
+### Queue Configuration Options
+
+```javascript
+await queen.queue('super-queue').config({
+  // Lease & Retry
+  leaseTime: 300,                // 5 minutes to process (seconds)
+  retryLimit: 3,                 // Retry 3 times
+  retryDelay: 5000,              // Wait 5 seconds between retries (ms)
+  
+  // Dead Letter Queue
+  dlqAfterMaxRetries: true,      // Move to DLQ after max retries
+  
+  // Priority
+  priority: 5,                   // Higher = higher priority (0-10)
+  
+  // Delays & Buffers
+  delayedProcessing: 60,         // Available after 60 seconds
+  windowBuffer: 30,              // Hold messages for 30 seconds to batch
+  
+  // Retention
+  retentionSeconds: 86400,       // Keep pending messages 24 hours
+  completedRetentionSeconds: 3600, // Keep completed 1 hour
+  ttl: 86400,                    // Message expires after 24 hours
+  
+  // Security
+  encryptionEnabled: true        // Encrypt payloads at rest
+}).create()
+```
+
+### Consumer Configuration
+
+```javascript
+await queen.queue('tasks')
+  .group('workers')
+  .concurrency(10)        // 10 parallel workers
+  .batch(20)              // Fetch 20 at a time
+  .autoAck(true)          // Auto-ack on success
+  .renewLease(true, 5000) // Auto-renew every 5s
+  .limit(1000)            // Process 1000 messages then stop
+  .each()                 // Process individually (vs batch)
+  .consume(async (message) => {
+    await process(message.data)
+  })
+```
+
+## Graceful Shutdown
+
+Always clean up properly!
+
+### Automatic Shutdown
+
+Queen automatically handles `SIGINT` and `SIGTERM`:
+
+```javascript
+const queen = new Queen('http://localhost:6632')
+
+// Your app runs...
+
+// User presses Ctrl+C:
+// Queen automatically flushes buffers and closes cleanly!
+```
+
+### Manual Shutdown
+
+```javascript
+await queen.close()
+console.log('Queen shut down cleanly')
+```
+
+### With AbortController
+
+```javascript
+const controller = new AbortController()
+
+const consumerPromise = queen.queue('tasks')
+  .consume(async (message) => {
+    await processMessage(message.data)
+  }, { signal: controller.signal })
+
+// Later... stop consumer
+controller.abort()
+
+// Wait for consumer to finish current message
+await consumerPromise
+
+// Close Queen
+await queen.close()
 ```
 
 ## Error Handling
@@ -287,18 +797,149 @@ try {
 }
 ```
 
+## Configuration Defaults
+
+### Client Defaults
+
+```javascript
+{
+  timeoutMillis: 30000,
+  retryAttempts: 3,
+  retryDelayMillis: 1000,
+  loadBalancingStrategy: 'round-robin',
+  enableFailover: true
+}
+```
+
+### Queue Defaults
+
+```javascript
+{
+  leaseTime: 300,          // 5 minutes
+  retryLimit: 3,
+  priority: 0,
+  delayedProcessing: 0,
+  windowBuffer: 0,
+  maxSize: 0,              // Unlimited
+  retentionSeconds: 0,     // Keep forever
+  encryptionEnabled: false
+}
+```
+
+### Consume Defaults
+
+```javascript
+{
+  concurrency: 1,
+  batch: 1,
+  autoAck: true,
+  wait: true,              // Long polling
+  timeoutMillis: 30000,
+  limit: null,             // Run forever
+  renewLease: false
+}
+```
+
+## Logging
+
+Enable detailed logging for debugging:
+
+```bash
+export QUEEN_CLIENT_LOG=true
+node your-app.js
+```
+
+Example output:
+```
+[2025-10-28T10:30:45.123Z] [INFO] [Queen.constructor] {"status":"initialized","urls":1}
+[2025-10-28T10:30:45.234Z] [INFO] [QueueBuilder.push] {"queue":"tasks","partition":"Default","count":5}
+```
+
 ## Best Practices
 
-1. ✅ Use consumer groups for scalability
-2. ✅ Enable long polling for efficiency
-3. ✅ Set appropriate batch sizes
-4. ✅ Use transactions for atomicity
-5. ✅ Handle errors gracefully
-6. ✅ Monitor queue depths
-7. ✅ Use meaningful partition keys
+1. ✅ **Use `consume()` for workers** - Simpler, handles retries automatically
+2. ✅ **Use `pop()` for control** - When you need precise control over acking
+3. ✅ **Buffer for speed** - Always use buffering when pushing many messages
+4. ✅ **Partitions for order** - Use partitions when message order matters
+5. ✅ **Consumer groups for scale** - Run multiple workers in the same group
+6. ✅ **Transactions for consistency** - Use transactions when operations must be atomic
+7. ✅ **Enable DLQ** - Always enable DLQ in production to catch failures
+8. ✅ **Renew long leases** - Use auto-renewal for long-running tasks
+9. ✅ **Graceful shutdown** - Always call `queen.close()` before exiting
+10. ✅ **Monitor DLQ** - Regularly check your DLQ for failed messages
 
-## Support
+## Complete Example
 
-- [GitHub](https://github.com/smartpricing/queen)
-- [LinkedIn](https://www.linkedin.com/company/smartness-com/)
-- [Examples](/clients/examples/basic)
+```javascript
+import { Queen } from 'queen-mq'
+
+const queen = new Queen('http://localhost:6632')
+
+// Setup queues
+await queen.queue('raw-events').config({ priority: 5 }).create()
+await queen.queue('processed-events').config({ priority: 10 }).create()
+
+// Stage 1: Ingest with buffering
+async function ingestEvents() {
+  for (let i = 0; i < 10000; i++) {
+    await queen.queue('raw-events')
+      .partition(`user-${i % 100}`)
+      .buffer({ messageCount: 500, timeMillis: 1000 })
+      .push([{
+        data: {
+          userId: i % 100,
+          event: 'page_view',
+          timestamp: Date.now()
+        }
+      }])
+  }
+  await queen.flushAllBuffers()
+}
+
+// Stage 2: Process with transactions
+async function processEvents() {
+  await queen.queue('raw-events')
+    .group('processors')
+    .concurrency(5)
+    .batch(10)
+    .autoAck(false)
+    .consume(async (messages) => {
+      const processed = messages.map(m => ({
+        userId: m.data.userId,
+        processed: true,
+        timestamp: Date.now()
+      }))
+      
+      const txn = queen.transaction()
+      for (const msg of messages) {
+        txn.ack(msg)
+      }
+      txn.queue('processed-events').push(
+        processed.map(p => ({ data: p }))
+      )
+      await txn.commit()
+    })
+    .onError(async (messages, error) => {
+      console.error('Processing failed:', error)
+      await queen.ack(messages, false)
+    })
+}
+
+// Run pipeline
+await ingestEvents()
+await processEvents()
+
+// Graceful shutdown
+process.on('SIGINT', async () => {
+  await queen.close()
+  process.exit(0)
+})
+```
+
+
+## See Also
+
+- [Quick Start Guide](/guide/quickstart) - Get started quickly
+- [Examples](/clients/examples/basic) - More code examples
+- [API Reference](/api/http) - Complete HTTP API
+- [GitHub README](https://github.com/smartpricing/queen/blob/master/client-js/client-v2/README.md) - Extended tutorial (1940 lines!)

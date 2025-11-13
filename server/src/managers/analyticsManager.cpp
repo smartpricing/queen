@@ -312,6 +312,27 @@ std::string AnalyticsManager::build_filter_clause(const std::string& queue, cons
     return where;
 }
 
+int AnalyticsManager::calculate_bucket_minutes(int duration_minutes) {
+    // Fixed bucket sizes based on time interval:
+    // - <= 1 hour (60 min) = 1 minute buckets
+    // - <= 6 hours (360 min) = 5 minute buckets
+    // - <= 24 hours (1440 min) = 15 minute buckets
+    // - <= 1 week (10080 min) = 1 hour (60 min) buckets
+    // - > 1 week = 1 day (1440 min) buckets
+    
+    if (duration_minutes <= 60) {
+        return 1;
+    } else if (duration_minutes <= 360) {
+        return 5;
+    } else if (duration_minutes <= 1440) {
+        return 15;
+    } else if (duration_minutes <= 10080) {
+        return 60;
+    } else {
+        return 1440;
+    }
+}
+
 nlohmann::json AnalyticsManager::get_metrics(int total_messages) {
     try {
         nlohmann::json response = {
@@ -1542,8 +1563,8 @@ nlohmann::json AnalyticsManager::get_status(const StatusFilters& filters) {
         auto time_to = std::chrono::system_clock::from_time_t(std::mktime(&tm_to));
         auto duration_minutes = std::chrono::duration_cast<std::chrono::minutes>(time_to - time_from).count();
         
-        // Calculate bucket size: target ~100 points, minimum 1 minute
-        int bucket_minutes = std::max(1, (int)std::ceil(duration_minutes / 100.0));
+        // Calculate bucket size using fixed intervals based on duration
+        int bucket_minutes = calculate_bucket_minutes(duration_minutes);
         int bucket_seconds = bucket_minutes * 60;
         
         spdlog::debug("Analytics query: duration={}min, bucket={}min, target_points=~{}", 
@@ -2222,8 +2243,8 @@ nlohmann::json AnalyticsManager::get_system_metrics(const SystemMetricsFilters& 
         auto time_to = std::chrono::system_clock::from_time_t(std::mktime(&tm_to));
         auto duration_minutes = std::chrono::duration_cast<std::chrono::minutes>(time_to - time_from).count();
         
-        // Calculate bucket size: target ~100 points, minimum 1 minute
-        int bucket_minutes = std::max(1, (int)std::ceil(duration_minutes / 100.0));
+        // Calculate bucket size using fixed intervals based on duration
+        int bucket_minutes = calculate_bucket_minutes(duration_minutes);
         std::string bucket_interval = std::to_string(bucket_minutes) + " minutes";
         
         spdlog::debug("System metrics query: duration={}min, bucket={}min, target_points=~{}", 

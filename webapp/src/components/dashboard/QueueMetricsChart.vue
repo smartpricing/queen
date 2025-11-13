@@ -9,7 +9,7 @@
           selectedMetrics.dbActive ? 'metric-toggle-active-blue' : 'metric-toggle-inactive'
         ]"
       >
-        <div :class="['metric-dot', selectedMetrics.dbActive ? 'bg-blue-500' : 'bg-gray-400']"></div>
+        <div :class="['metric-dot', selectedMetrics.dbActive ? 'bg-emerald-500' : 'bg-gray-400']"></div>
         DB Active
       </button>
       <button
@@ -128,14 +128,14 @@ const chartData = computed(() => {
         if (values.length === 0) return null;
         return values.reduce((sum, v) => sum + v, 0); // SUM for total connections
       }),
-      borderColor: 'rgba(59, 130, 246, 1)',
-      backgroundColor: 'rgba(59, 130, 246, 0.1)',
+      borderColor: 'rgba(5, 150, 105, 1)',
+      backgroundColor: 'rgba(5, 150, 105, 0.1)',
       borderWidth: 2,
       fill: true,
       tension: 0,
       pointRadius: 0,
       pointHoverRadius: 5,
-      pointHoverBackgroundColor: 'rgba(59, 130, 246, 1)',
+      pointHoverBackgroundColor: 'rgba(5, 150, 105, 1)',
     });
   }
 
@@ -275,16 +275,16 @@ const chartOptions = {
 }
 
 .metric-toggle-active-blue {
-  background: rgba(59, 130, 246, 0.12);
+  background: rgba(5, 150, 105, 0.12);
   color: #2563eb;
-  border: 1px solid rgba(59, 130, 246, 0.3);
-  box-shadow: 0 1px 2px 0 rgba(59, 130, 246, 0.1);
+  border: 1px solid rgba(5, 150, 105, 0.3);
+  box-shadow: 0 1px 2px 0 rgba(5, 150, 105, 0.1);
 }
 
 .dark .metric-toggle-active-blue {
-  background: rgba(59, 130, 246, 0.18);
-  color: #60a5fa;
-  border: 1px solid rgba(59, 130, 246, 0.4);
+  background: rgba(5, 150, 105, 0.18);
+  color: #10b981;
+  border: 1px solid rgba(5, 150, 105, 0.4);
 }
 
 .metric-toggle-active-orange {
@@ -326,11 +326,11 @@ const chartOptions = {
 
 
 .metric-toggle-active-blue:hover {
-  background: rgba(59, 130, 246, 0.15);
+  background: rgba(5, 150, 105, 0.15);
 }
 
 .dark .metric-toggle-active-blue:hover {
-  background: rgba(59, 130, 246, 0.2);
+  background: rgba(5, 150, 105, 0.2);
 }
 
 .metric-toggle-active-orange:hover {

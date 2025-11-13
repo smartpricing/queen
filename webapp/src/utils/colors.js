@@ -1,23 +1,23 @@
 // Centralized color configuration for the entire app
-// Change these values to update the color scheme everywhere
+// Emerald green theme matching the documentation website
+// Design philosophy: Natural, elegant, regal
 
 export const colors = {
-  // Primary brand colors (used for charts, accents, etc.)
-  // Professional blue color scheme for a clean, modern look
+  // Primary brand colors - Sophisticated emerald green palette
   primary: {
-    name: 'Blue',
-    hex: '#3b82f6',      // blue-500
-    rgb: 'rgb(59, 130, 246)',
-    rgba: (opacity) => `rgba(59, 130, 246, ${opacity})`,
+    name: 'Emerald',
+    hex: '#059669',      // emerald-600 - Rich emerald
+    rgb: 'rgb(5, 150, 105)',
+    rgba: (opacity) => `rgba(5, 150, 105, ${opacity})`,
   },
   secondary: {
-    name: 'Indigo', 
-    hex: '#6366f1',      // indigo-500
-    rgb: 'rgb(99, 102, 241)',
-    rgba: (opacity) => `rgba(99, 102, 241, ${opacity})`,
+    name: 'Jade', 
+    hex: '#0d9488',      // teal-600 - Jade accent
+    rgb: 'rgb(13, 148, 136)',
+    rgba: (opacity) => `rgba(13, 148, 136, ${opacity})`,
   },
   
-  // Status colors
+  // Status colors (keep standard for clarity)
   success: {
     hex: '#10b981',      // green-500
     rgb: 'rgb(16, 185, 129)',
@@ -34,42 +34,42 @@ export const colors = {
     rgba: (opacity) => `rgba(239, 68, 68, ${opacity})`,
   },
   info: {
-    hex: '#3b82f6',      // blue-500
-    rgb: 'rgb(59, 130, 246)',
-    rgba: (opacity) => `rgba(59, 130, 246, ${opacity})`,
+    hex: '#059669',      // emerald-600 - matches primary
+    rgb: 'rgb(5, 150, 105)',
+    rgba: (opacity) => `rgba(5, 150, 105, ${opacity})`,
   },
   
-  // Chart colors (for consistency)
+  // Chart colors - Emerald green palette
   charts: {
-    // Main data series - professional blue tones
+    // Main data series - emerald and jade tones
     ingested: {
-      border: 'rgb(59, 130, 246)',      // Blue
-      background: 'rgba(59, 130, 246, 0.1)',
+      border: 'rgb(5, 150, 105)',           // Emerald
+      background: 'rgba(5, 150, 105, 0.1)',
     },
     processed: {
-      border: 'rgb(99, 102, 241)',     // Indigo
-      background: 'rgba(99, 102, 241, 0.1)',
+      border: 'rgb(13, 148, 136)',          // Jade
+      background: 'rgba(13, 148, 136, 0.1)',
     },
     
-    // Status distribution
+    // Status distribution (keep standard colors for clarity)
     pending: {
-      bg: 'rgba(245, 158, 11, 0.8)',   // Yellow
+      bg: 'rgba(245, 158, 11, 0.8)',        // Yellow
       border: 'rgb(245, 158, 11)',
     },
     processing: {
-      bg: 'rgba(59, 130, 246, 0.8)',   // Blue
-      border: 'rgb(59, 130, 246)',
+      bg: 'rgba(5, 150, 105, 0.8)',         // Emerald
+      border: 'rgb(5, 150, 105)',
     },
     completed: {
-      bg: 'rgba(16, 185, 129, 0.8)',   // Green
+      bg: 'rgba(16, 185, 129, 0.8)',        // Green
       border: 'rgb(16, 185, 129)',
     },
     failed: {
-      bg: 'rgba(239, 68, 68, 0.8)',    // Red
+      bg: 'rgba(239, 68, 68, 0.8)',         // Red
       border: 'rgb(239, 68, 68)',
     },
     deadLetter: {
-      bg: 'rgba(156, 163, 175, 0.8)',  // Gray
+      bg: 'rgba(156, 163, 175, 0.8)',       // Gray
       border: 'rgb(156, 163, 175)',
     },
   },
@@ -94,4 +94,3 @@ export function getStatusColors() {
     ],
   };
 }
-

@@ -95,7 +95,7 @@
                   <span 
                     v-for="name in trace.trace_names"
                     :key="name"
-                    class="inline-block px-2 py-0.5 text-xs rounded-full bg-blue-100 dark:bg-blue-900 text-blue-700 dark:text-blue-300"
+                    class="inline-block px-2 py-0.5 text-xs rounded-full bg-emerald-100 dark:bg-emerald-900 text-emerald-700 dark:text-emerald-300"
                   >
                     {{ name }}
                   </span>
@@ -312,7 +312,7 @@ function close() {
 
 function getTraceColorClass(eventType) {
   const colors = {
-    info: 'border-blue-400',
+    info: 'border-emerald-400',
     processing: 'border-green-400',
     step: 'border-purple-400',
     error: 'border-red-400',

@@ -6,7 +6,7 @@ export default defineConfig({
   base: '/queen/',
   head: [
     ['link', { rel: 'icon', type: 'image/svg+xml', href: '/queen-logo.svg' }],
-    ['meta', { name: 'theme-color', content: '#3b82f6' }],
+    ['meta', { name: 'theme-color', content: '#059669' }],
     ['meta', { property: 'og:type', content: 'website' }],
     ['meta', { property: 'og:title', content: 'Queen MQ - PostgreSQL-backed Message Queue' }],
     ['meta', { property: 'og:description', content: 'High-performance, feature-rich message queue system built on PostgreSQL' }],
@@ -28,8 +28,21 @@ export default defineConfig({
         ]
       },
       {
-        text: 'Resources',
+        text: 'Server',
         items: [
+          { text: 'Architecture', link: '/server/architecture' },
+          { text: 'Installation', link: '/server/installation' },
+          { text: 'Configuration', link: '/server/configuration' },
+          { text: 'Environment Variables', link: '/server/environment-variables' },
+          { text: 'Deployment', link: '/server/deployment' },
+          { text: 'Benchmarks', link: '/server/benchmarks' }
+        ]
+      },
+      {
+        text: 'More',
+        items: [
+          { text: 'Web Dashboard', link: '/webapp/overview' },
+          { text: 'Proxy Server', link: '/proxy/overview' },
           { text: 'GitHub', link: 'https://github.com/smartpricing/queen' },
           { text: 'LinkedIn', link: 'https://www.linkedin.com/company/smartness-com/' },
           { text: 'Docker Hub', link: 'https://hub.docker.com/r/smartnessai/queen-mq' }
@@ -45,7 +58,8 @@ export default defineConfig({
             { text: 'Introduction', link: '/guide/introduction' },
             { text: 'Quick Start', link: '/guide/quickstart' },
             { text: 'Installation', link: '/guide/installation' },
-            { text: 'Basic Concepts', link: '/guide/concepts' }
+            { text: 'Basic Concepts', link: '/guide/concepts' },
+            { text: 'Comparison', link: '/guide/comparison' }
           ]
         },
         {
@@ -97,6 +111,7 @@ export default defineConfig({
             { text: 'Architecture', link: '/server/architecture' },
             { text: 'Installation', link: '/server/installation' },
             { text: 'Configuration', link: '/server/configuration' },
+            { text: 'Environment Variables', link: '/server/environment-variables' },
             { text: 'Performance Tuning', link: '/server/tuning' },
             { text: 'Deployment', link: '/server/deployment' }
           ]
@@ -106,6 +121,7 @@ export default defineConfig({
           items: [
             { text: 'Monitoring', link: '/server/monitoring' },
             { text: 'Benchmarks', link: '/server/benchmarks' },
+            { text: 'Benchmarking Tool', link: '/server/benchmarking' },
             { text: 'Troubleshooting', link: '/server/troubleshooting' }
           ]
         }
@@ -175,4 +191,3 @@ export default defineConfig({
     lineNumbers: true
   }
 })
-

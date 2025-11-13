@@ -2,7 +2,7 @@
 
 ## Quick Color Change
 
-To change the entire app's color scheme, edit **ONE FILE**:
+The entire app uses a **centralized color system**. To change the color scheme, edit **ONE FILE**:
 
 ### **File:** `src/utils/colors.js`
 
@@ -10,16 +10,16 @@ To change the entire app's color scheme, edit **ONE FILE**:
 export const colors = {
   // PRIMARY COLORS - Change these!
   primary: {
-    name: 'Rose',
-    hex: '#f43f5e',      // Change to your color
-    rgb: 'rgb(244, 63, 94)',
-    rgba: (opacity) => `rgba(244, 63, 94, ${opacity})`,
+    name: 'Emerald',
+    hex: '#059669',      // Change to your color
+    rgb: 'rgb(5, 150, 105)',
+    rgba: (opacity) => `rgba(5, 150, 105, ${opacity})`,
   },
   secondary: {
-    name: 'Purple', 
-    hex: '#a855f7',      // Change to your color
-    rgb: 'rgb(168, 85, 247)',
-    rgba: (opacity) => `rgba(168, 85, 247, ${opacity})`,
+    name: 'Jade', 
+    hex: '#0d9488',      // Change to your color
+    rgb: 'rgb(13, 148, 136)',
+    rgba: (opacity) => `rgba(13, 148, 136, ${opacity})`,
   },
   // ... rest of config
 };
@@ -27,30 +27,55 @@ export const colors = {
 
 ## Current Color Scheme
 
-**Primary (Charts - Ingested):** Rose (#f43f5e)  
-**Secondary (Charts - Processed):** Purple (#a855f7)
+**Theme:** Sophisticated Emerald Green (matching documentation website)  
+**Design Philosophy:** Natural, Elegant, Regal
+
+**Primary (Charts - Ingested):** Emerald (#059669)  
+**Secondary (Charts - Processed):** Jade (#0d9488)
+
+### Color Palette
+
+| Color | Hex | RGB | Usage |
+|-------|-----|-----|-------|
+| Rich Emerald | #059669 | rgb(5, 150, 105) | Primary brand, buttons, accents |
+| Jade | #0d9488 | rgb(13, 148, 136) | Secondary accent, charts |
+| Forest Green | #047857 | rgb(4, 120, 87) | Hover states, depth |
+| Spring Green | #10b981 | rgb(16, 185, 129) | Success states |
+| Light Emerald | #34d399 | rgb(52, 211, 153) | Dark mode highlights |
 
 ## Where Colors Are Used
 
-### **Primary (Rose)**
+### **Primary (Emerald)**
+- Primary buttons and CTAs
 - Dashboard throughput chart - "Ingested" line
 - Analytics message flow - "Ingested" line
-- Accent colors
+- Info badges and cards
+- Focus rings and selection
+- Active sidebar items
+- Link accents
+- Table hover highlights
 
-### **Secondary (Purple)**
+### **Secondary (Jade)**
 - Dashboard throughput chart - "Processed" line
 - Analytics message flow - "Processed" line
 - Top queues bar chart
-- Accent elements
+- Secondary accent elements
+- Gradients (primary → secondary)
 
-### **Status Colors** (Fixed)
-- Success/Completed: Green
-- Warning/Pending: Yellow
-- Danger/Failed: Red
-- Info: Blue
-- Dead Letter: Gray
+### **Status Colors** (Standard - Keep for Clarity)
+- Success/Completed: Green (#10b981)
+- Warning/Pending: Yellow (#f59e0b)
+- Danger/Failed: Red (#ef4444)
+- Dead Letter: Gray (#9ca3af)
 
-## How to Change
+## Files Updated for Theme
+
+1. ✅ `src/utils/colors.js` - Centralized color config
+2. ✅ `tailwind.config.js` - Tailwind theme colors
+3. ✅ `src/assets/styles/main.css` - Component styles
+4. ✅ `src/assets/styles/professional.css` - Page styles
+
+## How to Change to Different Colors
 
 ### Example: Switch to Blue & Cyan
 
@@ -87,32 +112,50 @@ secondary: {
 },
 ```
 
-## Tailwind Config
-
-Also update `tailwind.config.js` for consistency:
+### Example: Switch to Purple & Violet
 
 ```javascript
-colors: {
-  'queen-primary': '#f43f5e',    // Match primary
-  'queen-secondary': '#a855f7',  // Match secondary
-  'queen-accent': '#ec4899',     // Optional third color
+primary: {
+  name: 'Purple',
+  hex: '#a855f7',
+  rgb: 'rgb(168, 85, 247)',
+  rgba: (opacity) => `rgba(168, 85, 247, ${opacity})`,
+},
+secondary: {
+  name: 'Violet', 
+  hex: '#8b5cf6',
+  rgb: 'rgb(139, 92, 246)',
+  rgba: (opacity) => `rgba(139, 92, 246, ${opacity})`,
 },
 ```
 
-## Current Implementation
+## After Changing Colors
 
-✅ **Centralized**: All chart colors in one place  
-✅ **Easy to change**: Edit one file  
-✅ **Consistent**: Used across all charts  
-✅ **Type-safe**: Helper functions for opacity  
+Also update `tailwind.config.js` to match:
 
-## Files Using Color System
+```javascript
+colors: {
+  'queen-primary': '#your-primary-color',
+  'queen-secondary': '#your-secondary-color',
+  'primary': '#your-primary-color',
+  'secondary': '#your-secondary-color',
+},
+```
 
-1. `src/components/dashboard/ThroughputChart.vue`
-2. `src/components/analytics/MessageFlowChart.vue`
-3. `src/components/analytics/TopQueuesChart.vue`
-4. `src/components/analytics/MessageDistributionChart.vue`
-5. `tailwind.config.js` (for CSS utilities)
+## Benefits of Centralized System
 
-Change `src/utils/colors.js` and all charts update automatically! 🎨
+✅ **Single source of truth**: Change one file, update entire app  
+✅ **Consistent**: All charts and components use same colors  
+✅ **Type-safe**: Helper functions for opacity variations  
+✅ **Easy maintenance**: No scattered color definitions  
+✅ **Hot reload**: Changes apply immediately in dev mode  
 
+## Current Theme Match
+
+The webapp now uses the **same emerald green theme** as the documentation website for a cohesive brand experience across:
+- Documentation site: https://smartpricing.github.io/queen/
+- Web dashboard: http://localhost:6632/
+
+Both use the sophisticated emerald green palette inspired by natural, regal colors.
+
+Change `src/utils/colors.js` and all components update automatically! 🎨
