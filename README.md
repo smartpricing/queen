@@ -18,17 +18,22 @@
 
 ---
 
+# Queen MQ
+
+Queen MQ is a modern PostgreSQL-backed Message Queue, high-performance, feature-rich system with unlimited FIFO partitions, consumer groups, transactions, tracing and streaming capabilities with exact-once delivery guarantees.
+
 ## Why Queen?
 
 Born at [Smartness](https://www.linkedin.com/company/smartness-com/) to power **Smartchat**, Queen solves a unique problem: **unlimited FIFO partitions** where slow processing in one partition doesn't block others.
 
 Perfect for:
-- 💬 Chat systems with variable AI response times
-- 🤖 AI processing pipelines with unpredictable latency
-- 👥 Human-in-the-loop workflows
-- 🔄 Event-driven microservices
-
-**[Read the full story →](https://smartpricing.github.io/queen/guide/comparison)**
+- Processing messages in order, without losing them somewhere in the middle
+- Do not want that a slow message processing in one partition blocks other partitions 
+- When you need thousands of thousands of partitions to process messages in parallel, respecting the order of the messages
+- Process the same messages in multiple pipelines
+- Have a clear view of the message processing flow and traceability
+- Build event-driven microservices with exactly-once delivery guarantees
+- Critical systems that need to be highly available and reliable with zero message loss
 
 ---
 
