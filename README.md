@@ -101,10 +101,9 @@ await queen.queue('orders')
 
 | Metric | Value |
 |--------|-------|
-| **Throughput** | 130K+ msg/s sustained, 148K+ peak |
+| **Throughput** | 100K+ msg/s sustained |
 | **Latency** | 10-50ms (POP/ACK), 50-200ms (TRANSACTION) |
 | **Partitions** | Unlimited |
-| **Resources** | 14 threads, 150 DB connections |
 
 **[Detailed Benchmarks →](https://smartpricing.github.io/queen/server/benchmarks)**
 
@@ -117,9 +116,6 @@ A modern Vue 3 dashboard for monitoring and managing Queen MQ:
 <div align="center">
 
 ![Dashboard](./assets/dashboard.png)
-![Queues](./assets/queues.png)
-![Messages](./assets/messages.png)
-![Traces](./assets/traces.png)
 
 </div>
 
@@ -163,7 +159,7 @@ A modern Vue 3 dashboard for monitoring and managing Queen MQ:
 
 ## Production Ready
 
-Queen is currently running in production at [Smartness](https://www.linkedin.com/company/smartness-com/), handling **millions of messages daily**.
+Queen is currently running in production at [Smartness](https://www.linkedin.com/company/smartness-com/), handling **200k messages daily**.
 
 Latest stable version: **0.6.6**
 
