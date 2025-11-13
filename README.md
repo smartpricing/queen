@@ -18,8 +18,6 @@
 
 ---
 
-# Queen MQ
-
 Queen MQ is a modern PostgreSQL-backed Message Queue, high-performance, feature-rich system with unlimited FIFO partitions, consumer groups, transactions, tracing and streaming capabilities with exact-once delivery guarantees.
 
 ## Why Queen?
