@@ -2094,11 +2094,11 @@ bool AsyncQueueManager::ensure_consumer_group_exists(
     }
 }
 
-// --- Pop from Specific Partition ---
+// --- Pop from Specific Partition (Optimized - by ID) ---
 
-PopResult AsyncQueueManager::pop_messages_from_partition(
+PopResult AsyncQueueManager::pop_messages_from_partition_by_id(
     const std::string& queue_name,
-    const std::string& partition_name,
+    const std::string& partition_id,
     const std::string& consumer_group,
     const PopOptions& options
 ) {
@@ -2109,10 +2109,10 @@ PopResult AsyncQueueManager::pop_messages_from_partition(
         
         // Check if partition is accessible considering window_buffer
         std::string window_check_sql = R"(
-            SELECT p.id, q.window_buffer
+            SELECT p.id, p.name, q.window_buffer
             FROM queen.partitions p
             JOIN queen.queues q ON p.queue_id = q.id
-            WHERE q.name = $1 AND p.name = $2
+            WHERE p.id = $1::uuid
               AND (q.window_buffer = 0 OR NOT EXISTS (
                 SELECT 1 FROM queen.messages m
                 WHERE m.partition_id = p.id
@@ -2120,13 +2120,16 @@ PopResult AsyncQueueManager::pop_messages_from_partition(
               ))
         )";
         
-        sendQueryParamsAsync(conn.get(), window_check_sql, {queue_name, partition_name});
+        sendQueryParamsAsync(conn.get(), window_check_sql, {partition_id});
         auto window_result = getTuplesResult(conn.get());
         
         if (PQntuples(window_result.get()) == 0) {
-            spdlog::debug("Partition {} blocked by window buffer", partition_name);
+            spdlog::debug("Partition {} blocked by window buffer", partition_id);
             return result;
         }
+        
+        // Extract partition_name for logging and lease functions
+        std::string partition_name = PQgetvalue(window_result.get(), 0, 1);
         
         // Get queue configuration for delayed_processing, max_wait_time_seconds, and lease_time
         std::string config_sql = R"(
@@ -2152,7 +2155,7 @@ PopResult AsyncQueueManager::pop_messages_from_partition(
             lease_time = (lease_str && strlen(lease_str) > 0) ? std::stoi(lease_str) : 300;
         }
         
-        // Acquire lease for this partition
+        // Acquire lease for this partition (uses partition_name internally)
         std::string lease_id = acquire_partition_lease(conn.get(), queue_name, partition_name, 
                                                       consumer_group, lease_time, options);
         if (lease_id.empty()) {
@@ -2161,9 +2164,9 @@ PopResult AsyncQueueManager::pop_messages_from_partition(
         
         result.lease_id = lease_id;
         
-        // Build WHERE clause
+        // Build WHERE clause (use partition_id directly for efficiency)
         std::string where_clause = R"(
-            WHERE q.name = $1 AND p.name = $2 AND pc.consumer_group = $3
+            WHERE q.name = $1 AND p.id = $2::uuid AND pc.consumer_group = $3
               AND pc.worker_id = $4 AND pc.lease_expires_at > NOW()
                    AND (pc.last_consumed_created_at IS NULL 
                         OR m.created_at > pc.last_consumed_created_at
@@ -2172,7 +2175,7 @@ PopResult AsyncQueueManager::pop_messages_from_partition(
         
         std::vector<std::string> params = {
             queue_name,
-            partition_name,
+            partition_id,
             consumer_group,
             lease_id
         };
@@ -2208,8 +2211,8 @@ PopResult AsyncQueueManager::pop_messages_from_partition(
             FOR UPDATE OF m SKIP LOCKED
         )";
         
-        spdlog::debug("Pop query params: queue={}, partition={}, consumer_group={}, lease_id={}, batch={}", 
-                     queue_name, partition_name, consumer_group, lease_id, options.batch);
+        spdlog::debug("Pop query params: queue={}, partition_id={}, consumer_group={}, lease_id={}, batch={}", 
+                     queue_name, partition_id, consumer_group, lease_id, options.batch);
         
         sendQueryParamsAsync(conn.get(), sql, params);
         auto query_result = getTuplesResult(conn.get());
@@ -2223,24 +2226,19 @@ PopResult AsyncQueueManager::pop_messages_from_partition(
         }
         
         if (num_messages > 0) {
-            // Update batch_size
+            // Update batch_size (use partition_id directly)
             std::string update_batch_size = R"(
                 UPDATE queen.partition_consumers
                 SET batch_size = $1,
                     acked_count = 0
-                WHERE partition_id = (
-                    SELECT p.id FROM queen.partitions p
-                    JOIN queen.queues q ON p.queue_id = q.id
-                    WHERE q.name = $2 AND p.name = $3
-                )
-                AND consumer_group = $4
-                AND worker_id = $5
+                WHERE partition_id = $2::uuid
+                AND consumer_group = $3
+                AND worker_id = $4
             )";
             
             sendQueryParamsAsync(conn.get(), update_batch_size, {
                 std::to_string(num_messages),
-                queue_name,
-                partition_name,
+                partition_id,
                 consumer_group,
                 lease_id
             });
@@ -2327,6 +2325,49 @@ PopResult AsyncQueueManager::pop_messages_from_partition(
     return result;
 }
 
+// --- Pop from Specific Partition (Wrapper - by Name) ---
+// This is a convenience wrapper that maintains backward compatibility
+// It looks up partition_id from partition_name and delegates to the optimized _by_id version
+
+PopResult AsyncQueueManager::pop_messages_from_partition(
+    const std::string& queue_name,
+    const std::string& partition_name,
+    const std::string& consumer_group,
+    const PopOptions& options
+) {
+    PopResult result;
+    
+    try {
+        auto conn = async_db_pool_->acquire();
+        
+        // Look up partition_id from partition_name
+        std::string lookup_sql = R"(
+            SELECT p.id
+            FROM queen.partitions p
+            JOIN queen.queues q ON q.id = p.queue_id
+            WHERE q.name = $1 AND p.name = $2
+        )";
+        
+        sendQueryParamsAsync(conn.get(), lookup_sql, {queue_name, partition_name});
+        auto lookup_result = getTuplesResult(conn.get());
+        
+        if (PQntuples(lookup_result.get()) == 0) {
+            spdlog::debug("Partition not found: queue={}, partition={}", queue_name, partition_name);
+            return result;
+        }
+        
+        std::string partition_id = PQgetvalue(lookup_result.get(), 0, 0);
+        
+        // Delegate to optimized _by_id version
+        return pop_messages_from_partition_by_id(queue_name, partition_id, consumer_group, options);
+        
+    } catch (const std::exception& e) {
+        spdlog::error("Failed to pop from partition (by name): {}", e.what());
+    }
+    
+    return result;
+}
+
 // --- Pop from Any Partition in Queue ---
 
 PopResult AsyncQueueManager::pop_messages_from_queue(
@@ -2356,9 +2397,8 @@ PopResult AsyncQueueManager::pop_messages_from_queue(
         
         if (window_buffer > 0) {
             sql = R"(
-                SELECT p.id, p.name
+                SELECT pl.partition_id
                 FROM queen.partition_lookup pl
-                JOIN queen.partitions p ON p.id = pl.partition_id
                 LEFT JOIN queen.partition_consumers pc ON pc.partition_id = pl.partition_id 
                     AND pc.consumer_group = $2
                 WHERE pl.queue_name = $1
@@ -2378,9 +2418,8 @@ PopResult AsyncQueueManager::pop_messages_from_queue(
             params.push_back(std::to_string(window_buffer));
         } else {
             sql = R"(
-                SELECT p.id, p.name
+                SELECT pl.partition_id
                 FROM queen.partition_lookup pl
-                JOIN queen.partitions p ON p.id = pl.partition_id
                 LEFT JOIN queen.partition_consumers pc ON pc.partition_id = pl.partition_id 
                     AND pc.consumer_group = $2
                 WHERE pl.queue_name = $1
@@ -2402,13 +2441,14 @@ PopResult AsyncQueueManager::pop_messages_from_queue(
             return result;
         }
         
-        // Try each partition until we get messages
+        // Try each partition until we get messages (using optimized _by_id function)
         for (int i = 0; i < PQntuples(partitions_result.get()); ++i) {
-            std::string partition_name = PQgetvalue(partitions_result.get(), i, 1);
+            std::string partition_id = PQgetvalue(partitions_result.get(), i, 0);
             
-            spdlog::debug("Trying partition '{}' (priority by last_consumed_at)", partition_name);
+            spdlog::debug("Trying partition_id '{}' (priority by last_consumed_at)", partition_id);
             
-            result = pop_messages_from_partition(queue_name, partition_name, consumer_group, options);
+            // Call optimized version that uses partition_id directly
+            result = pop_messages_from_partition_by_id(queue_name, partition_id, consumer_group, options);
             
             if (!result.messages.empty()) {
                 return result;

@@ -156,6 +156,14 @@ public:
         const PopOptions& options
     );
     
+    // Optimized version using partition_id directly (avoids name->id lookup)
+    PopResult pop_messages_from_partition_by_id(
+        const std::string& queue_name,
+        const std::string& partition_id,
+        const std::string& consumer_group,
+        const PopOptions& options
+    );
+    
     PopResult pop_messages_from_queue(
         const std::string& queue_name,
         const std::string& consumer_group,
