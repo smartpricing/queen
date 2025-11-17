@@ -16,7 +16,7 @@ docker run -p 6632:6632 \
   -e PG_DB=queen_production \
   -e DB_POOL_SIZE=150 \
   -e NUM_WORKERS=10 \
-  smartnessai/queen-mq:0.6.6
+  smartnessai/queen-mq:{{VERSION}}
 ```
 
 ### Production Configuration
@@ -40,7 +40,7 @@ docker run -d \
   -e LOG_FORMAT=json \
   -e QUEEN_ENCRYPTION_KEY=your_64_char_hex_key \
   -e FILE_BUFFER_DIR=/var/lib/queen/buffers \
-  smartnessai/queen-mq:0.6.6
+  smartnessai/queen-mq:{{VERSION}}
 ```
 
 ### Docker Compose
@@ -68,7 +68,7 @@ services:
       retries: 5
 
   queen:
-    image: smartnessai/queen-mq:0.6.6
+    image: smartnessai/queen-mq:{{VERSION}}
     depends_on:
       postgres:
         condition: service_healthy

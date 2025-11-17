@@ -731,16 +731,10 @@ bool AsyncQueueManager::initialize_schema() {
 // --- Maintenance Mode ---
 
 bool AsyncQueueManager::check_maintenance_mode_with_cache() {
-    auto now_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
-        std::chrono::system_clock::now().time_since_epoch()).count();
+    // NO CACHE: Always check database for maintenance mode
+    // This ensures all workers see the current state immediately
+    // Performance impact is minimal since maintenance mode toggles are rare
     
-    // Check cache TTL
-    uint64_t last_check = last_maintenance_check_ms_.load();
-    if (now_ms - last_check < MAINTENANCE_CACHE_TTL_MS) {
-        return maintenance_mode_cached_.load();
-    }
-    
-    // Cache expired, check database
     try {
         auto conn = async_db_pool_->acquire();
         
@@ -759,12 +753,13 @@ bool AsyncQueueManager::check_maintenance_mode_with_cache() {
             enabled = (val && std::string(val) == "true");
         }
         
+        // Update local cache for status endpoint
         maintenance_mode_cached_.store(enabled);
-        last_maintenance_check_ms_.store(now_ms);
         
         return enabled;
     } catch (const std::exception& e) {
         spdlog::error("Failed to check maintenance mode from database: {}", e.what());
+        // On DB error, return cached value as fallback
         return maintenance_mode_cached_.load();
     }
 }
@@ -1134,6 +1129,23 @@ std::vector<PushResult> AsyncQueueManager::push_messages(const std::vector<PushI
         return results;
     }
     
+    // Normal path: push to database
+    return push_messages_internal(items);
+}
+
+// --- Push Messages Internal (Bypasses Maintenance Mode) ---
+
+std::vector<PushResult> AsyncQueueManager::push_messages_internal(const std::vector<PushItem>& items) {
+    if (items.empty()) {
+        return {};
+    }
+    
+    // NOTE: This method NEVER checks maintenance mode
+    // It's used ONLY for internal operations like file buffer drain
+    // DO NOT call from user-facing code paths!
+    
+    spdlog::debug("push_messages_internal: Processing {} items (bypassing maintenance mode)", items.size());
+    
     // Group items by queue and partition while PRESERVING ORDER
     std::vector<std::pair<std::string, std::vector<size_t>>> partition_groups_ordered;
     std::map<std::string, size_t> key_to_index;
@@ -1336,7 +1348,7 @@ std::vector<PushResult> AsyncQueueManager::push_messages_batch(const std::vector
         }
         
         const size_t TARGET_BATCH_SIZE = static_cast<size_t>(config_.batch_push_target_size_mb) * 1024 * 1024;
-        const size_t MIN_BATCH_SIZE = static_cast<size_t>(config_.batch_push_min_size_mb) * 1024 * 1024;
+        [[maybe_unused]] const size_t MIN_BATCH_SIZE = static_cast<size_t>(config_.batch_push_min_size_mb) * 1024 * 1024;
         const size_t MAX_BATCH_SIZE = static_cast<size_t>(config_.batch_push_max_size_mb) * 1024 * 1024;
         const size_t MIN_MESSAGES = static_cast<size_t>(config_.batch_push_min_messages);
         const size_t MAX_MESSAGES = static_cast<size_t>(config_.batch_push_max_messages);
@@ -3021,7 +3033,7 @@ AsyncQueueManager::BatchAckResult AsyncQueueManager::acknowledge_messages_batch(
                     sendQueryParamsAsync(conn.get(), insert_consumed_sql, {partition_id, consumer_group, std::to_string(failed_count)});
                     getCommandResult(conn.get());
                     
-                    for (const auto& ack : failed) {
+                    for (size_t i = 0; i < failed.size(); i++) {
                         AckResult result;
                         result.success = true;
                         result.message = "failed_dlq";
@@ -3048,7 +3060,7 @@ AsyncQueueManager::BatchAckResult AsyncQueueManager::acknowledge_messages_batch(
                     sendQueryParamsAsync(conn.get(), retry_sql, {partition_id, consumer_group});
                     getCommandResult(conn.get());
                     
-                    for (const auto& ack : failed) {
+                    for (size_t i = 0; i < failed.size(); i++) {
                         AckResult result;
                         result.success = true;
                         result.message = "failed_retry";
@@ -3740,12 +3752,28 @@ void AsyncQueueManager::set_maintenance_mode(bool enabled) {
             ).count()
         );
         
-        spdlog::info("Maintenance mode {} (persisted to database for all instances)", 
-                    enabled ? "ENABLED - routing PUSHes to file buffer" : "DISABLED - resuming normal operations");
-        
-        if (!enabled && file_buffer_manager_) {
-            spdlog::info("File buffer will drain {} pending messages to database", 
-                        file_buffer_manager_->get_pending_count());
+        // Handle file buffer state changes
+        if (file_buffer_manager_) {
+            if (enabled) {
+                // ENABLE: Pause background drain to prevent infinite loop
+                file_buffer_manager_->pause_background_drain();
+                spdlog::info("Maintenance mode ENABLED - PUSHes routing to file buffer, drain paused");
+            } else {
+                // DISABLE: Force finalize .tmp files and resume drain
+                spdlog::info("Maintenance mode DISABLED - finalizing buffered messages and resuming drain");
+                
+                // Step 1: Force finalize all .tmp files to make messages visible
+                file_buffer_manager_->force_finalize_all();
+                
+                // Step 2: Resume background drain (will wake processor)
+                file_buffer_manager_->resume_background_drain();
+                
+                size_t pending = file_buffer_manager_->get_pending_count();
+                spdlog::info("File buffer will drain {} pending messages to database", pending);
+            }
+        } else {
+            spdlog::info("Maintenance mode {} (persisted to database for all instances)", 
+                        enabled ? "ENABLED - routing PUSHes to file buffer" : "DISABLED - resuming normal operations");
         }
         
     } catch (const std::exception& e) {

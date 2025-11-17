@@ -71,7 +71,7 @@ private:
     // Maintenance mode (cached from database for multi-instance support)
     std::atomic<bool> maintenance_mode_cached_{false};
     std::atomic<uint64_t> last_maintenance_check_ms_{0};
-    static constexpr int MAINTENANCE_CACHE_TTL_MS = 5000;  // 5 seconds cache TTL
+    static constexpr int MAINTENANCE_CACHE_TTL_MS = 100;  // 100ms cache TTL (was 5000ms)
     
     // Internal helper methods
     std::string generate_transaction_id();
@@ -147,6 +147,11 @@ public:
     
     // Core message operations - async versions
     std::vector<PushResult> push_messages(const std::vector<PushItem>& items);
+    
+    // INTERNAL ONLY: Push messages directly to database, bypassing maintenance mode
+    // Used by: file buffer drain, internal operations, admin tools
+    // NEVER call this from user-facing code paths!
+    std::vector<PushResult> push_messages_internal(const std::vector<PushItem>& items);
     
     // Pop operations - async versions
     PopResult pop_messages_from_partition(

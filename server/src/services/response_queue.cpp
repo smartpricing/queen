@@ -85,7 +85,7 @@ std::string ResponseRegistry::register_response(uWS::HttpResponse<false>* res, i
 
 
 bool ResponseRegistry::send_response(const std::string& request_id, const nlohmann::json& data,
-                                   bool is_error, int status_code) {
+                                   [[maybe_unused]] bool is_error, int status_code) {
     std::shared_ptr<ResponseEntry> entry;
 
     // Find and remove from registry

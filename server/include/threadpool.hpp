@@ -111,8 +111,8 @@ namespace astp
         {
         public:
             Semaphore(int value) : _value(value) {};
-            Semaphore(const Semaphore &S) : _mutex(), _cv() {};
-            Semaphore& operator=(Semaphore S) {return *this;}
+            Semaphore(const Semaphore &S) : _mutex(), _cv() { (void)S; };
+            Semaphore& operator=(Semaphore S) { (void)S; return *this; }
             ~Semaphore() {};
     
             void
@@ -174,7 +174,7 @@ namespace astp
                 _jobs_done_counter(0),
                 _jobs_count_at_leave(0),
                 _sem_sync(Semaphore(1)) {};
-            DispatchGroup& operator = (DispatchGroup&& DP) = default;
+            DispatchGroup& operator = (DispatchGroup&& DP) = delete;
             DispatchGroup(const DispatchGroup& DP) = delete;
             DispatchGroup& operator = (const DispatchGroup& DP) = delete;
 
@@ -341,7 +341,7 @@ namespace astp
             _prev_threads(0)
         {
             #if TP_ENABLE_DEFAULT_EXCEPTION_CALL
-            _exception_action = [](std::exception_ptr e) {};
+            _exception_action = [](std::exception_ptr e) { (void)e; };
             #endif
 
             #if TP_ENABLE_SANITY_CHECKS

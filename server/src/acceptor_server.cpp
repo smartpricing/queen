@@ -42,9 +42,9 @@ static std::shared_ptr<queen::EvictionService> global_eviction_service;
 static std::shared_ptr<queen::PollIntentionRegistry> global_poll_intention_registry;
 static std::shared_ptr<queen::StreamPollIntentionRegistry> global_stream_poll_registry;
 static std::shared_ptr<queen::StreamManager> global_stream_manager;
-static us_timer_t* global_response_timer = nullptr;
+[[maybe_unused]] static us_timer_t* global_response_timer = nullptr;
 static std::once_flag global_pool_init_flag;
-static std::once_flag global_stream_registry_init_flag;
+[[maybe_unused]] static std::once_flag global_stream_registry_init_flag;
 static int num_workers_global = 0;  // Track number of workers for queue array sizing
 
 // System information for metrics
@@ -304,10 +304,11 @@ static void setup_worker_routes(uWS::App* app,
                                 std::shared_ptr<FileBufferManager> file_buffer,
                                 const Config& config,
                                 int worker_id,
-                                std::shared_ptr<astp::ThreadPool> db_thread_pool) {
+                                [[maybe_unused]] std::shared_ptr<astp::ThreadPool> db_thread_pool) {
     
     // CORS preflight
     app->options("/*", [](auto* res, auto* req) {
+        (void)req;
         setup_cors_headers(res);
         res->writeStatus("204");
         res->end();
@@ -315,6 +316,7 @@ static void setup_worker_routes(uWS::App* app,
     
     // Health check
     app->get("/health", [async_queue_manager, worker_id](auto* res, auto* req) {
+        (void)req;
         try {
             bool healthy = async_queue_manager->health_check();
             nlohmann::json response = {
@@ -332,6 +334,7 @@ static void setup_worker_routes(uWS::App* app,
     
     // GET maintenance mode status (always fetch fresh from DB)
     app->get("/api/v1/system/maintenance", [async_queue_manager](auto* res, auto* req) {
+        (void)req;
         try {
             // Force fresh check from database (bypass cache for status endpoint)
             bool current_mode = async_queue_manager->get_maintenance_mode_fresh();
@@ -351,6 +354,7 @@ static void setup_worker_routes(uWS::App* app,
     
     // POST toggle maintenance mode
     app->post("/api/v1/system/maintenance", [async_queue_manager](auto* res, auto* req) {
+        (void)req;
         read_json_body(res,
             [res, async_queue_manager](const nlohmann::json& body) {
                 try {
@@ -386,6 +390,7 @@ static void setup_worker_routes(uWS::App* app,
     
     // Configure queue
     app->post("/api/v1/configure", [async_queue_manager, worker_id](auto* res, auto* req) {
+        (void)req;
         read_json_body(res,
             [res, async_queue_manager, worker_id](const nlohmann::json& body) {
                 try {
@@ -486,6 +491,7 @@ static void setup_worker_routes(uWS::App* app,
     
     // ASYNC PUSH - NON-BLOCKING WITH ASYNC DB POOL (NO THREAD POOL NEEDED!)
     app->post("/api/v1/push", [async_queue_manager, file_buffer, worker_id](auto* res, auto* req) {
+        (void)req;
         read_json_body(res,
             [res, async_queue_manager, file_buffer, worker_id](const nlohmann::json& body) {
                 try {
@@ -734,6 +740,7 @@ static void setup_worker_routes(uWS::App* app,
     // ASYNC ACK batch
     // ASYNC ACK Batch - NEW RESPONSE QUEUE ARCHITECTURE
     app->post("/api/v1/ack/batch", [async_queue_manager, worker_id](auto* res, auto* req) {
+        (void)req;
         read_json_body(res,
             [res, async_queue_manager, worker_id](const nlohmann::json& body) {
                 try {
@@ -988,6 +995,7 @@ static void setup_worker_routes(uWS::App* app,
     
     // ASYNC Single ACK - NEW RESPONSE QUEUE ARCHITECTURE
     app->post("/api/v1/ack", [async_queue_manager, worker_id](auto* res, auto* req) {
+        (void)req;
         read_json_body(res,
             [res, async_queue_manager, worker_id](const nlohmann::json& body) {
                 try {
@@ -1224,6 +1232,7 @@ static void setup_worker_routes(uWS::App* app,
     
     // ASYNC Transaction API (atomic operations) - NEW RESPONSE QUEUE ARCHITECTURE
     app->post("/api/v1/transaction", [async_queue_manager, worker_id](auto* res, auto* req) {
+        (void)req;
         read_json_body(res,
             [res, async_queue_manager, worker_id](const nlohmann::json& body) {
                 try {
@@ -1319,6 +1328,7 @@ static void setup_worker_routes(uWS::App* app,
     
     // GET /metrics - Performance metrics
     app->get("/metrics", [analytics_manager](auto* res, auto* req) {
+        (void)req;
         try {
             auto response = analytics_manager->get_metrics();
             send_json_response(res, response);
@@ -1329,6 +1339,7 @@ static void setup_worker_routes(uWS::App* app,
     
     // GET /api/v1/resources/queues - List all queues
     app->get("/api/v1/resources/queues", [analytics_manager](auto* res, auto* req) {
+        (void)req;
         try {
             auto response = analytics_manager->get_queues();
             send_json_response(res, response);
@@ -1354,6 +1365,7 @@ static void setup_worker_routes(uWS::App* app,
     
     // GET /api/v1/resources/namespaces - List all namespaces
     app->get("/api/v1/resources/namespaces", [analytics_manager](auto* res, auto* req) {
+        (void)req;
         try {
             auto response = analytics_manager->get_namespaces();
             send_json_response(res, response);
@@ -1364,6 +1376,7 @@ static void setup_worker_routes(uWS::App* app,
     
     // GET /api/v1/resources/tasks - List all tasks
     app->get("/api/v1/resources/tasks", [analytics_manager](auto* res, auto* req) {
+        (void)req;
         try {
             auto response = analytics_manager->get_tasks();
             send_json_response(res, response);
@@ -1374,6 +1387,7 @@ static void setup_worker_routes(uWS::App* app,
     
     // GET /api/v1/resources/overview - System overview
     app->get("/api/v1/resources/overview", [analytics_manager](auto* res, auto* req) {
+        (void)req;
         try {
             auto response = analytics_manager->get_system_overview();
             send_json_response(res, response);
@@ -1468,6 +1482,7 @@ static void setup_worker_routes(uWS::App* app,
     
     // POST /api/v1/traces - Record trace event
     app->post("/api/v1/traces", [async_queue_manager, worker_id](auto* res, auto* req) {
+        (void)req;
         read_json_body(res,
             [res, async_queue_manager, worker_id](const nlohmann::json& body) {
                 try {
@@ -1599,6 +1614,7 @@ static void setup_worker_routes(uWS::App* app,
     
     // GET /api/v1/resources/streams - List all streams
     app->get("/api/v1/resources/streams", [async_queue_manager](auto* res, auto* req) {
+        (void)req;
         try {
             auto response = async_queue_manager->list_streams();
             send_json_response(res, response);
@@ -1609,6 +1625,7 @@ static void setup_worker_routes(uWS::App* app,
     
     // GET /api/v1/resources/streams/stats - Get stream statistics
     app->get("/api/v1/resources/streams/stats", [async_queue_manager](auto* res, auto* req) {
+        (void)req;
         try {
             auto response = async_queue_manager->get_stream_stats();
             send_json_response(res, response);
@@ -1772,6 +1789,7 @@ static void setup_worker_routes(uWS::App* app,
     
     // GET /api/v1/consumer-groups - Consumer groups summary
     app->get("/api/v1/consumer-groups", [analytics_manager](auto* res, auto* req) {
+        (void)req;
         try {
             auto response = analytics_manager->get_consumer_groups();
             send_json_response(res, response);
@@ -1859,6 +1877,7 @@ static void setup_worker_routes(uWS::App* app,
     
     // GET /api/v1/status/buffers - File buffer stats
     app->get("/api/v1/status/buffers", [file_buffer, worker_id](auto* res, auto* req) {
+        (void)req;
         try {
             if (file_buffer) {
                 nlohmann::json response = {
@@ -1933,6 +1952,7 @@ static void setup_worker_routes(uWS::App* app,
         
         // Route 2: GET / - Serve root index.html
         app->get("/", [webapp_root](auto* res, auto* req) {
+            (void)req;
             auto aborted = std::make_shared<bool>(false);
             res->onAborted([aborted]() { *aborted = true; });
             

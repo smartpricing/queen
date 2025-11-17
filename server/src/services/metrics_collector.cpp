@@ -159,7 +159,7 @@ MetricsSample MetricsCollector::collect_sample() {
     return sample;
 }
 
-void MetricsCollector::collect_linux_metrics(MetricsSample& sample) {
+void MetricsCollector::collect_linux_metrics([[maybe_unused]] MetricsSample& sample) {
     #ifdef __linux__
     // CPU from /proc/self/stat
     std::ifstream stat_file("/proc/self/stat");

@@ -45,7 +45,7 @@ docker run --name postgres --network queen \
 
 docker run -p 6632:6632 --network queen \
   -e PG_HOST=postgres -e PG_PASSWORD=postgres \
-  smartnessai/queen-mq:0.6.6
+  smartnessai/queen-mq:{{VERSION}}
 
 # Install client
 npm install queen-mq
@@ -161,7 +161,7 @@ A modern Vue 3 dashboard for monitoring and managing Queen MQ:
 
 Queen is currently running in production at [Smartness](https://www.linkedin.com/company/smartness-com/), handling **200k messages daily**.
 
-Latest stable version: **0.6.6**
+Latest stable version: **{{VERSION}}**
 
 ---
 

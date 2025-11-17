@@ -1,9 +1,19 @@
 <template>
   <div
     v-if="isOpen"
-    class="fixed inset-y-0 right-0 w-full sm:w-[32rem] bg-white dark:bg-slate-800 shadow-2xl z-40 overflow-y-auto scrollbar-thin transform transition-all duration-300 border-l border-gray-200 dark:border-gray-700"
+    ref="panelRef"
+    class="fixed inset-y-0 right-0 bg-gray-50 dark:bg-[#0d1117] shadow-2xl z-40 overflow-y-auto scrollbar-thin transform transition-transform duration-300 border-l border-gray-200/60 dark:border-gray-800/60"
     :class="isOpen ? 'translate-x-0' : 'translate-x-full'"
+    :style="{ width: panelWidth + 'px' }"
   >
+    <!-- Resize handle -->
+    <div
+      ref="resizeHandle"
+      @mousedown="startResize"
+      class="absolute left-0 top-0 bottom-0 w-1 cursor-ew-resize hover:bg-rose-500 transition-colors group z-50"
+    >
+      <div class="absolute left-0 top-0 bottom-0 w-4 -ml-1.5"></div>
+    </div>
     <!-- Backdrop for mobile -->
     <div
       v-if="isOpen"
@@ -11,16 +21,19 @@
       @click="close"
     ></div>
     
-    <div class="p-6">
+    <div class="p-5">
       <!-- Header -->
-      <div class="flex items-start justify-between mb-6">
+      <div class="flex items-start justify-between mb-5 pb-4 border-b border-gray-200/60 dark:border-gray-800/60">
         <div class="flex-1 min-w-0">
-          <h3 class="text-lg font-bold mb-1">Message Details</h3>
+          <h3 class="text-base font-bold mb-1 text-gray-900 dark:text-white tracking-tight">Message Details</h3>
           <p class="text-xs font-mono text-gray-500 dark:text-gray-400 break-all">
             {{ message?.transactionId }}
           </p>
         </div>
-        <button @click="close" class="text-gray-400 hover:text-gray-600 p-1">
+        <button 
+          @click="close" 
+          class="text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 p-1.5 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-800 transition-colors"
+        >
           <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" />
           </svg>
@@ -34,57 +47,58 @@
       </div>
 
       <template v-else-if="messageDetail">
-        <!-- Status Badge -->
+        <!-- Status & Info -->
         <div class="mb-6">
-          <StatusBadge :status="messageDetail.status" />
-        </div>
+          <div class="mb-5">
+            <StatusBadge :status="messageDetail.status" />
+          </div>
 
-        <!-- Info Grid -->
-        <div class="space-y-4 mb-6">
-          <div>
-            <label class="text-xs text-gray-500 dark:text-gray-400 block mb-1">Queue</label>
-            <p class="text-sm font-medium">{{ messageDetail.queue }} / {{ messageDetail.partition }}</p>
-          </div>
-          
-          <div>
-            <label class="text-xs text-gray-500 dark:text-gray-400 block mb-1">Created</label>
-            <p class="text-sm">{{ formatDate(messageDetail.createdAt) }}</p>
-          </div>
-          
-          <div v-if="messageDetail.traceId">
-            <label class="text-xs text-gray-500 dark:text-gray-400 block mb-1">Trace ID</label>
-            <p class="text-xs font-mono break-all">{{ messageDetail.traceId }}</p>
-          </div>
-          
-          <div v-if="messageDetail.errorMessage">
-            <label class="text-xs text-gray-500 dark:text-gray-400 block mb-1">Error Message</label>
-            <p class="text-sm text-red-600 dark:text-red-400">{{ messageDetail.errorMessage }}</p>
-          </div>
-          
-          <div v-if="messageDetail.retryCount">
-            <label class="text-xs text-gray-500 dark:text-gray-400 block mb-1">Retry Count</label>
-            <p class="text-sm">{{ messageDetail.retryCount }}</p>
+          <div class="space-y-4">
+            <div>
+              <label class="text-xs font-medium text-gray-500 dark:text-gray-400 block mb-1.5 uppercase tracking-wide">Queue</label>
+              <p class="text-sm font-medium text-gray-900 dark:text-gray-100">{{ messageDetail.queue }} / {{ messageDetail.partition }}</p>
+            </div>
+            
+            <div>
+              <label class="text-xs font-medium text-gray-500 dark:text-gray-400 block mb-1.5 uppercase tracking-wide">Created</label>
+              <p class="text-sm text-gray-700 dark:text-gray-300">{{ formatDate(messageDetail.createdAt) }}</p>
+            </div>
+            
+            <div v-if="messageDetail.traceId">
+              <label class="text-xs font-medium text-gray-500 dark:text-gray-400 block mb-1.5 uppercase tracking-wide">Trace ID</label>
+              <p class="text-xs font-mono break-all text-gray-700 dark:text-gray-300">{{ messageDetail.traceId }}</p>
+            </div>
+            
+            <div v-if="messageDetail.errorMessage">
+              <label class="text-xs font-medium text-gray-500 dark:text-gray-400 block mb-1.5 uppercase tracking-wide">Error Message</label>
+              <p class="text-sm text-red-600 dark:text-red-400">{{ messageDetail.errorMessage }}</p>
+            </div>
+            
+            <div v-if="messageDetail.retryCount">
+              <label class="text-xs font-medium text-gray-500 dark:text-gray-400 block mb-1.5 uppercase tracking-wide">Retry Count</label>
+              <p class="text-sm text-gray-700 dark:text-gray-300">{{ messageDetail.retryCount }}</p>
+            </div>
           </div>
         </div>
 
         <!-- Trace Events -->
-        <div v-if="traceEvents && traceEvents.length > 0" class="mb-6">
-          <h4 class="text-sm font-semibold mb-3 text-gray-700 dark:text-gray-300">
+        <div v-if="traceEvents && traceEvents.length > 0" class="mb-4">
+          <h4 class="text-sm font-semibold mb-3 text-gray-900 dark:text-white tracking-tight">
             Processing Timeline
           </h4>
           <div class="space-y-2">
             <div 
               v-for="trace in traceEvents" 
               :key="trace.id"
-              class="bg-gray-50 dark:bg-slate-900 rounded-lg p-3 border-l-4"
+              class="bg-white dark:bg-[#161b22] rounded-lg p-3 border-l-4 border border-gray-200/60 dark:border-gray-800/60"
               :class="getTraceColorClass(trace.event_type)"
             >
               <!-- Event header -->
               <div class="flex justify-between items-start mb-2">
-                <span class="text-xs font-semibold uppercase tracking-wide">
+                <span class="text-xs font-semibold uppercase tracking-wide text-gray-900 dark:text-gray-100">
                   {{ trace.event_type }}
                 </span>
-                <span class="text-xs text-gray-500">
+                <span class="text-xs text-gray-500 dark:text-gray-400">
                   {{ formatTime(trace.created_at) }}
                 </span>
               </div>
@@ -109,9 +123,7 @@
                 </div>
                 
                 <div v-if="hasAdditionalData(trace.data)" class="mt-2">
-                  <div class="bg-white dark:bg-slate-800 rounded p-2 text-xs font-mono overflow-x-auto scrollbar-thin">
-                    <pre>{{ formatTraceData(trace.data) }}</pre>
-                  </div>
+                  <JsonViewer :data="getTraceDataWithoutText(trace.data)" compact />
                 </div>
               </div>
               
@@ -127,17 +139,15 @@
         </div>
 
         <!-- Payload -->
-        <div class="mb-6">
-          <label class="text-xs text-gray-500 dark:text-gray-400 block mb-2">Payload</label>
-          <div class="bg-gray-50 dark:bg-slate-900 rounded-lg p-4 overflow-x-auto scrollbar-thin">
-            <pre class="text-xs font-mono">{{ JSON.stringify(messageDetail.payload, null, 2) }}</pre>
-          </div>
+        <div class="mb-4">
+          <h4 class="text-sm font-semibold mb-3 text-gray-900 dark:text-white tracking-tight">Payload</h4>
+          <JsonViewer :data="messageDetail.payload" />
         </div>
 
         <!-- Actions -->
-        <div class="space-y-2">
+        <div class="space-y-2 pt-2">
           <!-- Completed message info -->
-          <div v-if="messageDetail.status === 'completed'" class="card bg-green-50 dark:bg-green-900/20 text-green-800 dark:text-green-200 text-sm">
+          <div v-if="messageDetail.status === 'completed'" class="bg-green-50 dark:bg-green-900/20 border border-green-200 dark:border-green-700/30 rounded-lg p-3 text-green-800 dark:text-green-200 text-sm">
             <div class="flex gap-2">
               <svg class="w-5 h-5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
@@ -199,13 +209,14 @@
 </template>
 
 <script setup>
-import { ref, watch } from 'vue';
+import { ref, watch, onMounted, onUnmounted } from 'vue';
 import { messagesApi } from '../../api/messages';
 import { formatDate } from '../../utils/formatters';
 
 import StatusBadge from '../common/StatusBadge.vue';
 import LoadingSpinner from '../common/LoadingSpinner.vue';
 import ConfirmDialog from '../common/ConfirmDialog.vue';
+import JsonViewer from '../common/JsonViewer.vue';
 
 const props = defineProps({
   isOpen: Boolean,
@@ -221,6 +232,14 @@ const actionError = ref(null);
 const messageDetail = ref(null);
 const traceEvents = ref([]);
 const showDeleteConfirm = ref(false);
+
+// Resizable panel state
+const panelRef = ref(null);
+const resizeHandle = ref(null);
+const panelWidth = ref(512); // 32rem default
+const isResizing = ref(false);
+const minWidth = 320; // 20rem
+const maxWidth = 1200; // 75rem
 
 watch(() => props.message, async (newMessage) => {
   if (newMessage) {
@@ -335,6 +354,12 @@ function formatTraceData(data) {
   return JSON.stringify(rest, null, 2);
 }
 
+function getTraceDataWithoutText(data) {
+  if (!data || typeof data !== 'object') return {};
+  const { text, ...rest } = data;
+  return rest;
+}
+
 function formatTime(timestamp) {
   if (!timestamp) return '';
   const date = new Date(timestamp);
@@ -345,5 +370,55 @@ function formatTime(timestamp) {
     hour12: false 
   });
 }
+
+// Resize functionality
+function startResize(e) {
+  isResizing.value = true;
+  e.preventDefault();
+  document.addEventListener('mousemove', handleResize);
+  document.addEventListener('mouseup', stopResize);
+  document.body.style.cursor = 'ew-resize';
+  document.body.style.userSelect = 'none';
+}
+
+function handleResize(e) {
+  if (!isResizing.value) return;
+  
+  const windowWidth = window.innerWidth;
+  const newWidth = windowWidth - e.clientX;
+  
+  // Constrain width
+  if (newWidth >= minWidth && newWidth <= maxWidth) {
+    panelWidth.value = newWidth;
+    // Save to localStorage
+    localStorage.setItem('messagePanelWidth', newWidth.toString());
+  }
+}
+
+function stopResize() {
+  isResizing.value = false;
+  document.removeEventListener('mousemove', handleResize);
+  document.removeEventListener('mouseup', stopResize);
+  document.body.style.cursor = '';
+  document.body.style.userSelect = '';
+}
+
+onMounted(() => {
+  // Restore saved width
+  const savedWidth = localStorage.getItem('messagePanelWidth');
+  if (savedWidth) {
+    const width = parseInt(savedWidth);
+    if (width >= minWidth && width <= maxWidth) {
+      panelWidth.value = width;
+    }
+  }
+});
+
+onUnmounted(() => {
+  // Clean up event listeners if component unmounts during resize
+  if (isResizing.value) {
+    stopResize();
+  }
+});
 </script>
 

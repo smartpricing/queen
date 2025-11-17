@@ -63,7 +63,7 @@ export async function test_maintenance_mode(client = null) {
     const consumePromise = (async () => {
       while (consumerActive) {
         try {
-          const messages = await queen.queue(QUEUE_NAME).batch(10).wait(true).limit(1).each().pop();
+          const messages = await queen.queue(QUEUE_NAME).batch(10).wait(false).limit(1).each().pop();
           
           if (messages && messages.length > 0) {
             receivedCount += messages.length;

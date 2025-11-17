@@ -1,4 +1,13 @@
 import { defineConfig } from 'vitepress'
+import { readFileSync } from 'fs'
+import { fileURLToPath } from 'url'
+import { dirname, join } from 'path'
+
+// Read version from server/server.json (single source of truth)
+const __dirname = dirname(fileURLToPath(import.meta.url))
+const serverJsonPath = join(__dirname, '../../server/server.json')
+const serverJson = JSON.parse(readFileSync(serverJsonPath, 'utf-8'))
+const QUEEN_VERSION = serverJson.version
 
 export default defineConfig({
   title: 'Queen MQ',
@@ -188,6 +197,14 @@ export default defineConfig({
       light: 'github-light',
       dark: 'github-dark'
     },
-    lineNumbers: true
+    lineNumbers: true,
+    config: (md) => {
+      // Replace {{VERSION}} placeholder with actual version from server.json
+      const defaultRender = md.render.bind(md)
+      md.render = function (src, env) {
+        const srcWithVersion = src.replace(/\{\{VERSION\}\}/g, QUEEN_VERSION)
+        return defaultRender(srcWithVersion, env)
+      }
+    }
   }
 })

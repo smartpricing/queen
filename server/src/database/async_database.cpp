@@ -41,7 +41,7 @@ PGConnPtr asyncConnect(const char* conn_str,
                       int statement_timeout_ms,
                       int lock_timeout_ms,
                       int idle_in_transaction_timeout_ms,
-                      const std::string& schema) {
+                      [[maybe_unused]] const std::string& schema) {
     PGconn* conn = PQconnectStart(conn_str);
     if (!conn) {
         throw std::runtime_error("PQconnectStart failed to allocate connection.");
@@ -70,6 +70,9 @@ PGConnPtr asyncConnect(const char* conn_str,
                     throw std::runtime_error("Async connection failed: " + errMsg);
                 }
             case PGRES_POLLING_OK: 
+                break;
+            case PGRES_POLLING_ACTIVE:
+                // Deprecated status, but handle it anyway
                 break;
         }
     } while (poll_status != PGRES_POLLING_OK);
@@ -131,7 +134,7 @@ bool asyncReset(PGconn* conn,
                int statement_timeout_ms,
                int lock_timeout_ms,
                int idle_in_transaction_timeout_ms,
-               const std::string& schema) {
+               [[maybe_unused]] const std::string& schema) {
     if (!conn) {
         spdlog::error("[asyncReset] Cannot reset null connection");
         return false;
@@ -168,6 +171,9 @@ bool asyncReset(PGconn* conn,
                 spdlog::error("[asyncReset] Reset failed: {}", PQerrorMessage(conn));
                 return false;
             case PGRES_POLLING_OK:
+                break;
+            case PGRES_POLLING_ACTIVE:
+                // Deprecated status, but handle it anyway
                 break;
         }
     } while (poll_status != PGRES_POLLING_OK);

@@ -75,24 +75,28 @@ void poll_worker_loop(
                 worker_id, total_workers, poll_worker_interval_ms, poll_db_interval_ms, 
                 backoff_multiplier, backoff_threshold, max_poll_interval_ms, backoff_cleanup_inactive_threshold);
     
-    int loop_count = 0;
-    
     // Track last query time per group key for rate limiting
     std::unordered_map<std::string, std::chrono::steady_clock::time_point> last_query_times;
     
     // Track backoff state per group for adaptive exponential backoff
     std::unordered_map<std::string, GroupBackoffState> backoff_states;
     
-    // Cleanup configuration
-    constexpr int CLEANUP_INTERVAL_LOOPS = 600;  // Clean every 600 loops (~60 seconds at 100ms interval)
+    // Cleanup and logging timing
+    constexpr int CLEANUP_INTERVAL_SECONDS = 60;  // Clean every 60 seconds
+    constexpr int LOG_INTERVAL_SECONDS = 10;  // Log every 10 seconds
+    auto last_cleanup_time = std::chrono::steady_clock::now();
+    auto last_log_time = std::chrono::steady_clock::now();
     
     while (registry->is_running()) {
-        loop_count++;
-        
         try {
+            auto now = std::chrono::steady_clock::now();
+            
             // PERIODIC CLEANUP: Remove old backoff state entries
-            if (loop_count % CLEANUP_INTERVAL_LOOPS == 0) {
-                auto now = std::chrono::steady_clock::now();
+            auto seconds_since_cleanup = std::chrono::duration_cast<std::chrono::seconds>(
+                now - last_cleanup_time).count();
+            
+            if (seconds_since_cleanup >= CLEANUP_INTERVAL_SECONDS) {
+                last_cleanup_time = now;
                 
                 size_t initial_backoff_size = backoff_states.size();
                 size_t initial_query_size = last_query_times.size();
@@ -129,8 +133,8 @@ void poll_worker_loop(
                 size_t cleaned_query = initial_query_size - final_query_size;
                 
                 if (cleaned_backoff > 0 || cleaned_query > 0) {
-                    spdlog::info("[Worker {}] Backoff cleanup: removed {} backoff states ({} -> {}), {} query times ({} -> {})",
-                                worker_id, cleaned_backoff, initial_backoff_size, final_backoff_size,
+                    spdlog::info("[Worker {}] Backoff cleanup (every {}s): removed {} backoff states ({} -> {}), {} query times ({} -> {})",
+                                worker_id, CLEANUP_INTERVAL_SECONDS, cleaned_backoff, initial_backoff_size, final_backoff_size,
                                 cleaned_query, initial_query_size, final_query_size);
                 }
             }
@@ -138,15 +142,18 @@ void poll_worker_loop(
             // Get all active intentions
             auto all_intentions = registry->get_active_intentions();
             
-            // Log every 100 loops or when we have intentions
-            if (loop_count % 100 == 0 || (!all_intentions.empty() && loop_count % 10 == 0)) {
-                spdlog::debug("Poll worker {} loop {}: registry has {} total intentions", 
-                           worker_id, loop_count, all_intentions.size());
+            // Log periodically when we have intentions
+            auto seconds_since_log = std::chrono::duration_cast<std::chrono::seconds>(
+                now - last_log_time).count();
+            
+            if (!all_intentions.empty() && seconds_since_log >= LOG_INTERVAL_SECONDS) {
+                spdlog::debug("Poll worker {} status: registry has {} total intentions", 
+                           worker_id, all_intentions.size());
+                last_log_time = now;
             }
             
             // CHECK TIMEOUTS FIRST (before processing groups)
             // This ensures timeouts fire on time even if group processing is slow
-            auto now = std::chrono::steady_clock::now();
             for (const auto& intention : all_intentions) {
                 if (now >= intention.deadline) {
                     // Try to mark group as in-flight to get exclusive access for timeout

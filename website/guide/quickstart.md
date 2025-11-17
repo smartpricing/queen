@@ -31,11 +31,11 @@ docker run -p 6632:6632 --network queen \
   -e PG_DB=postgres \
   -e DB_POOL_SIZE=20 \
   -e NUM_WORKERS=2 \
-  smartnessai/queen-mq:0.6.6
+  smartnessai/queen-mq:{{VERSION}}
 ```
 
 :::tip Production Ready
-Queen MQ version **0.5.0** is production-ready and stable. It's currently handling millions of messages daily at [Smartness](https://www.linkedin.com/company/smartness-com/).
+Queen MQ version **{{VERSION}}** is production-ready and stable. It's currently handling millions of messages daily at [Smartness](https://www.linkedin.com/company/smartness-com/).
 :::
 
 The Queen server will be available at `http://localhost:6632`.

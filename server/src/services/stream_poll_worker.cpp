@@ -249,6 +249,7 @@ void stream_poll_worker_loop(
                     // Submit window check job to ThreadPool
                     // Capture by value for lambda safety
                     auto batch_copy = batch;
+                    auto group_key_copy = group_key;  // Copy for C++17 compatibility
                     thread_pool->push([=]() {
                         try {
                             // This will be implemented in StreamManager as check_and_deliver_window
@@ -264,11 +265,11 @@ void stream_poll_worker_loop(
                                 // Window found and delivered - reset backoff
                                 {
                                     std::lock_guard<std::mutex> lock(*backoff_mutex);
-                                    auto it = backoff_states->find(group_key);
+                                    auto it = backoff_states->find(group_key_copy);
                                     if (it != backoff_states->end()) {
                                         if (it->second.consecutive_empty_checks > 0) {
                                             spdlog::debug("Resetting backoff for stream group '{}' (was: {}ms, {} empty)",
-                                                        group_key, it->second.current_interval_ms, 
+                                                        group_key_copy, it->second.current_interval_ms, 
                                                         it->second.consecutive_empty_checks);
                                         }
                                         it->second.consecutive_empty_checks = 0;
@@ -283,12 +284,12 @@ void stream_poll_worker_loop(
                                 }
                                 
                                 spdlog::info("[Worker {}] Stream poll fulfilled {} intentions for group '{}'",
-                                           worker_id, batch_copy.size(), group_key);
+                                           worker_id, batch_copy.size(), group_key_copy);
                             } else {
                                 // No window ready - increment backoff counter
                                 {
                                     std::lock_guard<std::mutex> lock(*backoff_mutex);
-                                    auto it = backoff_states->find(group_key);
+                                    auto it = backoff_states->find(group_key_copy);
                                     if (it != backoff_states->end()) {
                                         it->second.consecutive_empty_checks++;
                                         it->second.last_accessed = std::chrono::steady_clock::now(); // Update access time
@@ -303,7 +304,7 @@ void stream_poll_worker_loop(
                                             
                                             if (it->second.current_interval_ms > old_interval) {
                                                 spdlog::info("Backoff activated for stream group '{}': {}ms -> {}ms (empty count: {})",
-                                                            group_key, old_interval, it->second.current_interval_ms,
+                                                            group_key_copy, old_interval, it->second.current_interval_ms,
                                                             it->second.consecutive_empty_checks);
                                             }
                                         }
@@ -311,15 +312,15 @@ void stream_poll_worker_loop(
                                 }
                                 
                                 spdlog::debug("No ready windows for stream group '{}' - keeping {} intentions in registry",
-                                            group_key, batch_copy.size());
+                                            group_key_copy, batch_copy.size());
                             }
                             
                             // Remove group from in-flight tracking
-                            registry->unmark_group_in_flight(group_key);
+                            registry->unmark_group_in_flight(group_key_copy);
                             
                         } catch (const std::exception& e) {
-                            spdlog::error("Stream window check job error for group '{}': {}", group_key, e.what());
-                            registry->unmark_group_in_flight(group_key);
+                            spdlog::error("Stream window check job error for group '{}': {}", group_key_copy, e.what());
+                            registry->unmark_group_in_flight(group_key_copy);
                         }
                     });
                     

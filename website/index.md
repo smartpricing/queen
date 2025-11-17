@@ -276,7 +276,7 @@ Queen uses a high-performance **acceptor/worker pattern** with fully asynchronou
 Queen was created by [Smartness](https://www.linkedin.com/company/smartness-com/) to power their hospitality platform. It's built with modern C++17, uses PostgreSQL for ACID guarantees, and includes a beautiful Vue.js dashboard.
 
 :::tip 🎉 Production Ready
-Queen is currently running in production, handling millions of messages daily. Version 0.5.0 is stable and ready for your projects.
+Queen is currently running in production, handling millions of messages daily. Version {{VERSION}} is stable and ready for your projects.
 :::
 
 ## Get Started in Minutes
@@ -289,7 +289,7 @@ docker run --name postgres --network queen \
 
 docker run -p 6632:6632 --network queen \
   -e PG_HOST=postgres -e PG_PASSWORD=postgres \
-  smartnessai/queen-mq:0.6.6
+  smartnessai/queen-mq:{{VERSION}}
 
 # Install client
 npm install queen-mq

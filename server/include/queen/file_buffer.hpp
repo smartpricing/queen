@@ -51,8 +51,25 @@ public:
      */
     void mark_db_unhealthy() { db_healthy_.store(false); }
     
+    /**
+     * Pause/Resume background drain (called during maintenance mode)
+     */
+    void pause_background_drain();
+    void resume_background_drain();
+    
+    /**
+     * Force finalize all .tmp files immediately
+     * Used when disabling maintenance mode to make buffered messages visible
+     */
+    void force_finalize_all();
+    
+    /**
+     * Wake up background processor immediately
+     */
+    void wake_processor();
+    
     // Stats
-    size_t get_pending_count() const { return pending_count_.load(); }
+    size_t get_pending_count() const;
     size_t get_failed_count() const { return failed_count_.load(); }
     bool is_db_healthy() const { return db_healthy_.load(); }
     
@@ -110,6 +127,12 @@ private:
     std::atomic<bool> running_{true};
     std::atomic<bool> ready_{false};
     std::atomic<bool> processor_running_{false};
+    std::atomic<bool> drain_paused_{false};  // Pause drain during maintenance mode
+    std::atomic<bool> wake_requested_{false};  // Wake processor immediately
+    
+    // Condition variable for wake-up
+    std::condition_variable processor_cv_;
+    std::mutex processor_mutex_;
     
     // Configuration
     int flush_interval_ms_;
@@ -120,6 +143,11 @@ private:
     std::atomic<size_t> pending_count_{0};
     std::atomic<size_t> failed_count_{0};
     std::atomic<bool> db_healthy_{true};
+    
+    // Circuit breaker for drain failures
+    std::atomic<int> consecutive_drain_failures_{0};
+    static constexpr int MAX_CONSECUTIVE_FAILURES = 10;
+    static constexpr int CIRCUIT_BREAKER_COOLDOWN_MS = 5000;  // 5 seconds
 };
 
 } // namespace queen

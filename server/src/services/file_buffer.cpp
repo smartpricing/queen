@@ -407,10 +407,36 @@ void FileBufferManager::background_processor() {
     const int RETRY_INTERVAL_CYCLES = 1000 / flush_interval_ms_;  // Try every 1 second (not 5)
     
     while (running_) {
-        std::this_thread::sleep_for(std::chrono::milliseconds(flush_interval_ms_));
+        // Wait for wake signal OR timeout
+        {
+            std::unique_lock<std::mutex> lock(processor_mutex_);
+            processor_cv_.wait_for(lock, 
+                std::chrono::milliseconds(flush_interval_ms_),
+                [this] { return wake_requested_.load() || !running_.load(); }
+            );
+            wake_requested_ = false;  // Clear wake flag
+        }
+        
+        if (!running_) break;
+        
         retry_counter++;
         
         try {
+            // CHECK: If drain is paused (maintenance mode), skip processing
+            if (drain_paused_.load()) {
+                spdlog::debug("Background processor: Drain paused (maintenance mode active), skipping cycle");
+                continue;  // Only finalize files, don't drain
+            }
+            
+            // Circuit breaker: If too many consecutive failures, cool down
+            int failures = consecutive_drain_failures_.load();
+            if (failures >= MAX_CONSECUTIVE_FAILURES) {
+                spdlog::error("Circuit breaker: {} consecutive drain failures, cooling down for {}ms", 
+                             failures, CIRCUIT_BREAKER_COOLDOWN_MS);
+                std::this_thread::sleep_for(std::chrono::milliseconds(CIRCUIT_BREAKER_COOLDOWN_MS));
+                consecutive_drain_failures_ = 0;  // Reset after cooldown
+                continue;
+            }
             // Check if current .tmp files should be finalized
             // Finalize if: (1) reached max events, OR (2) has events and is older than 2x flush interval
             
@@ -486,14 +512,23 @@ void FileBufferManager::background_processor() {
             // Process failover events - if DB is healthy, process aggressively
             // Process multiple files per cycle to drain faster (10 files = ~100 events in 100ms)
             int max_files_per_cycle = db_healthy_ ? 10 : 1;
+            bool any_processing_done = false;
             for (int i = 0; i < max_files_per_cycle; i++) {
                 process_failover_events();
+                any_processing_done = true;
                 // Stop if no more files to process
                 if (!has_failover_files()) break;
             }
             
             // Process QoS 0 events
             process_qos0_events();
+            
+            // Update circuit breaker: reset on successful processing
+            if (any_processing_done && db_healthy_.load()) {
+                consecutive_drain_failures_ = 0;
+            } else if (!db_healthy_.load()) {
+                consecutive_drain_failures_++;
+            }
             
             // Retry failed files periodically (every ~1 second)
             if (retry_counter >= RETRY_INTERVAL_CYCLES) {
@@ -752,6 +787,9 @@ void FileBufferManager::process_qos0_events() {
 
 bool FileBufferManager::flush_batched_to_db(const std::vector<nlohmann::json>& events) {
     try {
+        // NOTE: Connection state cleanup is handled by AsyncDbPool
+        // Each acquire() returns a connection in clean state
+        
         // Convert to PushItem format for proper batch insert
         std::vector<PushItem> items;
         items.reserve(events.size());
@@ -779,8 +817,9 @@ bool FileBufferManager::flush_batched_to_db(const std::vector<nlohmann::json>& e
             items.push_back(std::move(item));
         }
         
-        // Use queue_manager's push_messages for proper batch insert
-        auto results = queue_manager_->push_messages(items);
+        // CRITICAL: Use push_messages_internal() to bypass maintenance mode
+        // This prevents infinite loop where drain re-buffers messages
+        auto results = queue_manager_->push_messages_internal(items);
         
         // Check if all succeeded (or are duplicates, which is OK)
         for (size_t i = 0; i < results.size(); i++) {
@@ -1176,6 +1215,65 @@ void FileBufferManager::cleanup_incomplete_tmp_files() {
     } catch (const std::exception& e) {
         spdlog::error("Error during .tmp file cleanup: {}", e.what());
     }
+}
+
+// --- Pause/Resume Background Drain ---
+
+void FileBufferManager::pause_background_drain() {
+    drain_paused_.store(true);
+    spdlog::info("FileBufferManager: Background drain PAUSED (maintenance mode active)");
+}
+
+void FileBufferManager::resume_background_drain() {
+    drain_paused_.store(false);
+    spdlog::info("FileBufferManager: Background drain RESUMED (maintenance mode disabled)");
+    wake_processor();  // Wake immediately to start draining
+}
+
+void FileBufferManager::wake_processor() {
+    wake_requested_ = true;
+    processor_cv_.notify_one();
+    spdlog::debug("FileBufferManager: Processor wake requested");
+}
+
+// --- Force Finalize All .tmp Files ---
+
+void FileBufferManager::force_finalize_all() {
+    spdlog::info("FileBufferManager: Force finalizing all .tmp files");
+    
+    // Finalize QoS 0 file
+    {
+        std::lock_guard<std::mutex> lock(qos0_file_mutex_);
+        if (current_qos0_fd_ >= 0 && !current_qos0_file_.empty() && current_qos0_count_.load() > 0) {
+            spdlog::info("Force finalizing QoS 0 buffer file ({} events)", current_qos0_count_.load());
+            close(current_qos0_fd_);
+            finalize_buffer_file(current_qos0_file_);
+            create_new_buffer_file("qos0");
+            current_qos0_count_ = 0;
+        }
+    }
+    
+    // Finalize failover file
+    {
+        std::lock_guard<std::mutex> lock(failover_file_mutex_);
+        if (current_failover_fd_ >= 0 && !current_failover_file_.empty() && current_failover_count_.load() > 0) {
+            spdlog::info("Force finalizing failover buffer file ({} events)", current_failover_count_.load());
+            close(current_failover_fd_);
+            finalize_buffer_file(current_failover_file_);
+            create_new_buffer_file("failover");
+            current_failover_count_ = 0;
+        }
+    }
+    
+    spdlog::info("FileBufferManager: All .tmp files finalized");
+}
+
+size_t FileBufferManager::get_pending_count() const {
+    // pending_count_ is incremented in write_event() for every buffered message
+    // It's decremented in process_xxx_events() when messages are successfully drained
+    // It already includes events in both .tmp files and .buf files
+    // DO NOT add current_xxx_count_ here - that would double-count!
+    return pending_count_.load();
 }
 
 } // namespace queen

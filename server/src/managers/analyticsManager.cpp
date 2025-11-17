@@ -428,7 +428,7 @@ nlohmann::json AnalyticsManager::get_queues() {
         auto result = exec_query_json(conn.get(), query);
         
         nlohmann::json queues = nlohmann::json::array();
-        for (int i = 0; i < result.size(); i++) {
+        for (size_t i = 0; i < result.size(); i++) {
             std::string ns_val = json_to_string(result[i]["namespace"]);
             std::string task_val = json_to_string(result[i]["task"]);
             queues.push_back({
@@ -507,7 +507,7 @@ nlohmann::json AnalyticsManager::get_queue(const std::string& queue_name) {
         int total_total = 0, total_pending = 0, total_processing = 0;
         int total_completed = 0, total_failed = 0, total_dead_letter = 0;
         
-        for (int i = 0; i < partitions_result.size(); i++) {
+        for (size_t i = 0; i < partitions_result.size(); i++) {
             int total = json_to_int(partitions_result[i]["message_count"]);
             int pending = json_to_int(partitions_result[i]["pending"]);
             int processing = json_to_int(partitions_result[i]["processing"]);
@@ -621,7 +621,7 @@ nlohmann::json AnalyticsManager::get_namespaces() {
         auto result = exec_query_json(conn.get(), query);
         
         nlohmann::json namespaces = nlohmann::json::array();
-        for (int i = 0; i < result.size(); i++) {
+        for (size_t i = 0; i < result.size(); i++) {
             namespaces.push_back({
                 {"namespace", result[i]["namespace"]},
                 {"queues", json_to_int(result[i]["queue_count"])},
@@ -693,7 +693,7 @@ nlohmann::json AnalyticsManager::get_tasks() {
         auto result = exec_query_json(conn.get(), query);
         
         nlohmann::json tasks = nlohmann::json::array();
-        for (int i = 0; i < result.size(); i++) {
+        for (size_t i = 0; i < result.size(); i++) {
             tasks.push_back({
                 {"task", result[i]["task"]},
                 {"queues", json_to_int(result[i]["queue_count"])},
@@ -1013,7 +1013,7 @@ nlohmann::json AnalyticsManager::list_messages(const MessageFilters& filters) {
         
         nlohmann::json messages = nlohmann::json::array();
         
-        for (int i = 0; i < result.size(); i++) {
+        for (size_t i = 0; i < result.size(); i++) {
             std::string trace_val = json_to_string(result[i]["trace_id"]);
             std::string lease_val = json_to_string(result[i]["lease_expires_at"]);
             std::string queue_path = json_to_string(result[i]["queue_name"]) + "/" + json_to_string(result[i]["partition_name"]);
@@ -1396,8 +1396,10 @@ nlohmann::json AnalyticsManager::get_dlq_messages(const DLQFilters& filters) {
             JOIN queen.queues q ON p.queue_id = q.id
         )" + where_clause + R"(
             ORDER BY dlq.failed_at DESC
-            LIMIT $)" + std::to_string(param_num++) + R"(
-            OFFSET $)" + std::to_string(param_num++);
+            LIMIT $)" + std::to_string(param_num) + R"(
+            OFFSET $)" + std::to_string(param_num + 1);
+        
+        param_num += 2;
         
         params.push_back(std::to_string(filters.limit));
         params.push_back(std::to_string(filters.offset));
@@ -1620,7 +1622,7 @@ nlohmann::json AnalyticsManager::get_status(const StatusFilters& filters) {
         auto throughput_result = exec_query_params_json(conn.get(), throughput_query, {from_iso, to_iso});
         
         nlohmann::json throughput = nlohmann::json::array();
-        for (int i = 0; i < throughput_result.size(); i++) {
+        for (size_t i = 0; i < throughput_result.size(); i++) {
             int ingested = json_to_int(throughput_result[i]["messages_ingested"]);
             int processed = json_to_int(throughput_result[i]["messages_processed"]);
             throughput.push_back({
@@ -1652,7 +1654,7 @@ nlohmann::json AnalyticsManager::get_status(const StatusFilters& filters) {
         auto queues_result = exec_query_params_json(conn.get(), queues_query, {from_iso, to_iso});
         
         nlohmann::json queues = nlohmann::json::array();
-        for (int i = 0; i < queues_result.size(); i++) {
+        for (size_t i = 0; i < queues_result.size(); i++) {
             std::string ns_val = json_to_string(queues_result[i]["namespace"]);
             std::string task_val = json_to_string(queues_result[i]["task"]);
             queues.push_back({
@@ -1773,7 +1775,7 @@ nlohmann::json AnalyticsManager::get_status(const StatusFilters& filters) {
         std::set<std::string> dlq_partitions;
         nlohmann::json top_errors = nlohmann::json::array();
         
-        for (int i = 0; i < dlq_result.size(); i++) {
+        for (size_t i = 0; i < dlq_result.size(); i++) {
             int error_count = json_to_int(dlq_result[i]["error_count"]);
             dlq_total += error_count;
             std::string partition_id = json_to_string(dlq_result[i]["partition_id"]);
@@ -1847,7 +1849,7 @@ nlohmann::json AnalyticsManager::get_status_queues(const StatusFilters& filters,
         auto result = exec_query_params_json(conn.get(), query, {std::to_string(limit), std::to_string(offset)});
         
         nlohmann::json queues = nlohmann::json::array();
-        for (int i = 0; i < result.size(); i++) {
+        for (size_t i = 0; i < result.size(); i++) {
             int total = json_to_int(result[i]["total_messages"]);
             int completed = json_to_int(result[i]["completed"]);
             int processing = json_to_int(result[i]["processing"]);
@@ -1947,7 +1949,7 @@ nlohmann::json AnalyticsManager::get_queue_detail(const std::string& queue_name)
         int total_consumed = 0, total_batches = 0;
         
         nlohmann::json partitions = nlohmann::json::array();
-        for (int i = 0; i < result.size(); i++) {
+        for (size_t i = 0; i < result.size(); i++) {
             std::string partition_id = json_to_string(result[i]["partition_id"]);
             if (partition_id.empty()) continue;
             
@@ -2048,7 +2050,7 @@ nlohmann::json AnalyticsManager::get_queue_messages(const std::string& queue_nam
         });
         
         nlohmann::json messages = nlohmann::json::array();
-        for (int i = 0; i < result.size(); i++) {
+        for (size_t i = 0; i < result.size(); i++) {
             std::string trace_val = json_to_string(result[i]["trace_id"]);
             nlohmann::json msg = {
                 {"id", result[i]["id"]},
@@ -2149,7 +2151,7 @@ nlohmann::json AnalyticsManager::get_analytics(const AnalyticsFilters& filters) 
         nlohmann::json throughput_series = nlohmann::json::array();
         int total_ingested = 0, total_processed = 0, total_failed = 0;
         
-        for (int i = 0; i < throughput_result.size(); i++) {
+        for (size_t i = 0; i < throughput_result.size(); i++) {
             int ingested = json_to_int(throughput_result[i]["ingested"]);
             int processed = json_to_int(throughput_result[i]["processed"]);
             int failed = json_to_int(throughput_result[i]["failed"]);
@@ -2403,7 +2405,7 @@ nlohmann::json AnalyticsManager::get_system_metrics(const SystemMetricsFilters& 
         // Group data by replica (hostname:port)
         std::map<std::string, nlohmann::json> replicas;
         
-        for (int i = 0; i < result.size(); i++) {
+        for (size_t i = 0; i < result.size(); i++) {
             std::string hostname = json_to_string(result[i]["hostname"]);
             std::string port = json_to_string(result[i]["port"]);
             std::string worker_id = json_to_string(result[i]["worker_id"]);
@@ -2543,7 +2545,7 @@ nlohmann::json AnalyticsManager::get_consumer_groups() {
         // Group by consumer group AND queue name (so each group+queue combination gets its own row)
         std::map<std::string, nlohmann::json> consumer_groups_map;
         
-        for (int i = 0; i < result.size(); i++) {
+        for (size_t i = 0; i < result.size(); i++) {
             std::string consumer_group = json_to_string(result[i]["consumer_group"]);
             std::string queue_name = json_to_string(result[i]["queue_name"]);
             int offset_lag = json_to_int(result[i]["offset_lag"]);
@@ -2668,7 +2670,7 @@ nlohmann::json AnalyticsManager::get_consumer_group_details(const std::string& c
         // Group by queue
         nlohmann::json queues = nlohmann::json::object();
         
-        for (int i = 0; i < result.size(); i++) {
+        for (size_t i = 0; i < result.size(); i++) {
             std::string queue_name = json_to_string(result[i]["queue_name"]);
             int offset_lag = json_to_int(result[i]["offset_lag"]);
             int time_lag_seconds = json_to_int(result[i]["time_lag_seconds"]);
