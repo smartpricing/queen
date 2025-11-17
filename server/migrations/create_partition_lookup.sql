@@ -3,6 +3,14 @@
 -- Date: 2025-11-14
 -- Priority: HIGH - Performance Critical
 -- Downtime Required: No
+--
+-- IMPORTANT: Trigger is created BEFORE migration to eliminate any window gap:
+--   1. Create table + indexes
+--   2. Create trigger (captures all NEW messages from this point forward)
+--   3. Migrate old data (captures all messages BEFORE trigger was created)
+--   
+-- This ensures NO messages are missed - trigger handles concurrent inserts
+-- while migration processes historical data. No resync needed!
 -- ============================================================================
 
 BEGIN;
@@ -28,26 +36,8 @@ CREATE INDEX IF NOT EXISTS idx_partition_lookup_partition_id
 CREATE INDEX IF NOT EXISTS idx_partition_lookup_timestamp 
     ON queen.partition_lookup(last_message_created_at DESC);
 
--- Step 3: Populate with existing data (MIGRATION FOR OLD DATA)
--- This finds the last message per partition and inserts into lookup table
-INSERT INTO queen.partition_lookup (queue_name, partition_id, last_message_id, last_message_created_at)
-SELECT 
-    q.name as queue_name,
-    p.id as partition_id,
-    m.id as last_message_id,
-    m.created_at as last_message_created_at
-FROM queen.partitions p
-JOIN queen.queues q ON p.queue_id = q.id
-JOIN LATERAL (
-    SELECT id, created_at
-    FROM queen.messages
-    WHERE partition_id = p.id
-    ORDER BY created_at DESC, id DESC
-    LIMIT 1
-) m ON true
-ON CONFLICT (queue_name, partition_id) DO NOTHING;
-
--- Step 4: Create trigger function to maintain lookup table automatically
+-- Step 3: Create trigger function and trigger FIRST (eliminates migration window)
+-- From this point forward, all new messages will automatically update lookup table
 CREATE OR REPLACE FUNCTION queen.update_partition_lookup_trigger()
 RETURNS TRIGGER AS $$
 BEGIN
@@ -88,13 +78,41 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql;
 
--- Step 5: Create the trigger
 DROP TRIGGER IF EXISTS trg_update_partition_lookup ON queen.messages;
 CREATE TRIGGER trg_update_partition_lookup
 AFTER INSERT ON queen.messages
 REFERENCING NEW TABLE AS new_messages  -- Batch-aware: processes all inserted rows at once
 FOR EACH STATEMENT                     -- Fires once per INSERT statement (not per row)
 EXECUTE FUNCTION queen.update_partition_lookup_trigger();
+
+-- Step 4: NOW populate with existing data (MIGRATION FOR OLD DATA)
+-- Trigger is already active, so new messages during migration are handled automatically
+-- This migration captures all messages that existed BEFORE the trigger was created
+INSERT INTO queen.partition_lookup (queue_name, partition_id, last_message_id, last_message_created_at)
+SELECT 
+    q.name as queue_name,
+    p.id as partition_id,
+    m.id as last_message_id,
+    m.created_at as last_message_created_at
+FROM queen.partitions p
+JOIN queen.queues q ON p.queue_id = q.id
+JOIN LATERAL (
+    SELECT id, created_at
+    FROM queen.messages
+    WHERE partition_id = p.id
+    ORDER BY created_at DESC, id DESC
+    LIMIT 1
+) m ON true
+ON CONFLICT (queue_name, partition_id) 
+DO UPDATE SET
+    last_message_id = EXCLUDED.last_message_id,
+    last_message_created_at = EXCLUDED.last_message_created_at,
+    updated_at = NOW()
+WHERE 
+    -- Only update if migration found a newer message than what trigger already captured
+    EXCLUDED.last_message_created_at > partition_lookup.last_message_created_at
+    OR (EXCLUDED.last_message_created_at = partition_lookup.last_message_created_at 
+        AND EXCLUDED.last_message_id > partition_lookup.last_message_id);
 
 COMMIT;
 

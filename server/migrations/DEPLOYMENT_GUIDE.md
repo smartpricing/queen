@@ -14,7 +14,7 @@ This deployment adds a `partition_lookup` table with automatic trigger maintenan
 
 ### Step 1: Run Initial Migration (BEFORE code deploy)
 
-This creates the table, indexes, migrates existing data, and sets up the trigger.
+This creates the table, indexes, trigger, then migrates existing data.
 
 ```bash
 cd /Users/alice/Work/queen
@@ -24,9 +24,13 @@ psql $DATABASE_URL -f server/migrations/create_partition_lookup.sql
 **What this does:**
 - ✅ Creates `queen.partition_lookup` table
 - ✅ Creates 3 indexes for performance
-- ✅ **Migrates all existing message data** into lookup table
-- ✅ Creates trigger function
-- ✅ Creates trigger (will maintain table automatically going forward)
+- ✅ Creates trigger function and trigger (captures new messages from this point forward)
+- ✅ **Migrates all existing message data** into lookup table (old messages)
+
+**Important:** The trigger is created BEFORE migration to eliminate any gap:
+- Trigger captures all messages inserted DURING migration
+- Migration captures all messages that existed BEFORE trigger was created
+- No window between them = no resync needed!
 
 **Expected output:**
 ```
@@ -71,33 +75,38 @@ make clean && make
 
 ---
 
-### Step 3: Run Post-Deploy Resync (AFTER code deploy)
+### Step 3: (Optional) Run Post-Deploy Resync
 
-This ensures any messages inserted between Step 1 and Step 2 are captured.
+**Note:** With the improved migration script, resync is now **optional** because the trigger is created before migration, eliminating any gap.
+
+However, you can still run it as a verification step:
 
 ```bash
 psql $DATABASE_URL -f server/migrations/resync_partition_lookup.sql
 ```
 
 **What this does:**
-- ✅ Resyncs lookup table with latest messages
-- ✅ Handles any messages inserted during deployment
-- ✅ Verifies no stale data exists
+- ✅ Verifies lookup table is in sync
+- ✅ Provides peace of mind
+- ✅ Safe to run anytime (idempotent)
 
 **Expected output:**
 ```
 BEGIN
-INSERT 0 [N]  -- Updates N entries
+INSERT 0 0  -- Should be 0 updates if migration worked correctly
 COMMIT
 
 [Sample of lookup data...]
 
  partitions_with_stale_lookup
 ------------------------------
-                            0  -- Should be 0!
+                            0  -- Should always be 0!
 ```
 
-If `partitions_with_stale_lookup` is not 0, run the resync script again.
+**Run resync only if:**
+- ❌ Test script shows stale data
+- ❌ You want extra verification (harmless!)
+- ❌ Any errors occurred during Step 1
 
 ---
 
