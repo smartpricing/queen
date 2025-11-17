@@ -347,8 +347,8 @@ namespace astp
             #if TP_ENABLE_SANITY_CHECKS
             try {
                 resize(max_threads);
-            } catch(std::runtime_error e) {
-                throw e;
+            } catch(const std::runtime_error& e) {
+                throw;
             }
             #else
                 resize(max_threads);
