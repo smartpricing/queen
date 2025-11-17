@@ -500,6 +500,17 @@ bool AsyncQueueManager::initialize_schema() {
                 max_created_at TIMESTAMPTZ NOT NULL DEFAULT '-infinity'::timestamptz,
                 updated_at TIMESTAMPTZ DEFAULT NOW()
             );
+            
+            -- 6. Partition Lookup Table (Performance Optimization)
+            CREATE TABLE IF NOT EXISTS queen.partition_lookup (
+                id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+                queue_name VARCHAR(255) NOT NULL REFERENCES queen.queues(name) ON DELETE CASCADE,
+                partition_id UUID NOT NULL REFERENCES queen.partitions(id) ON DELETE CASCADE,
+                last_message_id UUID NOT NULL,
+                last_message_created_at TIMESTAMPTZ NOT NULL,
+                updated_at TIMESTAMPTZ DEFAULT NOW(),
+                UNIQUE(queue_name, partition_id)
+            );
         )";
         
         if (!exec_async(conn.get(), create_tables_sql)) {
@@ -547,6 +558,11 @@ bool AsyncQueueManager::initialize_schema() {
             CREATE INDEX IF NOT EXISTS idx_message_trace_names_name ON queen.message_trace_names(trace_name);
             CREATE INDEX IF NOT EXISTS idx_message_trace_names_trace_id ON queen.message_trace_names(trace_id);
             CREATE INDEX IF NOT EXISTS idx_system_state_key ON queen.system_state(key);
+            
+            -- Partition lookup indexes
+            CREATE INDEX IF NOT EXISTS idx_partition_lookup_queue_name ON queen.partition_lookup(queue_name);
+            CREATE INDEX IF NOT EXISTS idx_partition_lookup_partition_id ON queen.partition_lookup(partition_id);
+            CREATE INDEX IF NOT EXISTS idx_partition_lookup_timestamp ON queen.partition_lookup(last_message_created_at DESC);
             
             -- Streaming indexes
             CREATE INDEX IF NOT EXISTS idx_queue_watermarks_name ON queen.queue_watermarks(queue_name);
@@ -635,6 +651,53 @@ bool AsyncQueueManager::initialize_schema() {
             REFERENCING NEW TABLE AS new_messages
             FOR EACH STATEMENT
             EXECUTE FUNCTION update_queue_watermark();
+
+            -- Partition lookup trigger (statement-level, batch-efficient)
+            CREATE OR REPLACE FUNCTION queen.update_partition_lookup_trigger()
+            RETURNS TRIGGER AS $$
+            BEGIN
+                -- Find the latest message per partition in this batch
+                WITH batch_max AS (
+                    SELECT DISTINCT ON (partition_id)
+                        partition_id, 
+                        created_at as max_created_at,
+                        id as max_id
+                    FROM new_messages
+                    ORDER BY partition_id, created_at DESC, id DESC
+                )
+                -- Update lookup table once per partition
+                INSERT INTO queen.partition_lookup (
+                    queue_name, partition_id, last_message_id, last_message_created_at, updated_at
+                )
+                SELECT 
+                    q.name, 
+                    bm.partition_id, 
+                    bm.max_id, 
+                    bm.max_created_at, 
+                    NOW()
+                FROM batch_max bm
+                JOIN queen.partitions p ON p.id = bm.partition_id
+                JOIN queen.queues q ON q.id = p.queue_id
+                ON CONFLICT (queue_name, partition_id)
+                DO UPDATE SET
+                    last_message_id = EXCLUDED.last_message_id,
+                    last_message_created_at = EXCLUDED.last_message_created_at,
+                    updated_at = NOW()
+                WHERE 
+                    -- Only update if new message is actually newer (handles out-of-order commits)
+                    EXCLUDED.last_message_created_at > queen.partition_lookup.last_message_created_at
+                    OR (EXCLUDED.last_message_created_at = queen.partition_lookup.last_message_created_at 
+                        AND EXCLUDED.last_message_id > queen.partition_lookup.last_message_id);
+                RETURN NULL;
+            END;
+            $$ LANGUAGE plpgsql;
+
+            DROP TRIGGER IF EXISTS trg_update_partition_lookup ON queen.messages;
+            CREATE TRIGGER trg_update_partition_lookup
+            AFTER INSERT ON queen.messages
+            REFERENCING NEW TABLE AS new_messages
+            FOR EACH STATEMENT
+            EXECUTE FUNCTION queen.update_partition_lookup_trigger();
         )";
         
         if (!exec_async(conn.get(), create_triggers_sql)) {
@@ -2287,53 +2350,47 @@ PopResult AsyncQueueManager::pop_messages_from_queue(
             window_buffer = (buffer_str && strlen(buffer_str) > 0) ? std::stoi(buffer_str) : 0;
         }
         
-        // Build query to find available partitions
+        // Build query to find available partitions using lookup table
         std::string sql;
         std::vector<std::string> params = {queue_name, consumer_group};
         
         if (window_buffer > 0) {
             sql = R"(
-                SELECT p.id, p.name, COUNT(m.id) as message_count
-                FROM queen.partitions p
-                JOIN queen.queues q ON p.queue_id = q.id
-                LEFT JOIN queen.messages m ON m.partition_id = p.id
-                LEFT JOIN queen.partition_consumers pc ON pc.partition_id = p.id 
+                SELECT p.id, p.name
+                FROM queen.partition_lookup pl
+                JOIN queen.partitions p ON p.id = pl.partition_id
+                LEFT JOIN queen.partition_consumers pc ON pc.partition_id = pl.partition_id 
                     AND pc.consumer_group = $2
-                WHERE q.name = $1
+                WHERE pl.queue_name = $1
                   AND (pc.lease_expires_at IS NULL OR pc.lease_expires_at <= NOW())
-                  AND m.id IS NOT NULL
+                  AND (pc.last_consumed_created_at IS NULL 
+                       OR pl.last_message_created_at > pc.last_consumed_created_at
+                       OR (pl.last_message_created_at = pc.last_consumed_created_at 
+                           AND pl.last_message_id > pc.last_consumed_id))
                   AND NOT EXISTS (
-                      SELECT 1 FROM queen.messages m2
-                      WHERE m2.partition_id = p.id
-                        AND m2.created_at > NOW() - INTERVAL '1 second' * $3
+                      SELECT 1 FROM queen.messages m
+                      WHERE m.partition_id = pl.partition_id
+                        AND m.created_at > NOW() - INTERVAL '1 second' * $3
                   )
-                       AND (pc.last_consumed_created_at IS NULL
-                            OR m.created_at > pc.last_consumed_created_at
-                       OR (m.created_at = pc.last_consumed_created_at AND m.id > pc.last_consumed_id))
-                GROUP BY p.id, p.name
-                HAVING COUNT(m.id) > 0
-                ORDER BY COUNT(m.id) DESC
-                LIMIT 10
+                ORDER BY pc.last_consumed_at ASC NULLS FIRST, pl.last_message_created_at DESC
+                LIMIT 100
             )";
             params.push_back(std::to_string(window_buffer));
         } else {
             sql = R"(
-                SELECT p.id, p.name, COUNT(m.id) as message_count
-                FROM queen.partitions p
-                JOIN queen.queues q ON p.queue_id = q.id
-                LEFT JOIN queen.messages m ON m.partition_id = p.id
-                LEFT JOIN queen.partition_consumers pc ON pc.partition_id = p.id 
+                SELECT p.id, p.name
+                FROM queen.partition_lookup pl
+                JOIN queen.partitions p ON p.id = pl.partition_id
+                LEFT JOIN queen.partition_consumers pc ON pc.partition_id = pl.partition_id 
                     AND pc.consumer_group = $2
-                WHERE q.name = $1
+                WHERE pl.queue_name = $1
                   AND (pc.lease_expires_at IS NULL OR pc.lease_expires_at <= NOW())
-                  AND m.id IS NOT NULL
-                       AND (pc.last_consumed_created_at IS NULL
-                            OR m.created_at > pc.last_consumed_created_at
-                       OR (m.created_at = pc.last_consumed_created_at AND m.id > pc.last_consumed_id))
-                GROUP BY p.id, p.name
-                HAVING COUNT(m.id) > 0
-                ORDER BY COUNT(m.id) DESC
-                LIMIT 10
+                  AND (pc.last_consumed_created_at IS NULL 
+                       OR pl.last_message_created_at > pc.last_consumed_created_at
+                       OR (pl.last_message_created_at = pc.last_consumed_created_at 
+                           AND pl.last_message_id > pc.last_consumed_id))
+                ORDER BY pc.last_consumed_at ASC NULLS FIRST, pl.last_message_created_at DESC
+                LIMIT 100
             )";
         }
         
@@ -2348,10 +2405,8 @@ PopResult AsyncQueueManager::pop_messages_from_queue(
         // Try each partition until we get messages
         for (int i = 0; i < PQntuples(partitions_result.get()); ++i) {
             std::string partition_name = PQgetvalue(partitions_result.get(), i, 1);
-            const char* count_str = PQgetvalue(partitions_result.get(), i, 2);
-            int message_count = (count_str && strlen(count_str) > 0) ? std::stoi(count_str) : 0;
             
-            spdlog::debug("Trying partition '{}' with {} messages", partition_name, message_count);
+            spdlog::debug("Trying partition '{}' (priority by last_consumed_at)", partition_name);
             
             result = pop_messages_from_partition(queue_name, partition_name, consumer_group, options);
             
