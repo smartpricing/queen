@@ -3,6 +3,8 @@ node_modules
 *.env
 .env*
 
+beanchmark/bin
+
 # Built webapp for npm package (copied during prepublishOnly)
 src/webapp-dist
 webapp/node_modules

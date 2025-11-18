@@ -14,7 +14,7 @@ DB_POOL_SIZE=50 ./bin/queen-server
 
 **Ubuntu/Debian:**
 ```bash
-sudo apt-get install build-essential libpq-dev libssl-dev
+sudo apt-get install build-essential libpq-dev libssl-dev unzip zlib1g-dev
 ```
 
 **macOS:**
