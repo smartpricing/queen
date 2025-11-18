@@ -57,7 +57,7 @@ jobs:
       with:
         context: .
         file: ./Dockerfile
-        platforms: linux/amd64
+        platforms: linux/amd64,linux/arm64
         push: ${{ github.event_name != 'pull_request' }}
         tags: |
           ${{ secrets.DOCKER_REGISTRY }}/${{ steps.version.outputs.name }}:${{ steps.version.outputs.tag }}
@@ -70,5 +70,5 @@ jobs:
         echo "✅ Successfully built multi-platform image"
         echo "- Name: ${{ steps.version.outputs.name }}"
         echo "- Tag: ${{ steps.version.outputs.tag }}"
-        echo "- Platforms: linux/amd64"
+        echo "- Platforms: linux/amd64,linux/arm64"
 

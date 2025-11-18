@@ -79,7 +79,7 @@ jobs:
           -w /build \
           ubuntu:24.04 bash -c "
             apt-get update && \
-            apt-get install -y build-essential libpq-dev libssl-dev zlib1g-dev curl unzip && \
+            apt-get install -y build-essential libpq-dev libssl-dev zlib1g-dev curl unzip file && \
             make deps && \
             make build-only && \
             strip bin/queen-server && \

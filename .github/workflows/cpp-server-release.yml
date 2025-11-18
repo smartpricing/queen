@@ -71,7 +71,7 @@ jobs:
           -w /build \
           ubuntu:24.04 bash -c "
             apt-get update && \
-            apt-get install -y build-essential libpq-dev libssl-dev zlib1g-dev curl unzip && \
+            apt-get install -y build-essential libpq-dev libssl-dev zlib1g-dev curl unzip file && \
             make deps && \
             make build-only && \
             strip bin/queen-server && \
@@ -89,6 +89,84 @@ jobs:
         cd ..
         sha256sum queen-server-${{ steps.version.outputs.version }}-linux-arm64.tar.gz > \
           queen-server-${{ steps.version.outputs.version }}-linux-arm64.tar.gz.sha256
+    
+  build-macos:
+    runs-on: macos-latest
+    strategy:
+      matrix:
+        arch: [x86_64, arm64]
+    
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Install dependencies
+      run: |
+        brew install postgresql@16 openssl@3 curl unzip jq
+    
+    - name: Extract version info
+      id: version
+      run: |
+        VERSION=$(cat server/server.json | jq -r '.version')
+        echo "version=$VERSION" >> $GITHUB_OUTPUT
+        echo "Building version $VERSION"
+    
+    - name: Build queen-server (${{ matrix.arch }})
+      working-directory: server
+      run: |
+        make deps
+        if [ "${{ matrix.arch }}" = "arm64" ]; then
+          export CXXFLAGS="-std=c++17 -O3 -Wall -Wextra -pthread -DWITH_OPENSSL=1 -arch arm64"
+        else
+          export CXXFLAGS="-std=c++17 -O3 -Wall -Wextra -pthread -DWITH_OPENSSL=1 -arch x86_64"
+        fi
+        make build-only
+        strip bin/queen-server
+        file bin/queen-server
+        ls -lh bin/queen-server
+    
+    - name: Package macOS binary
+      run: |
+        cd server
+        tar -czf queen-server-${{ steps.version.outputs.version }}-darwin-${{ matrix.arch }}.tar.gz \
+          bin/queen-server \
+          README.md \
+          ENV_VARIABLES.md
+        mv queen-server-${{ steps.version.outputs.version }}-darwin-${{ matrix.arch }}.tar.gz ../
+        cd ..
+        shasum -a 256 queen-server-${{ steps.version.outputs.version }}-darwin-${{ matrix.arch }}.tar.gz > \
+          queen-server-${{ steps.version.outputs.version }}-darwin-${{ matrix.arch }}.tar.gz.sha256
+    
+    - name: Upload artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: queen-server-darwin-${{ matrix.arch }}
+        path: |
+          queen-server-${{ steps.version.outputs.version }}-darwin-${{ matrix.arch }}.tar.gz
+          queen-server-${{ steps.version.outputs.version }}-darwin-${{ matrix.arch }}.tar.gz.sha256
+
+  create-release:
+    needs: [build-and-release, build-macos]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Download all artifacts
+      uses: actions/download-artifact@v4
+    
+    - name: Extract version info
+      id: version
+      run: |
+        VERSION=$(cat server/server.json | jq -r '.version')
+        echo "version=$VERSION" >> $GITHUB_OUTPUT
+    
+    - name: List artifacts
+      run: |
+        echo "Downloaded artifacts:"
+        ls -lah
+        find . -name "*.tar.gz" -o -name "*.sha256"
     
     # Create GitHub Release
     - name: Create Release
