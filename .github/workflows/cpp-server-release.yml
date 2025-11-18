@@ -1,0 +1,157 @@
+name: C++ Server Release
+
+on:
+  push:
+    tags:
+      - 'v*'  # Triggers on version tags like v0.7.1, v1.0.0, etc.
+
+jobs:
+  build-and-release:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write  # Required to create releases
+    
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Install dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y build-essential libpq-dev libssl-dev zlib1g-dev curl unzip jq
+    
+    - name: Set up QEMU for ARM64
+      uses: docker/setup-qemu-action@v3
+    
+    - name: Set up Docker Buildx
+      uses: docker/setup-buildx-action@v3
+    
+    - name: Extract version info
+      id: version
+      run: |
+        VERSION=$(cat server/server.json | jq -r '.version')
+        TAG_VERSION=${GITHUB_REF#refs/tags/v}
+        echo "version=$VERSION" >> $GITHUB_OUTPUT
+        echo "tag_version=$TAG_VERSION" >> $GITHUB_OUTPUT
+        echo "Building version $VERSION for tag $TAG_VERSION"
+        
+        # Verify tag matches version
+        if [ "$VERSION" != "$TAG_VERSION" ]; then
+          echo "⚠️  Warning: server.json version ($VERSION) doesn't match tag ($TAG_VERSION)"
+        fi
+    
+    # Build Linux AMD64
+    - name: Build Linux AMD64
+      working-directory: server
+      run: |
+        make deps
+        make build-only
+        strip bin/queen-server
+        file bin/queen-server
+    
+    - name: Package Linux AMD64
+      run: |
+        cd server
+        tar -czf queen-server-${{ steps.version.outputs.version }}-linux-amd64.tar.gz \
+          bin/queen-server \
+          README.md \
+          ENV_VARIABLES.md
+        mv queen-server-${{ steps.version.outputs.version }}-linux-amd64.tar.gz ../
+        cd ..
+        sha256sum queen-server-${{ steps.version.outputs.version }}-linux-amd64.tar.gz > \
+          queen-server-${{ steps.version.outputs.version }}-linux-amd64.tar.gz.sha256
+    
+    - name: Clean build
+      run: cd server && make clean
+    
+    # Build Linux ARM64
+    - name: Build Linux ARM64
+      run: |
+        docker run --platform linux/arm64 --rm \
+          -v $PWD/server:/build \
+          -w /build \
+          ubuntu:24.04 bash -c "
+            apt-get update && \
+            apt-get install -y build-essential libpq-dev libssl-dev zlib1g-dev curl unzip && \
+            make deps && \
+            make build-only && \
+            strip bin/queen-server && \
+            file bin/queen-server
+          "
+    
+    - name: Package Linux ARM64
+      run: |
+        cd server
+        tar -czf queen-server-${{ steps.version.outputs.version }}-linux-arm64.tar.gz \
+          bin/queen-server \
+          README.md \
+          ENV_VARIABLES.md
+        mv queen-server-${{ steps.version.outputs.version }}-linux-arm64.tar.gz ../
+        cd ..
+        sha256sum queen-server-${{ steps.version.outputs.version }}-linux-arm64.tar.gz > \
+          queen-server-${{ steps.version.outputs.version }}-linux-arm64.tar.gz.sha256
+    
+    # Create GitHub Release
+    - name: Create Release
+      id: create_release
+      uses: softprops/action-gh-release@v1
+      with:
+        name: Queen MQ v${{ steps.version.outputs.version }}
+        body: |
+          ## Queen Message Queue v${{ steps.version.outputs.version }}
+          
+          ### Download Pre-built Binaries
+          
+          Download the appropriate binary for your platform:
+          
+          - **Linux AMD64**: `queen-server-${{ steps.version.outputs.version }}-linux-amd64.tar.gz`
+          - **Linux ARM64**: `queen-server-${{ steps.version.outputs.version }}-linux-arm64.tar.gz`
+          
+          ### Installation
+          
+          ```bash
+          # Download and extract
+          tar -xzf queen-server-${{ steps.version.outputs.version }}-linux-amd64.tar.gz
+          cd bin
+          
+          # Run the server
+          ./queen-server
+          ```
+          
+          ### Verify Checksums
+          
+          ```bash
+          sha256sum -c queen-server-${{ steps.version.outputs.version }}-linux-amd64.tar.gz.sha256
+          ```
+          
+          ### Docker Images
+          
+          Docker images are also available:
+          
+          ```bash
+          docker pull smartnessai/queen-mq:${{ steps.version.outputs.version }}
+          ```
+          
+          ### What's New
+          
+          See [CHANGELOG.md](CHANGELOG.md) for details.
+        draft: false
+        prerelease: false
+        files: |
+          queen-server-${{ steps.version.outputs.version }}-linux-amd64.tar.gz
+          queen-server-${{ steps.version.outputs.version }}-linux-amd64.tar.gz.sha256
+          queen-server-${{ steps.version.outputs.version }}-linux-arm64.tar.gz
+          queen-server-${{ steps.version.outputs.version }}-linux-arm64.tar.gz.sha256
+        token: ${{ secrets.GITHUB_TOKEN }}
+    
+    - name: Release summary
+      run: |
+        echo "✅ Release created successfully!"
+        echo "Version: ${{ steps.version.outputs.version }}"
+        echo "Tag: v${{ steps.version.outputs.tag_version }}"
+        echo ""
+        echo "Binaries published:"
+        echo "  - Linux AMD64"
+        echo "  - Linux ARM64"
+        echo ""
+        echo "View release at: https://github.com/${{ github.repository }}/releases/tag/${{ github.ref_name }}"
+
