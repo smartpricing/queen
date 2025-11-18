@@ -63,7 +63,6 @@ How Queen concepts map to other systems:
 | **Query Language** | ✅ SQL | ❌ | ❌ | ❌ | ❌ |
 | **Encryption** | ✅ Per-queue | ✅ TLS | ✅ TLS | ✅ TLS | ✅ TLS |
 | **Message Tracing** | ✅ Built-in | ⚠️ Plugins | ⚠️ External | ❌ | ❌ |
-| **Streaming** | ✅ WebSocket | ⚠️ STOMP | ❌ | ✅ Native | ✅ XREAD |
 
 ## Deep Dive Comparisons
 

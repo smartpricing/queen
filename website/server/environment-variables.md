@@ -371,16 +371,6 @@ export FILE_BUFFER_MAX_BATCH=50
 export FILE_BUFFER_EVENTS_PER_FILE=1000
 ```
 
-## WebSocket Configuration
-
-| Variable | Type | Default | Description |
-|----------|------|---------|-------------|
-| `WS_COMPRESSION` | int | 0 | WebSocket compression level (0-9) |
-| `WS_MAX_PAYLOAD_LENGTH` | int | 16384 | Maximum payload length (bytes) |
-| `WS_IDLE_TIMEOUT` | int | 60 | Idle timeout (seconds) |
-| `WS_MAX_CONNECTIONS` | int | 1000 | Maximum concurrent connections |
-| `WS_HEARTBEAT_INTERVAL` | int | 30000 | Heartbeat interval (ms) |
-
 ## Encryption Configuration
 
 | Variable | Type | Default | Description |

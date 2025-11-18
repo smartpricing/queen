@@ -37,19 +37,27 @@ Perfect for:
 
 ## Quick Start
 
-```bash
+Run PostgreSQL and Queen server in Docker:
+
+```sh
 # Start PostgreSQL and Queen
 docker network create queen
+
 docker run --name postgres --network queen \
   -e POSTGRES_PASSWORD=postgres -p 5432:5432 -d postgres
 
 docker run -p 6632:6632 --network queen \
   -e PG_HOST=postgres -e PG_PASSWORD=postgres \
   smartnessai/queen-mq
+```
 
-# Install client
+Install client:
+
+```sh
 npm install queen-mq
 ```
+
+Use the client:
 
 ```javascript
 import { Queen } from 'queen-mq'
@@ -85,7 +93,7 @@ await queen.queue('orders')
 - 🎯 **Unlimited FIFO Partitions** - No limits on ordered message streams
 - 👥 **Consumer Groups** - Kafka-style with replay from any timestamp
 - 🔄 **Transactions** - Atomic push+ack for exactly-once delivery
-- 📡 **Streaming** - Real-time message streams via WebSocket
+- 📡 **Streaming** - Window aggregation and processing
 - 🛡️ **Zero Message Loss** - Automatic failover to disk buffer
 - 💀 **Dead Letter Queue** - Automatic handling of failed messages
 - 🔍 **Message Tracing** - Debug distributed workflows

@@ -244,15 +244,6 @@ while (running) {
 console.log('Shutdown complete')
 ```
 
-## Comparison
-
-| Method | Requests/min | Latency | CPU Usage | Best For |
-|--------|--------------|---------|-----------|----------|
-| No polling | Manual | Varies | None | Interactive scripts |
-| Traditional polling (100ms) | 600 | 50-150ms | High | Legacy systems |
-| Long polling (30s) | 2-120 | 10-100ms | Low | Modern apps ✅ |
-| WebSocket streaming | N/A | <10ms | Low | Real-time feeds |
-
 ## Advanced Patterns
 
 ### Pattern: Adaptive Timeout
@@ -383,7 +374,7 @@ MAX_POLL_TIMEOUT_MS=120000  # Default: 2 minutes
 
 ## Related Topics
 
-- [Streaming](/guide/streaming) - Real-time WebSocket streaming
+- [Streaming](/guide/streaming) - Window aggregation and processing
 - [Consumer Groups](/guide/consumer-groups) - Scaling consumption
 - [Performance Tuning](/server/tuning) - Optimize server settings
 
