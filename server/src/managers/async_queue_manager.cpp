@@ -1436,12 +1436,8 @@ std::vector<PushResult> AsyncQueueManager::push_messages_chunk(const std::vector
         auto conn = async_db_pool_->acquire();
         
         // Check if queue exists
-        auto queue_check_start = std::chrono::steady_clock::now();
         sendQueryParamsAsync(conn.get(), "SELECT id FROM queen.queues WHERE name = $1", {queue_name});
         auto queue_check = getTuplesResult(conn.get());
-        auto queue_check_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
-            std::chrono::steady_clock::now() - queue_check_start).count();
-        spdlog::debug("TIMING: Queue check took {}ms", queue_check_ms);
         
         if (PQntuples(queue_check.get()) == 0) {
             for (const auto& item : items) {
@@ -1466,9 +1462,6 @@ std::vector<PushResult> AsyncQueueManager::push_messages_chunk(const std::vector
             }
             return results;
         }
-        auto partition_check_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
-            std::chrono::steady_clock::now() - partition_check_start).count();
-        spdlog::debug("TIMING: Partition check took {}ms", partition_check_ms);
         
         // Check encryption enabled
         auto encryption_check_start = std::chrono::steady_clock::now();
@@ -1506,7 +1499,7 @@ std::vector<PushResult> AsyncQueueManager::push_messages_chunk(const std::vector
         
         std::string partition_id = PQgetvalue(partition_result.get(), 0, 0);
         auto encryption_check_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
-            std::chrono::steady_clock::now() - encryption_check_start).count();
+        std::chrono::steady_clock::now() - encryption_check_start).count();
         spdlog::debug("TIMING: Encryption check + partition ID lookup took {}ms", encryption_check_ms);
         
         // Begin transaction

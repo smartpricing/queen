@@ -157,6 +157,8 @@ struct QueueConfig {
     
     // Response queue timer settings
     int response_timer_interval_ms = 25; // Response timer polling interval in ms
+    int response_batch_size = 100;       // Base number of responses to process per timer tick
+    int response_batch_max = 500;        // Maximum responses per tick even under backlog
     
     // Batch push settings
     int batch_push_chunk_size = 1000;    // DEPRECATED: Legacy count-based batching (kept for backward compatibility)
@@ -222,6 +224,8 @@ struct QueueConfig {
         config.max_partition_candidates = get_env_int("MAX_PARTITION_CANDIDATES", 100);
         
         config.response_timer_interval_ms = get_env_int("RESPONSE_TIMER_INTERVAL_MS", 25);
+        config.response_batch_size = get_env_int("RESPONSE_BATCH_SIZE", 100);
+        config.response_batch_max = get_env_int("RESPONSE_BATCH_MAX", 500);
         
         // Batch push settings
         config.batch_push_chunk_size = get_env_int("BATCH_PUSH_CHUNK_SIZE", 1000);

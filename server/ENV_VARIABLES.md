@@ -126,6 +126,8 @@ When a queue/consumer group consistently returns empty results, the system autom
 | Variable | Type | Default | Description |
 |----------|------|---------|-------------|
 | `RESPONSE_TIMER_INTERVAL_MS` | int | 25 | Response queue timer polling interval (ms). Controls how frequently the response queue is checked for ready messages. Lower values reduce latency but increase CPU usage. |
+| `RESPONSE_BATCH_SIZE` | int | 100 | Base number of responses to process per timer tick. Automatically scales up when backlog is detected. |
+| `RESPONSE_BATCH_MAX` | int | 500 | Maximum responses to process per timer tick, even under heavy backlog. Prevents event loop blocking. |
 
 ### Batch Push - Size-Based Dynamic Batching (ACTIVE)
 

@@ -231,11 +231,63 @@ Queen uses intelligent size-based batching that dynamically calculates row sizes
 
 ### Response Queue
 
+Response processing uses an adaptive batching system that automatically scales up under load to prevent backlog buildup.
+
 | Variable | Type | Default | Description |
 |----------|------|---------|-------------|
 | `RESPONSE_TIMER_INTERVAL_MS` | int | 25 | Response queue polling interval (ms) |
+| `RESPONSE_BATCH_SIZE` | int | 100 | Base number of responses to process per timer tick |
+| `RESPONSE_BATCH_MAX` | int | 500 | Maximum responses per tick under heavy backlog |
 
-Lower values reduce latency but increase CPU usage.
+**How Adaptive Batching Works:**
+
+Under normal load, the system processes `RESPONSE_BATCH_SIZE` responses every timer tick. When backlog is detected, it automatically scales up:
+
+```
+Normal (< 100 items):     100 responses per tick
+Moderate (200 items):     200 responses per tick (2x)
+High (300 items):         300 responses per tick (3x)
+Heavy (500+ items):       500 responses per tick (capped at max)
+```
+
+The system logs warnings when backlog exceeds 2x the base batch size.
+
+**Throughput Calculations:**
+
+At default settings (25ms interval):
+- Normal: 4,000 responses/sec per worker
+- Maximum: 20,000 responses/sec per worker
+
+**Configuration Examples:**
+
+```bash
+# Default balanced configuration
+export RESPONSE_TIMER_INTERVAL_MS=25
+export RESPONSE_BATCH_SIZE=100
+export RESPONSE_BATCH_MAX=500
+
+# Low latency (more responsive, higher CPU)
+export RESPONSE_TIMER_INTERVAL_MS=10
+export RESPONSE_BATCH_SIZE=50
+export RESPONSE_BATCH_MAX=200
+
+# High throughput (handles large backlogs)
+export RESPONSE_TIMER_INTERVAL_MS=25
+export RESPONSE_BATCH_SIZE=200
+export RESPONSE_BATCH_MAX=1000
+
+# Conservative (lower CPU, can backlog under load)
+export RESPONSE_TIMER_INTERVAL_MS=50
+export RESPONSE_BATCH_SIZE=50
+export RESPONSE_BATCH_MAX=200
+```
+
+::: tip Tuning Guidelines
+- Increase `RESPONSE_BATCH_SIZE` if you frequently see backlog warnings
+- Increase `RESPONSE_BATCH_MAX` for burst traffic handling
+- Lower `RESPONSE_TIMER_INTERVAL_MS` for lower latency (increases CPU)
+- The system automatically adapts between base and max based on queue depth
+:::
 
 ## Queue Defaults
 
@@ -522,6 +574,9 @@ export BATCH_PUSH_MAX_SIZE_MB=10
 export POLL_WORKER_INTERVAL=25
 export POLL_DB_INTERVAL=50
 export MAX_PARTITION_CANDIDATES=500
+export RESPONSE_TIMER_INTERVAL_MS=25
+export RESPONSE_BATCH_SIZE=200
+export RESPONSE_BATCH_MAX=1000
 export RETENTION_BATCH_SIZE=2000
 export EVICTION_BATCH_SIZE=2000
 export FILE_BUFFER_FLUSH_MS=50
@@ -554,6 +609,8 @@ export POLL_WORKER_INTERVAL=25
 export POLL_DB_INTERVAL=50
 export QUEUE_MAX_POLL_INTERVAL=1000
 export RESPONSE_TIMER_INTERVAL_MS=10
+export RESPONSE_BATCH_SIZE=50
+export RESPONSE_BATCH_MAX=200
 export FILE_BUFFER_FLUSH_MS=10
 ```
 
@@ -618,6 +675,17 @@ export QUEUE_MAX_POLL_INTERVAL=1000  # Lower ceiling
 export DB_CONNECTION_TIMEOUT=5000  # More time to connect
 export DB_STATEMENT_TIMEOUT=10000  # More time for queries
 export DB_MAX_RETRIES=5  # More retry attempts
+```
+
+### Response Queue Backlog
+
+**Symptom:** "Response queue backlog detected" warnings in logs
+
+**Solution:**
+```bash
+export RESPONSE_BATCH_SIZE=200  # Process more per tick
+export RESPONSE_BATCH_MAX=1000  # Higher ceiling for bursts
+export RESPONSE_TIMER_INTERVAL_MS=10  # Check more frequently (higher CPU)
 ```
 
 ## See Also

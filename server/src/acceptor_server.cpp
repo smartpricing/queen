@@ -2002,15 +2002,37 @@ static void setup_worker_routes(uWS::App* app,
 
 // Global shared resources initialized in worker_thread
 
+// Context struct for response timer callback
+struct ResponseTimerContext {
+    queen::ResponseQueue* queue;
+    int batch_size;
+    int batch_max;
+};
+
 // Timer callback for processing response queue
 static void response_timer_callback(us_timer_t* timer) {
-    auto* response_queue = *(queen::ResponseQueue**)us_timer_ext(timer);
+    auto* ctx = (ResponseTimerContext*)us_timer_ext(timer);
     
     queen::ResponseQueue::ResponseItem item;
     int processed = 0;
     
-    // Process up to 50 responses per timer tick to avoid blocking event loop
-    while (processed < 50 && response_queue->pop(item)) {
+    // Adaptive batch sizing based on queue backlog
+    size_t queue_size = ctx->queue->size();
+    int batch_limit = ctx->batch_size;
+    
+    // Scale up batch size if there's backlog (2x for every 100 items backlog)
+    if (queue_size > ctx->batch_size) {
+        int backlog_multiplier = 1 + (queue_size / 100);
+        batch_limit = std::min(ctx->batch_size * backlog_multiplier, ctx->batch_max);
+        
+        if (queue_size > ctx->batch_size * 2) {
+            spdlog::warn("Response queue backlog detected: {} items, processing {} this tick", 
+                        queue_size, batch_limit);
+        }
+    }
+    
+    // Process up to batch_limit responses per timer tick to avoid blocking event loop
+    while (processed < batch_limit && ctx->queue->pop(item)) {
         bool sent = global_response_registry->send_response(
             item.request_id, item.data, item.is_error, item.status_code);
         
@@ -2018,6 +2040,14 @@ static void response_timer_callback(us_timer_t* timer) {
             spdlog::debug("Response {} was aborted or expired", item.request_id);
         }
         processed++;
+    }
+    
+    // Log if we're still behind after processing
+    if (processed == batch_limit) {
+        size_t remaining = ctx->queue->size();
+        if (remaining > 0) {
+            spdlog::debug("Processed {} responses, {} still in queue", processed, remaining);
+        }
     }
     
     // Cleanup expired responses every 200 timer ticks (~5 seconds at 25ms intervals)
@@ -2306,13 +2336,19 @@ static void worker_thread(const Config& config, int worker_id, int num_workers,
         // Setup response timer for this worker (each worker has its own timer and queue)
         // CRITICAL: Timer must be created AFTER listen() to ensure event loop is properly initialized
         spdlog::info("[Worker {}] Setting up response timer...", worker_id);
-        us_timer_t* response_timer = us_create_timer((us_loop_t*)uWS::Loop::get(), 0, sizeof(queen::ResponseQueue*));
-        *(queen::ResponseQueue**)us_timer_ext(response_timer) = worker_response_queues[worker_id].get();
+        us_timer_t* response_timer = us_create_timer((us_loop_t*)uWS::Loop::get(), 0, sizeof(ResponseTimerContext));
+        
+        // Initialize timer context with queue and config
+        auto* timer_ctx = (ResponseTimerContext*)us_timer_ext(response_timer);
+        timer_ctx->queue = worker_response_queues[worker_id].get();
+        timer_ctx->batch_size = config.queue.response_batch_size;
+        timer_ctx->batch_max = config.queue.response_batch_max;
         
         // Poll using configured interval for good balance between latency and CPU usage
         int timer_interval = config.queue.response_timer_interval_ms;
         us_timer_set(response_timer, response_timer_callback, timer_interval, timer_interval);
-        spdlog::info("[Worker {}] Response timer configured to process own queue ({}ms interval)", worker_id, timer_interval);
+        spdlog::info("[Worker {}] Response timer configured: {}ms interval, batch size {}-{}", 
+                    worker_id, timer_interval, timer_ctx->batch_size, timer_ctx->batch_max);
         
         // Run worker event loop (blocks forever)
         // Will receive sockets adopted from the acceptor
