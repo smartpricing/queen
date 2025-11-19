@@ -1451,7 +1451,6 @@ std::vector<PushResult> AsyncQueueManager::push_messages_chunk(const std::vector
         }
         
         // Ensure partition exists
-        auto partition_check_start = std::chrono::steady_clock::now();
         if (!ensure_partition_exists(conn.get(), queue_name, partition_name)) {
             for (const auto& item : items) {
                 PushResult result;
