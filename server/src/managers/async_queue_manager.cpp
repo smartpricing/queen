@@ -1967,10 +1967,17 @@ std::string AsyncQueueManager::acquire_partition_lease(
         std::string sql;
         std::vector<std::string> params;
         
-        if (!consumer_exists && consumer_group != "__QUEUE_MODE__" && 
-            (effective_subscription_mode.has_value() || effective_subscription_from.has_value())) {
+        // Check if we should use subscription cursor logic:
+        // - Either PopOptions has subscription preferences
+        // - OR we found metadata that set a non-default cursor
+        bool has_subscription_cursor = (effective_subscription_mode.has_value() || 
+                                        effective_subscription_from.has_value() ||
+                                        initial_cursor_id != "00000000-0000-0000-0000-000000000000");
+        
+        if (!consumer_exists && consumer_group != "__QUEUE_MODE__" && has_subscription_cursor) {
             // New consumer group with subscription preferences
-            spdlog::debug("Creating new consumer group '{}' with cursor at: {}", consumer_group, initial_cursor_id);
+            spdlog::debug("Creating new consumer group '{}' with cursor at: {} (timestamp: {})", 
+                         consumer_group, initial_cursor_id, initial_cursor_timestamp_sql);
             
             sql = R"(
                 INSERT INTO queen.partition_consumers (

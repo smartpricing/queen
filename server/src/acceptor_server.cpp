@@ -147,6 +147,28 @@ static void read_json_body(uWS::HttpResponse<false>* res,
 }
 
 // Query parameter helpers
+static std::string url_decode(const std::string& str) {
+    std::string result;
+    result.reserve(str.length());
+    for (size_t i = 0; i < str.length(); ++i) {
+        if (str[i] == '%' && i + 2 < str.length()) {
+            int value;
+            std::istringstream is(str.substr(i + 1, 2));
+            if (is >> std::hex >> value) {
+                result += static_cast<char>(value);
+                i += 2;
+            } else {
+                result += str[i];
+            }
+        } else if (str[i] == '+') {
+            result += ' ';
+        } else {
+            result += str[i];
+        }
+    }
+    return result;
+}
+
 static std::string get_query_param(uWS::HttpRequest* req, const std::string& key, const std::string& default_value = "") {
     std::string query = std::string(req->getQuery());
     size_t pos = query.find(key + "=");
@@ -154,7 +176,7 @@ static std::string get_query_param(uWS::HttpRequest* req, const std::string& key
     pos += key.length() + 1;
     size_t end = query.find('&', pos);
     if (end == std::string::npos) end = query.length();
-    return query.substr(pos, end - pos);
+    return url_decode(query.substr(pos, end - pos));
 }
 
 static int get_query_param_int(uWS::HttpRequest* req, const std::string& key, int default_value) {
@@ -625,12 +647,13 @@ static void setup_worker_routes(uWS::App* app,
                 std::string subscription_mode_value;
                 std::string subscription_timestamp_sql;
                 
-                if (effective_sub_mode == "new" || effective_sub_mode == "new-only" || sub_from == "now") {
-                    subscription_mode_value = "new";
-                    subscription_timestamp_sql = "NOW()";
-                } else if (!sub_from.empty() && sub_from != "now") {
+                // Check subscriptionFrom parameter first (explicit user preference takes precedence)
+                if (!sub_from.empty() && sub_from != "now") {
                     subscription_mode_value = "timestamp";
                     subscription_timestamp_sql = "'" + sub_from + "'::timestamptz";
+                } else if (effective_sub_mode == "new" || effective_sub_mode == "new-only" || sub_from == "now") {
+                    subscription_mode_value = "new";
+                    subscription_timestamp_sql = "NOW()";
                 } else {
                     subscription_mode_value = "all";
                     subscription_timestamp_sql = "'1970-01-01 00:00:00+00'";
@@ -881,12 +904,13 @@ static void setup_worker_routes(uWS::App* app,
                 std::string subscription_mode_value;
                 std::string subscription_timestamp_sql;
                 
-                if (effective_sub_mode == "new" || effective_sub_mode == "new-only" || sub_from == "now") {
-                    subscription_mode_value = "new";
-                    subscription_timestamp_sql = "NOW()";
-                } else if (!sub_from.empty() && sub_from != "now") {
+                // Check subscriptionFrom parameter first (explicit user preference takes precedence)
+                if (!sub_from.empty() && sub_from != "now") {
                     subscription_mode_value = "timestamp";
                     subscription_timestamp_sql = "'" + sub_from + "'::timestamptz";
+                } else if (effective_sub_mode == "new" || effective_sub_mode == "new-only" || sub_from == "now") {
+                    subscription_mode_value = "new";
+                    subscription_timestamp_sql = "NOW()";
                 } else {
                     subscription_mode_value = "all";
                     subscription_timestamp_sql = "'1970-01-01 00:00:00+00'";
@@ -1119,12 +1143,13 @@ static void setup_worker_routes(uWS::App* app,
                 std::string subscription_mode_value;
                 std::string subscription_timestamp_sql;
                 
-                if (effective_sub_mode == "new" || effective_sub_mode == "new-only" || sub_from == "now") {
-                    subscription_mode_value = "new";
-                    subscription_timestamp_sql = "NOW()";
-                } else if (!sub_from.empty() && sub_from != "now") {
+                // Check subscriptionFrom parameter first (explicit user preference takes precedence)
+                if (!sub_from.empty() && sub_from != "now") {
                     subscription_mode_value = "timestamp";
                     subscription_timestamp_sql = "'" + sub_from + "'::timestamptz";
+                } else if (effective_sub_mode == "new" || effective_sub_mode == "new-only" || sub_from == "now") {
+                    subscription_mode_value = "new";
+                    subscription_timestamp_sql = "NOW()";
                 } else {
                     subscription_mode_value = "all";
                     subscription_timestamp_sql = "'1970-01-01 00:00:00+00'";
