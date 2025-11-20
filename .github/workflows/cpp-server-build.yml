@@ -2,9 +2,9 @@ name: C++ Server Build
 
 on:
   push:
-    branches: [ "master", "release" ]
+    branches: [ "release" ]
   pull_request:
-    branches: [ "master", "release" ]
+    branches: [ "release" ]
 
 jobs:
   build-linux-amd64:
@@ -103,58 +103,8 @@ jobs:
         path: queen-server-${{ steps.version.outputs.version }}-linux-arm64.tar.gz
         retention-days: 30
 
-  build-macos:
-    runs-on: macos-latest
-    strategy:
-      matrix:
-        arch: [x86_64, arm64]
-    
-    steps:
-    - uses: actions/checkout@v4
-    
-    - name: Install dependencies
-      run: |
-        brew install postgresql@16 openssl@3 curl unzip jq
-    
-    - name: Extract version info
-      id: version
-      run: |
-        VERSION=$(cat server/server.json | jq -r '.version')
-        echo "version=$VERSION" >> $GITHUB_OUTPUT
-        echo "Building version $VERSION"
-    
-    - name: Build queen-server (${{ matrix.arch }})
-      working-directory: server
-      run: |
-        make deps
-        if [ "${{ matrix.arch }}" = "arm64" ]; then
-          export CXXFLAGS="-std=c++17 -O3 -Wall -Wextra -pthread -DWITH_OPENSSL=1 -arch arm64"
-        else
-          export CXXFLAGS="-std=c++17 -O3 -Wall -Wextra -pthread -DWITH_OPENSSL=1 -arch x86_64"
-        fi
-        make build-only
-        strip bin/queen-server
-        file bin/queen-server
-        ls -lh bin/queen-server
-    
-    - name: Create tarball
-      run: |
-        cd server
-        tar -czf queen-server-${{ steps.version.outputs.version }}-darwin-${{ matrix.arch }}.tar.gz \
-          bin/queen-server \
-          README.md \
-          ENV_VARIABLES.md
-        mv queen-server-${{ steps.version.outputs.version }}-darwin-${{ matrix.arch }}.tar.gz ../
-    
-    - name: Upload artifact
-      uses: actions/upload-artifact@v4
-      with:
-        name: queen-server-darwin-${{ matrix.arch }}
-        path: queen-server-${{ steps.version.outputs.version }}-darwin-${{ matrix.arch }}.tar.gz
-        retention-days: 30
-
   summary:
-    needs: [build-linux-amd64, build-linux-arm64, build-macos]
+    needs: [build-linux-amd64, build-linux-arm64]
     runs-on: ubuntu-latest
     
     steps:
@@ -165,8 +115,6 @@ jobs:
         echo "Built for platforms:"
         echo "  - Linux AMD64"
         echo "  - Linux ARM64"
-        echo "  - macOS x86_64"
-        echo "  - macOS ARM64"
         echo ""
         echo "Artifacts are available for download for 30 days."
 
