@@ -1,0 +1,167 @@
+#pragma once
+
+#include <App.h>
+
+namespace queen {
+namespace routes {
+
+struct RouteContext;
+
+// ============================================================================
+// Route Setup Functions
+// ============================================================================
+// Each function sets up a category of routes on the provided uWS::App
+
+/**
+ * Setup CORS preflight OPTIONS handler
+ */
+void setup_cors_routes(uWS::App* app);
+
+/**
+ * Setup health check endpoint
+ * Routes: GET /health
+ */
+void setup_health_routes(uWS::App* app, const RouteContext& ctx);
+
+/**
+ * Setup maintenance mode endpoints
+ * Routes: GET/POST /api/v1/system/maintenance
+ */
+void setup_maintenance_routes(uWS::App* app, const RouteContext& ctx);
+
+/**
+ * Setup queue configuration endpoints
+ * Routes: POST /api/v1/configure
+ */
+void setup_configure_routes(uWS::App* app, const RouteContext& ctx);
+
+/**
+ * Setup message push endpoints
+ * Routes: POST /api/v1/push
+ */
+void setup_push_routes(uWS::App* app, const RouteContext& ctx);
+
+/**
+ * Setup message pop endpoints
+ * Routes: 
+ *   GET /api/v1/pop
+ *   GET /api/v1/pop/queue/:queue
+ *   GET /api/v1/pop/queue/:queue/partition/:partition
+ */
+void setup_pop_routes(uWS::App* app, const RouteContext& ctx);
+
+/**
+ * Setup message acknowledgment endpoints
+ * Routes:
+ *   POST /api/v1/ack
+ *   POST /api/v1/ack/batch
+ */
+void setup_ack_routes(uWS::App* app, const RouteContext& ctx);
+
+/**
+ * Setup transaction endpoints
+ * Routes: POST /api/v1/transaction
+ */
+void setup_transaction_routes(uWS::App* app, const RouteContext& ctx);
+
+/**
+ * Setup lease management endpoints
+ * Routes: POST /api/v1/lease/:leaseId/extend
+ */
+void setup_lease_routes(uWS::App* app, const RouteContext& ctx);
+
+/**
+ * Setup metrics endpoints
+ * Routes: GET /metrics
+ */
+void setup_metrics_routes(uWS::App* app, const RouteContext& ctx);
+
+/**
+ * Setup resource listing endpoints
+ * Routes:
+ *   GET /api/v1/resources/queues
+ *   GET /api/v1/resources/queues/:queue
+ *   DELETE /api/v1/resources/queues/:queue
+ *   GET /api/v1/resources/namespaces
+ *   GET /api/v1/resources/tasks
+ *   GET /api/v1/resources/overview
+ */
+void setup_resource_routes(uWS::App* app, const RouteContext& ctx);
+
+/**
+ * Setup message listing and detail endpoints
+ * Routes:
+ *   GET /api/v1/messages
+ *   GET /api/v1/messages/:partitionId/:transactionId
+ *   DELETE /api/v1/messages/:partitionId/:transactionId
+ */
+void setup_message_routes(uWS::App* app, const RouteContext& ctx);
+
+/**
+ * Setup dead letter queue endpoints
+ * Routes: GET /api/v1/dlq
+ */
+void setup_dlq_routes(uWS::App* app, const RouteContext& ctx);
+
+/**
+ * Setup message tracing endpoints
+ * Routes:
+ *   POST /api/v1/traces
+ *   GET /api/v1/traces/:partitionId/:transactionId
+ *   GET /api/v1/traces/by-name/:traceName
+ *   GET /api/v1/traces/names
+ */
+void setup_trace_routes(uWS::App* app, const RouteContext& ctx);
+
+/**
+ * Setup streaming endpoints
+ * Routes:
+ *   POST /api/v1/stream/define
+ *   POST /api/v1/stream/poll
+ *   POST /api/v1/stream/ack
+ *   POST /api/v1/stream/renew-lease
+ *   POST /api/v1/stream/seek
+ *   GET /api/v1/resources/streams
+ *   GET /api/v1/resources/streams/stats
+ *   GET /api/v1/resources/streams/:streamName
+ *   GET /api/v1/resources/streams/:streamName/consumers
+ *   DELETE /api/v1/resources/streams/:streamName
+ */
+void setup_stream_routes(uWS::App* app, const RouteContext& ctx);
+
+/**
+ * Setup status and analytics endpoints
+ * Routes:
+ *   GET /api/v1/status
+ *   GET /api/v1/status/queues
+ *   GET /api/v1/status/queues/:queue
+ *   GET /api/v1/status/queues/:queue/messages
+ *   GET /api/v1/status/analytics
+ *   GET /api/v1/analytics/system-metrics
+ *   GET /api/v1/status/buffers
+ */
+void setup_status_routes(uWS::App* app, const RouteContext& ctx);
+
+/**
+ * Setup consumer group endpoints
+ * Routes:
+ *   GET /api/v1/consumer-groups
+ *   GET /api/v1/consumer-groups/lagging
+ *   GET /api/v1/consumer-groups/:group
+ *   DELETE /api/v1/consumer-groups/:group
+ *   POST /api/v1/consumer-groups/:group/subscription
+ */
+void setup_consumer_group_routes(uWS::App* app, const RouteContext& ctx);
+
+/**
+ * Setup static file serving for webapp
+ * Routes:
+ *   GET /
+ *   GET /assets/... (all assets)
+ *   GET /... (SPA fallback for all other routes)
+ */
+void setup_static_file_routes(uWS::App* app, const RouteContext& ctx);
+
+} // namespace routes
+} // namespace queen
+

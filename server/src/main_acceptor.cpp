@@ -59,7 +59,6 @@ int main(int argc, char* argv[]) {
         spdlog::info("  - Host: {}", config.server.host);
         spdlog::info("  - Port: {}", config.server.port);
         spdlog::info("  - Database: {}:{}/{}", config.database.host, config.database.port, config.database.database);
-        spdlog::info("  - Pattern: Acceptor distributes to workers (cross-platform)");
         
         // Start acceptor/worker server
         if (!queen::start_acceptor_server(config)) {

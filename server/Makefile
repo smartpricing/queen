@@ -46,7 +46,8 @@ SOURCES = $(SRC_DIR)/main_acceptor.cpp \
           $(SRC_DIR)/acceptor_server.cpp \
           $(wildcard $(SRC_DIR)/database/*.cpp) \
           $(wildcard $(SRC_DIR)/managers/*.cpp) \
-          $(wildcard $(SRC_DIR)/services/*.cpp)
+          $(wildcard $(SRC_DIR)/services/*.cpp) \
+          $(wildcard $(SRC_DIR)/routes/*.cpp)
 OBJECTS = $(SOURCES:$(SRC_DIR)/%.cpp=$(BUILD_DIR)/%.o)
 
 # uSockets source files (C and C++ files)
