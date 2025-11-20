@@ -138,6 +138,18 @@ struct QueueConfig {
     // Long polling - Worker configuration
     int poll_worker_count = 10;          // Number of dedicated poll worker threads (scale for higher loads)
     
+    // Stream long polling - Worker configuration
+    int stream_poll_worker_count = 1;    // Number of dedicated stream poll worker threads
+    int stream_poll_worker_interval = 100; // How often stream workers check registry (ms)
+    int stream_poll_interval = 1000;     // Min time between stream checks per group (ms)
+    int stream_backoff_threshold = 5;    // Consecutive empty checks before backoff
+    double stream_backoff_multiplier = 2.0; // Exponential backoff multiplier
+    int stream_max_poll_interval = 5000; // Max poll interval after backoff (ms)
+    int stream_concurrent_checks = 1;   // Max concurrent window check jobs per worker
+    
+    // ThreadPool sizing
+    int db_thread_pool_service_threads = 5; // Threads for background service DB operations
+    
     // Long polling - Dual-interval rate limiting (ACTIVE)
     int poll_worker_interval = 50;       // 50ms - How often poll workers wake up to check registry (in-memory, cheap)
     int poll_db_interval = 100;          // 100ms - Initial DB query interval (aggressive first attempt, then backoff)
@@ -206,6 +218,18 @@ struct QueueConfig {
         
         // Long polling - Worker configuration
         config.poll_worker_count = get_env_int("POLL_WORKER_COUNT", 2);
+        
+        // Stream long polling - Worker configuration
+        config.stream_poll_worker_count = get_env_int("STREAM_POLL_WORKER_COUNT", 1);
+        config.stream_poll_worker_interval = get_env_int("STREAM_POLL_WORKER_INTERVAL", 100);
+        config.stream_poll_interval = get_env_int("STREAM_POLL_INTERVAL", 1000);
+        config.stream_backoff_threshold = get_env_int("STREAM_BACKOFF_THRESHOLD", 5);
+        config.stream_backoff_multiplier = get_env_double("STREAM_BACKOFF_MULTIPLIER", 2.0);
+        config.stream_max_poll_interval = get_env_int("STREAM_MAX_POLL_INTERVAL", 5000);
+        config.stream_concurrent_checks = get_env_int("STREAM_CONCURRENT_CHECKS", 2);
+        
+        // ThreadPool sizing
+        config.db_thread_pool_service_threads = get_env_int("DB_THREAD_POOL_SERVICE_THREADS", 5);
         
         // Long polling - Dual-interval rate limiting
         config.poll_worker_interval = get_env_int("POLL_WORKER_INTERVAL", 50);
@@ -291,6 +315,10 @@ struct JobsConfig {
     // Metrics retention (messages_consumed table)
     int metrics_retention_days = 90;     // Keep 90 days of metrics
     
+    // Metrics collector intervals
+    int metrics_sample_interval_ms = 1000;    // 1 second - How often to sample metrics
+    int metrics_aggregate_interval_s = 60;    // 60 seconds - How often to aggregate and save to DB
+    
     // Eviction service
     int eviction_interval = 60000;       // 1 minute
     int eviction_batch_size = 1000;
@@ -308,6 +336,9 @@ struct JobsConfig {
         config.partition_cleanup_days = get_env_int("PARTITION_CLEANUP_DAYS", 30);
         
         config.metrics_retention_days = get_env_int("METRICS_RETENTION_DAYS", 90);
+        
+        config.metrics_sample_interval_ms = get_env_int("METRICS_SAMPLE_INTERVAL_MS", 1000);
+        config.metrics_aggregate_interval_s = get_env_int("METRICS_AGGREGATE_INTERVAL_S", 60);
         
         config.eviction_interval = get_env_int("EVICTION_INTERVAL", 60000);
         config.eviction_batch_size = get_env_int("EVICTION_BATCH_SIZE", 1000);

@@ -17,6 +17,7 @@ const consumer = await queen
   .each()
   .consume(async (message) => {
     try {
+        console.log(message.createdAt)
         const data = message.data
         console.log((new Date()).toISOString(), data.sentAt, message.transactionId)
     } catch (error) {

@@ -2,13 +2,13 @@
 #include <spdlog/spdlog.h>
 #include <sstream>
 #include <iomanip>
-#include <thread>
 #include <unordered_map>
 #include <mutex>
 
 namespace queen {
 
 void init_long_polling(
+    std::shared_ptr<astp::ThreadPool> thread_pool,
     std::shared_ptr<PollIntentionRegistry> registry,
     std::shared_ptr<AsyncQueueManager> async_queue_manager,
     std::vector<std::shared_ptr<ResponseQueue>> worker_response_queues,
@@ -23,9 +23,9 @@ void init_long_polling(
     spdlog::info("Initializing long-polling with {} poll workers (worker_interval={}ms, db_interval={}ms, backoff: {}x after {} empty, cleanup_threshold={}s)", 
                 worker_count, poll_worker_interval_ms, poll_db_interval_ms, backoff_multiplier, backoff_threshold, backoff_cleanup_inactive_threshold);
     
-    // Spawn dedicated poll worker threads
+    // Push never-returning jobs to ThreadPool to reserve worker threads
     for (int worker_id = 0; worker_id < worker_count; worker_id++) {
-        std::thread([=]() {
+        thread_pool->push([=]() {
             poll_worker_loop(
                 worker_id,
                 worker_count,
@@ -39,10 +39,10 @@ void init_long_polling(
                 max_poll_interval_ms,
                 backoff_cleanup_inactive_threshold
             );
-        }).detach();
+        });
     }
     
-    spdlog::info("Long-polling: {} dedicated poll worker threads spawned", worker_count);
+    spdlog::info("Long-polling: {} poll workers reserved from ThreadPool", worker_count);
 }
 
 // Per-group backoff state

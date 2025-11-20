@@ -3,23 +3,24 @@
 #include "queen/poll_intention_registry.hpp"
 #include "queen/async_queue_manager.hpp"
 #include "queen/response_queue.hpp"
+#include "threadpool.hpp"
 #include <memory>
 #include <string>
-#include <thread>
 
 namespace queen {
 
 /**
  * Initialize long-polling infrastructure
  * 
- * This function spawns dedicated poll worker threads that check the registry
+ * This function submits dedicated poll worker jobs to the ThreadPool that check the registry
  * for polling intentions and fulfill them when messages are available.
- * Each poll worker executes pop operations directly (no ThreadPool indirection).
+ * Each poll worker executes pop operations directly using AsyncQueueManager.
  * 
+ * @param thread_pool The ThreadPool to submit poll worker jobs to
  * @param registry The shared PollIntentionRegistry
  * @param async_queue_manager The AsyncQueueManager for database operations
  * @param worker_response_queues All worker response queues for routing responses
- * @param worker_count Number of poll worker threads to spawn (default: 10)
+ * @param worker_count Number of poll worker threads to reserve (default: 10)
  * @param poll_worker_interval_ms How often workers wake to check registry (default: 50ms)
  * @param poll_db_interval_ms Minimum time between DB queries per group (default: 500ms)
  * @param backoff_threshold Number of consecutive empty pops before backoff starts (default: 5)
@@ -28,6 +29,7 @@ namespace queen {
  * @param backoff_cleanup_inactive_threshold Cleanup inactive backoff state after N seconds (default: 3600)
  */
 void init_long_polling(
+    std::shared_ptr<astp::ThreadPool> thread_pool,
     std::shared_ptr<PollIntentionRegistry> registry,
     std::shared_ptr<AsyncQueueManager> async_queue_manager,
     std::vector<std::shared_ptr<ResponseQueue>> worker_response_queues,

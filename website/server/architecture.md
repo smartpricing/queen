@@ -172,15 +172,16 @@ Return to client
 
 ### 4. Background Services
 
-#### Poll Workers (Dedicated Threads)
+#### Poll Workers (ThreadPool-Managed)
 
 **Purpose:** Handle long-polling operations (`wait=true`)
 
 **Design:**
-- **2-4 dedicated threads** (configurable via `POLL_WORKER_COUNT`)
+- **ThreadPool-managed threads** (configurable via `POLL_WORKER_COUNT` and `STREAM_POLL_WORKER_COUNT`)
 - **Non-blocking I/O** with AsyncDbPool
-- **Exponential backoff** (100ms → 2000ms)
+- **Exponential backoff** (100ms → 2000ms for regular, 1000ms → 5000ms for streams)
 - **Intention registry** for request grouping
+- **Centralized resource management** via DB ThreadPool
 
 **Flow:**
 ```
@@ -206,10 +207,22 @@ If no messages:
 
 **Configuration:**
 ```bash
-export POLL_WORKER_COUNT=2          # Number of poll workers
-export POLL_WORKER_INTERVAL=50      # Registry check interval (ms)
-export POLL_DB_INTERVAL=100         # Initial DB query interval (ms)
-export QUEUE_MAX_POLL_INTERVAL=2000 # Max backoff interval (ms)
+# Regular poll workers
+export POLL_WORKER_COUNT=2                  # Reserved threads in DB ThreadPool
+export POLL_WORKER_INTERVAL=50              # Registry check interval (ms)
+export POLL_DB_INTERVAL=100                 # Initial DB query interval (ms)
+export QUEUE_MAX_POLL_INTERVAL=2000         # Max backoff interval (ms)
+
+# Stream poll workers  
+export STREAM_POLL_WORKER_COUNT=2           # Reserved threads in DB ThreadPool
+export STREAM_POLL_WORKER_INTERVAL=100      # Registry check interval (ms)
+export STREAM_POLL_INTERVAL=1000            # Initial stream check interval (ms)
+export STREAM_CONCURRENT_CHECKS=10          # Max concurrent window checks per worker
+export STREAM_MAX_POLL_INTERVAL=5000        # Max backoff interval (ms)
+
+# ThreadPool sizing (auto-calculated)
+# DB ThreadPool = 2 + 2 + 20 + 5 = 29 threads
+# System ThreadPool = 4 threads (fixed)
 ```
 
 #### Background Pool (8 Connections)
@@ -494,8 +507,10 @@ Lower latency, better scalability
 export NUM_WORKERS=10
 export DB_POOL_SIZE=150
 export POLL_WORKER_COUNT=2
+export STREAM_POLL_WORKER_COUNT=2
 export POLL_WORKER_INTERVAL=50
 export POLL_DB_INTERVAL=100
+# DB ThreadPool: 2 + 2 + 20 + 5 = 29 threads
 ```
 
 ### High Throughput
@@ -503,10 +518,13 @@ export POLL_DB_INTERVAL=100
 ```bash
 export NUM_WORKERS=20
 export DB_POOL_SIZE=300
-export POLL_WORKER_COUNT=4
+export POLL_WORKER_COUNT=10
+export STREAM_POLL_WORKER_COUNT=4
+export STREAM_CONCURRENT_CHECKS=20
 export POLL_WORKER_INTERVAL=25
 export POLL_DB_INTERVAL=50
 export BATCH_INSERT_SIZE=2000
+# DB ThreadPool: 10 + 4 + 80 + 5 = 99 threads
 ```
 
 ### Low Latency
@@ -515,9 +533,11 @@ export BATCH_INSERT_SIZE=2000
 export NUM_WORKERS=10
 export DB_POOL_SIZE=150
 export POLL_WORKER_COUNT=4
+export STREAM_POLL_WORKER_COUNT=2
 export POLL_WORKER_INTERVAL=25
 export POLL_DB_INTERVAL=50
 export RESPONSE_TIMER_INTERVAL_MS=10
+# DB ThreadPool: 4 + 2 + 20 + 5 = 31 threads
 ```
 
 ## See Also

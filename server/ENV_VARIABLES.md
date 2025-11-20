@@ -60,7 +60,7 @@ The system uses dedicated poll worker threads that execute pop operations direct
 
 | Variable | Type | Default | Description |
 |----------|------|---------|-------------|
-| `POLL_WORKER_COUNT` | int | 2 | Number of dedicated poll worker threads. Scale this for higher loads (2-50 workers typical). Each worker can handle ~5-10 active groups efficiently. |
+| `POLL_WORKER_COUNT` | int | 2 | Number of dedicated poll worker threads. Scale this for higher loads (2-50 workers typical). Each worker can handle ~5-10 active groups efficiently. These workers spawn their own threads and execute pop operations directly (not using a shared ThreadPool). |
 
 **Scaling Guidelines:**
 - Low load (< 20 clients): 2-5 workers
@@ -116,6 +116,46 @@ When a queue/consumer group consistently returns empty results, the system autom
 |----------|------|---------|-------------|
 | `QUEUE_POLL_INTERVAL` | int | 100 | Reserved for future use |
 | `QUEUE_POLL_INTERVAL_FILTERED` | int | 50 | Reserved for future use |
+
+#### 3. Stream Long Polling *(Active)*
+
+Stream processing uses dedicated poll workers similar to regular queue long polling, but optimized for windowed message consumption. Stream workers can submit concurrent window check operations to the ThreadPool. These workers handle `/api/v1/stream/poll` requests with configurable backoff.
+
+**ThreadPool Allocation:** The DB ThreadPool is shared by all long-polling workers and services:
+```
+DB ThreadPool Size = P + S + (S × C) + T
+Where:
+  P = POLL_WORKER_COUNT (reserved threads for regular poll workers)
+  S = STREAM_POLL_WORKER_COUNT (reserved threads for stream poll workers)
+  C = STREAM_CONCURRENT_CHECKS (max concurrent window checks per stream worker)
+  T = DB_THREAD_POOL_SERVICE_THREADS (background service DB operations)
+
+Example: 2 poll + 2 stream + (2 × 10) + 5 = 29 threads
+```
+
+| Variable | Type | Default | Description |
+|----------|------|---------|-------------|
+| `STREAM_POLL_WORKER_COUNT` | int | 2 | Number of dedicated stream poll worker threads. Scale based on number of active stream consumers. Each worker reserves 1 ThreadPool thread for its main loop. |
+| `STREAM_CONCURRENT_CHECKS` | int | 10 | Maximum concurrent window check jobs per stream worker. Higher values allow checking more stream groups in parallel but use more threads. |
+| `DB_THREAD_POOL_SERVICE_THREADS` | int | 5 | Number of ThreadPool threads reserved for background service DB operations (MetricsCollector writes, etc.). |
+| `STREAM_POLL_WORKER_INTERVAL` | int | 100 | How often stream workers check registry for new requests (ms) - in-memory operation |
+| `STREAM_POLL_INTERVAL` | int | 1000 | Minimum time between stream checks per consumer group (ms) - controls DB query frequency |
+| `STREAM_BACKOFF_THRESHOLD` | int | 5 | Number of consecutive empty checks before exponential backoff starts |
+| `STREAM_BACKOFF_MULTIPLIER` | double | 2.0 | Exponential backoff multiplier for stream poll interval |
+| `STREAM_MAX_POLL_INTERVAL` | int | 5000 | Maximum poll interval after backoff (ms) - caps exponential growth |
+
+**Stream Scaling Guidelines:**
+- Low load (< 10 stream consumers): 2 workers, 10 concurrent checks
+- Medium load (10-50 consumers): 4 workers, 15 concurrent checks
+- High load (50+ consumers): 8 workers, 20 concurrent checks
+
+**Important:** Stream workers check groups sequentially and submit ONE window check job per group to the ThreadPool. The `STREAM_CONCURRENT_CHECKS` setting controls the maximum concurrent window checks per worker. All stream workers combined can have `STREAM_POLL_WORKER_COUNT × STREAM_CONCURRENT_CHECKS` concurrent checks in flight.
+
+**Resource Management:** All poll workers (both regular and stream) run as never-returning jobs in the DB ThreadPool. This provides:
+- Centralized thread management
+- Visibility into thread usage
+- Proper resource limits
+- Clean shutdown capabilities
 
 ### Partition Selection
 | Variable | Type | Default | Description |
@@ -229,6 +269,17 @@ export DEFAULT_SUBSCRIPTION_MODE="new"
 | Variable | Type | Default | Description |
 |----------|------|---------|-------------|
 | `LEASE_RECLAIM_INTERVAL` | int | 5000 | Lease reclamation interval (ms) |
+
+### Metrics Collector
+| Variable | Type | Default | Description |
+|----------|------|---------|-------------|
+| `METRICS_SAMPLE_INTERVAL_MS` | int | 1000 | How often to sample system metrics (CPU, memory, queue depth) in milliseconds |
+| `METRICS_AGGREGATE_INTERVAL_S` | int | 60 | How often to aggregate sampled metrics and write to database (seconds) |
+
+**How it works:**
+- Samples metrics every second (in-memory, low overhead)
+- Aggregates 60 samples into averages/min/max
+- Writes aggregated data to database every 60 seconds (reduces DB writes)
 
 ### Retention Service
 | Variable | Type | Default | Description |
@@ -450,5 +501,5 @@ export EVICTION_BATCH_SIZE=2000
 - **String values**: Used as-is without validation unless specified otherwise
 - **Encryption key**: Must be exactly 64 hexadecimal characters (32 bytes)
 - All timeout values are in milliseconds unless specified as seconds
-- The C++ server now has **full parity** with the JavaScript server's configuration options
+
 

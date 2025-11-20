@@ -48,9 +48,8 @@ std::shared_ptr<PollIntentionRegistry> global_poll_intention_registry;
 std::shared_ptr<StreamPollIntentionRegistry> global_stream_poll_registry;
 std::shared_ptr<StreamManager> global_stream_manager;
 }
-[[maybe_unused]] static us_timer_t* global_response_timer = nullptr;
+
 static std::once_flag global_pool_init_flag;
-[[maybe_unused]] static std::once_flag global_stream_registry_init_flag;
 static int num_workers_global = 0;  // Track number of workers for queue array sizing
 
 // System information for metrics
@@ -257,15 +256,36 @@ static void worker_thread(const Config& config, int worker_id, int num_workers,
             // ALL connections go to async pool (100% utilization)
             // No more DatabasePool - everything uses AsyncDbPool
             
-            // Thread pool sizing: 2 for poll_worker_loop + 8 for their pop jobs = 10 total
-            int poll_worker_threads = 10; // 2 poll workers + 8 for jobs they submit
-            int system_threads = 4; // Small pool for background tasks (metrics, cleanup, etc.)
+            // Thread pool sizing calculations:
+            // ALL workers use ThreadPool for proper resource management and visibility
+            // - Regular poll workers: reserve threads in db_thread_pool
+            // - Stream poll workers: reserve threads + submit concurrent window checks
+            // - Background services: use system_thread_pool for scheduling
+            
+            // DB ThreadPool Formula:
+            // = Regular poll workers (reserved)
+            // + Stream poll workers (reserved) 
+            // + Stream concurrent checks (N × C)
+            // + Service threads (metrics, etc.)
+            int poll_workers = config.queue.poll_worker_count;
+            int stream_workers = config.queue.stream_poll_worker_count;
+            int stream_concurrent = config.queue.stream_poll_worker_count * config.queue.stream_concurrent_checks;
+            int service_threads = config.queue.db_thread_pool_service_threads;
+            int db_thread_pool_size = poll_workers + stream_workers + stream_concurrent + service_threads;
+            
+            // System ThreadPool: Used by background services (metrics sampling, retention, eviction)
+            int system_threads = 4; // MetricsCollector, RetentionService, EvictionService scheduling
             
             spdlog::info("Initializing GLOBAL shared resources (ASYNC-ONLY MODE):");
             spdlog::info("  - Total DB connections: {} (95% of {}) - ALL ASYNC", total_connections, config.database.pool_size);
-            spdlog::info("  - Poll Worker ThreadPool threads: {} (long-polling only)", poll_worker_threads);
-            spdlog::info("  - System ThreadPool threads: {}", system_threads);
-            spdlog::info("  - Number of workers: {}", num_workers);
+            spdlog::info("  - DB ThreadPool size: {} = {} poll + {} stream + {} stream concurrent + {} service", 
+                        db_thread_pool_size, poll_workers, stream_workers, stream_concurrent, service_threads);
+            spdlog::info("    * Regular poll workers: {} (reserved threads for long-polling)", poll_workers);
+            spdlog::info("    * Stream poll workers: {} (reserved threads)", stream_workers);
+            spdlog::info("    * Stream concurrent checks: {} ({} per worker)", stream_concurrent, config.queue.stream_concurrent_checks);
+            spdlog::info("    * Service DB threads: {} (metrics, retention, eviction)", service_threads);
+            spdlog::info("  - System ThreadPool threads: {} (for background service scheduling)", system_threads);
+            spdlog::info("  - Number of HTTP workers: {}", num_workers);
             
             // Create ONLY async connection pool (for ALL operations including analytics)
             spdlog::info("  - Creating Async DB Pool ({} connections) for ALL operations", total_connections);
@@ -278,8 +298,8 @@ static void worker_thread(const Config& config, int worker_id, int num_workers,
                 config.database.schema
             );
             
-            // Create global DB operations ThreadPool (only for poll workers now)
-            global_db_thread_pool = std::make_shared<astp::ThreadPool>(poll_worker_threads);
+            // Create global DB operations ThreadPool (for stream workers + services)
+            global_db_thread_pool = std::make_shared<astp::ThreadPool>(db_thread_pool_size);
             
             // Create global System operations ThreadPool (for metrics, cleanup, etc.)
             global_system_thread_pool = std::make_shared<astp::ThreadPool>(system_threads);
@@ -349,8 +369,9 @@ static void worker_thread(const Config& config, int worker_id, int num_workers,
                 spdlog::info("[Worker 0] Initializing database schema...");
                 async_queue_manager->initialize_schema();
                 
-                // Start metrics collector (samples every 1s, aggregates every 60s)
-                spdlog::info("[Worker 0] Starting background metrics collector...");
+                // Start metrics collector
+                spdlog::info("[Worker 0] Starting background metrics collector (sample: {}ms, aggregate: {}s)...",
+                            config.jobs.metrics_sample_interval_ms, config.jobs.metrics_aggregate_interval_s);
                 global_metrics_collector = std::make_shared<queen::MetricsCollector>(
                     global_async_db_pool,
                     global_db_thread_pool,
@@ -361,8 +382,8 @@ static void worker_thread(const Config& config, int worker_id, int num_workers,
                     global_system_info.hostname,
                     global_system_info.port,
                     config.server.worker_id,
-                    1000,  // Sample every 1 second
-                    60     // Aggregate and save every 60 seconds
+                    config.jobs.metrics_sample_interval_ms,
+                    config.jobs.metrics_aggregate_interval_s
                 );
                 global_metrics_collector->start();
                 
@@ -400,6 +421,7 @@ static void worker_thread(const Config& config, int worker_id, int num_workers,
         if (worker_id == 0) {
             spdlog::info("[Worker 0] Starting long-polling poll workers...");
             queen::init_long_polling(
+                global_db_thread_pool,
                 queen::global_poll_intention_registry,
                 async_queue_manager,
                 worker_response_queues,  // All worker queues (poll workers will route to correct one)
@@ -419,12 +441,12 @@ static void worker_thread(const Config& config, int worker_id, int num_workers,
                 queen::global_stream_poll_registry,
                 queen::global_stream_manager,
                 worker_response_queues,
-                2,  // 2 stream poll workers
-                100,   // poll_worker_interval_ms (how often to check registry)
-                1000,  // poll_stream_interval_ms (min time between stream checks per group)
-                5,     // backoff_threshold (consecutive empty checks before backoff)
-                2.0,   // backoff_multiplier
-                5000,  // max_poll_interval_ms
+                config.queue.stream_poll_worker_count,
+                config.queue.stream_poll_worker_interval,
+                config.queue.stream_poll_interval,
+                config.queue.stream_backoff_threshold,
+                config.queue.stream_backoff_multiplier,
+                config.queue.stream_max_poll_interval,
                 config.queue.backoff_cleanup_inactive_threshold
             );
         }

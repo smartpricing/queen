@@ -21,9 +21,31 @@ DB_POOL_SIZE=50
 ## Performance Tuning
 
 ```bash
-NUM_WORKERS=10              # HTTP worker threads
-DB_POOL_SIZE=150            # Database connections
-POLL_WORKER_COUNT=10        # Long-polling worker threads (scale for load)
+NUM_WORKERS=10                      # HTTP worker threads (uWebSockets)
+DB_POOL_SIZE=150                    # Database connections
+
+# ThreadPool Configuration (all workers use managed pools)
+POLL_WORKER_COUNT=2                 # Regular poll workers
+STREAM_POLL_WORKER_COUNT=2          # Stream poll workers
+STREAM_CONCURRENT_CHECKS=10         # Concurrent stream checks per worker
+DB_THREAD_POOL_SERVICE_THREADS=5    # Service DB operations
+
+# DB ThreadPool auto-calculated: P + S + (S × C) + T
+# Default: 2 + 2 + 20 + 5 = 29 threads
+```
+
+### ThreadPool Architecture
+
+All long-running worker threads use the **DB ThreadPool** for proper resource management:
+
+```
+DB ThreadPool Size = P + S + (S × C) + T
+
+Where:
+  P = POLL_WORKER_COUNT (regular poll workers)
+  S = STREAM_POLL_WORKER_COUNT (stream poll workers)
+  C = STREAM_CONCURRENT_CHECKS (concurrent checks per stream worker)
+  T = DB_THREAD_POOL_SERVICE_THREADS (service operations)
 ```
 
 ### Long-Polling Scaling
@@ -33,15 +55,19 @@ Scale poll workers based on concurrent waiting clients:
 ```bash
 # Low load (< 20 clients)
 POLL_WORKER_COUNT=2
+STREAM_POLL_WORKER_COUNT=2
 
 # Medium load (20-100 clients)  
 POLL_WORKER_COUNT=10
+STREAM_POLL_WORKER_COUNT=4
 
 # High load (100-200 clients)
 POLL_WORKER_COUNT=20
+STREAM_POLL_WORKER_COUNT=8
 
 # Very high load (200+ clients)
 POLL_WORKER_COUNT=50
+STREAM_POLL_WORKER_COUNT=12
 ```
 
 ## Features

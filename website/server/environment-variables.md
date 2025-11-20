@@ -121,19 +121,38 @@ export NUM_WORKERS=30
 
 ### Long Polling Configuration
 
-The system uses dedicated poll worker threads for long-polling operations.
+The system uses managed ThreadPools for all long-polling operations to ensure proper resource management and visibility.
 
 #### Worker Configuration
 
 | Variable | Type | Default | Description |
 |----------|------|---------|-------------|
-| `POLL_WORKER_COUNT` | int | 2 | Number of dedicated poll worker threads |
+| `POLL_WORKER_COUNT` | int | 2 | Number of dedicated poll worker threads (reserved in DB ThreadPool) |
+| `STREAM_POLL_WORKER_COUNT` | int | 2 | Number of dedicated stream poll worker threads (reserved in DB ThreadPool) |
+| `STREAM_CONCURRENT_CHECKS` | int | 10 | Maximum concurrent window check jobs per stream worker |
+| `DB_THREAD_POOL_SERVICE_THREADS` | int | 5 | Threads for background service DB operations |
+
+**ThreadPool Architecture:**
+
+All worker threads run in the **DB ThreadPool** with the following allocation:
+
+```
+DB ThreadPool Size = P + S + (S × C) + T
+
+Where:
+  P = POLL_WORKER_COUNT (regular poll workers)
+  S = STREAM_POLL_WORKER_COUNT (stream poll workers)
+  C = STREAM_CONCURRENT_CHECKS (concurrent checks per stream worker)
+  T = DB_THREAD_POOL_SERVICE_THREADS (service DB operations)
+
+Default: 2 + 2 + (2 × 10) + 5 = 29 threads
+```
 
 **Scaling Guidelines:**
-- Low load (< 20 clients): 2-5 workers
-- Medium load (20-100 clients): 5-10 workers
-- High load (100-200 clients): 10-20 workers
-- Very high load (200+ clients): 20-50 workers
+- Low load (< 20 clients): 2-5 poll workers, 2 stream workers
+- Medium load (20-100 clients): 5-10 poll workers, 4 stream workers
+- High load (100-200 clients): 10-20 poll workers, 8 stream workers
+- Very high load (200+ clients): 20-50 poll workers, 12 stream workers
 
 Each poll worker can efficiently handle ~5-10 active consumer groups.
 
@@ -143,6 +162,8 @@ Each poll worker can efficiently handle ~5-10 active consumer groups.
 |----------|------|---------|-------------|
 | `POLL_WORKER_INTERVAL` | int | 50 | How often workers check for new client requests (ms) - in-memory operation |
 | `POLL_DB_INTERVAL` | int | 100 | Initial DB query interval (ms) - aggressive first attempt |
+| `STREAM_POLL_WORKER_INTERVAL` | int | 100 | How often stream workers check registry (ms) |
+| `STREAM_POLL_INTERVAL` | int | 1000 | Min time between stream checks per group (ms) |
 
 **How it works:**
 1. Workers check registry every 50ms (cheap in-memory check)
@@ -160,7 +181,15 @@ When queues are consistently empty, the system automatically backs off to reduce
 | `QUEUE_MAX_POLL_INTERVAL` | int | 2000 | Maximum poll interval after backoff (ms) |
 | `QUEUE_BACKOFF_CLEANUP_THRESHOLD` | int | 3600 | Cleanup inactive backoff state entries after N seconds |
 
-**Example backoff sequence (defaults):**
+**Stream Backoff Configuration (separate from regular poll workers):**
+
+| Variable | Type | Default | Description |
+|----------|------|---------|-------------|
+| `STREAM_BACKOFF_THRESHOLD` | int | 5 | Stream: Consecutive empty checks before backoff |
+| `STREAM_BACKOFF_MULTIPLIER` | double | 2.0 | Stream: Exponential backoff multiplier |
+| `STREAM_MAX_POLL_INTERVAL` | int | 5000 | Stream: Maximum poll interval after backoff (ms) |
+
+**Example backoff sequence (regular poll workers, defaults):**
 ```
 Query 1: 100ms  (aggressive first attempt)
 Empty 1: 200ms  (backoff starts)

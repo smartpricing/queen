@@ -595,13 +595,69 @@ curl "http://localhost:6632/api/v1/status/analytics?interval=hour"
 - Adjustable connection pool
 - Background service tuning
 - Memory management
+- Auto-scaling thread pools
 
-**Configuration:**
+**Worker Thread Configuration:**
 ```bash
-export NUM_WORKERS=10
-export DB_POOL_SIZE=150
-export POLL_WORKER_INTERVAL=50
-export BATCH_INSERT_SIZE=2000
+# Main HTTP workers (handles incoming requests)
+export NUM_WORKERS=10              # Number of uWebSockets worker threads
+
+# Queue long-polling workers (handles wait=true requests)
+export POLL_WORKER_COUNT=2         # Reserved threads in DB ThreadPool
+
+# Stream long-polling workers (handles stream poll requests)
+export STREAM_POLL_WORKER_COUNT=2  # Reserved threads in DB ThreadPool
+export STREAM_CONCURRENT_CHECKS=10 # Concurrent window checks per worker
+```
+
+**Thread Pool Allocation:**
+The system uses two ThreadPools for managed resource allocation:
+
+**DB ThreadPool:** `P + S + (S × C) + T` threads (e.g., 2 + 2 + 20 + 5 = 29 threads by default)
+  - P = `POLL_WORKER_COUNT` threads (reserved for regular poll worker loops)
+  - S = `STREAM_POLL_WORKER_COUNT` threads (reserved for stream poll worker loops)
+  - S × C = Concurrent window check jobs (`STREAM_CONCURRENT_CHECKS` per stream worker)
+  - T = `DB_THREAD_POOL_SERVICE_THREADS` threads (background service DB operations)
+
+**System ThreadPool:** 4 threads (metrics sampling, retention scheduling, eviction scheduling)
+
+**HTTP Workers:** 10 workers (uWebSockets event loops, independent of ThreadPools)
+
+**Configurable ThreadPool Settings:**
+```bash
+export POLL_WORKER_COUNT=2                # Regular poll workers
+export STREAM_POLL_WORKER_COUNT=2         # Stream poll workers
+export STREAM_CONCURRENT_CHECKS=10        # Max concurrent window checks per stream worker
+export DB_THREAD_POOL_SERVICE_THREADS=5   # Threads for service DB operations
+```
+
+**Why ThreadPools?**
+All long-running worker threads use the ThreadPool for:
+- Centralized resource management
+- Visibility into thread usage (metrics can report ThreadPool queue depth)
+- Proper resource limits and backpressure
+- Clean shutdown capabilities
+- No orphaned threads
+
+**Database Configuration:**
+```bash
+export DB_POOL_SIZE=150            # Total async DB connections
+export BATCH_INSERT_SIZE=2000      # Batch size for bulk inserts
+```
+
+**Background Services:**
+```bash
+# Metrics collector
+export METRICS_SAMPLE_INTERVAL_MS=1000    # Sample every 1s
+export METRICS_AGGREGATE_INTERVAL_S=60    # Aggregate and save every 60s
+
+# Retention service
+export RETENTION_INTERVAL=300000          # Run every 5 minutes
+export RETENTION_BATCH_SIZE=1000          # Process 1000 messages per run
+
+# Eviction service
+export EVICTION_INTERVAL=60000            # Run every 1 minute
+export EVICTION_BATCH_SIZE=1000           # Process 1000 messages per run
 ```
 
 ### 24. Authentication & Security
