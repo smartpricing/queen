@@ -32,12 +32,178 @@ const queen = new Queen([
 
 // Full configuration
 const queen = new Queen({
-  urls: ['http://server1:6632', 'http://server2:6632'],
+  urls: ['http://server1:6632', 'http://server2:6632', 'http://server3:6632'],
   timeoutMillis: 30000,
   retryAttempts: 3,
-  loadBalancingStrategy: 'round-robin',  // or 'session'
+  loadBalancingStrategy: 'affinity',  // 'affinity', 'round-robin', or 'session'
+  affinityHashRing: 128,              // Virtual nodes per server (for affinity)
   enableFailover: true
 })
+```
+
+## Load Balancing & Affinity Routing
+
+When connecting to multiple Queen servers, you can choose how requests are distributed. The client supports three load balancing strategies.
+
+### Affinity Mode (Recommended for Production)
+
+**Best for:** Production deployments with 3+ servers and multiple consumer groups.
+
+Affinity mode uses **consistent hashing with virtual nodes** to route consumer groups to the same backend server. This optimizes database queries by consolidating poll intentions on a single server.
+
+```javascript
+const queen = new Queen({
+  urls: [
+    'http://queen-server-1:6632',
+    'http://queen-server-2:6632',
+    'http://queen-server-3:6632'
+  ],
+  loadBalancingStrategy: 'affinity',
+  affinityHashRing: 150  // Virtual nodes per server (default: 150)
+})
+```
+
+**How it works:**
+
+1. Each consumer generates an **affinity key** from its parameters:
+   - Queue-based: `queue:partition:consumerGroup`
+   - Namespace-based: `namespace:task:consumerGroup`
+
+2. The key is **hashed** using FNV-1a algorithm (fast, deterministic)
+
+3. Hash is **mapped** to a virtual node on the consistent hash ring
+
+4. Virtual node **maps** to a real backend server
+
+5. **Same key always routes to same server** (unless server is unhealthy)
+
+**Example:**
+
+```javascript
+// Consumer 1
+await queen.queue('orders')
+  .partition('priority')
+  .group('email-processor')
+  .consume(async (msg) => {
+    // Affinity key: "orders:priority:email-processor"
+    // Routes to: server-2 (based on hash)
+  })
+
+// Consumer 2 (same group, different worker)
+await queen.queue('orders')
+  .partition('priority')
+  .group('email-processor')
+  .consume(async (msg) => {
+    // Same affinity key: "orders:priority:email-processor"  
+    // Routes to: server-2 (same server!)
+    // → Poll intentions consolidated
+    // → Single DB query serves both workers
+  })
+
+// Consumer 3 (different group)
+await queen.queue('orders')
+  .partition('priority')
+  .group('analytics')
+  .consume(async (msg) => {
+    // Different affinity key: "orders:priority:analytics"
+    // Routes to: server-1 (different server)
+    // → Load is distributed across servers
+  })
+```
+
+**Benefits:**
+
+- ✅ **Optimized Database Queries** - Poll intentions for same consumer group are consolidated on one server, reducing duplicate SELECT queries
+- ✅ **Better Cache Locality** - In-memory poll registry stays warm on the same server
+- ✅ **Graceful Failover** - If a server fails, only ~33% of consumer groups move to other servers
+- ✅ **Works with HA** - Perfect for 3-server high-availability setups
+- ✅ **Automatic** - No manual configuration required
+
+**Virtual Nodes:**
+
+The `affinityHashRing` parameter controls how many virtual nodes each server gets:
+
+```javascript
+affinityHashRing: 150   // Default: good for 3-5 servers
+affinityHashRing: 300   // Better distribution, more memory (~14KB total)
+affinityHashRing: 50    // Less memory, worse distribution
+```
+
+::: tip Performance Impact
+With affinity routing and 3 backend servers, multiple workers in the same consumer group will hit the same backend, allowing the server to consolidate poll intentions and serve them with a single database query instead of multiple queries.
+:::
+
+### Round-Robin Mode
+
+**Best for:** Simple setups where poll optimization is not critical.
+
+Cycles through servers in order. Simple but doesn't optimize for poll intention consolidation.
+
+```javascript
+const queen = new Queen({
+  urls: ['http://server1:6632', 'http://server2:6632'],
+  loadBalancingStrategy: 'round-robin'
+})
+```
+
+Each request goes to the next server in the list. Load is evenly distributed but consumer groups may hit different servers on each poll.
+
+### Session Mode
+
+**Best for:** Single client instance that should stick to one server.
+
+Each client instance picks a server and sticks to it for all requests.
+
+```javascript
+const queen = new Queen({
+  urls: ['http://server1:6632', 'http://server2:6632'],
+  loadBalancingStrategy: 'session'
+})
+```
+
+### Comparison
+
+| Feature | Affinity | Round-Robin | Session |
+|---------|----------|-------------|---------|
+| **Poll Consolidation** | ✅ Yes | ❌ No | ⚠️ Partial |
+| **Load Distribution** | ✅ Good | ✅ Perfect | ❌ Poor |
+| **Failover** | ✅ Graceful | ✅ Automatic | ✅ Automatic |
+| **Memory** | ~10KB | Minimal | Minimal |
+| **Best For** | Production | Testing | Simple apps |
+
+### Push vs Consume Routing
+
+**Important:** Affinity routing is **only applied to consumer operations** (pop/consume), not push operations.
+
+- **Consumers (pop/consume):** Use affinity key for consistent routing
+- **Producers (push):** Use default strategy (round-robin) for even write distribution
+
+This gives you the best of both worlds: optimized reads with affinity, balanced writes without hotspots.
+
+```javascript
+// Push - uses round-robin (even distribution)
+await queen.queue('orders').push([{ data: { order: 123 } }])
+
+// Consume - uses affinity (consolidated polling)  
+await queen.queue('orders').group('processors').consume(async (msg) => {
+  // Same group always routes to same server
+})
+```
+
+### Monitoring Affinity Routing
+
+You can check the load balancer status:
+
+```javascript
+const httpClient = queen._httpClient
+const loadBalancer = httpClient.getLoadBalancer()
+
+if (loadBalancer) {
+  console.log('Strategy:', loadBalancer.getStrategy())
+  console.log('Virtual nodes:', loadBalancer.getVirtualNodeCount())
+  console.log('Servers:', loadBalancer.getAllUrls())
+  console.log('Health:', loadBalancer.getHealthStatus())
+}
 ```
 
 ## Queue Management
@@ -806,7 +972,8 @@ try {
   timeoutMillis: 30000,
   retryAttempts: 3,
   retryDelayMillis: 1000,
-  loadBalancingStrategy: 'round-robin',
+  loadBalancingStrategy: 'affinity',    // 'affinity', 'round-robin', or 'session'
+  affinityHashRing: 150,                // Virtual nodes per server
   enableFailover: true
 }
 ```
@@ -857,16 +1024,17 @@ Example output:
 
 ## Best Practices
 
-1. ✅ **Use `consume()` for workers** - Simpler, handles retries automatically
-2. ✅ **Use `pop()` for control** - When you need precise control over acking
-3. ✅ **Buffer for speed** - Always use buffering when pushing many messages
-4. ✅ **Partitions for order** - Use partitions when message order matters
-5. ✅ **Consumer groups for scale** - Run multiple workers in the same group
-6. ✅ **Transactions for consistency** - Use transactions when operations must be atomic
-7. ✅ **Enable DLQ** - Always enable DLQ in production to catch failures
-8. ✅ **Renew long leases** - Use auto-renewal for long-running tasks
-9. ✅ **Graceful shutdown** - Always call `queen.close()` before exiting
-10. ✅ **Monitor DLQ** - Regularly check your DLQ for failed messages
+1. ✅ **Use affinity routing** - Enable `loadBalancingStrategy: 'affinity'` for production to optimize poll intentions
+2. ✅ **Use `consume()` for workers** - Simpler, handles retries automatically
+3. ✅ **Use `pop()` for control** - When you need precise control over acking
+4. ✅ **Buffer for speed** - Always use buffering when pushing many messages
+5. ✅ **Partitions for order** - Use partitions when message order matters
+6. ✅ **Consumer groups for scale** - Run multiple workers in the same group
+7. ✅ **Transactions for consistency** - Use transactions when operations must be atomic
+8. ✅ **Enable DLQ** - Always enable DLQ in production to catch failures
+9. ✅ **Renew long leases** - Use auto-renewal for long-running tasks
+10. ✅ **Graceful shutdown** - Always call `queen.close()` before exiting
+11. ✅ **Monitor DLQ** - Regularly check your DLQ for failed messages
 
 ## Complete Example
 

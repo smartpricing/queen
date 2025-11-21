@@ -75,7 +75,7 @@ export class Queen {
   }
 
   #createHttpClient() {
-    const { urls, timeoutMillis, retryAttempts, retryDelayMillis, loadBalancingStrategy, enableFailover } = this.#config
+    const { urls, timeoutMillis, retryAttempts, retryDelayMillis, loadBalancingStrategy, affinityHashRing, healthRetryAfterMillis, enableFailover } = this.#config
 
     if (urls.length === 1) {
       // Single server
@@ -88,7 +88,10 @@ export class Queen {
     }
 
     // Multiple servers with load balancing
-    const loadBalancer = new LoadBalancer(urls, loadBalancingStrategy)
+    const loadBalancer = new LoadBalancer(urls, loadBalancingStrategy, {
+      affinityHashRing,
+      healthRetryAfterMillis
+    })
     return new HttpClient({
       loadBalancer,
       timeoutMillis,

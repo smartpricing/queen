@@ -43,15 +43,66 @@ const queen = new Queen(['http://server1:6632', 'http://server2:6632'])
 
 // Or with full configuration
 const queen = new Queen({
-  urls: ['http://server1:6632', 'http://server2:6632'],
+  urls: ['http://server1:6632', 'http://server2:6632', 'http://server3:6632'],
   timeoutMillis: 30000,
   retryAttempts: 3,
-  loadBalancingStrategy: 'round-robin', // or 'session'
+  loadBalancingStrategy: 'affinity',  // 'affinity', 'round-robin', or 'session'
+  affinityHashRing: 150,               // Virtual nodes per server (for affinity mode)
   enableFailover: true
 })
 ```
 
 That's it! You're connected. Now let's do something fun. 🎉
+
+### Load Balancing Strategies
+
+When connecting to multiple Queen servers, you can choose how requests are distributed:
+
+#### Affinity Mode (Recommended for Production)
+
+Uses consistent hashing with virtual nodes to route consumer groups to the same backend server. This optimizes database queries by consolidating poll intentions.
+
+```javascript
+const queen = new Queen({
+  urls: ['http://server1:6632', 'http://server2:6632', 'http://server3:6632'],
+  loadBalancingStrategy: 'affinity',
+  affinityHashRing: 150  // Virtual nodes per server (default: 150)
+})
+```
+
+**Benefits:**
+- ✅ Same consumer group always routes to same server
+- ✅ Poll intentions consolidated → optimized DB queries
+- ✅ Graceful failover (only ~33% of keys move if server fails)
+- ✅ Works great with 3-server HA setup
+
+**How it works:**
+1. Each consumer group generates an affinity key: `queue:partition:consumerGroup`
+2. Key is hashed and mapped to a virtual node on the ring
+3. Virtual node maps to a real backend server
+4. Same key always routes to same server
+
+#### Round-Robin Mode
+
+Cycles through servers in order. Simple but doesn't optimize for poll intention consolidation.
+
+```javascript
+const queen = new Queen({
+  urls: ['http://server1:6632', 'http://server2:6632'],
+  loadBalancingStrategy: 'round-robin'
+})
+```
+
+#### Session Mode
+
+Sticky sessions - each client instance sticks to one server.
+
+```javascript
+const queen = new Queen({
+  urls: ['http://server1:6632', 'http://server2:6632'],
+  loadBalancingStrategy: 'session'
+})
+```
 
 ---
 

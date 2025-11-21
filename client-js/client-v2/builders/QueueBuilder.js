@@ -49,6 +49,26 @@ export class QueueBuilder {
   }
 
   // ===========================
+  // Affinity Key Generation
+  // ===========================
+
+  /**
+   * Generate affinity key for consistent routing
+   * Matches server's PollIntention::grouping_key() format
+   * Format: queue:partition:consumerGroup or namespace:task:consumerGroup
+   */
+  #getAffinityKey() {
+    if (this.#queueName) {
+      // Queue-based routing: queue:partition:consumerGroup
+      return `${this.#queueName}:${this.#partition || '*'}:${this.#group || '__QUEUE_MODE__'}`
+    } else if (this.#namespace || this.#task) {
+      // Namespace/task-based routing: namespace:task:consumerGroup
+      return `${this.#namespace || '*'}:${this.#task || '*'}:${this.#group || '__QUEUE_MODE__'}`
+    }
+    return null
+  }
+
+  // ===========================
   // Queue Configuration Methods
   // ===========================
 
@@ -270,7 +290,10 @@ export class QueueBuilder {
       if (this.#subscriptionMode) params.append('subscriptionMode', this.#subscriptionMode)
       if (this.#subscriptionFrom) params.append('subscriptionFrom', this.#subscriptionFrom)
 
-      const result = await this.#httpClient.get(`${path}?${params}`, this.#timeoutMillis + 5000)
+      // Generate affinity key for consistent routing to same backend
+      const affinityKey = this.#getAffinityKey()
+      
+      const result = await this.#httpClient.get(`${path}?${params}`, this.#timeoutMillis + 5000, affinityKey)
 
       if (!result || !result.messages) {
         logger.log('QueueBuilder.pop', { status: 'no-messages' })

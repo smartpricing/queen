@@ -145,7 +145,7 @@ export class HttpClient {
     throw lastError
   }
 
-  async #requestWithFailover(method, path, body = null, requestTimeoutMillis = null) {
+  async #requestWithFailover(method, path, body = null, requestTimeoutMillis = null, affinityKey = null) {
     if (!this.#loadBalancer || !this.#enableFailover) {
       return this.#requestWithRetry(method, path, body, requestTimeoutMillis)
     }
@@ -154,10 +154,11 @@ export class HttpClient {
     const attemptedUrls = new Set()
     let lastError = null
 
-    logger.log('HttpClient.failover', { method, path, totalServers: urls.length })
+    logger.log('HttpClient.failover', { method, path, totalServers: urls.length, affinityKey })
 
     for (let i = 0; i < urls.length; i++) {
-      const url = this.#loadBalancer.getNextUrl()
+      // Pass affinity key to load balancer for consistent routing
+      const url = this.#loadBalancer.getNextUrl(affinityKey)
 
       if (attemptedUrls.has(url)) {
         continue
@@ -166,9 +167,20 @@ export class HttpClient {
       attemptedUrls.add(url)
 
       try {
-        return await this.#executeRequest(url + path, method, body, requestTimeoutMillis)
+        const result = await this.#executeRequest(url + path, method, body, requestTimeoutMillis)
+        
+        // Mark backend as healthy on success
+        this.#loadBalancer.markHealthy(url)
+        
+        return result
       } catch (error) {
         lastError = error
+        
+        // Mark backend as unhealthy on failure (5xx or network errors)
+        if (!error.status || error.status >= 500) {
+          this.#loadBalancer.markUnhealthy(url)
+        }
+        
         logger.warn('HttpClient.failover', { url, method, path, error: error.message })
         console.warn(`Request failed for ${url}: ${method} ${path} - ${error.message}`)
 
@@ -192,20 +204,20 @@ export class HttpClient {
     return this.#baseUrl
   }
 
-  async get(path, requestTimeoutMillis = null) {
-    return this.#requestWithFailover('GET', path, null, requestTimeoutMillis)
+  async get(path, requestTimeoutMillis = null, affinityKey = null) {
+    return this.#requestWithFailover('GET', path, null, requestTimeoutMillis, affinityKey)
   }
 
-  async post(path, body = null, requestTimeoutMillis = null) {
-    return this.#requestWithFailover('POST', path, body, requestTimeoutMillis)
+  async post(path, body = null, requestTimeoutMillis = null, affinityKey = null) {
+    return this.#requestWithFailover('POST', path, body, requestTimeoutMillis, affinityKey)
   }
 
-  async put(path, body = null, requestTimeoutMillis = null) {
-    return this.#requestWithFailover('PUT', path, body, requestTimeoutMillis)
+  async put(path, body = null, requestTimeoutMillis = null, affinityKey = null) {
+    return this.#requestWithFailover('PUT', path, body, requestTimeoutMillis, affinityKey)
   }
 
-  async delete(path, requestTimeoutMillis = null) {
-    return this.#requestWithFailover('DELETE', path, null, requestTimeoutMillis)
+  async delete(path, requestTimeoutMillis = null, affinityKey = null) {
+    return this.#requestWithFailover('DELETE', path, null, requestTimeoutMillis, affinityKey)
   }
 
   getLoadBalancer() {

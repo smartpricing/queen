@@ -194,6 +194,13 @@ function analyzeLogFile(filePath) {
     ? (lastTimestamp - firstTimestamp) / 1000 
     : 0;
 
+  // Store time range in stats
+  stats.timeRange = {
+    start: firstTimestamp,
+    end: lastTimestamp,
+    durationSeconds: durationSeconds
+  };
+
   // Print results
   console.log(`\nTime Range: ${firstTimestamp?.toISOString()} to ${lastTimestamp?.toISOString()}`);
   console.log(`Duration: ${durationSeconds.toFixed(1)}s (${(durationSeconds / 60).toFixed(1)} minutes)\n`);
@@ -349,10 +356,73 @@ function analyzeLogFile(filePath) {
   return stats;
 }
 
+function calculateOverlap(stats1, stats2) {
+  const start1 = stats1.timeRange.start;
+  const end1 = stats1.timeRange.end;
+  const start2 = stats2.timeRange.start;
+  const end2 = stats2.timeRange.end;
+
+  if (!start1 || !end1 || !start2 || !end2) {
+    return null;
+  }
+
+  const overlapStart = new Date(Math.max(start1.getTime(), start2.getTime()));
+  const overlapEnd = new Date(Math.min(end1.getTime(), end2.getTime()));
+
+  if (overlapStart >= overlapEnd) {
+    return {
+      hasOverlap: false,
+      overlapSeconds: 0
+    };
+  }
+
+  return {
+    hasOverlap: true,
+    overlapStart,
+    overlapEnd,
+    overlapSeconds: (overlapEnd - overlapStart) / 1000
+  };
+}
+
 function compareStats(stats1, stats2, label1, label2) {
+  console.log(`\n\n${'═'.repeat(80)}`);
+  console.log('TIME PERIOD ANALYSIS');
+  console.log('═'.repeat(80));
+
+  const overlap = calculateOverlap(stats1, stats2);
+  
+  console.log(`\n${label1}:`);
+  console.log(`  Start: ${stats1.timeRange.start?.toISOString()}`);
+  console.log(`  End:   ${stats1.timeRange.end?.toISOString()}`);
+  console.log(`  Duration: ${stats1.timeRange.durationSeconds.toFixed(1)}s (${(stats1.timeRange.durationSeconds / 60).toFixed(1)} minutes)`);
+
+  console.log(`\n${label2}:`);
+  console.log(`  Start: ${stats2.timeRange.start?.toISOString()}`);
+  console.log(`  End:   ${stats2.timeRange.end?.toISOString()}`);
+  console.log(`  Duration: ${stats2.timeRange.durationSeconds.toFixed(1)}s (${(stats2.timeRange.durationSeconds / 60).toFixed(1)} minutes)`);
+
+  if (overlap && overlap.hasOverlap) {
+    const overlapPct1 = (overlap.overlapSeconds / stats1.timeRange.durationSeconds * 100).toFixed(1);
+    const overlapPct2 = (overlap.overlapSeconds / stats2.timeRange.durationSeconds * 100).toFixed(1);
+    
+    console.log(`\n⚠️  OVERLAPPING PERIOD DETECTED:`);
+    console.log(`  Start: ${overlap.overlapStart.toISOString()}`);
+    console.log(`  End:   ${overlap.overlapEnd.toISOString()}`);
+    console.log(`  Duration: ${overlap.overlapSeconds.toFixed(1)}s (${(overlap.overlapSeconds / 60).toFixed(1)} minutes)`);
+    console.log(`  Coverage: ${overlapPct1}% of ${label1}, ${overlapPct2}% of ${label2}`);
+    console.log(`\n  Note: The comparison below uses absolute counts from different time windows.`);
+    console.log(`        Rate-based metrics (per-minute frequencies) are more meaningful for comparison.`);
+  } else {
+    console.log(`\n✓ No overlap detected - time periods are distinct.`);
+  }
+
   console.log(`\n\n${'═'.repeat(80)}`);
   console.log('COMPARISON SUMMARY');
   console.log('═'.repeat(80));
+
+  // Calculate rates per minute
+  const minutes1 = stats1.timeRange.durationSeconds / 60;
+  const minutes2 = stats2.timeRange.durationSeconds / 60;
 
   const comparison = [
     ['Metric', label1, label2, 'Ratio'],
@@ -368,7 +438,28 @@ function compareStats(stats1, stats2, label1, label2) {
     ['Unique backoff groups', stats1.backoff.byGroup.size, stats2.backoff.byGroup.size, (stats2.backoff.byGroup.size / stats1.backoff.byGroup.size).toFixed(2) + 'x'],
   ];
 
+  const rateComparison = [
+    ['Rate-Based Metrics (per minute)', label1, label2, 'Ratio'],
+    ['─'.repeat(40), '─'.repeat(12), '─'.repeat(12), '─'.repeat(12)],
+    ['QPOP requests/min', (stats1.qpop.total / minutes1).toFixed(2), (stats2.qpop.total / minutes2).toFixed(2), ((stats2.qpop.total / minutes2) / (stats1.qpop.total / minutes1)).toFixed(2) + 'x'],
+    ['Poll fulfilled/min', (stats1.popFulfilled.total / minutes1).toFixed(2), (stats2.popFulfilled.total / minutes2).toFixed(2), ((stats2.popFulfilled.total / minutes2) / (stats1.popFulfilled.total / minutes1)).toFixed(2) + 'x'],
+    ['Poll timeouts/min', (stats1.popTimeout.total / minutes1).toFixed(2), (stats2.popTimeout.total / minutes2).toFixed(2), ((stats2.popTimeout.total / minutes2) / (stats1.popTimeout.total / minutes1)).toFixed(2) + 'x'],
+    ['Messages/min', (stats1.popFulfilled.totalMessages / minutes1).toFixed(2), (stats2.popFulfilled.totalMessages / minutes2).toFixed(2), ((stats2.popFulfilled.totalMessages / minutes2) / (stats1.popFulfilled.totalMessages / minutes1)).toFixed(2) + 'x'],
+    ['ACKs/min', (stats1.ack.total / minutes1).toFixed(2), (stats2.ack.total / minutes2).toFixed(2), ((stats2.ack.total / minutes2) / (stats1.ack.total / minutes1)).toFixed(2) + 'x'],
+    ['Backoff/min', (stats1.backoff.total / minutes1).toFixed(2), (stats2.backoff.total / minutes2).toFixed(2), ((stats2.backoff.total / minutes2) / (stats1.backoff.total / minutes1)).toFixed(2) + 'x'],
+  ];
+
+  console.log('\nAbsolute Counts:');
   for (const row of comparison) {
+    if (row[0].startsWith('─')) {
+      console.log(row[0]);
+    } else {
+      console.log(`${row[0].padEnd(40)} ${String(row[1]).padStart(12)} ${String(row[2]).padStart(12)} ${String(row[3]).padStart(12)}`);
+    }
+  }
+
+  console.log('\n');
+  for (const row of rateComparison) {
     if (row[0].startsWith('─')) {
       console.log(row[0]);
     } else {
@@ -394,21 +485,28 @@ function compareStats(stats1, stats2, label1, label2) {
   console.log(`  - Avg backoff activations per group: ${(stats2.backoff.total / stats2.backoff.byGroup.size).toFixed(1)}`);
 
   console.log(`\nInterpretation:`);
+  
+  if (overlap && overlap.hasOverlap) {
+    console.log(`  ⚠️  Note: These logs overlap by ${(overlap.overlapSeconds / 60).toFixed(1)} minutes.`);
+    console.log(`     The rate-based comparison above is more accurate than absolute counts.`);
+    console.log('');
+  }
+
   if (stats1.popFulfilled.total > stats2.popFulfilled.total) {
-    console.log(`  → ${label1} fulfills ${(stats1.popFulfilled.total / stats2.popFulfilled.total).toFixed(2)}x more polls`);
+    console.log(`  → ${label1} fulfills ${(stats1.popFulfilled.total / stats2.popFulfilled.total).toFixed(2)}x more polls (absolute)`);
     console.log(`  → ${label1} is winning the database lock race more frequently`);
     console.log(`  → This keeps its backoff low, creating a self-reinforcing winner pattern`);
   } else {
-    console.log(`  → ${label2} fulfills ${(stats2.popFulfilled.total / stats1.popFulfilled.total).toFixed(2)}x more polls`);
+    console.log(`  → ${label2} fulfills ${(stats2.popFulfilled.total / stats1.popFulfilled.total).toFixed(2)}x more polls (absolute)`);
     console.log(`  → ${label2} is winning the database lock race more frequently`);
     console.log(`  → This keeps its backoff low, creating a self-reinforcing winner pattern`);
   }
 
   if (stats1.backoff.total > stats2.backoff.total) {
-    console.log(`  → ${label1} has ${(stats1.backoff.total / stats2.backoff.total).toFixed(2)}x more backoff activations`);
+    console.log(`  → ${label1} has ${(stats1.backoff.total / stats2.backoff.total).toFixed(2)}x more backoff activations (absolute)`);
     console.log(`  → More backoff = lower query frequency = lower CPU usage = fewer wins`);
   } else {
-    console.log(`  → ${label2} has ${(stats2.backoff.total / stats1.backoff.total).toFixed(2)}x more backoff activations`);
+    console.log(`  → ${label2} has ${(stats2.backoff.total / stats1.backoff.total).toFixed(2)}x more backoff activations (absolute)`);
     console.log(`  → More backoff = lower query frequency = lower CPU usage = fewer wins`);
   }
 }

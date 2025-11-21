@@ -10,8 +10,10 @@ export const CLIENT_DEFAULTS = {
   timeoutMillis: 30000,                // 30 seconds
   retryAttempts: 3,                    // 3 retry attempts
   retryDelayMillis: 1000,              // 1 second initial delay (exponential backoff)
-  loadBalancingStrategy: 'round-robin', // 'round-robin' or 'session'
-  enableFailover: true                 // Auto-failover to other servers
+  loadBalancingStrategy: 'affinity',   // 'round-robin', 'session', or 'affinity'
+  affinityHashRing: 128,               // Number of virtual nodes per server for affinity strategy
+  enableFailover: true,                // Auto-failover to other servers
+  healthRetryAfterMillis: 5000        // Retry unhealthy backends after 5 seconds
 }
 
 export const QUEUE_DEFAULTS = {

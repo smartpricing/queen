@@ -13,6 +13,22 @@ export class ConsumerManager {
     this.#queen = queen
   }
 
+  /**
+   * Generate affinity key for consistent routing
+   * Matches server's PollIntention::grouping_key() format
+   * Format: queue:partition:consumerGroup or namespace:task:consumerGroup
+   */
+  #getAffinityKey(queue, partition, namespace, task, group) {
+    if (queue) {
+      // Queue-based routing: queue:partition:consumerGroup
+      return `${queue}:${partition || '*'}:${group || '__QUEUE_MODE__'}`
+    } else if (namespace || task) {
+      // Namespace/task-based routing: namespace:task:consumerGroup
+      return `${namespace || '*'}:${task || '*'}:${group || '__QUEUE_MODE__'}`
+    }
+    return null
+  }
+
   async start(handler, options) {
     const {
       queue,
@@ -52,6 +68,9 @@ export class ConsumerManager {
     // Build the path and params for pop requests
     const path = this.#buildPath(queue, partition, namespace, task)
     const baseParams = this.#buildParams(batch, wait, timeoutMillis, group, subscriptionMode, subscriptionFrom, namespace, task, autoAck)
+    
+    // Generate affinity key for consistent routing to same backend
+    const affinityKey = this.#getAffinityKey(queue, partition, namespace, task, group)
 
     // Start workers
     const workers = []
@@ -67,7 +86,8 @@ export class ConsumerManager {
         renewLeaseIntervalMillis,
         each,
         signal,
-        group  // Pass consumer group to workers
+        group,  // Pass consumer group to workers
+        affinityKey  // Pass affinity key to workers
       }))
     }
 
@@ -91,7 +111,8 @@ export class ConsumerManager {
       renewLeaseIntervalMillis,
       each,
       signal,
-      group
+      group,
+      affinityKey
     } = options
 
     logger.log('ConsumerManager.worker', { workerId, status: 'started', limit, idleMillis })
@@ -122,9 +143,9 @@ export class ConsumerManager {
       }
 
       try {
-        // Pop messages
+        // Pop messages with affinity key for consistent routing
         const clientTimeout = wait ? timeoutMillis + 5000 : timeoutMillis
-        const result = await this.#httpClient.get(`${path}?${baseParams}`, clientTimeout)
+        const result = await this.#httpClient.get(`${path}?${baseParams}`, clientTimeout, affinityKey)
 
         // Handle empty response
         if (!result || !result.messages || result.messages.length === 0) {
