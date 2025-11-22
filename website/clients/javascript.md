@@ -856,6 +856,236 @@ await queen.queue()
   })
 ```
 
+## Stream Processing
+
+Queen provides powerful **windowed stream processing** for aggregating messages from multiple queues into time-based windows. Perfect for real-time analytics, event correlation, and temporal aggregations.
+
+### What is a Stream?
+
+Instead of consuming individual messages, streams group messages into **time windows** and deliver entire windows for processing. This enables temporal correlation and multi-queue aggregation.
+
+### Basic Stream Example
+
+```javascript
+// Create source queues
+await queen.queue('events').namespace('analytics').task('stream').create()
+await queen.queue('clicks').namespace('analytics').task('stream').create()
+
+// Define stream with 5-second tumbling windows
+await queen.stream('event-stream', 'analytics')
+  .sources(['events', 'clicks'])
+  .tumblingTime(5)         // 5-second windows
+  .gracePeriod(1)          // 1-second grace period for late messages
+  .define()
+
+// Consume windows
+const consumer = queen.consumer('event-stream', 'analytics-consumer')
+
+await consumer.process(async (window) => {
+  console.log(`Window: ${window.start} - ${window.end}`)
+  console.log(`Total messages: ${window.allMessages.length}`)
+  
+  // Process all messages in the window
+  for (const msg of window.allMessages) {
+    console.log(msg.data)
+  }
+})
+```
+
+### Partitioned Streams
+
+**Partitioned streams** ensure messages with the same partition key are grouped together. Essential for per-user analytics, session tracking, or conversation processing.
+
+```javascript
+// Define partitioned stream
+await queen.stream('chat-stream', 'prod')
+  .sources(['chat-translations', 'chat-agent'])
+  .partitioned()           // Enable partition-aware processing
+  .tumblingTime(5)
+  .gracePeriod(1)
+  .define()
+
+// Producer: Push with partition key
+await queen
+  .queue('chat-translations')
+  .partition(chatId.toString())  // Set partition key
+  .push({
+    data: {
+      kind: 'translation',
+      chatId: chatId,
+      text: 'Hello world'
+    }
+  })
+
+// Consumer: Process windows with groupBy
+const consumer = queen.consumer('chat-stream', 'chat-analytics')
+
+await consumer.process(async (window) => {
+  // Group messages by chat ID
+  const byChatId = window.groupBy('data.chatId')
+  
+  // Process each chat's messages together
+  for (const [chatId, messages] of Object.entries(byChatId)) {
+    console.log(`Chat ${chatId}: ${messages.length} messages`)
+    
+    const translations = messages.filter(m => m.data.kind === 'translation')
+    const agentReplies = messages.filter(m => m.data.kind === 'agent')
+    
+    // Calculate metrics per chat
+    console.log(`Translations: ${translations.length}`)
+    console.log(`Agent replies: ${agentReplies.length}`)
+  }
+})
+```
+
+### Stream Configuration Options
+
+```javascript
+await queen.stream('stream-name', 'namespace')
+  .sources(['queue1', 'queue2', 'queue3'])  // 1+ source queues
+  .partitioned()                             // Optional: enable partitioning
+  .tumblingTime(5)                           // Window size in seconds
+  .gracePeriod(2)                            // Optional: grace period in seconds
+  .define()
+```
+
+**Key Concepts:**
+- **Tumbling windows**: Fixed-size, non-overlapping time windows
+- **Grace period**: Additional time to wait for late-arriving messages
+- **Partitioned**: Messages with same partition key processed together
+- **Multi-source**: Aggregate messages from multiple related queues
+
+### Window Operations
+
+The `window` object provides powerful aggregation methods:
+
+```javascript
+await consumer.process(async (window) => {
+  // Window metadata
+  console.log(window.id)          // Unique window identifier
+  console.log(window.start)       // Window start time (ISO 8601)
+  console.log(window.end)         // Window end time (ISO 8601)
+  
+  // All messages in the window
+  console.log(window.allMessages.length)
+  
+  // Group by any field path
+  const byUserId = window.groupBy('data.userId')
+  const byEventType = window.groupBy('data.event.type')
+  const byQueue = window.groupBy('queue_name')
+  
+  // Process grouped messages
+  for (const [key, messages] of Object.entries(byUserId)) {
+    console.log(`User ${key}: ${messages.length} events`)
+  }
+})
+```
+
+### Use Cases
+
+**Real-time Analytics:**
+```javascript
+// Aggregate metrics every 10 seconds
+await queen.stream('metrics-10s', 'monitoring')
+  .sources(['app-metrics'])
+  .tumblingTime(10)
+  .define()
+
+await consumer.process(async (window) => {
+  const values = window.allMessages.map(m => m.data.value)
+  const stats = {
+    count: values.length,
+    avg: values.reduce((a, b) => a + b, 0) / values.length,
+    min: Math.min(...values),
+    max: Math.max(...values)
+  }
+  await saveMetrics(stats)
+})
+```
+
+**Event Correlation:**
+```javascript
+// Correlate related events across multiple queues
+await queen.stream('user-journey', 'analytics')
+  .sources(['page-views', 'clicks', 'conversions'])
+  .partitioned()            // Group by user
+  .tumblingTime(60)         // 60-second windows
+  .define()
+
+await consumer.process(async (window) => {
+  const byUser = window.groupBy('data.userId')
+  
+  for (const [userId, events] of Object.entries(byUser)) {
+    const journey = {
+      views: events.filter(e => e.queue_name === 'page-views').length,
+      clicks: events.filter(e => e.queue_name === 'clicks').length,
+      conversions: events.filter(e => e.queue_name === 'conversions').length
+    }
+    console.log(`User ${userId}:`, journey)
+  }
+})
+```
+
+**Multi-stage Pipeline:**
+```javascript
+// Stage 1: Raw events stream
+await queen.stream('raw-events', 'pipeline')
+  .sources(['clicks', 'views'])
+  .tumblingTime(10)
+  .define()
+
+// Stage 2: Process and enrich
+const enrichConsumer = queen.consumer('raw-events', 'enricher')
+await enrichConsumer.process(async (window) => {
+  for (const msg of window.allMessages) {
+    const enriched = await enrichEvent(msg.data)
+    await queen.queue('enriched-events').push({ data: enriched })
+  }
+})
+
+// Stage 3: Final aggregation (longer window)
+await queen.stream('analytics', 'pipeline')
+  .sources(['enriched-events'])
+  .tumblingTime(60)
+  .define()
+```
+
+### Performance Tuning
+
+Control stream processing performance via server environment variables:
+
+```bash
+# Worker configuration
+STREAM_POLL_WORKER_COUNT=2        # Number of stream poll workers
+STREAM_CONCURRENT_CHECKS=10       # Concurrent window checks per worker
+
+# Polling intervals
+STREAM_POLL_INTERVAL=1000         # DB query interval (ms)
+STREAM_BACKOFF_THRESHOLD=5        # Empty checks before backoff
+STREAM_MAX_POLL_INTERVAL=5000     # Max backoff interval (ms)
+```
+
+**Tuning recommendations:**
+- **Low latency**: Lower `STREAM_POLL_INTERVAL` (500ms), increase workers
+- **High throughput**: Increase `STREAM_CONCURRENT_CHECKS` (20), more workers
+- **Low load**: Reduce workers (1), increase intervals (2000ms)
+
+### Best Practices
+
+1. ✅ **Choose appropriate window sizes** - 5-30 seconds for most use cases
+2. ✅ **Set grace periods** - Typically 10-20% of window size
+3. ✅ **Use partitioning for related events** - Ensures consistency
+4. ✅ **Preserve partition keys in pipelines** - Critical for partitioned streams
+5. ✅ **Process windows efficiently** - Minimize time in consumer
+6. ✅ **Use consumer groups for scaling** - Distribute windows across workers
+
+### Learn More
+
+For comprehensive documentation, complete examples, and tuning guides, see:
+- [Stream Processing Examples](/clients/examples/streaming) - Detailed guide with examples
+- [Example 18: Basic Streaming](https://github.com/smartpricing/queen/blob/master/examples/18-streaming.js)
+- [Example 19: Partitioned Streaming](https://github.com/smartpricing/queen/blob/master/examples/19-streaming-partitioned.js)
+
 ## Advanced Configuration
 
 ### Queue Configuration Options

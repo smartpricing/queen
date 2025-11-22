@@ -3,7 +3,6 @@
  */
 
 import { Queen } from '../client-js/client-v2/Queen.js';
-import { v4 as uuid } from 'uuid';
 const queen = new Queen({ url: 'http://localhost:6632' });
 
 async function main() {
@@ -22,10 +21,11 @@ async function main() {
     .gracePeriod(1)
     .define();
   
+  let chatId = 0;
   const producer = async () => {
     while (true) {
-      const chatId = uuid()
-      const message = await queen.queue('test-chat-translations').partition(chatId).push({
+      chatId++;
+      const message = await queen.queue('test-chat-translations').partition(chatId.toString()).push({
         data: {
           kind: 'translation',
           value: Math.random() * 100,
@@ -51,7 +51,7 @@ async function main() {
         .transaction()
         .ack(message)
         .queue('test-chat-agent')
-        .partition(message.data.chatId)
+        .partition(message.data.chatId.toString())
         .push([{ data: newMessage }])
         .commit()
     })
