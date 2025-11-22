@@ -85,12 +85,15 @@ class QueueBuilder:
         """Create queue"""
         # Always merge with QUEUE_DEFAULTS to ensure all options are sent
         full_config = self._config if self._config else QUEUE_DEFAULTS
+        
+        # Convert snake_case keys to camelCase for server
+        server_config = self._convert_config_to_camel_case(full_config)
 
         payload = {
             "queue": self._queue_name,
             "namespace": self._namespace,
             "task": self._task,
-            "options": full_config,
+            "options": server_config,
         }
 
         logger.log(
@@ -98,6 +101,16 @@ class QueueBuilder:
             {"queue": self._queue_name, "namespace": self._namespace, "task": self._task},
         )
         return OperationBuilder(self._http_client, "POST", "/api/v1/configure", payload)
+    
+    def _convert_config_to_camel_case(self, config: Dict[str, Any]) -> Dict[str, Any]:
+        """Convert snake_case config keys to camelCase for server"""
+        result = {}
+        for key, value in config.items():
+            # Convert snake_case to camelCase
+            parts = key.split("_")
+            camel_key = parts[0] + "".join(word.capitalize() for word in parts[1:])
+            result[camel_key] = value
+        return result
 
     def delete(self) -> OperationBuilder:
         """Delete queue"""
