@@ -32,6 +32,7 @@ export default defineConfig({
         text: 'Clients',
         items: [
           { text: 'JavaScript Client', link: '/clients/javascript' },
+          { text: 'Python Client', link: '/clients/python' },
           { text: 'C++ Client', link: '/clients/cpp' },
           { text: 'HTTP API', link: '/api/http' }
         ]
@@ -98,6 +99,7 @@ export default defineConfig({
           text: 'Client Libraries',
           items: [
             { text: 'JavaScript Client', link: '/clients/javascript' },
+            { text: 'Python Client', link: '/clients/python' },
             { text: 'C++ Client', link: '/clients/cpp' }
           ]
         },
@@ -105,6 +107,7 @@ export default defineConfig({
           text: 'Examples',
           items: [
             { text: 'Basic Usage', link: '/clients/examples/basic' },
+            { text: 'Python Examples', link: '/clients/examples/python' },
             { text: 'Batch Operations', link: '/clients/examples/batch' },
             { text: 'Transactions', link: '/clients/examples/transactions' },
             { text: 'Consumer Groups', link: '/clients/examples/consumer-groups' },

@@ -128,6 +128,8 @@ Ready to dive in? Check out the [Quick Start Guide](/guide/quickstart) to get Qu
 Or explore specific topics:
 - [Basic Concepts](/guide/concepts) - Understand queues, partitions, and consumer groups
 - [JavaScript Client](/clients/javascript) - Start building with the JS client
+- [Python Client](/clients/python) - Start building with the Python client
+- [C++ Client](/clients/cpp) - High-performance C++ client
 - [Server Setup](/server/installation) - Install and configure the server
 - [Examples](/clients/examples/basic) - See real-world usage patterns
 

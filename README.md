@@ -6,6 +6,7 @@
 
 [![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE.md)
 [![Node](https://img.shields.io/badge/node-%3E%3D22.0.0-brightgreen.svg)](https://nodejs.org/)
+[![Python](https://img.shields.io/badge/python-3.8%2B-blue.svg)](https://www.python.org/)
 [![C++](https://img.shields.io/badge/C%2B%2B-17-blue.svg)](https://en.cppreference.com/w/cpp/17)
 
 📚 **[Complete Documentation](https://smartpricing.github.io/queen/)** • 🚀 **[Quick Start](https://smartpricing.github.io/queen/guide/quickstart)** • ⚖️ **[Comparison](https://smartpricing.github.io/queen/guide/comparison)**
@@ -53,13 +54,23 @@ docker run -p 6632:6632 --network queen \
 
 Install client:
 
-```sh
+::: code-group
+
+```sh [JavaScript]
 npm install queen-mq
 ```
 
+```sh [Python]
+pip install queen-mq
+```
+
+:::
+
 Use the client:
 
-```javascript
+::: code-group
+
+```javascript [JavaScript]
 import { Queen } from 'queen-mq'
 
 const queen = new Queen('http://localhost:6632')
@@ -83,6 +94,38 @@ await queen.queue('orders')
     await processOrder(message.data)
   })
 ```
+
+```python [Python]
+import asyncio
+from queen import Queen
+
+async def main():
+    async with Queen('http://localhost:6632') as queen:
+        # Create queue
+        await queen.queue('orders').config({
+            'leaseTime': 30,
+            'retryLimit': 3
+        }).create()
+        
+        # Push with guaranteed order per partition
+        await queen.queue('orders').partition('customer-123').push([
+            {'data': {'orderId': 'ORD-001', 'amount': 99.99}}
+        ])
+        
+        # Consume with consumer groups
+        async def handler(message):
+            await process_order(message['data'])
+        
+        await (queen.queue('orders')
+            .group('order-processor')
+            .concurrency(10)
+            .batch(20)
+            .consume(handler))
+
+asyncio.run(main())
+```
+
+:::
 
 **[Complete Tutorial →](https://smartpricing.github.io/queen/guide/quickstart)**
 
@@ -142,6 +185,7 @@ A modern Vue 3 dashboard for monitoring and managing Queen MQ:
 
 ### Client Libraries
 - [JavaScript Client](https://smartpricing.github.io/queen/clients/javascript)
+- [Python Client](https://smartpricing.github.io/queen/clients/python)
 - [C++ Client](https://smartpricing.github.io/queen/clients/cpp)
 - [HTTP API Reference](https://smartpricing.github.io/queen/api/http)
 

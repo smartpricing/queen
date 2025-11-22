@@ -5,7 +5,7 @@ Get Queen MQ up and running in just a few minutes! This guide will have you push
 ## Prerequisites
 
 - Docker (recommended for quick start)
-- Node.js 22+ (for JavaScript client)
+- Node.js 22+ (for JavaScript client) **or** Python 3.8+ (for Python client)
 - PostgreSQL 13+ (if not using Docker)
 
 ## Step 1: Start PostgreSQL and Queen Server
@@ -63,6 +63,12 @@ You should see:
 
 ```bash
 npm install queen-mq
+```
+
+### Python
+
+```bash
+pip install queen-mq
 ```
 
 ### C++
@@ -132,6 +138,60 @@ You should see:
 ```
 
 Congratulations! 🎉 You've just sent and received your first message with Queen MQ.
+
+### Python Example
+
+Create a file `quickstart.py`:
+
+```python
+import asyncio
+from queen import Queen
+
+async def main():
+    # Connect to Queen server
+    async with Queen('http://localhost:6632') as queen:
+        # Create a queue with configuration
+        await queen.queue('my-first-queue').config({
+            'leaseTime': 30,        # 30 seconds to process each message
+            'retryLimit': 3,        # Retry up to 3 times on failure
+        }).create()
+        
+        print('✅ Queue created!')
+        
+        # Push a message
+        await queen.queue('my-first-queue').push([
+            {'data': {'message': 'Hello, Queen MQ!'}}
+        ])
+        
+        print('✅ Message pushed!')
+        
+        # Pop and process the message
+        messages = await queen.queue('my-first-queue').pop()
+        
+        print('✅ Message received:', messages[0]['data'])
+        
+        # Acknowledge the message
+        await queen.ack(messages[0], True)
+        
+        print('✅ Message acknowledged!')
+
+asyncio.run(main())
+```
+
+Run it:
+
+```bash
+python quickstart.py
+```
+
+You should see:
+
+```
+✅ Queue created!
+✅ Message pushed!
+✅ Message received: {'message': 'Hello, Queen MQ!'}
+✅ Message acknowledged!
+```
 
 ## Step 4: Try Consumer Groups
 
@@ -323,5 +383,10 @@ Make sure PostgreSQL is accessible and the database exists.
 
 ---
 
-Ready to build something awesome? Dive deeper into the [JavaScript Client Documentation](/clients/javascript) or explore the [Complete Guide](/guide/concepts)!
+Ready to build something awesome? Dive deeper into the client documentation:
+- [JavaScript Client](/clients/javascript)
+- [Python Client](/clients/python)
+- [C++ Client](/clients/cpp)
+
+Or explore the [Complete Guide](/guide/concepts)!
 

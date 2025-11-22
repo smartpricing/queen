@@ -47,6 +47,29 @@ import { Queen } from 'queen-mq'
 const queen = new Queen('http://localhost:6632')
 ```
 
+### Python
+
+```bash
+pip install queen-mq
+```
+
+**Requirements:**
+- Python 3.8+
+- pip
+
+**Usage:**
+```python
+import asyncio
+from queen import Queen
+
+async def main():
+    async with Queen('http://localhost:6632') as queen:
+        # Your code here
+        pass
+
+asyncio.run(main())
+```
+
 ### C++
 
 See the [C++ Client Guide](/clients/cpp) for detailed installation instructions.
@@ -427,6 +450,7 @@ Need help?
 **Compatibility:**
 - PostgreSQL 13+
 - Node.js 22+
+- Python 3.8+
 - C++17 or higher
 - Docker 20.10+
 

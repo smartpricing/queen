@@ -65,7 +65,7 @@ features:
     link: /guide/tracing
   
   - title: Multi-Language Clients
-    details: JavaScript and C++ clients with idiomatic APIs. Or use the HTTP API directly from any language. Python client coming soon.
+    details: JavaScript, Python, and C++ clients with idiomatic APIs. Or use the HTTP API directly from any language.
     link: /clients/javascript
 ---
 
@@ -95,7 +95,7 @@ features:
       <span class="doc-link-icon">💻</span>
       Client Libraries
     </div>
-    <div>JS, C++, and HTTP API</div>
+    <div>JavaScript, Python, C++, and HTTP API</div>
   </a>
   
   <a href="./server/installation" class="doc-link">
@@ -291,8 +291,11 @@ docker run -p 6632:6632 --network queen \
   -e PG_HOST=postgres -e PG_PASSWORD=postgres \
   smartnessai/queen-mq:{{VERSION}}
 
-# Install client
+# Install JavaScript client
 npm install queen-mq
+
+# Or install Python client
+pip install queen-mq
 
 # Start building!
 ```
