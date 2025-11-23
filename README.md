@@ -54,23 +54,20 @@ docker run -p 6632:6632 --network queen \
 
 Install client:
 
-::: code-group
-
-```sh [JavaScript]
+**JavaScript:**
+```sh
 npm install queen-mq
 ```
 
-```sh [Python]
+**Python:**
+```sh
 pip install queen-mq
 ```
 
-:::
-
 Use the client:
 
-::: code-group
-
-```javascript [JavaScript]
+**JavaScript:**
+```javascript
 import { Queen } from 'queen-mq'
 
 const queen = new Queen('http://localhost:6632')
@@ -95,7 +92,8 @@ await queen.queue('orders')
   })
 ```
 
-```python [Python]
+**Python:**
+```python
 import asyncio
 from queen import Queen
 
@@ -124,8 +122,6 @@ async def main():
 
 asyncio.run(main())
 ```
-
-:::
 
 **[Complete Tutorial →](https://smartpricing.github.io/queen/guide/quickstart)**
 
