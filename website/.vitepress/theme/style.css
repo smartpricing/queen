@@ -1,36 +1,36 @@
 /**
  * Queen MQ Custom Theme
- * Sophisticated emerald green palette inspired by the Queen logo
- * Design philosophy: Natural, elegant, regal
+ * Vibrant punk-rock palette inspired by the Queen duck logo
+ * Design philosophy: Bold, energetic, warm
  */
 
 /**
  * Color Palette
- * Primary: Rich Emerald (#059669) - Main brand color
- * Secondary: Forest Green (#047857) - Depth and contrast
- * Accent: Jade (#0d9488) - Interactive elements
- * Light: Spring Green (#34d399) - Dark mode highlights
+ * Primary: Vibrant Orange (#FF6B00) - Main brand color (warm, energetic)
+ * Secondary: Hot Pink (#E91E63) - Energy and passion
+ * Tertiary: Deep Pink (#C2185B) - Depth and contrast
+ * Accent Cyan: Turquoise (#00BCD4) - Fresh, modern highlights
  */
 
 :root {
-  /* Brand Colors - Emerald Green Palette */
-  --vp-c-brand-1: #059669;
-  --vp-c-brand-2: #047857;
-  --vp-c-brand-3: #065f46;
-  --vp-c-brand-soft: rgba(5, 150, 105, 0.12);
+  /* Brand Colors - Orange-Pink Palette */
+  --vp-c-brand-1: #FF6B00;
+  --vp-c-brand-2: #E91E63;
+  --vp-c-brand-3: #C2185B;
+  --vp-c-brand-soft: rgba(255, 107, 0, 0.12);
 
   /* Accent Colors */
-  --vp-c-jade: #0d9488;
-  --vp-c-spring: #34d399;
+  --vp-c-pink: #E91E63;
+  --vp-c-cyan: #00BCD4;
 
   /* Interactive Elements */
-  --vp-button-brand-bg: #059669;
-  --vp-button-brand-hover-bg: #047857;
-  --vp-button-brand-active-bg: #065f46;
+  --vp-button-brand-bg: #FF6B00;
+  --vp-button-brand-hover-bg: #E91E63;
+  --vp-button-brand-active-bg: #C2185B;
 
-  /* Home Hero - Elegant green gradient */
+  /* Home Hero - Orange to pink gradient */
   --vp-home-hero-name-color: transparent;
-  --vp-home-hero-name-background: linear-gradient(135deg, #059669 0%, #0d9488 50%, #047857 100%);
+  --vp-home-hero-name-background: linear-gradient(135deg, #FF6B00 0%, #E91E63 100%);
 
   /* Typography */
   --vp-font-family-base: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
@@ -38,7 +38,7 @@
 }
 
 /**
- * Dark Mode - Enhanced greens for contrast
+ * Dark Mode - Enhanced orange/pink/cyan for contrast
  */
 .dark {
   --vp-c-bg: #0f172a;
@@ -53,11 +53,15 @@
   --vp-c-text-2: #cbd5e1;
   --vp-c-text-3: #94a3b8;
 
-  /* Brighter greens for dark mode visibility */
-  --vp-c-brand-1: #10b981;
-  --vp-c-brand-2: #34d399;
-  --vp-c-brand-3: #6ee7b7;
-  --vp-c-brand-soft: rgba(16, 185, 129, 0.16);
+  /* Brighter orange/pink for dark mode visibility */
+  --vp-c-brand-1: #FF8A3D;
+  --vp-c-brand-2: #FF4081;
+  --vp-c-brand-3: #F06292;
+  --vp-c-brand-soft: rgba(255, 138, 61, 0.16);
+  
+  /* Enhanced accent colors for dark mode */
+  --vp-c-pink: #FF4081;
+  --vp-c-cyan: #18FFFF;
 }
 
 /**
@@ -72,7 +76,7 @@
  * Component: Home Hero
  */
 :root {
-  --vp-home-hero-image-background-image: linear-gradient(135deg, #059669 20%, #0d9488 60%, #047857 100%);
+  --vp-home-hero-image-background-image: linear-gradient(135deg, #FF6B00 20%, #E91E63 60%, #C2185B 100%);
   --vp-home-hero-image-filter: blur(44px);
 }
 
@@ -91,14 +95,14 @@
  */
 :root {
   --vp-badge-info-border: transparent;
-  --vp-badge-info-text: #059669;
-  --vp-badge-info-bg: rgba(5, 150, 105, 0.12);
+  --vp-badge-info-text: #FF6B00;
+  --vp-badge-info-bg: rgba(255, 107, 0, 0.12);
 }
 
 .dark {
   --vp-badge-info-border: transparent;
-  --vp-badge-info-text: #34d399;
-  --vp-badge-info-bg: rgba(16, 185, 129, 0.16);
+  --vp-badge-info-text: #FF8A3D;
+  --vp-badge-info-bg: rgba(255, 138, 61, 0.16);
 }
 
 /**
@@ -132,7 +136,7 @@ div[class*='language-'] {
   background-color: #1e293b;
 }
 
-/* Feature cards - elegant hover with green glow */
+/* Feature cards - elegant hover with warm orange/pink glow */
 .VPFeature {
   transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
   border: 1px solid transparent;
@@ -141,12 +145,12 @@ div[class*='language-'] {
 .VPFeature:hover {
   transform: translateY(-4px);
   border-color: var(--vp-c-brand-1);
-  box-shadow: 0 12px 24px rgba(5, 150, 105, 0.15);
+  box-shadow: 0 12px 24px rgba(255, 107, 0, 0.25);
 }
 
 .dark .VPFeature:hover {
   border-color: var(--vp-c-brand-2);
-  box-shadow: 0 12px 24px rgba(16, 185, 129, 0.25);
+  box-shadow: 0 12px 24px rgba(255, 64, 129, 0.35);
 }
 
 /* Feature card icon and title on same line */
@@ -206,7 +210,7 @@ div[class*='language-'] {
   margin-right: 8px;
   height: 24px;
   width: 24px;
-  filter: drop-shadow(0 0 8px rgba(5, 150, 105, 0.3));
+  filter: drop-shadow(0 0 8px rgba(255, 107, 0, 0.5));
 }
 
 /* Sidebar link active state - green accent */
@@ -326,13 +330,13 @@ div[class*='language-'] {
 
 .doc-link:hover {
   border-color: var(--vp-c-brand-1);
-  box-shadow: 0 4px 12px rgba(5, 150, 105, 0.15);
+  box-shadow: 0 4px 12px rgba(255, 107, 0, 0.25);
   transform: translateY(-2px);
   text-decoration: none;
 }
 
 .dark .doc-link:hover {
-  box-shadow: 0 4px 12px rgba(16, 185, 129, 0.25);
+  box-shadow: 0 4px 12px rgba(255, 138, 61, 0.35);
 }
 
 .doc-link-icon {
@@ -367,24 +371,46 @@ div[class*='language-'] {
   font-size: 0.9em;
 }
 
-/* Scrollbar styling - green accent */
+/* Scrollbar styling - orange accent */
 ::-webkit-scrollbar-thumb {
-  background-color: rgba(5, 150, 105, 0.3);
+  background-color: rgba(255, 107, 0, 0.3);
   border-radius: 4px;
 }
 
 ::-webkit-scrollbar-thumb:hover {
-  background-color: rgba(5, 150, 105, 0.5);
+  background-color: rgba(255, 107, 0, 0.5);
 }
 
-/* Selection color - green highlight */
+/* Selection color - warm orange/pink highlight */
 ::selection {
-  background-color: rgba(5, 150, 105, 0.3);
+  background-color: rgba(255, 107, 0, 0.25);
   color: inherit;
 }
 
-/* Focus rings - green */
+.dark ::selection {
+  background-color: rgba(255, 64, 129, 0.35);
+}
+
+/* Focus rings - orange */
 :focus-visible {
   outline: 2px solid var(--vp-c-brand-1);
   outline-offset: 2px;
+}
+
+/* Additional accent elements with cyan for variety */
+.VPButton.alt:hover {
+  border-color: var(--vp-c-cyan);
+}
+
+.vp-doc h1, .vp-doc h2 {
+  border-bottom-color: var(--vp-c-brand-soft);
+}
+
+/* Add subtle cyan accent to links in specific contexts */
+.vp-doc .custom-block.tip a {
+  color: var(--vp-c-cyan);
+}
+
+.vp-doc .custom-block.tip a:hover {
+  color: var(--vp-c-brand-2);
 }

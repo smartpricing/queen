@@ -6,7 +6,7 @@ hero:
   text: "Modern PostgreSQL-backed Message Queue"
   tagline: High-performance, feature-rich message queue system with unlimited FIFO partitions, consumer groups, transactions, and streaming capabilities
   image:
-    src: /queen-logo.svg
+    src: /queen_logo.png
     alt: Queen MQ Logo
   actions:
     - theme: brand

@@ -12,7 +12,7 @@
 📚 **[Complete Documentation](https://smartpricing.github.io/queen/)** • 🚀 **[Quick Start](https://smartpricing.github.io/queen/guide/quickstart)** • ⚖️ **[Comparison](https://smartpricing.github.io/queen/guide/comparison)**
 
 <p align="center">
-  <img src="assets/queen-logo.svg" alt="Queen Logo" width="120" />
+  <img src="assets/queen_logo.png" alt="Queen Logo" width="120" />
 </p>
 
 </div>

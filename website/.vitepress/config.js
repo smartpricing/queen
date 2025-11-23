@@ -14,15 +14,15 @@ export default defineConfig({
   description: 'Modern PostgreSQL-backed Message Queue System',
   base: '/queen/',
   head: [
-    ['link', { rel: 'icon', type: 'image/svg+xml', href: '/queen-logo.svg' }],
-    ['meta', { name: 'theme-color', content: '#059669' }],
+    ['link', { rel: 'icon', type: 'image/png', href: '/queen_logo.png' }],
+    ['meta', { name: 'theme-color', content: '#FF6B00' }],
     ['meta', { property: 'og:type', content: 'website' }],
     ['meta', { property: 'og:title', content: 'Queen MQ - PostgreSQL-backed Message Queue' }],
     ['meta', { property: 'og:description', content: 'High-performance, feature-rich message queue system built on PostgreSQL' }],
   ],
   
   themeConfig: {
-    logo: '/queen-logo.svg',
+    logo: '/queen_head.png',
     
     nav: [
       { text: 'Home', link: '/' },
