@@ -7,14 +7,15 @@ export default {
   theme: {
     extend: {
       colors: {
-        // Primary brand colors - Emerald green theme matching documentation website
-        'queen-primary': '#059669',      // emerald-600 - Rich emerald
-        'queen-secondary': '#0d9488',    // teal-600 - Jade accent
-        'queen-emerald': '#059669',      // emerald-600
-        'queen-jade': '#0d9488',         // teal-600
+        // Primary brand colors - Orange/Pink theme matching new punk rock logo
+        'queen-primary': '#FF6B00',      // Vibrant orange
+        'queen-secondary': '#E91E63',    // Hot pink
+        'queen-orange': '#FF6B00',       // Vibrant orange
+        'queen-pink': '#E91E63',         // Hot pink
+        'queen-deep-pink': '#C2185B',    // Deep pink
         // Aliases for convenience
-        'primary': '#059669',
-        'secondary': '#0d9488',
+        'primary': '#FF6B00',
+        'secondary': '#E91E63',
       },
       fontFamily: {
         sans: ['Inter', '-apple-system', 'BlinkMacSystemFont', 'Segoe UI', 'sans-serif'],

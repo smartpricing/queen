@@ -9,7 +9,7 @@
           selectedMetrics.cpu ? 'metric-toggle-active-rose' : 'metric-toggle-inactive'
         ]"
       >
-        <div :class="['metric-dot', selectedMetrics.cpu ? 'bg-emerald-500' : 'bg-gray-400']"></div>
+        <div :class="['metric-dot', selectedMetrics.cpu ? 'bg-orange-500' : 'bg-gray-400']"></div>
         CPU %
       </button>
       <button
@@ -79,8 +79,8 @@ function getNestedValue(obj, path) {
 
 // Colors for different replicas (CPU and Memory use same color per replica)
 const replicaColors = [
-  { color: 'rgba(5, 150, 105, 1)', bg: 'rgba(5, 150, 105, 0.1)' },
-  { color: 'rgba(5, 150, 105, 1)', bg: 'rgba(5, 150, 105, 0.1)' },
+  { color: 'rgba(255, 107, 0, 1)', bg: 'rgba(255, 107, 0, 0.1)' },
+  { color: 'rgba(255, 107, 0, 1)', bg: 'rgba(255, 107, 0, 0.1)' },
   { color: 'rgba(245, 158, 11, 1)', bg: 'rgba(245, 158, 11, 0.1)' },
   { color: 'rgba(14, 165, 233, 1)', bg: 'rgba(14, 165, 233, 0.1)' },
 ];
@@ -211,11 +211,11 @@ const chartOptions = computed(() => {
       position: 'left',
       beginAtZero: true,
       grid: {
-        color: 'rgba(5, 150, 105, 0.1)',
+        color: 'rgba(255, 107, 0, 0.1)',
         drawBorder: false,
       },
       ticks: {
-        color: 'rgba(5, 150, 105, 0.8)',
+        color: 'rgba(255, 107, 0, 0.8)',
         font: {
           size: 11,
         },
@@ -226,7 +226,7 @@ const chartOptions = computed(() => {
       title: {
         display: true,
         text: 'CPU %',
-        color: 'rgba(5, 150, 105, 0.8)',
+        color: 'rgba(255, 107, 0, 0.8)',
         font: {
           size: 12,
           weight: 600,
@@ -343,9 +343,9 @@ const chartOptions = computed(() => {
 }
 
 .metric-toggle-active-rose {
-  background: rgba(5, 150, 105, 0.12);
+  background: rgba(255, 107, 0, 0.12);
   color: #2563eb;
-  border: 1px solid rgba(5, 150, 105, 0.3);
+  border: 1px solid rgba(255, 107, 0, 0.3);
 }
 
 .metric-toggle-active-purple {
@@ -369,7 +369,7 @@ const chartOptions = computed(() => {
 }
 
 .metric-toggle-active-rose:hover {
-  background: rgba(5, 150, 105, 0.18);
+  background: rgba(255, 107, 0, 0.18);
 }
 
 .metric-toggle-active-purple:hover {

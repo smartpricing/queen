@@ -29,13 +29,13 @@
           </div>
         </div>
         
-        <div v-if="queueMode && queueMode.type === 'hybrid'" class="bg-emerald-50 dark:bg-emerald-900/20 border border-emerald-200 dark:border-emerald-700/30 rounded-lg p-3">
+        <div v-if="queueMode && queueMode.type === 'hybrid'" class="bg-orange-50 dark:bg-orange-900/20 border border-emerald-200 dark:border-orange-700/30 rounded-lg p-3">
           <div class="flex items-center gap-2 text-sm">
-            <svg class="w-5 h-5 text-emerald-600 dark:text-emerald-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <svg class="w-5 h-5 text-orange-600 dark:text-pink-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 7h12m0 0l-4-4m4 4l-4 4m0 6H4m0 0l4 4m-4-4l4-4" />
             </svg>
-            <span class="font-medium text-emerald-900 dark:text-emerald-100">Hybrid Mode</span>
-            <span class="text-emerald-700 dark:text-emerald-300">Queue mode + {{ queueMode.busGroupsCount }} consumer group(s)</span>
+            <span class="font-medium text-orange-900 dark:text-orange-100">Hybrid Mode</span>
+            <span class="text-orange-700 dark:text-emerald-300">Queue mode + {{ queueMode.busGroupsCount }} consumer group(s)</span>
           </div>
         </div>
 

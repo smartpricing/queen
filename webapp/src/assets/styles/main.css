@@ -59,15 +59,15 @@
   }
   
   .btn-primary {
-    @apply bg-gradient-to-br from-emerald-600 to-emerald-700 hover:from-emerald-700 hover:to-emerald-800 
-           active:from-emerald-800 active:to-emerald-900 text-white shadow-sm hover:shadow-md 
+    @apply bg-gradient-to-br from-orange-600 to-pink-600 hover:from-orange-700 hover:to-pink-700 
+           active:from-orange-800 active:to-pink-800 text-white shadow-sm hover:shadow-md 
            disabled:opacity-50 disabled:cursor-not-allowed;
-    box-shadow: 0 1px 2px 0 rgb(0 0 0 / 0.05), 0 0 0 1px rgb(5 150 105 / 0.1);
+    box-shadow: 0 1px 2px 0 rgb(0 0 0 / 0.05), 0 0 0 1px rgb(255 107 0 / 0.1);
   }
   
   .btn-primary:hover {
     box-shadow: 0 4px 6px -1px rgb(0 0 0 / 0.1), 0 2px 4px -2px rgb(0 0 0 / 0.1), 
-                0 0 0 1px rgb(5 150 105 / 0.2);
+                0 0 0 1px rgb(255 107 0 / 0.2);
   }
   
   .btn-secondary {
@@ -122,23 +122,23 @@
   }
   
   .badge-info {
-    @apply bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400 
-           ring-1 ring-emerald-600/20 dark:ring-emerald-400/20;
-    box-shadow: 0 0 0 0 rgba(5, 150, 105, 0);
+    @apply bg-orange-100 text-orange-700 dark:bg-orange-900/30 dark:text-orange-400 
+           ring-1 ring-orange-600/20 dark:ring-orange-400/20;
+    box-shadow: 0 0 0 0 rgba(255, 107, 0, 0);
   }
   
   .badge-info:hover {
-    box-shadow: 0 0 8px 0 rgba(5, 150, 105, 0.3);
+    box-shadow: 0 0 8px 0 rgba(255, 107, 0, 0.3);
   }
   
   .input {
     @apply w-full px-3 py-2 text-sm border rounded-lg bg-white dark:bg-slate-800 
-           focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:border-transparent 
+           focus:outline-none focus:ring-2 focus:ring-orange-500 focus:border-transparent 
            transition-all duration-200;
   }
   
   .input:focus {
-    box-shadow: 0 0 0 3px rgba(5, 150, 105, 0.1);
+    box-shadow: 0 0 0 3px rgba(255, 107, 0, 0.1);
   }
   
   /* Table styles */
@@ -170,7 +170,7 @@
   }
   
   .table tbody tr:hover {
-    @apply bg-emerald-50/30 dark:bg-emerald-900/10;
+    @apply bg-orange-50/30 dark:bg-orange-900/10;
   }
   
   .table td {
@@ -230,11 +230,11 @@
   }
   
   .scrollbar-thin::-webkit-scrollbar-thumb {
-    @apply bg-gradient-to-b from-emerald-400 to-teal-400 rounded-full;
+    @apply bg-gradient-to-b from-orange-400 to-pink-400 rounded-full;
   }
   
   .scrollbar-thin::-webkit-scrollbar-thumb:hover {
-    @apply from-emerald-500 to-teal-500;
+    @apply from-orange-500 to-pink-500;
   }
   
   /* Custom utilities */
@@ -307,17 +307,17 @@
 
 /* Focus visible for accessibility */
 :focus-visible {
-  @apply outline-2 outline-offset-2 outline-emerald-500 rounded;
+  @apply outline-2 outline-offset-2 outline-orange-500 rounded;
 }
 
 /* Selection color */
 ::selection {
-  @apply bg-emerald-200 dark:bg-emerald-800/50 text-gray-900 dark:text-gray-100;
+  @apply bg-orange-200 dark:bg-orange-800/50 text-gray-900 dark:text-gray-100;
 }
 
 /* Gradient text utility */
 .gradient-text {
-  background: linear-gradient(135deg, #059669 0%, #0d9488 100%);
+  background: linear-gradient(135deg, #FF6B00 0%, #E91E63 100%);
   -webkit-background-clip: text;
   -webkit-text-fill-color: transparent;
   background-clip: text;
@@ -329,11 +329,11 @@
   background: white;
   border-radius: 0.75rem;
   padding: 1px;
-  background: linear-gradient(135deg, rgba(5, 150, 105, 0.2), rgba(13, 148, 136, 0.2));
+  background: linear-gradient(135deg, rgba(255, 107, 0, 0.2), rgba(233, 30, 99, 0.2));
 }
 
 .dark .card-gradient-border {
-  background: linear-gradient(135deg, rgba(5, 150, 105, 0.3), rgba(13, 148, 136, 0.3));
+  background: linear-gradient(135deg, rgba(255, 107, 0, 0.3), rgba(233, 30, 99, 0.3));
 }
 
 .card-gradient-border > * {

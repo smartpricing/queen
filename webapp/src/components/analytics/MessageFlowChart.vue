@@ -103,8 +103,8 @@ function createGradientBars(color) {
     const gradient = ctx.createLinearGradient(0, chartArea.top, 0, chartArea.bottom);
     
     if (color === 'blue') {
-      gradient.addColorStop(0, 'rgba(5, 150, 105, 0.8)');
-      gradient.addColorStop(1, 'rgba(5, 150, 105, 0.4)');
+      gradient.addColorStop(0, 'rgba(255, 107, 0, 0.8)');
+      gradient.addColorStop(1, 'rgba(255, 107, 0, 0.4)');
     } else if (color === 'indigo') {
       gradient.addColorStop(0, 'rgba(99, 102, 241, 0.8)');
       gradient.addColorStop(1, 'rgba(99, 102, 241, 0.4)');

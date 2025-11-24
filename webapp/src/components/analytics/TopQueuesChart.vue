@@ -69,7 +69,7 @@ function createGradientBars() {
     }
     
     const gradient = ctx.createLinearGradient(chartArea.left, 0, chartArea.right, 0);
-    gradient.addColorStop(0, 'rgba(5, 150, 105, 0.8)');
+    gradient.addColorStop(0, 'rgba(255, 107, 0, 0.8)');
     gradient.addColorStop(0.5, 'rgba(79, 70, 229, 0.8)');
     gradient.addColorStop(1, 'rgba(99, 102, 241, 0.8)');
     

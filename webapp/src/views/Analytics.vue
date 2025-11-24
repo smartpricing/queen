@@ -75,8 +75,8 @@
           <!-- Performance Metrics -->
           <div class="info-card-white">
             <div class="flex items-center gap-2 mb-2">
-              <div class="w-7 h-7 rounded-lg bg-gradient-to-br from-emerald-500/10 to-cyan-500/20 flex items-center justify-center">
-                <svg class="w-4 h-4 text-emerald-600 dark:text-emerald-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <div class="w-7 h-7 rounded-lg bg-gradient-to-br from-orange-500/10 to-cyan-500/20 flex items-center justify-center">
+                <svg class="w-4 h-4 text-orange-600 dark:text-pink-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z" />
                 </svg>
               </div>

@@ -9,7 +9,7 @@
           selectedMetrics.ingested ? 'metric-toggle-active-blue' : 'metric-toggle-inactive'
         ]"
       >
-        <div :class="['metric-dot', selectedMetrics.ingested ? 'bg-emerald-500' : 'bg-gray-400']"></div>
+        <div :class="['metric-dot', selectedMetrics.ingested ? 'bg-orange-500' : 'bg-gray-400']"></div>
         Ingested
       </button>
       <button
@@ -145,8 +145,8 @@ function createGradientBars(color) {
     
     if (color === 'blue') {
       // Blue gradient for ingested
-      gradient.addColorStop(0, 'rgba(5, 150, 105, 0.8)');
-      gradient.addColorStop(1, 'rgba(5, 150, 105, 0.4)');
+      gradient.addColorStop(0, 'rgba(255, 107, 0, 0.8)');
+      gradient.addColorStop(1, 'rgba(255, 107, 0, 0.4)');
     } else if (color === 'indigo') {
       // Indigo gradient for processed
       gradient.addColorStop(0, 'rgba(99, 102, 241, 0.8)');
@@ -256,16 +256,16 @@ const chartOptions = {
 }
 
 .metric-toggle-active-blue {
-  background: rgba(5, 150, 105, 0.12);
+  background: rgba(255, 107, 0, 0.12);
   color: #2563eb;
-  border: 1px solid rgba(5, 150, 105, 0.3);
-  box-shadow: 0 1px 2px 0 rgba(5, 150, 105, 0.1);
+  border: 1px solid rgba(255, 107, 0, 0.3);
+  box-shadow: 0 1px 2px 0 rgba(255, 107, 0, 0.1);
 }
 
 .dark .metric-toggle-active-blue {
-  background: rgba(5, 150, 105, 0.18);
-  color: #10b981;
-  border: 1px solid rgba(5, 150, 105, 0.4);
+  background: rgba(255, 107, 0, 0.18);
+  color: #FF4081;
+  border: 1px solid rgba(255, 107, 0, 0.4);
 }
 
 .metric-toggle-active-indigo {
@@ -294,11 +294,11 @@ const chartOptions = {
 
 
 .metric-toggle-active-blue:hover {
-  background: rgba(5, 150, 105, 0.15);
+  background: rgba(255, 107, 0, 0.15);
 }
 
 .dark .metric-toggle-active-blue:hover {
-  background: rgba(5, 150, 105, 0.2);
+  background: rgba(255, 107, 0, 0.2);
 }
 
 .metric-toggle-active-indigo:hover {

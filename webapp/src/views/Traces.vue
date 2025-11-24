@@ -51,16 +51,16 @@
         <!-- Results -->
         <div v-else-if="currentTraceName && traces.length > 0" class="space-y-4">
           <!-- Summary -->
-          <div class="bg-emerald-50 dark:bg-emerald-900/20 border border-emerald-200 dark:border-emerald-700/30 rounded-lg p-4">
+          <div class="bg-orange-50 dark:bg-orange-900/20 border border-emerald-200 dark:border-orange-700/30 rounded-lg p-4">
             <div class="flex items-center gap-3">
-              <svg class="w-5 h-5 text-emerald-600 dark:text-emerald-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <svg class="w-5 h-5 text-orange-600 dark:text-pink-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
               </svg>
               <div class="flex-1">
-                <p class="text-sm font-semibold text-emerald-900 dark:text-emerald-100">
+                <p class="text-sm font-semibold text-orange-900 dark:text-orange-100">
                   Found {{ totalTraces }} trace{{ totalTraces !== 1 ? 's' : '' }} for: <span>{{ currentTraceName }}</span>
                 </p>
-                <p class="text-xs text-emerald-700 dark:text-emerald-300 mt-1">
+                <p class="text-xs text-orange-700 dark:text-emerald-300 mt-1">
                   {{ uniqueMessages }} unique message{{ uniqueMessages !== 1 ? 's' : '' }} • {{ uniqueQueues }} queue{{ uniqueQueues !== 1 ? 's' : '' }}
                 </p>
               </div>
@@ -157,7 +157,7 @@
                           class="inline-block px-2 py-0.5 text-xs rounded-full whitespace-nowrap"
                           :class="name === currentTraceName 
                             ? 'bg-rose-100 dark:bg-rose-900 text-rose-700 dark:text-rose-300 font-medium'
-                            : 'bg-emerald-100 dark:bg-emerald-900 text-emerald-700 dark:text-emerald-300'"
+                            : 'bg-orange-100 dark:bg-orange-900 text-orange-700 dark:text-emerald-300'"
                         >
                           {{ name }}
                         </span>
@@ -518,7 +518,7 @@ function nextNamesPage() {
 
 function getEventColor(eventType) {
   const colors = {
-    info: 'bg-emerald-500',
+    info: 'bg-orange-500',
     processing: 'bg-green-500',
     step: 'bg-purple-500',
     error: 'bg-red-500',

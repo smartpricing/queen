@@ -36,7 +36,7 @@
                 <path stroke-linecap="round" stroke-linejoin="round" d="M9 5l7 7-7 7" />
               </svg>
             </div>
-            <div class="metric-value text-orange-600 dark:text-orange-400">{{ formatNumber(calculatedPending) }}</div>
+            <div class="metric-value text-gray-900 dark:text-gray-100">{{ formatNumber(calculatedPending) }}</div>
             <div class="metric-subtext-bottom">{{ formatNumber(overview?.messages?.processing || 0) }} processing</div>
           </div>
 
@@ -48,7 +48,7 @@
                 <path stroke-linecap="round" stroke-linejoin="round" d="M9 5l7 7-7 7" />
               </svg>
             </div>
-            <div class="metric-value text-emerald-600 dark:text-emerald-400">{{ formatNumber(overview?.messages?.completed || 0) }}</div>
+            <div class="metric-value text-gray-900 dark:text-gray-100">{{ formatNumber(overview?.messages?.completed || 0) }}</div>
             <div class="metric-subtext-bottom">{{ formatNumber(overview?.messages?.total || 0) }} total</div>
           </div>
 
@@ -156,13 +156,13 @@
           <div class="metric-card-top">
             <div class="flex items-center justify-between mb-0.5">
               <span class="metric-label">WINDOWS PROCESSED</span>
-              <div class="text-emerald-500">
+              <div class="text-green-500">
                 <svg class="w-4 h-4" fill="currentColor" viewBox="0 0 20 20">
                   <circle cx="10" cy="10" r="4"/>
                 </svg>
               </div>
             </div>
-            <div class="metric-value text-emerald-600 dark:text-emerald-400">{{ formatNumber(streamStats?.totalWindowsProcessed || 0) }}</div>
+            <div class="metric-value text-gray-900 dark:text-gray-100">{{ formatNumber(streamStats?.totalWindowsProcessed || 0) }}</div>
             <div class="metric-subtext-bottom">{{ formatNumber(streamStats?.windowsLastHour || 0) }} last hour</div>
           </div>
 
@@ -170,13 +170,13 @@
           <div class="metric-card-top">
             <div class="flex items-center justify-between mb-0.5">
               <span class="metric-label">ACTIVE WINDOWS</span>
-              <div :class="streamStats?.activeLeases > 0 ? 'text-emerald-500' : 'text-gray-400 dark:text-gray-500'">
+              <div :class="streamStats?.activeLeases > 0 ? 'text-green-500' : 'text-gray-400 dark:text-gray-500'">
                 <svg class="w-4 h-4" fill="currentColor" viewBox="0 0 20 20">
                   <circle cx="10" cy="10" r="4"/>
                 </svg>
               </div>
             </div>
-            <div class="metric-value text-emerald-600 dark:text-emerald-400">{{ formatNumber(streamStats?.activeLeases || 0) }}</div>
+            <div class="metric-value text-gray-900 dark:text-gray-100">{{ formatNumber(streamStats?.activeLeases || 0) }}</div>
             <div class="metric-subtext-bottom">{{ formatNumber(streamStats?.avgLeaseTime || 0) }}s avg time</div>
           </div>
         </div>
@@ -315,7 +315,7 @@ function formatDuration(seconds) {
 // Get lag status indicator class (time-based)
 function getLagStatusClass(seconds) {
   if (!seconds || seconds === 0) return 'text-gray-400 dark:text-gray-500';
-  if (seconds < 60) return 'text-emerald-500'; // < 1 min: green
+  if (seconds < 60) return 'text-green-500'; // < 1 min: green
   if (seconds < 300) return 'text-yellow-500'; // 1-5 min: yellow
   return 'text-red-500'; // > 5 min: red
 }
@@ -323,7 +323,7 @@ function getLagStatusClass(seconds) {
 // Get lag value class (time-based)
 function getLagValueClass(seconds) {
   if (!seconds || seconds === 0) return 'metric-value text-gray-600 dark:text-gray-300';
-  if (seconds < 60) return 'metric-value text-emerald-600 dark:text-emerald-400';
+  if (seconds < 60) return 'metric-value text-gray-900 dark:text-gray-100';
   if (seconds < 300) return 'metric-value text-yellow-600 dark:text-yellow-400';
   return 'metric-value text-red-600 dark:text-red-400';
 }
@@ -331,7 +331,7 @@ function getLagValueClass(seconds) {
 // Get offset lag status indicator class
 function getOffsetLagStatusClass(count) {
   if (!count || count === 0) return 'text-gray-400 dark:text-gray-500';
-  if (count < 10) return 'text-emerald-500'; // < 10 msgs: green
+  if (count < 10) return 'text-green-500'; // < 10 msgs: green
   if (count < 50) return 'text-yellow-500'; // 10-50 msgs: yellow
   return 'text-red-500'; // > 50 msgs: red
 }
@@ -339,7 +339,7 @@ function getOffsetLagStatusClass(count) {
 // Get offset lag value class
 function getOffsetLagValueClass(count) {
   if (!count || count === 0) return 'metric-value text-gray-600 dark:text-gray-300';
-  if (count < 10) return 'metric-value text-emerald-600 dark:text-emerald-400';
+  if (count < 10) return 'metric-value text-gray-900 dark:text-gray-100';
   if (count < 50) return 'metric-value text-yellow-600 dark:text-yellow-400';
   return 'metric-value text-red-600 dark:text-red-400';
 }
@@ -426,13 +426,13 @@ function navigateToStreams() {
 .dashboard-professional {
   @apply min-h-screen bg-gray-50 dark:bg-[#0d1117];
   background-image: 
-    radial-gradient(at 0% 0%, rgba(5, 150, 105, 0.03) 0px, transparent 50%),
+    radial-gradient(at 0% 0%, rgba(255, 107, 0, 0.03) 0px, transparent 50%),
     radial-gradient(at 100% 0%, rgba(99, 102, 241, 0.03) 0px, transparent 50%);
 }
 
 .dark .dashboard-professional {
   background-image: 
-    radial-gradient(at 0% 0%, rgba(5, 150, 105, 0.05) 0px, transparent 50%),
+    radial-gradient(at 0% 0%, rgba(255, 107, 0, 0.05) 0px, transparent 50%),
     radial-gradient(at 100% 0%, rgba(99, 102, 241, 0.05) 0px, transparent 50%);
 }
 
@@ -472,12 +472,12 @@ function navigateToStreams() {
 
 .metric-card-clickable:hover {
   box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.08), 0 2px 4px -1px rgba(0, 0, 0, 0.04);
-  border-color: rgba(5, 150, 105, 0.4);
+  border-color: rgba(255, 107, 0, 0.4);
 }
 
 .dark .metric-card-clickable:hover {
   box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.5), 0 2px 4px -1px rgba(0, 0, 0, 0.3);
-  border-color: rgba(5, 150, 105, 0.5);
+  border-color: rgba(255, 107, 0, 0.5);
 }
 
 .metric-card {
@@ -510,12 +510,12 @@ function navigateToStreams() {
 .metric-card-clickable:hover .card-arrow,
 .chart-card-clickable:hover .card-arrow {
   transform: translateX(2px);
-  color: #059669;
+  color: #FF6B00;
 }
 
 .dark .metric-card-clickable:hover .card-arrow,
 .dark .chart-card-clickable:hover .card-arrow {
-  color: #10b981;
+  color: #FF4081;
 }
 
 .metric-value {
@@ -547,12 +547,12 @@ function navigateToStreams() {
 
 .chart-card-clickable:hover {
   box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.08), 0 2px 4px -1px rgba(0, 0, 0, 0.04);
-  border-color: rgba(5, 150, 105, 0.4);
+  border-color: rgba(255, 107, 0, 0.4);
 }
 
 .dark .chart-card-clickable:hover {
   box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.5), 0 2px 4px -1px rgba(0, 0, 0, 0.3);
-  border-color: rgba(5, 150, 105, 0.5);
+  border-color: rgba(255, 107, 0, 0.5);
 }
 
 .chart-header {

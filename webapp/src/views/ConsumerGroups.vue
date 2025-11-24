@@ -218,11 +218,11 @@
         <div class="metrics-grid">
           <div class="metric-card-compact">
             <span class="metric-label-sm">ACTIVE GROUPS</span>
-            <div class="metric-value-sm text-emerald-600 dark:text-emerald-400">{{ stats.activeGroups }}</div>
+            <div class="metric-value-sm text-gray-900 dark:text-gray-100">{{ stats.activeGroups }}</div>
           </div>
           <div class="metric-card-compact">
             <span class="metric-label-sm">TOTAL CONSUMERS</span>
-            <div class="metric-value-sm text-emerald-600 dark:text-emerald-400">{{ stats.totalConsumers }}</div>
+            <div class="metric-value-sm text-gray-900 dark:text-gray-100">{{ stats.totalConsumers }}</div>
           </div>
           <div class="metric-card-compact">
             <span class="metric-label-sm">QUEUES MONITORED</span>
@@ -1053,7 +1053,7 @@ onUnmounted(() => {
 }
 
 .stat-card {
-  @apply bg-emerald-50/50 dark:bg-emerald-900/10 border border-emerald-200/40 dark:border-emerald-800/30;
+  @apply bg-orange-50/50 dark:bg-orange-900/10 border border-emerald-200/40 dark:border-orange-800/30;
   @apply rounded-lg p-4;
 }
 
@@ -1063,7 +1063,7 @@ onUnmounted(() => {
 }
 
 .stat-value {
-  @apply text-xl font-bold text-emerald-600 dark:text-emerald-400 tracking-tight;
+  @apply text-xl font-bold text-gray-900 dark:text-gray-100 tracking-tight;
 }
 
 .subscription-info-card {
@@ -1082,7 +1082,7 @@ onUnmounted(() => {
 
 .queue-title {
   @apply flex items-center gap-2 text-base font-semibold text-gray-900 dark:text-white mb-3;
-  @apply p-3 bg-gray-50/80 dark:bg-gray-800/30 rounded-lg border-l-2 border-emerald-500;
+  @apply p-3 bg-gray-50/80 dark:bg-gray-800/30 rounded-lg border-l-2 border-orange-500;
 }
 
 .partition-count {

@@ -19,7 +19,7 @@
           selectedMetrics.poolActive ? 'metric-toggle-active-blue' : 'metric-toggle-inactive'
         ]"
       >
-        <div :class="['metric-dot', selectedMetrics.poolActive ? 'bg-emerald-500' : 'bg-gray-400']"></div>
+        <div :class="['metric-dot', selectedMetrics.poolActive ? 'bg-orange-500' : 'bg-gray-400']"></div>
         Active Connections
       </button>
       <button
@@ -90,7 +90,7 @@ function getNestedValue(obj, path) {
 
 // Colors for different replicas
 const replicaColors = [
-  { poolSize: 'rgba(107, 114, 128, 1)', active: 'rgba(5, 150, 105, 1)', idle: 'rgba(34, 197, 94, 1)' },
+  { poolSize: 'rgba(107, 114, 128, 1)', active: 'rgba(255, 107, 0, 1)', idle: 'rgba(34, 197, 94, 1)' },
   { poolSize: 'rgba(156, 163, 175, 1)', active: 'rgba(147, 197, 253, 1)', idle: 'rgba(134, 239, 172, 1)' },
   { poolSize: 'rgba(75, 85, 99, 1)', active: 'rgba(96, 165, 250, 1)', idle: 'rgba(74, 222, 128, 1)' },
 ];
@@ -328,9 +328,9 @@ const chartOptions = {
 }
 
 .metric-toggle-active-blue {
-  background: rgba(5, 150, 105, 0.1);
-  color: #059669;
-  border: 1px solid rgba(5, 150, 105, 0.2);
+  background: rgba(255, 107, 0, 0.1);
+  color: #FF6B00;
+  border: 1px solid rgba(255, 107, 0, 0.2);
 }
 
 .metric-toggle-active-green {

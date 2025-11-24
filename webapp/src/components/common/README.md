@@ -131,7 +131,7 @@ const selectedDateTime = ref('');
 
 Both components follow the Queen MQ design system:
 
-- **Primary Color**: Emerald Green (#059669, #34d399 for dark mode)
+- **Primary Color**: Emerald Green (#059669, #FF8A3D for dark mode)
 - **Border Radius**: 0.5rem (8px) for inputs, 0.75rem (12px) for dropdowns
 - **Transitions**: Smooth cubic-bezier(0.4, 0, 0.2, 1) animations
 - **Shadows**: Subtle elevation with dark mode support

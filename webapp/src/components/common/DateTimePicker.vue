@@ -382,22 +382,22 @@ onUnmounted(() => {
 }
 
 .picker-trigger:hover {
-  border-color: rgba(5, 150, 105, 0.3);
-  box-shadow: 0 0 0 3px rgba(5, 150, 105, 0.05);
+  border-color: rgba(255, 107, 0, 0.3);
+  box-shadow: 0 0 0 3px rgba(255, 107, 0, 0.05);
 }
 
 .dark .picker-trigger:hover {
-  border-color: rgba(5, 150, 105, 0.4);
+  border-color: rgba(255, 107, 0, 0.4);
 }
 
 .picker-trigger-open {
-  border-color: #059669;
-  box-shadow: 0 0 0 3px rgba(5, 150, 105, 0.1);
+  border-color: #FF6B00;
+  box-shadow: 0 0 0 3px rgba(255, 107, 0, 0.1);
 }
 
 .dark .picker-trigger-open {
-  border-color: #34d399;
-  box-shadow: 0 0 0 3px rgba(5, 150, 105, 0.15);
+  border-color: #FF8A3D;
+  box-shadow: 0 0 0 3px rgba(255, 107, 0, 0.15);
 }
 
 .picker-trigger-disabled {
@@ -502,25 +502,25 @@ onUnmounted(() => {
 
 .preset-btn {
   padding: 0.5rem 0.75rem;
-  background: rgba(5, 150, 105, 0.05);
-  border: 1px solid rgba(5, 150, 105, 0.15);
+  background: rgba(255, 107, 0, 0.05);
+  border: 1px solid rgba(255, 107, 0, 0.15);
   border-radius: 0.375rem;
   font-size: 0.8125rem;
-  color: #059669;
+  color: #FF6B00;
   font-weight: 500;
   transition: all 0.15s;
   cursor: pointer;
 }
 
 .dark .preset-btn {
-  background: rgba(5, 150, 105, 0.1);
-  border-color: rgba(5, 150, 105, 0.2);
-  color: #34d399;
+  background: rgba(255, 107, 0, 0.1);
+  border-color: rgba(255, 107, 0, 0.2);
+  color: #FF8A3D;
 }
 
 .preset-btn:hover {
-  background: rgba(5, 150, 105, 0.12);
-  border-color: rgba(5, 150, 105, 0.3);
+  background: rgba(255, 107, 0, 0.12);
+  border-color: rgba(255, 107, 0, 0.3);
   transform: translateY(-1px);
 }
 
@@ -549,12 +549,12 @@ onUnmounted(() => {
 }
 
 .nav-btn:hover {
-  background: rgba(5, 150, 105, 0.1);
-  color: #059669;
+  background: rgba(255, 107, 0, 0.1);
+  color: #FF6B00;
 }
 
 .dark .nav-btn:hover {
-  color: #34d399;
+  color: #FF8A3D;
 }
 
 .current-month {
@@ -603,12 +603,12 @@ onUnmounted(() => {
 }
 
 .day-cell:hover {
-  background: rgba(5, 150, 105, 0.1);
-  color: #059669;
+  background: rgba(255, 107, 0, 0.1);
+  color: #FF6B00;
 }
 
 .dark .day-cell:hover {
-  color: #34d399;
+  color: #FF8A3D;
 }
 
 .day-other-month {
@@ -621,22 +621,22 @@ onUnmounted(() => {
 
 .day-today {
   font-weight: 600;
-  color: #059669;
-  background: rgba(5, 150, 105, 0.08);
+  color: #FF6B00;
+  background: rgba(255, 107, 0, 0.08);
 }
 
 .dark .day-today {
-  color: #34d399;
+  color: #FF8A3D;
 }
 
 .day-selected {
-  background: #059669;
+  background: #FF6B00;
   color: white;
   font-weight: 600;
 }
 
 .dark .day-selected {
-  background: #34d399;
+  background: #FF8A3D;
   color: #111827;
 }
 
@@ -702,7 +702,7 @@ onUnmounted(() => {
 
 .time-input:focus {
   outline: none;
-  border-color: #059669;
+  border-color: #FF6B00;
   background: white;
 }
 
@@ -768,14 +768,14 @@ onUnmounted(() => {
 }
 
 .btn-apply {
-  background: #059669;
-  border: 1px solid #059669;
+  background: #FF6B00;
+  border: 1px solid #FF6B00;
   color: white;
 }
 
 .dark .btn-apply {
-  background: #34d399;
-  border-color: #34d399;
+  background: #FF8A3D;
+  border-color: #FF8A3D;
   color: #111827;
 }
 
@@ -785,8 +785,8 @@ onUnmounted(() => {
 }
 
 .dark .btn-apply:hover {
-  background: #10b981;
-  border-color: #10b981;
+  background: #FF4081;
+  border-color: #FF4081;
 }
 
 /* Picker dropdown animation */

@@ -54,7 +54,7 @@
               <table class="table">
               <thead>
                 <tr>
-                  <th @click="sortBy('name')" class="cursor-pointer hover:text-emerald-600 dark:hover:text-emerald-400 transition-colors">
+                  <th @click="sortBy('name')" class="cursor-pointer hover:text-orange-600 dark:hover:text-pink-400 transition-colors">
                     <div class="flex items-center gap-1">
                       Queue Name
                       <svg class="w-3 h-3 transition-transform" :class="getSortClass('name')" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2">
@@ -62,7 +62,7 @@
                       </svg>
                     </div>
                   </th>
-                  <th @click="sortBy('namespace')" class="hidden md:table-cell cursor-pointer hover:text-emerald-600 dark:hover:text-emerald-400 transition-colors">
+                  <th @click="sortBy('namespace')" class="hidden md:table-cell cursor-pointer hover:text-orange-600 dark:hover:text-pink-400 transition-colors">
                     <div class="flex items-center gap-1">
                       Namespace
                       <svg class="w-3 h-3 transition-transform" :class="getSortClass('namespace')" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2">
@@ -70,7 +70,7 @@
                       </svg>
                     </div>
                   </th>
-                  <th @click="sortBy('partitions')" class="text-right cursor-pointer hover:text-emerald-600 dark:hover:text-emerald-400 transition-colors">
+                  <th @click="sortBy('partitions')" class="text-right cursor-pointer hover:text-orange-600 dark:hover:text-pink-400 transition-colors">
                     <div class="flex items-center justify-end gap-1">
                       Partitions
                       <svg class="w-3 h-3 transition-transform" :class="getSortClass('partitions')" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2">
@@ -78,7 +78,7 @@
                       </svg>
                     </div>
                   </th>
-                  <th @click="sortBy('pending')" class="text-right cursor-pointer hover:text-emerald-600 dark:hover:text-emerald-400 transition-colors">
+                  <th @click="sortBy('pending')" class="text-right cursor-pointer hover:text-orange-600 dark:hover:text-pink-400 transition-colors">
                     <div class="flex items-center justify-end gap-1">
                       Pending
                       <svg class="w-3 h-3 transition-transform" :class="getSortClass('pending')" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2">
@@ -86,7 +86,7 @@
                       </svg>
                     </div>
                   </th>
-                  <th @click="sortBy('processing')" class="text-right hidden sm:table-cell cursor-pointer hover:text-emerald-600 dark:hover:text-emerald-400 transition-colors">
+                  <th @click="sortBy('processing')" class="text-right hidden sm:table-cell cursor-pointer hover:text-orange-600 dark:hover:text-pink-400 transition-colors">
                     <div class="flex items-center justify-end gap-1">
                       Processing
                       <svg class="w-3 h-3 transition-transform" :class="getSortClass('processing')" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2">
@@ -94,7 +94,7 @@
                       </svg>
                     </div>
                   </th>
-                  <th @click="sortBy('total')" class="text-right cursor-pointer hover:text-emerald-600 dark:hover:text-emerald-400 transition-colors">
+                  <th @click="sortBy('total')" class="text-right cursor-pointer hover:text-orange-600 dark:hover:text-pink-400 transition-colors">
                     <div class="flex items-center justify-end gap-1">
                       Total
                       <svg class="w-3 h-3 transition-transform" :class="getSortClass('total')" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2">
@@ -388,13 +388,13 @@ onUnmounted(() => {
 .page-professional {
   @apply min-h-screen bg-gray-50 dark:bg-[#0d1117];
   background-image: 
-    radial-gradient(at 0% 0%, rgba(5, 150, 105, 0.03) 0px, transparent 50%),
+    radial-gradient(at 0% 0%, rgba(255, 107, 0, 0.03) 0px, transparent 50%),
     radial-gradient(at 100% 0%, rgba(99, 102, 241, 0.03) 0px, transparent 50%);
 }
 
 .dark .page-professional {
   background-image: 
-    radial-gradient(at 0% 0%, rgba(5, 150, 105, 0.05) 0px, transparent 50%),
+    radial-gradient(at 0% 0%, rgba(255, 107, 0, 0.05) 0px, transparent 50%),
     radial-gradient(at 100% 0%, rgba(99, 102, 241, 0.05) 0px, transparent 50%);
 }
 

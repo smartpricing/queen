@@ -9,7 +9,7 @@
           selectedMetrics.pollIntention ? 'metric-toggle-active-blue' : 'metric-toggle-inactive'
         ]"
       >
-        <div :class="['metric-dot', selectedMetrics.pollIntention ? 'bg-emerald-500' : 'bg-gray-400']"></div>
+        <div :class="['metric-dot', selectedMetrics.pollIntention ? 'bg-orange-500' : 'bg-gray-400']"></div>
         Poll Intentions
       </button>
       <button
@@ -90,7 +90,7 @@ function getNestedValue(obj, path) {
 
 // Colors for different replicas
 const replicaColors = [
-  { pollIntention: 'rgba(5, 150, 105, 1)', streamPollIntention: 'rgba(168, 85, 247, 1)', response: 'rgba(244, 63, 94, 1)' },
+  { pollIntention: 'rgba(255, 107, 0, 1)', streamPollIntention: 'rgba(168, 85, 247, 1)', response: 'rgba(244, 63, 94, 1)' },
   { pollIntention: 'rgba(147, 197, 253, 1)', streamPollIntention: 'rgba(216, 180, 254, 1)', response: 'rgba(251, 113, 133, 1)' },
   { pollIntention: 'rgba(96, 165, 250, 1)', streamPollIntention: 'rgba(192, 132, 252, 1)', response: 'rgba(248, 113, 113, 1)' },
 ];
@@ -322,9 +322,9 @@ const chartOptions = {
 }
 
 .metric-toggle-active-blue {
-  background: rgba(5, 150, 105, 0.1);
-  color: #059669;
-  border: 1px solid rgba(5, 150, 105, 0.2);
+  background: rgba(255, 107, 0, 0.1);
+  color: #FF6B00;
+  border: 1px solid rgba(255, 107, 0, 0.2);
 }
 
 .metric-toggle-active-purple {

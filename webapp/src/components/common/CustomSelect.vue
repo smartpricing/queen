@@ -270,22 +270,22 @@ watch(isOpen, (newValue) => {
 }
 
 .select-trigger:hover {
-  border-color: rgba(5, 150, 105, 0.3);
-  box-shadow: 0 0 0 3px rgba(5, 150, 105, 0.05);
+  border-color: rgba(255, 107, 0, 0.3);
+  box-shadow: 0 0 0 3px rgba(255, 107, 0, 0.05);
 }
 
 .dark .select-trigger:hover {
-  border-color: rgba(5, 150, 105, 0.4);
+  border-color: rgba(255, 107, 0, 0.4);
 }
 
 .select-trigger-open {
-  border-color: #059669;
-  box-shadow: 0 0 0 3px rgba(5, 150, 105, 0.1);
+  border-color: #FF6B00;
+  box-shadow: 0 0 0 3px rgba(255, 107, 0, 0.1);
 }
 
 .dark .select-trigger-open {
-  border-color: #34d399;
-  box-shadow: 0 0 0 3px rgba(5, 150, 105, 0.15);
+  border-color: #FF8A3D;
+  box-shadow: 0 0 0 3px rgba(255, 107, 0, 0.15);
 }
 
 .select-trigger-disabled {
@@ -417,7 +417,7 @@ watch(isOpen, (newValue) => {
 
 .search-input:focus {
   outline: none;
-  border-color: #059669;
+  border-color: #FF6B00;
   background: white;
 }
 
@@ -447,25 +447,25 @@ watch(isOpen, (newValue) => {
 
 .select-option:hover,
 .select-option-focused {
-  background: rgba(5, 150, 105, 0.08);
-  color: #059669;
+  background: rgba(255, 107, 0, 0.08);
+  color: #FF6B00;
 }
 
 .dark .select-option:hover,
 .dark .select-option-focused {
-  background: rgba(5, 150, 105, 0.15);
-  color: #34d399;
+  background: rgba(255, 107, 0, 0.15);
+  color: #FF8A3D;
 }
 
 .select-option-selected {
-  background: rgba(5, 150, 105, 0.12);
-  color: #059669;
+  background: rgba(255, 107, 0, 0.12);
+  color: #FF6B00;
   font-weight: 500;
 }
 
 .dark .select-option-selected {
-  background: rgba(5, 150, 105, 0.2);
-  color: #34d399;
+  background: rgba(255, 107, 0, 0.2);
+  color: #FF8A3D;
 }
 
 .option-text {

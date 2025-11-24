@@ -51,7 +51,7 @@
         </div>
         <button
           @click="$emit('applyCustomRange')"
-          class="px-4 py-2 bg-emerald-500 hover:bg-emerald-600 text-white text-sm font-medium rounded-lg transition-colors whitespace-nowrap"
+          class="px-4 py-2 bg-orange-500 hover:bg-orange-600 text-white text-sm font-medium rounded-lg transition-colors whitespace-nowrap"
         >
           Apply
         </button>
@@ -188,9 +188,9 @@ function clearFilters() {
 }
 
 .time-range-active {
-  background: rgba(5, 150, 105, 0.1);
-  color: #059669;
-  border: 1px solid rgba(5, 150, 105, 0.2);
+  background: rgba(255, 107, 0, 0.1);
+  color: #FF6B00;
+  border: 1px solid rgba(255, 107, 0, 0.2);
 }
 
 .time-range-inactive {
@@ -208,7 +208,7 @@ function clearFilters() {
 }
 
 .time-range-active:hover {
-  background: rgba(5, 150, 105, 0.15);
+  background: rgba(255, 107, 0, 0.15);
 }
 
 .time-range-inactive:hover {
@@ -232,8 +232,8 @@ function clearFilters() {
 
 .datetime-input:focus {
   outline: none;
-  border-color: #059669;
-  box-shadow: 0 0 0 3px rgba(5, 150, 105, 0.1);
+  border-color: #FF6B00;
+  box-shadow: 0 0 0 3px rgba(255, 107, 0, 0.1);
 }
 
 .dark .datetime-input {
@@ -243,8 +243,8 @@ function clearFilters() {
 }
 
 .dark .datetime-input:focus {
-  border-color: #059669;
-  box-shadow: 0 0 0 3px rgba(5, 150, 105, 0.2);
+  border-color: #FF6B00;
+  box-shadow: 0 0 0 3px rgba(255, 107, 0, 0.2);
 }
 </style>
 

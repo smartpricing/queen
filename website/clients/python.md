@@ -2,7 +2,7 @@
 
 Complete guide for the Queen MQ Python client library.
 
-Python client is ready for production use and will be published soon to PyPi.
+Python client is available on PyPi, here: https://pypi.org/project/queen-mq/
 
 ## Installation
 

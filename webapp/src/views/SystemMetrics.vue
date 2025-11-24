@@ -55,7 +55,7 @@
               </div>
               <button
                 @click="applyCustomRange"
-                class="px-4 py-2 bg-emerald-500 hover:bg-emerald-600 text-white text-sm font-medium rounded-lg transition-colors whitespace-nowrap"
+                class="px-4 py-2 bg-orange-500 hover:bg-orange-600 text-white text-sm font-medium rounded-lg transition-colors whitespace-nowrap"
               >
                 Apply
               </button>
@@ -189,13 +189,13 @@
                 </div>
                 <div class="flex justify-between text-sm">
                   <span class="text-gray-600 dark:text-gray-400">DB Active</span>
-                  <span class="font-semibold font-mono text-emerald-600 dark:text-emerald-400">
+                  <span class="font-semibold font-mono text-gray-900 dark:text-gray-100">
                     {{ lastMetrics.database?.pool_active?.last || 0 }}
                   </span>
                 </div>
                 <div class="flex justify-between text-sm">
                   <span class="text-gray-600 dark:text-gray-400">Poll Intentions</span>
-                  <span class="font-semibold font-mono text-emerald-600 dark:text-emerald-400">
+                  <span class="font-semibold font-mono text-gray-900 dark:text-gray-100">
                     {{ lastMetrics.registries?.poll_intention?.last || 0 }}
                   </span>
                 </div>
@@ -225,7 +225,7 @@
                 </div>
                 <div class="flex justify-between text-sm">
                   <span class="text-gray-600 dark:text-gray-400">Poll Intentions (max)</span>
-                  <span class="font-semibold font-mono text-emerald-600 dark:text-emerald-400">
+                  <span class="font-semibold font-mono text-gray-900 dark:text-gray-100">
                     {{ lastMetrics.registries?.poll_intention?.max || 0 }}
                   </span>
                 </div>
@@ -442,9 +442,9 @@ onUnmounted(() => {
 }
 
 .time-range-active {
-  background: rgba(5, 150, 105, 0.1);
-  color: #059669;
-  border: 1px solid rgba(5, 150, 105, 0.2);
+  background: rgba(255, 107, 0, 0.1);
+  color: #FF6B00;
+  border: 1px solid rgba(255, 107, 0, 0.2);
 }
 
 .time-range-inactive {
@@ -462,7 +462,7 @@ onUnmounted(() => {
 }
 
 .time-range-active:hover {
-  background: rgba(5, 150, 105, 0.15);
+  background: rgba(255, 107, 0, 0.15);
 }
 
 .time-range-inactive:hover {
@@ -484,16 +484,16 @@ onUnmounted(() => {
 }
 
 .agg-type-active {
-  background: rgba(5, 150, 105, 0.12);
+  background: rgba(255, 107, 0, 0.12);
   color: #2563eb;
-  border: 1px solid rgba(5, 150, 105, 0.3);
-  box-shadow: 0 1px 2px 0 rgba(5, 150, 105, 0.1);
+  border: 1px solid rgba(255, 107, 0, 0.3);
+  box-shadow: 0 1px 2px 0 rgba(255, 107, 0, 0.1);
 }
 
 .dark .agg-type-active {
-  background: rgba(5, 150, 105, 0.18);
-  color: #10b981;
-  border: 1px solid rgba(5, 150, 105, 0.4);
+  background: rgba(255, 107, 0, 0.18);
+  color: #FF4081;
+  border: 1px solid rgba(255, 107, 0, 0.4);
 }
 
 .agg-type-inactive {
@@ -508,11 +508,11 @@ onUnmounted(() => {
 }
 
 .agg-type-active:hover {
-  background: rgba(5, 150, 105, 0.15);
+  background: rgba(255, 107, 0, 0.15);
 }
 
 .dark .agg-type-active:hover {
-  background: rgba(5, 150, 105, 0.2);
+  background: rgba(255, 107, 0, 0.2);
 }
 
 .agg-type-inactive:hover {
@@ -550,8 +550,8 @@ onUnmounted(() => {
 
 .datetime-input:focus {
   outline: none;
-  border-color: #059669;
-  box-shadow: 0 0 0 3px rgba(5, 150, 105, 0.1);
+  border-color: #FF6B00;
+  box-shadow: 0 0 0 3px rgba(255, 107, 0, 0.1);
 }
 
 .dark .datetime-input {
@@ -561,8 +561,8 @@ onUnmounted(() => {
 }
 
 .dark .datetime-input:focus {
-  border-color: #059669;
-  box-shadow: 0 0 0 3px rgba(5, 150, 105, 0.2);
+  border-color: #FF6B00;
+  box-shadow: 0 0 0 3px rgba(255, 107, 0, 0.2);
 }
 </style>
 

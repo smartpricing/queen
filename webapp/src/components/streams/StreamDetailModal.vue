@@ -163,13 +163,13 @@
               <div class="text-xs text-gray-500 dark:text-gray-400 mt-1">Consumer Groups</div>
             </div>
             <div class="text-center">
-              <div class="text-2xl font-bold text-emerald-600 dark:text-emerald-400">
+              <div class="text-2xl font-bold text-orange-600 dark:text-pink-400">
                 {{ formatNumber(totalWindowsConsumed) }}
               </div>
               <div class="text-xs text-gray-500 dark:text-gray-400 mt-1">Windows Consumed</div>
             </div>
             <div class="text-center">
-              <div class="text-2xl font-bold text-emerald-600 dark:text-emerald-400">
+              <div class="text-2xl font-bold text-orange-600 dark:text-pink-400">
                 {{ stream.sourceQueues?.length || 0 }}
               </div>
               <div class="text-xs text-gray-500 dark:text-gray-400 mt-1">Source Queues</div>
@@ -344,7 +344,7 @@ onMounted(() => {
 }
 
 .badge-info {
-  @apply bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400;
+  @apply bg-orange-100 text-orange-700 dark:bg-orange-900/30 dark:text-pink-400;
   @apply px-2 py-0.5 rounded text-xs font-medium;
 }
 

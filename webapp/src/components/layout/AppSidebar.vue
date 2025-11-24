@@ -6,7 +6,7 @@
         v-if="!isCollapsed" 
         class="flex items-center gap-3"
       >
-        <img src="/assets/queen-logo.svg" alt="Queen" class="h-8 w-8 flex-shrink-0" />
+        <img src="/queen_head.png" alt="Queen" class="h-10 w-10 flex-shrink-0 object-contain" />
         <div class="min-w-0">
           <h1 class="text-sm font-bold text-gray-900 dark:text-white truncate tracking-tight">Queen</h1>
           <p class="text-xs text-gray-500 dark:text-gray-400 truncate">Message Queue</p>
@@ -16,7 +16,7 @@
         v-else 
         class="flex items-center justify-center"
       >
-        <img src="/assets/queen-logo.svg" alt="Queen" class="h-8 w-8" />
+        <img src="/queen_head.png" alt="Queen" class="h-10 w-10 object-contain" />
       </div>
     </div>
     
@@ -134,7 +134,7 @@
           :title="isCollapsed ? (isHealthy ? 'System Healthy' : 'System Error') : ''"
           class="utility-status group"
           :class="[
-            isHealthy ? 'text-emerald-500 dark:text-emerald-400' : 'text-red-500 dark:text-red-400',
+            isHealthy ? 'text-green-500 dark:text-green-400' : 'text-red-500 dark:text-red-400',
             isCollapsed ? 'utility-btn-collapsed' : 'utility-btn-expanded'
           ]"
         >

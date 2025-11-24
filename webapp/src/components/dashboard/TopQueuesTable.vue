@@ -24,7 +24,7 @@
           </td>
           <td class="text-right">{{ formatNumber(queue.messages?.pending || 0) }}</td>
           <td class="text-right hidden sm:table-cell">{{ formatNumber(queue.messages?.processing || 0) }}</td>
-          <td class="text-right text-emerald-600 dark:text-emerald-500">
+          <td class="text-right text-orange-600 dark:text-orange-500">
             {{ formatNumber(queue.messages?.total || 0) }}
           </td>
         </tr>

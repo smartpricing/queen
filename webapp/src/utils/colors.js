@@ -1,20 +1,20 @@
 // Centralized color configuration for the entire app
-// Emerald green theme matching the documentation website
-// Design philosophy: Natural, elegant, regal
+// Orange/Pink theme matching the new punk rock logo
+// Design philosophy: Bold, energetic, vibrant
 
 export const colors = {
-  // Primary brand colors - Sophisticated emerald green palette
+  // Primary brand colors - Vibrant orange/pink palette
   primary: {
-    name: 'Emerald',
-    hex: '#059669',      // emerald-600 - Rich emerald
-    rgb: 'rgb(5, 150, 105)',
-    rgba: (opacity) => `rgba(5, 150, 105, ${opacity})`,
+    name: 'Orange',
+    hex: '#FF6B00',      // Vibrant orange
+    rgb: 'rgb(255, 107, 0)',
+    rgba: (opacity) => `rgba(255, 107, 0, ${opacity})`,
   },
   secondary: {
-    name: 'Jade', 
-    hex: '#0d9488',      // teal-600 - Jade accent
-    rgb: 'rgb(13, 148, 136)',
-    rgba: (opacity) => `rgba(13, 148, 136, ${opacity})`,
+    name: 'Pink', 
+    hex: '#E91E63',      // Hot pink
+    rgb: 'rgb(233, 30, 99)',
+    rgba: (opacity) => `rgba(233, 30, 99, ${opacity})`,
   },
   
   // Status colors (keep standard for clarity)
@@ -34,21 +34,21 @@ export const colors = {
     rgba: (opacity) => `rgba(239, 68, 68, ${opacity})`,
   },
   info: {
-    hex: '#059669',      // emerald-600 - matches primary
-    rgb: 'rgb(5, 150, 105)',
-    rgba: (opacity) => `rgba(5, 150, 105, ${opacity})`,
+    hex: '#FF6B00',      // orange - matches primary
+    rgb: 'rgb(255, 107, 0)',
+    rgba: (opacity) => `rgba(255, 107, 0, ${opacity})`,
   },
   
-  // Chart colors - Emerald green palette
+  // Chart colors - Orange/Pink palette
   charts: {
-    // Main data series - emerald and jade tones
+    // Main data series - orange and pink tones
     ingested: {
-      border: 'rgb(5, 150, 105)',           // Emerald
-      background: 'rgba(5, 150, 105, 0.1)',
+      border: 'rgb(255, 107, 0)',           // Orange
+      background: 'rgba(255, 107, 0, 0.1)',
     },
     processed: {
-      border: 'rgb(13, 148, 136)',          // Jade
-      background: 'rgba(13, 148, 136, 0.1)',
+      border: 'rgb(233, 30, 99)',           // Pink
+      background: 'rgba(233, 30, 99, 0.1)',
     },
     
     // Status distribution (keep standard colors for clarity)
@@ -57,8 +57,8 @@ export const colors = {
       border: 'rgb(245, 158, 11)',
     },
     processing: {
-      bg: 'rgba(5, 150, 105, 0.8)',         // Emerald
-      border: 'rgb(5, 150, 105)',
+      bg: 'rgba(255, 107, 0, 0.8)',         // Orange
+      border: 'rgb(255, 107, 0)',
     },
     completed: {
       bg: 'rgba(16, 185, 129, 0.8)',        // Green
