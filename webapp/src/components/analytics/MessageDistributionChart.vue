@@ -1,5 +1,5 @@
 <template>
-  <div class="h-80 flex items-center justify-center">
+  <div class="h-80 flex items-center justify-center p-8">
     <div class="w-full max-w-sm">
       <Doughnut v-if="chartData" :data="chartData" :options="chartOptions" />
       <div v-else class="text-center text-gray-500 text-sm">
@@ -44,25 +44,15 @@ const chartData = computed(() => {
   // Only show chart if there's data
   if (data.every(v => v === 0)) return null;
   
+  const statusColors = getStatusColors();
+  
   return {
     labels: ['Pending', 'Processing', 'Completed', 'Failed', 'Dead Letter'],
     datasets: [
       {
         data: data,
-        backgroundColor: [
-          'rgba(236, 72, 153, 0.8)',   // Pink - Pending
-          'rgba(255, 107, 0, 0.8)',   // Blue - Processing  
-          'rgba(16, 185, 129, 0.8)',   // Green - Completed
-          'rgba(239, 68, 68, 0.8)',    // Red - Failed
-          'rgba(192, 132, 252, 0.7)',  // Light Purple - Dead Letter
-        ],
-        borderColor: [
-          'rgb(236, 72, 153)',
-          'rgb(168, 85, 247)',
-          'rgb(139, 92, 246)',
-          'rgb(244, 63, 94)',
-          'rgb(192, 132, 252)',
-        ],
+        backgroundColor: statusColors.backgrounds,
+        borderColor: statusColors.borders,
         borderWidth: 2,
       },
     ],
@@ -72,6 +62,14 @@ const chartData = computed(() => {
 const chartOptions = {
   responsive: true,
   maintainAspectRatio: true,
+  layout: {
+    padding: {
+      top: 20,
+      bottom: 20,
+      left: 20,
+      right: 20,
+    },
+  },
   plugins: {
     legend: {
       position: 'bottom',

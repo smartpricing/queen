@@ -422,7 +422,8 @@ const isActive = (path) => {
 }
 
 .nav-item-active {
-  @apply bg-gray-100 dark:bg-gray-800/70 text-gray-900 dark:text-white;
+  @apply bg-gray-100 dark:bg-gray-800/70 text-orange-600 dark:text-orange-500;
+  @apply border border-orange-600 dark:border-orange-500;
   font-weight: 600;
   box-shadow: 0 1px 2px 0 rgba(0, 0, 0, 0.05);
 }

@@ -15,11 +15,11 @@ Modern Vue 3 web interface for managing and monitoring Queen MQ.
 
 ## Screenshots
 
-![Dashboard](/dashboard.png)
-![Queues](/queues.png)
-![Messages](/messages.png)
-![Traces](/traces.png)
-![Analytics](/analytics.png)
+![Dashboard](/new_dashboard.png)
+![Queues](/new_queues.png)
+![Messages](/new_messages.png)
+![Traces](/new_traces.png)
+![Analytics](/new_analytics.png)
 
 ## Access
 

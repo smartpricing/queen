@@ -9,181 +9,296 @@
       </div>
 
       <template v-else>
-        <!-- Queue Metrics Section -->
-        <div class="section-header">
-          <h2 class="section-title">Queue Metrics</h2>
-        </div>
-        
-        <!-- Queue Metric Cards -->
-        <div class="metrics-grid">
-          <!-- Queues Card -->
-          <div class="metric-card-top metric-card-clickable" @click="navigateToQueues">
-            <div class="flex items-center justify-between mb-0.5">
-              <span class="metric-label">QUEUES</span>
-              <svg class="w-4 h-4 text-gray-400 dark:text-gray-500 card-arrow" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2">
-                <path stroke-linecap="round" stroke-linejoin="round" d="M9 5l7 7-7 7" />
-              </svg>
-            </div>
-            <div class="metric-value text-gray-600 dark:text-gray-300">{{ formatNumber(overview?.queues || 0) }}</div>
-            <div class="metric-subtext-bottom">{{ formatNumber(overview?.partitions || 0) }} partitions</div>
-          </div>
-
-          <!-- Pending Card -->
-          <div class="metric-card-top metric-card-clickable" @click="navigateToPending">
-            <div class="flex items-center justify-between mb-0.5">
-              <span class="metric-label">PENDING</span>
-              <svg class="w-4 h-4 text-gray-400 dark:text-gray-500 card-arrow" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2">
-                <path stroke-linecap="round" stroke-linejoin="round" d="M9 5l7 7-7 7" />
-              </svg>
-            </div>
-            <div class="metric-value text-gray-900 dark:text-gray-100">{{ formatNumber(calculatedPending) }}</div>
-            <div class="metric-subtext-bottom">{{ formatNumber(overview?.messages?.processing || 0) }} processing</div>
-          </div>
-
-          <!-- Completed Card -->
-          <div class="metric-card-top metric-card-clickable" @click="navigateToCompleted">
-            <div class="flex items-center justify-between mb-0.5">
-              <span class="metric-label">COMPLETED</span>
-              <svg class="w-4 h-4 text-gray-400 dark:text-gray-500 card-arrow" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2">
-                <path stroke-linecap="round" stroke-linejoin="round" d="M9 5l7 7-7 7" />
-              </svg>
-            </div>
-            <div class="metric-value text-gray-900 dark:text-gray-100">{{ formatNumber(overview?.messages?.completed || 0) }}</div>
-            <div class="metric-subtext-bottom">{{ formatNumber(overview?.messages?.total || 0) }} total</div>
-          </div>
-
-          <!-- Failed Card -->
-          <div class="metric-card-top metric-card-clickable" @click="navigateToFailed">
-            <div class="flex items-center justify-between mb-0.5">
-              <span class="metric-label">FAILED</span>
-              <svg class="w-4 h-4 text-gray-400 dark:text-gray-500 card-arrow" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2">
-                <path stroke-linecap="round" stroke-linejoin="round" d="M9 5l7 7-7 7" />
-              </svg>
-            </div>
-            <div class="metric-value text-red-600 dark:text-red-400">{{ formatNumber(overview?.messages?.failed || 0) }}</div>
-            <div class="metric-subtext-bottom">{{ formatNumber(overview?.messages?.deadLetter || 0) }} DLQ</div>
-          </div>
-
-          <!-- Average Time Lag Card -->
-          <div class="metric-card-top">
-            <div class="flex items-center justify-between mb-0.5">
-              <span class="metric-label">AVG TIME LAG</span>
-              <div :class="getLagStatusClass(overview?.lag?.time?.avg)">
-                <svg class="w-4 h-4" fill="currentColor" viewBox="0 0 20 20">
-                  <circle cx="10" cy="10" r="4"/>
-                </svg>
-              </div>
-            </div>
-            <div :class="getLagValueClass(overview?.lag?.time?.avg)">{{ formatDuration(overview?.lag?.time?.avg || 0) }}</div>
-            <div class="metric-subtext-bottom">median: {{ formatDuration(overview?.lag?.time?.median || 0) }}</div>
-          </div>
-
-          <!-- Max Time Lag Card -->
-          <div class="metric-card-top">
-            <div class="flex items-center justify-between mb-0.5">
-              <span class="metric-label">MAX TIME LAG</span>
-              <div :class="getLagStatusClass(overview?.lag?.time?.max)">
-                <svg class="w-4 h-4" fill="currentColor" viewBox="0 0 20 20">
-                  <circle cx="10" cy="10" r="4"/>
-                </svg>
-              </div>
-            </div>
-            <div :class="getLagValueClass(overview?.lag?.time?.max)">{{ formatDuration(overview?.lag?.time?.max || 0) }}</div>
-            <div class="metric-subtext-bottom">min: {{ formatDuration(overview?.lag?.time?.min || 0) }}</div>
-          </div>
-
-          <!-- Average Offset Lag Card -->
-          <div class="metric-card-top">
-            <div class="flex items-center justify-between mb-0.5">
-              <span class="metric-label">AVG OFFSET LAG</span>
-              <div :class="getOffsetLagStatusClass(overview?.lag?.offset?.avg)">
-                <svg class="w-4 h-4" fill="currentColor" viewBox="0 0 20 20">
-                  <circle cx="10" cy="10" r="4"/>
-                </svg>
-              </div>
-            </div>
-            <div :class="getOffsetLagValueClass(overview?.lag?.offset?.avg)">{{ formatNumber(overview?.lag?.offset?.avg || 0) }} msg</div>
-            <div class="metric-subtext-bottom">median: {{ formatNumber(overview?.lag?.offset?.median || 0) }}</div>
-          </div>
-
-          <!-- Max Offset Lag Card -->
-          <div class="metric-card-top">
-            <div class="flex items-center justify-between mb-0.5">
-              <span class="metric-label">MAX OFFSET LAG</span>
-              <div :class="getOffsetLagStatusClass(overview?.lag?.offset?.max)">
-                <svg class="w-4 h-4" fill="currentColor" viewBox="0 0 20 20">
-                  <circle cx="10" cy="10" r="4"/>
-                </svg>
-              </div>
-            </div>
-            <div :class="getOffsetLagValueClass(overview?.lag?.offset?.max)">{{ formatNumber(overview?.lag?.offset?.max || 0) }} msg</div>
-            <div class="metric-subtext-bottom">min: {{ formatNumber(overview?.lag?.offset?.min || 0) }}</div>
-          </div>
-        </div>
-
-        <!-- Streaming Metrics Section -->
-        <div class="section-header">
-          <h2 class="section-title">Streaming Metrics</h2>
-        </div>
-        
-        <!-- Streaming Metric Cards -->
-        <div class="metrics-grid">
-          <!-- Streams Card -->
-          <div class="metric-card-top metric-card-clickable" @click="navigateToStreams">
-            <div class="flex items-center justify-between mb-0.5">
-              <span class="metric-label">STREAMS</span>
-              <svg class="w-4 h-4 text-gray-400 dark:text-gray-500 card-arrow" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2">
-                <path stroke-linecap="round" stroke-linejoin="round" d="M9 5l7 7-7 7" />
-              </svg>
-            </div>
-            <div class="metric-value text-purple-600 dark:text-purple-400">{{ formatNumber(streamStats?.totalStreams || 0) }}</div>
-            <div class="metric-subtext-bottom">{{ formatNumber(streamStats?.partitionedStreams || 0) }} partitioned</div>
-          </div>
-
-          <!-- Consumer Groups (Streaming) Card -->
-          <div class="metric-card-top metric-card-clickable" @click="navigateToStreams">
-            <div class="flex items-center justify-between mb-0.5">
-              <span class="metric-label">CONSUMER GROUPS</span>
-              <svg class="w-4 h-4 text-gray-400 dark:text-gray-500 card-arrow" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2">
-                <path stroke-linecap="round" stroke-linejoin="round" d="M9 5l7 7-7 7" />
-              </svg>
-            </div>
-            <div class="metric-value text-teal-600 dark:text-teal-400">{{ formatNumber(streamStats?.totalConsumerGroups || 0) }}</div>
-            <div class="metric-subtext-bottom">{{ formatNumber(streamStats?.activeConsumers || 0) }} active</div>
-          </div>
-
-          <!-- Windows Processed Card -->
-          <div class="metric-card-top">
-            <div class="flex items-center justify-between mb-0.5">
-              <span class="metric-label">WINDOWS PROCESSED</span>
-              <div class="text-green-500">
-                <svg class="w-4 h-4" fill="currentColor" viewBox="0 0 20 20">
-                  <circle cx="10" cy="10" r="4"/>
-                </svg>
-              </div>
-            </div>
-            <div class="metric-value text-gray-900 dark:text-gray-100">{{ formatNumber(streamStats?.totalWindowsProcessed || 0) }}</div>
-            <div class="metric-subtext-bottom">{{ formatNumber(streamStats?.windowsLastHour || 0) }} last hour</div>
-          </div>
-
-          <!-- Active Windows Card -->
-          <div class="metric-card-top">
-            <div class="flex items-center justify-between mb-0.5">
-              <span class="metric-label">ACTIVE WINDOWS</span>
-              <div :class="streamStats?.activeLeases > 0 ? 'text-green-500' : 'text-gray-400 dark:text-gray-500'">
-                <svg class="w-4 h-4" fill="currentColor" viewBox="0 0 20 20">
-                  <circle cx="10" cy="10" r="4"/>
-                </svg>
-              </div>
-            </div>
-            <div class="metric-value text-gray-900 dark:text-gray-100">{{ formatNumber(streamStats?.activeLeases || 0) }}</div>
-            <div class="metric-subtext-bottom">{{ formatNumber(streamStats?.avgLeaseTime || 0) }}s avg time</div>
-          </div>
-        </div>
-
-        <!-- Maintenance Mode Card (full width if there are issues) -->
+        <!-- System Status Banner -->
         <MaintenanceCard />
         
+        <!-- Main Metrics - 3 Column Layout -->
+        <div class="main-metrics-grid">
+          <!-- 1. System Status Card -->
+          <div class="status-card">
+            <div class="status-card-header">
+              <div class="flex items-center gap-2">
+                <div class="status-icon-wrapper">
+                  <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2.5">
+                    <path stroke-linecap="round" stroke-linejoin="round" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
+              </svg>
+            </div>
+                <h3 class="status-card-title">System Status</h3>
+          </div>
+              <div :class="getOverallSystemStatus()">
+                <svg class="w-5 h-5" fill="currentColor" viewBox="0 0 20 20">
+                  <circle cx="10" cy="10" r="5"/>
+              </svg>
+              </div>
+            </div>
+            <div class="status-card-body-improved">
+              <!-- Time Lag Section -->
+              <div class="status-section-improved">
+                <div class="status-section-header">
+                  <svg class="w-4 h-4 text-gray-400 dark:text-gray-500" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2">
+                    <path stroke-linecap="round" stroke-linejoin="round" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
+                  </svg>
+                  <span class="status-section-title">Time Lag</span>
+          </div>
+                <div class="status-metrics-grid-improved">
+                  <div class="status-metric-box">
+                    <div class="flex items-center justify-between mb-2">
+                      <span class="status-metric-label-improved">AVERAGE</span>
+                      <div :class="getLagStatusClass(overview?.lag?.time?.avg)">
+                        <svg class="w-3.5 h-3.5" fill="currentColor" viewBox="0 0 20 20">
+                          <circle cx="10" cy="10" r="5"/>
+              </svg>
+            </div>
+                    </div>
+                    <div :class="getLagValueClassCompact(overview?.lag?.time?.avg)">
+                      {{ formatDuration(overview?.lag?.time?.avg || 0) }}
+                    </div>
+                    <div class="status-metric-detail">median {{ formatDuration(overview?.lag?.time?.median || 0) }}</div>
+          </div>
+                  <div class="status-metric-box">
+                    <div class="flex items-center justify-between mb-2">
+                      <span class="status-metric-label-improved">MAXIMUM</span>
+                      <div :class="getLagStatusClass(overview?.lag?.time?.max)">
+                        <svg class="w-3.5 h-3.5" fill="currentColor" viewBox="0 0 20 20">
+                          <circle cx="10" cy="10" r="5"/>
+              </svg>
+            </div>
+                    </div>
+                    <div :class="getLagValueClassCompact(overview?.lag?.time?.max)">
+                      {{ formatDuration(overview?.lag?.time?.max || 0) }}
+                    </div>
+                    <div class="status-metric-detail">min {{ formatDuration(overview?.lag?.time?.min || 0) }}</div>
+                  </div>
+                </div>
+          </div>
+
+              <!-- Offset Lag Section -->
+              <div class="status-section-improved">
+                <div class="status-section-header">
+                  <svg class="w-4 h-4 text-gray-400 dark:text-gray-500" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2">
+                    <path stroke-linecap="round" stroke-linejoin="round" d="M7 16V4m0 0L3 8m4-4l4 4m6 0v12m0 0l4-4m-4 4l-4-4" />
+                  </svg>
+                  <span class="status-section-title">Offset Lag</span>
+                </div>
+                <div class="status-metrics-grid-improved">
+                  <div class="status-metric-box">
+                    <div class="flex items-center justify-between mb-2">
+                      <span class="status-metric-label-improved">AVERAGE</span>
+                      <div :class="getOffsetLagStatusClass(overview?.lag?.offset?.avg)">
+                        <svg class="w-3.5 h-3.5" fill="currentColor" viewBox="0 0 20 20">
+                          <circle cx="10" cy="10" r="5"/>
+                </svg>
+              </div>
+            </div>
+                    <div :class="getOffsetLagValueClassCompact(overview?.lag?.offset?.avg)">
+                      {{ formatNumber(overview?.lag?.offset?.avg || 0) }}
+                    </div>
+                    <div class="status-metric-detail">median {{ formatNumber(overview?.lag?.offset?.median || 0) }} msg</div>
+          </div>
+                  <div class="status-metric-box">
+                    <div class="flex items-center justify-between mb-2">
+                      <span class="status-metric-label-improved">MAXIMUM</span>
+                      <div :class="getOffsetLagStatusClass(overview?.lag?.offset?.max)">
+                        <svg class="w-3.5 h-3.5" fill="currentColor" viewBox="0 0 20 20">
+                          <circle cx="10" cy="10" r="5"/>
+                </svg>
+              </div>
+            </div>
+                    <div :class="getOffsetLagValueClassCompact(overview?.lag?.offset?.max)">
+                      {{ formatNumber(overview?.lag?.offset?.max || 0) }}
+                    </div>
+                    <div class="status-metric-detail">min {{ formatNumber(overview?.lag?.offset?.min || 0) }} msg</div>
+                  </div>
+          </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- 2. Queue Metrics Card -->
+          <div class="status-card">
+            <div class="status-card-header">
+              <div class="flex items-center gap-2">
+                <div class="status-icon-wrapper">
+                  <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2.5">
+                    <path stroke-linecap="round" stroke-linejoin="round" d="M4 6h16M4 10h16M4 14h16M4 18h16" />
+                </svg>
+                </div>
+                <h3 class="status-card-title">Queue Metrics</h3>
+              </div>
+              <button 
+                @click="navigateToQueues"
+                class="view-all-button"
+              >
+                View All
+                <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2">
+                  <path stroke-linecap="round" stroke-linejoin="round" d="M9 5l7 7-7 7" />
+                </svg>
+              </button>
+            </div>
+            <div class="status-card-body-improved">
+              <!-- Queue Overview -->
+              <div class="status-section-improved">
+                <div class="status-section-header">
+                  <svg class="w-4 h-4 text-gray-400 dark:text-gray-500" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2">
+                    <path stroke-linecap="round" stroke-linejoin="round" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2-2v6a2 2 0 002 2h2a2 2 0 002 2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z" />
+                  </svg>
+                  <span class="status-section-title">Overview</span>
+                </div>
+                <div class="queue-overview-grid">
+                  <div class="queue-overview-item metric-card-clickable" @click="navigateToQueues">
+                    <div class="queue-overview-label">
+                      <span>TOTAL</span>
+                    </div>
+                    <div class="queue-overview-value">{{ formatNumber(overview?.queues || 0) }}</div>
+                    <div class="queue-overview-subtext">{{ formatNumber(overview?.partitions || 0) }} partitions</div>
+                  </div>
+                  <div class="queue-overview-item">
+                    <div class="queue-overview-label">
+                      <span>MESSAGES</span>
+                    </div>
+                    <div class="queue-overview-value">{{ formatNumber(overview?.messages?.total || 0) }}</div>
+                    <div class="queue-overview-subtext">total messages</div>
+          </div>
+        </div>
+        </div>
+        
+              <!-- Message States -->
+              <div class="status-section-improved">
+                <div class="status-section-header">
+                  <svg class="w-4 h-4 text-gray-400 dark:text-gray-500" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2">
+                    <path stroke-linecap="round" stroke-linejoin="round" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2" />
+               </svg>
+                  <span class="status-section-title">Message States</span>
+                </div>
+                <div class="status-metrics-grid-improved">
+                  <div class="status-metric-box metric-card-clickable" @click="navigateToPending">
+                    <div class="flex items-center justify-between mb-2">
+                      <span class="status-metric-label-improved">PENDING</span>
+                      <div class="text-blue-500">
+                        <svg class="w-3.5 h-3.5" fill="currentColor" viewBox="0 0 20 20">
+                          <circle cx="10" cy="10" r="5"/>
+                        </svg>
+                      </div>
+                    </div>
+                    <div class="status-metric-value-lg text-blue-600 dark:text-blue-400">
+                      {{ formatNumber(calculatedPending) }}
+                    </div>
+                    <div class="status-metric-detail">{{ formatNumber(overview?.messages?.processing || 0) }} processing</div>
+                  </div>
+                  <div class="status-metric-box metric-card-clickable" @click="navigateToCompleted">
+                    <div class="flex items-center justify-between mb-2">
+                      <span class="status-metric-label-improved">COMPLETED</span>
+                      <div class="text-green-500">
+                        <svg class="w-3.5 h-3.5" fill="currentColor" viewBox="0 0 20 20">
+                          <circle cx="10" cy="10" r="5"/>
+                        </svg>
+                      </div>
+                    </div>
+                    <div class="status-metric-value-lg text-green-600 dark:text-green-400">
+                      {{ formatNumber(overview?.messages?.completed || 0) }}
+                    </div>
+                    <div class="status-metric-detail">{{ formatNumber(overview?.messages?.deadLetter || 0) }} in DLQ</div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- 3. Streaming Metrics Card -->
+          <div class="status-card">
+            <div class="status-card-header">
+              <div class="flex items-center gap-2">
+                <div class="status-icon-wrapper">
+                  <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2.5">
+                    <path stroke-linecap="round" stroke-linejoin="round" d="M13 10V3L4 14h7v7l9-11h-7z" />
+                  </svg>
+                </div>
+                <h3 class="status-card-title">Streaming</h3>
+              </div>
+              <button 
+                @click="navigateToStreams"
+                class="view-all-button"
+              >
+                View All
+                <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2">
+                <path stroke-linecap="round" stroke-linejoin="round" d="M9 5l7 7-7 7" />
+              </svg>
+              </button>
+            </div>
+            <div class="status-card-body-improved">
+              <!-- Stream Overview -->
+              <div class="status-section-improved">
+                <div class="status-section-header">
+                  <svg class="w-4 h-4 text-gray-400 dark:text-gray-500" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2">
+                    <path stroke-linecap="round" stroke-linejoin="round" d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10" />
+                  </svg>
+                  <span class="status-section-title">Streams</span>
+                </div>
+                <div class="status-metrics-grid-improved">
+                  <div class="status-metric-box metric-card-clickable" @click="navigateToStreams">
+                    <div class="flex items-center justify-between mb-2">
+                      <span class="status-metric-label-improved">TOTAL</span>
+                    </div>
+                    <div class="status-metric-value-lg text-purple-600 dark:text-purple-400">
+                      {{ formatNumber(streamStats?.totalStreams || 0) }}
+                    </div>
+                    <div class="status-metric-detail">{{ formatNumber(streamStats?.partitionedStreams || 0) }} partitioned</div>
+                  </div>
+                  <div class="status-metric-box metric-card-clickable" @click="navigateToStreams">
+                    <div class="flex items-center justify-between mb-2">
+                      <span class="status-metric-label-improved">CONSUMER GROUPS</span>
+                    </div>
+                    <div class="status-metric-value-lg text-teal-600 dark:text-teal-400">
+                      {{ formatNumber(streamStats?.totalConsumerGroups || 0) }}
+                    </div>
+                    <div class="status-metric-detail">{{ formatNumber(streamStats?.activeConsumers || 0) }} active consumers</div>
+                  </div>
+                </div>
+          </div>
+
+              <!-- Window Processing -->
+              <div class="status-section-improved">
+                <div class="status-section-header">
+                  <svg class="w-4 h-4 text-gray-400 dark:text-gray-500" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2">
+                    <path stroke-linecap="round" stroke-linejoin="round" d="M9 17V7m0 10a2 2 0 01-2 2H5a2 2 0 01-2-2V7a2 2 0 012-2h2a2 2 0 012 2m0 10a2 2 0 002 2h2a2 2 0 002-2M9 7a2 2 0 012-2h2a2 2 0 012 2m0 10V7m0 10a2 2 0 002 2h2a2 2 0 002-2V7a2 2 0 00-2-2h-2a2 2 0 00-2 2" />
+                  </svg>
+                  <span class="status-section-title">Windows</span>
+                </div>
+                <div class="status-metrics-grid-improved">
+                  <div class="status-metric-box">
+                    <div class="flex items-center justify-between mb-2">
+                      <span class="status-metric-label-improved">PROCESSED</span>
+              <div class="text-green-500">
+                        <svg class="w-3.5 h-3.5" fill="currentColor" viewBox="0 0 20 20">
+                          <circle cx="10" cy="10" r="5"/>
+                </svg>
+              </div>
+            </div>
+                    <div class="status-metric-value-lg text-gray-900 dark:text-gray-100">
+                      {{ formatNumber(streamStats?.totalWindowsProcessed || 0) }}
+                    </div>
+                    <div class="status-metric-detail">{{ formatNumber(streamStats?.windowsLastHour || 0) }} last hour</div>
+          </div>
+                  <div class="status-metric-box">
+                    <div class="flex items-center justify-between mb-2">
+                      <span class="status-metric-label-improved">ACTIVE</span>
+              <div :class="streamStats?.activeLeases > 0 ? 'text-green-500' : 'text-gray-400 dark:text-gray-500'">
+                        <svg class="w-3.5 h-3.5" fill="currentColor" viewBox="0 0 20 20">
+                          <circle cx="10" cy="10" r="5"/>
+                </svg>
+                      </div>
+                    </div>
+                    <div class="status-metric-value-lg text-gray-900 dark:text-gray-100">
+                      {{ formatNumber(streamStats?.activeLeases || 0) }}
+                    </div>
+                    <div class="status-metric-detail">{{ formatNumber(streamStats?.avgLeaseTime || 0) }}s avg time</div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+
         <!-- Charts Grid -->
         <div class="charts-grid">
           <!-- Throughput Chart -->
@@ -219,22 +334,6 @@
           </div>
         </div>
 
-        <!-- Queue Metrics Chart -->
-        <div class="chart-card chart-card-clickable" @click="navigateToSystemMetrics">
-          <div class="chart-header">
-            <div class="flex items-center gap-2">
-              <h3 class="chart-title">Queue & Connection Metrics</h3>
-              <svg class="w-3.5 h-3.5 text-gray-400 dark:text-gray-500 card-arrow" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2">
-                <path stroke-linecap="round" stroke-linejoin="round" d="M9 5l7 7-7 7" />
-              </svg>
-            </div>
-            <span class="chart-badge">Last Hour</span>
-          </div>
-          <div class="chart-body">
-            <QueueMetricsChart :data="systemMetrics" />
-          </div>
-        </div>
-
         <!-- Top Queues Table -->
         <div class="chart-card">
           <div class="chart-header">
@@ -258,12 +357,12 @@ import { queuesApi } from '../api/queues';
 import { systemMetricsApi } from '../api/system-metrics';
 import { streamsApi } from '../api/streams';
 import { formatNumber } from '../utils/formatters';
+import { useAutoRefresh } from '../composables/useAutoRefresh';
 
 import LoadingSpinner from '../components/common/LoadingSpinner.vue';
 import MaintenanceCard from '../components/MaintenanceCard.vue';
 import ThroughputChart from '../components/dashboard/ThroughputChart.vue';
 import ResourceUsageChart from '../components/dashboard/ResourceUsageChart.vue';
-import QueueMetricsChart from '../components/dashboard/QueueMetricsChart.vue';
 import TopQueuesTable from '../components/dashboard/TopQueuesTable.vue';
 
 const router = useRouter();
@@ -312,6 +411,23 @@ function formatDuration(seconds) {
   return hours > 0 ? `${days}d ${hours}h` : `${days}d`;
 }
 
+// Get overall system status based on lag metrics
+function getOverallSystemStatus() {
+  const timeLagMax = overview.value?.lag?.time?.max || 0;
+  const offsetLagMax = overview.value?.lag?.offset?.max || 0;
+  
+  // Red if time lag > 5min or offset lag > 50
+  if (timeLagMax >= 300 || offsetLagMax >= 50) {
+    return 'text-red-500';
+  }
+  // Yellow if time lag > 1min or offset lag > 10
+  if (timeLagMax >= 60 || offsetLagMax >= 10) {
+    return 'text-yellow-500';
+  }
+  // Green otherwise
+  return 'text-green-500';
+}
+
 // Get lag status indicator class (time-based)
 function getLagStatusClass(seconds) {
   if (!seconds || seconds === 0) return 'text-gray-400 dark:text-gray-500';
@@ -320,12 +436,12 @@ function getLagStatusClass(seconds) {
   return 'text-red-500'; // > 5 min: red
 }
 
-// Get lag value class (time-based)
-function getLagValueClass(seconds) {
-  if (!seconds || seconds === 0) return 'metric-value text-gray-600 dark:text-gray-300';
-  if (seconds < 60) return 'metric-value text-gray-900 dark:text-gray-100';
-  if (seconds < 300) return 'metric-value text-yellow-600 dark:text-yellow-400';
-  return 'metric-value text-red-600 dark:text-red-400';
+// Get lag value class (time-based) - compact version
+function getLagValueClassCompact(seconds) {
+  if (!seconds || seconds === 0) return 'status-metric-value-lg text-gray-600 dark:text-gray-300';
+  if (seconds < 60) return 'status-metric-value-lg text-gray-900 dark:text-gray-100';
+  if (seconds < 300) return 'status-metric-value-lg text-yellow-600 dark:text-yellow-400';
+  return 'status-metric-value-lg text-red-600 dark:text-red-400';
 }
 
 // Get offset lag status indicator class
@@ -336,12 +452,12 @@ function getOffsetLagStatusClass(count) {
   return 'text-red-500'; // > 50 msgs: red
 }
 
-// Get offset lag value class
-function getOffsetLagValueClass(count) {
-  if (!count || count === 0) return 'metric-value text-gray-600 dark:text-gray-300';
-  if (count < 10) return 'metric-value text-gray-900 dark:text-gray-100';
-  if (count < 50) return 'metric-value text-yellow-600 dark:text-yellow-400';
-  return 'metric-value text-red-600 dark:text-red-400';
+// Get offset lag value class - compact version
+function getOffsetLagValueClassCompact(count) {
+  if (!count || count === 0) return 'status-metric-value-lg text-gray-600 dark:text-gray-300';
+  if (count < 10) return 'status-metric-value-lg text-gray-900 dark:text-gray-100';
+  if (count < 50) return 'status-metric-value-lg text-yellow-600 dark:text-yellow-400';
+  return 'status-metric-value-lg text-red-600 dark:text-red-400';
 }
 
 async function loadData() {
@@ -374,9 +490,14 @@ async function loadData() {
   }
 }
 
+// Set up auto-refresh (every 30 seconds)
+const autoRefresh = useAutoRefresh(loadData, {
+  interval: 30000, // 30 seconds
+  immediate: true, // Load data immediately on mount
+  enabled: true, // Auto-refresh enabled by default
+});
+
 onMounted(() => {
-  loadData();
-  
   // Register refresh callback for header button
   if (window.registerRefreshCallback) {
     window.registerRefreshCallback('/', loadData);
@@ -450,7 +571,145 @@ function navigateToStreams() {
   @apply px-1;
 }
 
-/* Metrics Grid */
+/* Main Metrics - 3 Column Layout */
+.main-metrics-grid {
+  @apply grid grid-cols-1 lg:grid-cols-3 gap-5;
+}
+
+/* Status Cards (New Large Cards) */
+.status-card {
+  @apply bg-white dark:bg-[#161b22] border border-gray-200/40 dark:border-gray-800/40;
+  @apply rounded-xl overflow-hidden;
+  box-shadow: 0 1px 3px 0 rgba(0, 0, 0, 0.04), 0 1px 2px 0 rgba(0, 0, 0, 0.02);
+  transition: box-shadow 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.dark .status-card {
+  box-shadow: 0 1px 3px 0 rgba(0, 0, 0, 0.4), 0 1px 2px 0 rgba(0, 0, 0, 0.2);
+}
+
+.status-card-header {
+  @apply px-6 py-4 border-b border-gray-200/60 dark:border-gray-800/60;
+  @apply flex items-center justify-between;
+  background: linear-gradient(to bottom, rgba(249, 250, 251, 0.5), transparent);
+}
+
+.dark .status-card-header {
+  background: linear-gradient(to bottom, rgba(22, 27, 34, 0.5), transparent);
+}
+
+.status-icon-wrapper {
+  @apply flex items-center justify-center;
+  @apply w-8 h-8 rounded-lg;
+  @apply bg-gray-100 dark:bg-gray-800/60;
+  @apply text-gray-600 dark:text-gray-400;
+}
+
+.status-card-title {
+  @apply text-sm font-semibold text-gray-900 dark:text-white tracking-tight;
+  letter-spacing: -0.01em;
+}
+
+.view-all-button {
+  @apply text-xs text-gray-500 dark:text-gray-400;
+  @apply hover:text-orange-600 dark:hover:text-orange-400;
+  @apply flex items-center gap-1 transition-colors;
+  @apply font-medium;
+}
+
+.status-card-body-improved {
+  @apply p-6 space-y-6;
+}
+
+/* Improved Status Sections */
+.status-section-improved {
+  @apply space-y-3;
+}
+
+.status-section-header {
+  @apply flex items-center gap-2 mb-4;
+}
+
+.status-section-title {
+  @apply text-xs font-semibold uppercase tracking-wide;
+  @apply text-gray-700 dark:text-gray-300;
+  letter-spacing: 0.05em;
+}
+
+.status-metrics-grid-improved {
+  @apply grid grid-cols-2 gap-3;
+}
+
+.status-metric-box {
+  @apply bg-gray-50/80 dark:bg-gray-900/40;
+  @apply border border-gray-200/50 dark:border-gray-800/50;
+  @apply rounded-lg p-4;
+  transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.status-metric-box.metric-card-clickable:hover {
+  @apply bg-gray-100/90 dark:bg-gray-900/60;
+  @apply border-orange-300/60 dark:border-orange-600/60;
+  @apply shadow-sm;
+  cursor: pointer;
+  transform: translateY(-1px);
+}
+
+.status-metric-label-improved {
+  @apply text-[9px] font-bold uppercase tracking-wider;
+  @apply text-gray-500 dark:text-gray-500;
+  letter-spacing: 0.08em;
+}
+
+.status-metric-value-lg {
+  @apply text-2xl font-bold tracking-tight mt-2;
+  letter-spacing: -0.025em;
+  line-height: 1.1;
+}
+
+.status-metric-detail {
+  @apply text-[10px] text-gray-500 dark:text-gray-500 font-medium mt-1.5;
+}
+
+/* Queue Overview Grid */
+.queue-overview-grid {
+  @apply grid grid-cols-2 gap-4;
+}
+
+.queue-overview-item {
+  @apply text-center p-4 rounded-lg;
+  @apply bg-gradient-to-br from-gray-50 to-gray-100/50;
+  @apply dark:from-gray-900/40 dark:to-gray-900/20;
+  @apply border border-gray-200/40 dark:border-gray-800/40;
+  transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.queue-overview-item.metric-card-clickable:hover {
+  @apply shadow-md;
+  @apply border-orange-300/60 dark:border-orange-600/60;
+  cursor: pointer;
+  transform: translateY(-2px);
+}
+
+.queue-overview-label {
+  @apply text-[9px] font-bold uppercase tracking-wider;
+  @apply text-gray-500 dark:text-gray-500 mb-2;
+  letter-spacing: 0.08em;
+}
+
+.queue-overview-value {
+  @apply text-3xl font-bold tracking-tight;
+  @apply text-gray-900 dark:text-gray-100;
+  letter-spacing: -0.03em;
+  line-height: 1;
+}
+
+.queue-overview-subtext {
+  @apply text-[10px] text-gray-500 dark:text-gray-500 font-medium mt-2;
+}
+
+
+/* Metrics Grid (Old - keeping for charts) */
 .metrics-grid {
   @apply grid grid-cols-2 lg:grid-cols-4 gap-5;
 }

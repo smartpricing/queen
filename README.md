@@ -162,7 +162,7 @@ A modern Vue 3 dashboard for monitoring and managing Queen MQ:
 
 <div align="center">
 
-![Dashboard](./assets/dashboard.png)
+![Dashboard](./assets/new_dashboard.png)
 
 </div>
 

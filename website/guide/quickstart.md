@@ -285,7 +285,7 @@ You'll see:
 - 🔍 Trace explorer
 - 👥 Consumer group status
 
-![Queen Dashboard](/dashboard.png)
+![Queen Dashboard](/new_dashboard.png)
 
 ## What's Next?
 
