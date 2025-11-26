@@ -363,14 +363,91 @@ Long polling is configured on the server:
 
 ```bash
 # Number of poll worker threads
-NUM_POLL_WORKERS=4  # Default
+POLL_WORKER_COUNT=2  # Default
 
-# Poll interval (milliseconds)
-POLL_INTERVAL_MS=50  # Default
+# Poll worker interval (milliseconds) - how often workers check registry
+POLL_WORKER_INTERVAL=50  # Default
 
-# Max poll timeout (milliseconds)
-MAX_POLL_TIMEOUT_MS=120000  # Default: 2 minutes
+# Initial DB query interval (milliseconds)
+POLL_DB_INTERVAL=100  # Default
+
+# Maximum poll interval after backoff (milliseconds)
+QUEUE_MAX_POLL_INTERVAL=2000  # Default
 ```
+
+## Clustered Deployments: Inter-Instance Notifications
+
+In a clustered deployment, when a message is pushed to Server A, consumers connected to Server B need to be notified immediately. Queen supports **inter-instance notifications** to minimize latency across servers.
+
+### The Problem
+
+Without inter-instance notifications:
+
+```
+Server A: PUSH message to "orders" queue
+Server B: Consumer waiting on "orders" queue
+         → Consumer is in backoff (e.g., 1000ms)
+         → Must wait for backoff timer to query DB
+         → Latency: up to 2000ms (max backoff)
+```
+
+### The Solution
+
+With inter-instance notifications:
+
+```
+Server A: PUSH message to "orders" queue
+         → Notify Server B via UDP (0.2ms)
+Server B: Receives notification
+         → Resets backoff for "orders" queue
+         → Consumer queries DB immediately
+         → Latency: 10-50ms
+```
+
+### Configuration
+
+Queen supports two notification protocols:
+
+| Protocol | Latency | Reliability | Best For |
+|----------|---------|-------------|----------|
+| **UDP** | ~0.2ms | Fire-and-forget | Lowest latency (recommended) |
+| **HTTP** | ~3ms | Guaranteed | When reliability is critical |
+
+```bash
+# UDP notifications (recommended for lowest latency)
+export QUEEN_UDP_PEERS="queen-b:6633,queen-c:6633"
+export QUEEN_UDP_NOTIFY_PORT=6633
+
+# HTTP notifications (guaranteed delivery)
+export QUEEN_PEERS="http://queen-b:6632,http://queen-c:6632"
+
+# Or use both (UDP for speed, HTTP as backup)
+```
+
+### Kubernetes StatefulSet Example
+
+```yaml
+env:
+  - name: QUEEN_UDP_PEERS
+    value: "queen-mq-0.queen-mq-headless.ns.svc:6633,queen-mq-1.queen-mq-headless.ns.svc:6633"
+  - name: QUEEN_UDP_NOTIFY_PORT
+    value: "6633"
+```
+
+::: tip Self-Detection
+Each server automatically excludes itself from the peer list, so you can use the same configuration on all instances.
+:::
+
+### How It Works
+
+1. **PUSH** triggers `MESSAGE_AVAILABLE` notification to peers
+2. **ACK** triggers `PARTITION_FREE` notification to peers  
+3. Receiving server resets backoff for matching poll intentions
+4. Consumers wake up immediately and query the database
+
+This reduces cross-server message delivery latency from **up to 2000ms** (max backoff) to **10-50ms**.
+
+See [Environment Variables](/server/environment-variables#inter-instance-communication-clustered-deployments) for complete configuration options.
 
 ## Related Topics
 

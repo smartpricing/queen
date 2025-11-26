@@ -351,15 +351,24 @@ static void worker_thread(const Config& config, int worker_id, int num_workers,
                 global_system_info.hostname  // For K8s self-detection
             );
             
-            if (config.inter_instance.has_peers()) {
+            if (config.inter_instance.has_any_peers()) {
                 spdlog::info("Inter-Instance Peer Notifications:");
-                spdlog::info("  - Peers: {}", config.inter_instance.peers);
-                spdlog::info("  - Batch interval: {}ms", config.inter_instance.batch_ms);
+                if (config.inter_instance.has_peers()) {
+                    spdlog::info("  - HTTP Peers: {}", config.inter_instance.peers);
+                    spdlog::info("  - HTTP Batch interval: {}ms", config.inter_instance.batch_ms);
+                }
+                if (config.inter_instance.has_udp_peers()) {
+                    spdlog::info("  - UDP Peers: {}", config.inter_instance.udp_peers);
+                    spdlog::info("  - UDP Port: {}", config.inter_instance.udp_port);
+                }
                 queen::global_inter_instance_comms->start();
-                spdlog::info("Peer notifications started with {} peer(s)", 
-                            config.inter_instance.parse_peer_urls().size());
+                spdlog::info("Peer notifications started: {} HTTP peer(s), {} UDP peer(s)", 
+                            queen::global_inter_instance_comms->http_peer_count(),
+                            queen::global_inter_instance_comms->udp_peer_count());
             } else {
-                spdlog::info("Peer notifications: Disabled (single server mode, set QUEEN_PEERS to enable)");
+                spdlog::info("Peer notifications: Disabled (single server mode)");
+                spdlog::info("  - Set QUEEN_PEERS for HTTP notifications");
+                spdlog::info("  - Set QUEEN_UDP_PEERS for UDP notifications (lower latency)");
             }
             
             spdlog::info("System info: hostname={}, port={}", 

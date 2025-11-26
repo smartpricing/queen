@@ -233,7 +233,97 @@ Separate from async pool, handles non-critical operations:
 - **EvictionService** - Handle max wait time eviction
 - **StreamManager** - Manage streaming subscriptions
 
-### 5. Failover Layer (File Buffer)
+### 5. Inter-Instance Communication
+
+In clustered deployments, servers notify each other when messages are pushed or acknowledged, enabling immediate consumer response across all instances.
+
+#### Notification Types
+
+| Event | Notification | Effect |
+|-------|--------------|--------|
+| PUSH (message queued) | `MESSAGE_AVAILABLE` | Reset backoff for matching poll intentions |
+| ACK (partition freed) | `PARTITION_FREE` | Reset backoff for specific consumer group |
+
+#### Protocol Options
+
+Queen supports two protocols that can be used independently or together:
+
+**UDP (Recommended for lowest latency):**
+```
+Server A: PUSH message
+    ↓
+sendto(udp_socket, notification, peer_addr)  ← Fire-and-forget (~0.2ms)
+    ↓
+Server B: recvfrom() → reset_backoff()
+    ↓
+Consumer wakes immediately
+```
+
+**HTTP (Guaranteed delivery):**
+```
+Server A: PUSH message
+    ↓
+Queue notification → Batch for 10ms
+    ↓
+POST /internal/api/notify to each peer  ← ~3ms per peer
+    ↓
+Server B: Handle notification → reset_backoff()
+```
+
+#### Architecture
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                    INTER-INSTANCE COMMS                         │
+│  ┌─────────────────────────────────────────────────────────┐   │
+│  │                  InterInstanceComms                      │   │
+│  │   ┌─────────────┐           ┌─────────────┐             │   │
+│  │   │ UDP Sender  │           │ HTTP Batch  │             │   │
+│  │   │ (immediate) │           │  (10ms)     │             │   │
+│  │   └──────┬──────┘           └──────┬──────┘             │   │
+│  │          ↓                         ↓                     │   │
+│  │   sendto() to peers         POST to /internal/api/notify│   │
+│  └─────────────────────────────────────────────────────────┘   │
+│                              ↑                                  │
+│                    PUSH/ACK triggers                            │
+└─────────────────────────────────────────────────────────────────┘
+                              ↓
+┌─────────────────────────────────────────────────────────────────┐
+│                         PEER SERVERS                            │
+│   ┌─────────────┐                    ┌─────────────┐           │
+│   │ UDP Recv    │ ──────────────────→│ Poll        │           │
+│   │ Thread      │   reset_backoff()  │ Intention   │           │
+│   └─────────────┘                    │ Registry    │           │
+│   ┌─────────────┐                    │             │           │
+│   │ HTTP Route  │ ──────────────────→│             │           │
+│   │ /notify     │   reset_backoff()  └─────────────┘           │
+│   └─────────────┘                                              │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+#### Configuration
+
+```bash
+# UDP (fire-and-forget, ~0.2ms latency)
+export QUEEN_UDP_PEERS="queen-b:6633,queen-c:6633"
+export QUEEN_UDP_NOTIFY_PORT=6633
+
+# HTTP (batched, guaranteed delivery, ~3ms latency)
+export QUEEN_PEERS="http://queen-b:6632,http://queen-c:6632"
+export PEER_NOTIFY_BATCH_MS=10
+
+# Both protocols (recommended for production)
+# UDP provides speed, HTTP provides reliability as backup
+```
+
+#### Latency Impact
+
+| Scenario | Without Notifications | With UDP Notifications |
+|----------|----------------------|------------------------|
+| Cross-server message delivery | Up to 2000ms (backoff) | 10-50ms |
+| Consumer group rebalance | Up to 2000ms | 10-50ms |
+
+### 6. Failover Layer (File Buffer)
 
 **Zero message loss** when PostgreSQL is unavailable.
 

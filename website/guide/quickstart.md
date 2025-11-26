@@ -306,6 +306,7 @@ Now that you have Queen running, explore more advanced features:
 - [Server Installation](/server/installation) - Build from source
 - [Performance Tuning](/server/tuning) - Optimize for your workload
 - [Deployment Guide](/server/deployment) - Docker, Kubernetes, systemd
+- [Clustered Deployments](/guide/long-polling#clustered-deployments-inter-instance-notifications) - Low-latency multi-server setup
 
 ### See Examples
 - [Basic Usage](/clients/examples/basic) - Simple patterns

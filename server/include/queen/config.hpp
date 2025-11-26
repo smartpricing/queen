@@ -522,23 +522,48 @@ struct FileBufferConfig {
     }
 };
 
+// UDP peer entry with host and port
+struct UdpPeerEntry {
+    std::string host;
+    int port;
+};
+
 struct InterInstanceConfig {
+    // HTTP peers (existing) - full URLs like http://host:port
     std::string peers = "";
-    int batch_ms = 10;  // Batch notifications for this many ms before sending
+    int batch_ms = 10;  // Batch HTTP notifications for this many ms before sending
+    
+    // UDP peers (new) - host:port or just host (uses default port)
+    std::string udp_peers = "";
+    int udp_port = 6633;  // Default UDP notification port
     
     static InterInstanceConfig from_env() {
         InterInstanceConfig config;
+        // HTTP peers (existing)
         config.peers = get_env_string("QUEEN_PEERS", "");
         config.batch_ms = get_env_int("PEER_NOTIFY_BATCH_MS", 10);
+        // UDP peers (new)
+        config.udp_peers = get_env_string("QUEEN_UDP_PEERS", "");
+        config.udp_port = get_env_int("QUEEN_UDP_NOTIFY_PORT", 6633);
         return config;
     }
     
-    // Returns true if peer notification is enabled (peers are configured)
+    // Returns true if HTTP peer notification is enabled
     bool has_peers() const {
         return !peers.empty();
     }
     
-    // Parse comma-separated peer URLs into vector
+    // Returns true if UDP peer notification is enabled
+    bool has_udp_peers() const {
+        return !udp_peers.empty();
+    }
+    
+    // Returns true if any peer notification is enabled
+    bool has_any_peers() const {
+        return has_peers() || has_udp_peers();
+    }
+    
+    // Parse comma-separated HTTP peer URLs into vector
     std::vector<std::string> parse_peer_urls() const {
         std::vector<std::string> urls;
         if (peers.empty()) return urls;
@@ -564,6 +589,74 @@ struct InterInstanceConfig {
             }
         }
         return urls;
+    }
+    
+    // Parse comma-separated UDP peers into vector of {host, port}
+    // Accepts: "host:port" or "host" (uses default udp_port)
+    std::vector<UdpPeerEntry> parse_udp_peers() const {
+        std::vector<UdpPeerEntry> entries;
+        if (udp_peers.empty()) return entries;
+        
+        std::string remaining = udp_peers;
+        size_t pos = 0;
+        while ((pos = remaining.find(',')) != std::string::npos) {
+            std::string entry = remaining.substr(0, pos);
+            auto parsed = parse_udp_entry(entry, udp_port);
+            if (!parsed.host.empty()) {
+                entries.push_back(parsed);
+            }
+            remaining = remaining.substr(pos + 1);
+        }
+        // Handle last element
+        if (!remaining.empty()) {
+            auto parsed = parse_udp_entry(remaining, udp_port);
+            if (!parsed.host.empty()) {
+                entries.push_back(parsed);
+            }
+        }
+        return entries;
+    }
+    
+private:
+    // Parse a single UDP peer entry: "host:port" or "host"
+    static UdpPeerEntry parse_udp_entry(const std::string& entry, int default_port) {
+        UdpPeerEntry result;
+        result.port = default_port;
+        
+        std::string s = entry;
+        
+        // Trim whitespace
+        size_t start = s.find_first_not_of(" \t");
+        size_t end = s.find_last_not_of(" \t");
+        if (start == std::string::npos) return result;
+        s = s.substr(start, end - start + 1);
+        
+        // Strip protocol if present (for flexibility)
+        if (s.size() > 7 && s.substr(0, 7) == "http://") {
+            s = s.substr(7);
+        } else if (s.size() > 8 && s.substr(0, 8) == "https://") {
+            s = s.substr(8);
+        }
+        
+        // Strip trailing slash
+        if (!s.empty() && s.back() == '/') {
+            s.pop_back();
+        }
+        
+        // Split host:port
+        size_t colon = s.rfind(':');  // Use rfind for IPv6 compatibility
+        if (colon != std::string::npos) {
+            result.host = s.substr(0, colon);
+            try {
+                result.port = std::stoi(s.substr(colon + 1));
+            } catch (...) {
+                // Keep default port
+            }
+        } else {
+            result.host = s;
+        }
+        
+        return result;
     }
 };
 

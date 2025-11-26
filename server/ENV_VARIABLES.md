@@ -317,16 +317,31 @@ Queen provides real-time notifications for faster poll worker response times:
 
 1. **Local notifications** (always active): When a message is pushed or acknowledged, the server's own poll workers are immediately notified to reset their backoff timers.
 
-2. **Peer notifications** (when `QUEEN_PEERS` is set): In clustered deployments, servers notify each other via WebSocket so poll workers on all instances respond immediately.
+2. **Peer notifications** (when peers are configured): In clustered deployments, servers notify each other so poll workers on all instances respond immediately.
+
+### Protocol Options
+
+Queen supports two protocols for peer notifications:
+
+| Protocol | Latency | Reliability | Use Case |
+|----------|---------|-------------|----------|
+| **UDP** | ~0.1-0.3ms | Fire-and-forget | Recommended for lowest latency |
+| **HTTP** | ~2-5ms | Guaranteed delivery | Fallback or when reliability is critical |
+
+You can use either protocol alone, or both simultaneously (UDP for speed, HTTP as backup).
+
+### Configuration
 
 | Variable | Type | Default | Description |
 |----------|------|---------|-------------|
-| `QUEEN_PEERS` | string | "" | Comma-separated peer URLs (e.g., `http://queen2:6632,http://queen3:6632`). When set, enables HTTP peer notifications. |
-| `PEER_NOTIFY_BATCH_MS` | int | 10 | Batch notifications for N ms before sending (0 = immediate) |
+| `QUEEN_PEERS` | string | "" | Comma-separated HTTP peer URLs (e.g., `http://queen2:6632,http://queen3:6632`) |
+| `PEER_NOTIFY_BATCH_MS` | int | 10 | Batch HTTP notifications for N ms before sending (0 = immediate) |
+| `QUEEN_UDP_PEERS` | string | "" | Comma-separated UDP peer hostnames (e.g., `queen2.svc.local,queen3.svc.local`) |
+| `QUEEN_UDP_NOTIFY_PORT` | int | 6633 | UDP port for peer notifications (separate from HTTP API port) |
 
 **How it works:**
 
-Queen servers notify (locally and via HTTP POST to peers) when:
+Queen servers notify (locally and to peers) when:
 - A new message is pushed (MESSAGE_AVAILABLE notification)
 - A message is acknowledged (PARTITION_FREE notification)
 
@@ -338,25 +353,49 @@ This allows poll workers to immediately reset their backoff timers and query the
 ./bin/queen-server
 ```
 
-**Cluster setup:**
+**Cluster setup with HTTP (original):**
 ```bash
-# Server A - just define peers
+# Server A - define HTTP peers
 export QUEEN_PEERS="http://queen-b:6632,http://queen-c:6632"
 ./bin/queen-server
 
 # Server B
 export QUEEN_PEERS="http://queen-a:6632,http://queen-c:6632"
 ./bin/queen-server
+```
 
-# Server C
-export QUEEN_PEERS="http://queen-a:6632,http://queen-b:6632"
+**Cluster setup with UDP (recommended for lowest latency):**
+```bash
+# Server A - define UDP peers (hostnames only, port is separate)
+export QUEEN_UDP_PEERS="queen-b.svc.local,queen-c.svc.local"
+export QUEEN_UDP_NOTIFY_PORT=6633
+./bin/queen-server
+
+# Server B
+export QUEEN_UDP_PEERS="queen-a.svc.local,queen-c.svc.local"
+export QUEEN_UDP_NOTIFY_PORT=6633
 ./bin/queen-server
 ```
 
+**Kubernetes StatefulSet (both protocols for reliability):**
+```yaml
+env:
+  # HTTP - guaranteed delivery, higher latency
+  - name: QUEEN_PEERS
+    value: "http://queen-mq-0.queen-mq-headless.ns.svc.cluster.local:6632,http://queen-mq-1.queen-mq-headless.ns.svc.cluster.local:6632,http://queen-mq-2.queen-mq-headless.ns.svc.cluster.local:6632"
+  # UDP - fire-and-forget, lowest latency
+  - name: QUEEN_UDP_PEERS
+    value: "queen-mq-0.queen-mq-headless.ns.svc.cluster.local,queen-mq-1.queen-mq-headless.ns.svc.cluster.local,queen-mq-2.queen-mq-headless.ns.svc.cluster.local"
+  - name: QUEEN_UDP_NOTIFY_PORT
+    value: "6633"
+```
+
+> **Note:** Self-detection is automatic. Each server excludes itself from the peer list based on hostname matching, so you can use the same peer list on all instances.
+
 **Endpoints:**
-- `WS /internal/ws/peer` - WebSocket endpoint for peer connections
-- `POST /internal/api/notify` - HTTP fallback for notifications
-- `GET /internal/api/inter-instance/stats` - Peer notification statistics
+- `POST /internal/api/notify` - HTTP endpoint for notifications
+- `UDP port 6633` - UDP listener for notifications (when `QUEEN_UDP_PEERS` is set)
+- `GET /internal/api/inter-instance/stats` - Peer notification statistics (HTTP + UDP)
 - Stats also included in `/health` response
 
 ## Encryption Configuration

@@ -13,6 +13,7 @@
 #include <atomic>
 #include <set>
 #include <chrono>
+#include <netinet/in.h>  // For sockaddr_in
 
 namespace queen {
 
@@ -79,7 +80,7 @@ struct PeerNotification {
 };
 
 /**
- * Parsed peer URL components
+ * Parsed HTTP peer URL components
  */
 struct PeerEndpoint {
     std::string host;
@@ -88,14 +89,28 @@ struct PeerEndpoint {
 };
 
 /**
+ * UDP peer endpoint (resolved address)
+ */
+struct UdpPeerEndpoint {
+    std::string hostname;      // Original hostname for logging
+    int port;                  // Target port
+    sockaddr_in addr;          // Resolved address (includes port)
+    bool resolved = false;     // Whether DNS resolution succeeded
+};
+
+/**
  * Inter-Instance Communication Manager
  * 
- * Manages HTTP-based communication with peer Queen servers for real-time
- * notification of message availability and partition freeing.
+ * Manages communication with peer Queen servers for real-time notification
+ * of message availability and partition freeing.
  * 
- * When QUEEN_PEERS is configured:
- * - On PUSH: Notifies peers via HTTP POST of new message availability
- * - On ACK: Notifies peers via HTTP POST that partition is free for consumption
+ * Supports two protocols:
+ * - HTTP (QUEEN_PEERS): Batched HTTP POST with guaranteed delivery
+ * - UDP (QUEEN_UDP_PEERS): Fire-and-forget with lowest latency
+ * 
+ * When peers are configured:
+ * - On PUSH: Notifies peers of new message availability
+ * - On ACK: Notifies peers that partition is free for consumption
  * - Poll workers on peers reset their backoff and query immediately
  */
 class InterInstanceComms : public std::enable_shared_from_this<InterInstanceComms> {
@@ -113,7 +128,9 @@ public:
     // Lifecycle
     void start();
     void stop();
-    bool is_enabled() const { return enabled_; }
+    bool is_enabled() const { return http_enabled_ || udp_enabled_; }
+    bool is_http_enabled() const { return http_enabled_; }
+    bool is_udp_enabled() const { return udp_enabled_; }
     
     // ============================================================
     // OUTBOUND: Send notifications to peers (called after PUSH/ACK)
@@ -122,6 +139,7 @@ public:
     /**
      * Notify peers that a new message is available
      * Called after successful PUSH
+     * Sends via UDP (immediate) and/or HTTP (batched) depending on config
      */
     void notify_message_available(
         const std::string& queue_name,
@@ -131,6 +149,7 @@ public:
     /**
      * Notify peers that a partition is free (lease released)
      * Called after successful ACK
+     * Sends via UDP (immediate) and/or HTTP (batched) depending on config
      */
     void notify_partition_free(
         const std::string& queue_name,
@@ -139,7 +158,7 @@ public:
     );
     
     // ============================================================
-    // INBOUND: Handle notifications from peers (via HTTP route)
+    // INBOUND: Handle notifications from peers (via HTTP or UDP)
     // ============================================================
     
     /**
@@ -152,40 +171,78 @@ public:
     // Stats & Monitoring
     // ============================================================
     
-    size_t configured_peer_count() const { return peer_endpoints_.size(); }
+    size_t http_peer_count() const { return http_endpoints_.size(); }
+    size_t udp_peer_count() const { return udp_endpoints_.size(); }
     nlohmann::json get_stats() const;
 
 private:
-    // Configuration
-    bool enabled_;
-    std::vector<PeerEndpoint> peer_endpoints_;
+    // ============================================================
+    // HTTP Configuration & State
+    // ============================================================
+    bool http_enabled_ = false;
+    std::vector<PeerEndpoint> http_endpoints_;
     int batch_ms_;
+    
+    // HTTP Notification batching
+    std::queue<PeerNotification> pending_http_notifications_;
+    std::set<std::pair<std::string, std::string>> pending_http_dedup_;
+    std::mutex http_notification_mutex_;
+    std::condition_variable http_notification_cv_;
+    std::thread http_batch_thread_;
+    
+    // ============================================================
+    // UDP Configuration & State
+    // ============================================================
+    bool udp_enabled_ = false;
+    std::vector<UdpPeerEndpoint> udp_endpoints_;
+    int udp_port_;
+    int udp_send_sock_ = -1;     // Socket for sending
+    int udp_recv_sock_ = -1;     // Socket for receiving
+    std::thread udp_recv_thread_;
+    
+    // ============================================================
+    // Shared State
+    // ============================================================
     std::string own_host_;
     int own_port_;
-    std::string own_hostname_;  // System hostname for K8s self-detection
-    
-    // Registry to notify on incoming messages
+    std::string own_hostname_;
     std::shared_ptr<PollIntentionRegistry> poll_registry_;
-    
-    // Notification batching
-    std::queue<PeerNotification> pending_notifications_;
-    std::set<std::pair<std::string, std::string>> pending_dedup_;  // For deduplication
-    std::mutex notification_mutex_;
-    std::condition_variable notification_cv_;
-    std::thread batch_thread_;
     std::atomic<bool> running_{false};
     
+    // ============================================================
     // Stats
-    std::atomic<uint64_t> notifications_sent_{0};
-    std::atomic<uint64_t> notifications_received_{0};
-    std::atomic<uint64_t> notifications_batched_{0};
+    // ============================================================
+    // HTTP stats
+    std::atomic<uint64_t> http_notifications_sent_{0};
+    std::atomic<uint64_t> http_notifications_batched_{0};
     std::atomic<uint64_t> http_errors_{0};
     
-    // Internal methods
-    void batch_and_send_loop();
-    void send_to_peers(const std::vector<PeerNotification>& batch);
-    bool is_self_url(const std::string& url) const;
+    // UDP stats
+    std::atomic<uint64_t> udp_notifications_sent_{0};
+    std::atomic<uint64_t> udp_notifications_received_{0};
+    std::atomic<uint64_t> udp_send_errors_{0};
+    
+    // Shared stats
+    std::atomic<uint64_t> notifications_received_{0};  // Total received (HTTP + UDP)
+    
+    // ============================================================
+    // HTTP Internal Methods
+    // ============================================================
+    void http_batch_and_send_loop();
+    void http_send_to_peers(const std::vector<PeerNotification>& batch);
+    void queue_http_notification(const PeerNotification& n);
+    bool is_self_http_url(const std::string& url) const;
     static PeerEndpoint parse_peer_url(const std::string& url);
+    
+    // ============================================================
+    // UDP Internal Methods
+    // ============================================================
+    bool init_udp_sockets();
+    void resolve_udp_peers(const std::vector<UdpPeerEntry>& peers);
+    void udp_send_notification(const PeerNotification& n);
+    void udp_recv_loop();
+    bool is_self_udp_peer(const std::string& hostname, int port) const;
+    void cleanup_udp_sockets();
 };
 
 // Global instance (set in acceptor_server.cpp)

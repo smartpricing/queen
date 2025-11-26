@@ -547,6 +547,90 @@ export LOG_LEVEL=info
 export LOG_FORMAT=json
 ```
 
+## Inter-Instance Communication (Clustered Deployments)
+
+In clustered deployments, Queen servers can notify each other when messages are pushed or acknowledged, allowing poll workers on all instances to respond immediately instead of waiting for their backoff timers.
+
+### Protocol Options
+
+| Protocol | Latency | Reliability | Use Case |
+|----------|---------|-------------|----------|
+| **UDP** | ~0.1-0.3ms | Fire-and-forget | Recommended for lowest latency |
+| **HTTP** | ~2-5ms | Guaranteed delivery | Fallback or when reliability is critical |
+
+You can use either protocol alone, or both simultaneously (UDP for speed, HTTP as backup).
+
+### Configuration
+
+| Variable | Type | Default | Description |
+|----------|------|---------|-------------|
+| `QUEEN_PEERS` | string | "" | HTTP peers: comma-separated URLs (e.g., `http://queen2:6632,http://queen3:6632`) |
+| `PEER_NOTIFY_BATCH_MS` | int | 10 | Batch HTTP notifications for N ms before sending |
+| `QUEEN_UDP_PEERS` | string | "" | UDP peers: comma-separated `host:port` or hostnames (e.g., `queen2:6633,queen3:6633`) |
+| `QUEEN_UDP_NOTIFY_PORT` | int | 6633 | Default UDP port for notifications (separate from HTTP API port) |
+
+::: tip Self-Detection
+Each server automatically excludes itself from the peer list based on hostname matching, so you can use the same peer list on all instances in a StatefulSet.
+:::
+
+### Single Server (Default)
+
+Local poll worker notification is automatic - no configuration needed:
+
+```bash
+./bin/queen-server
+```
+
+### Cluster with HTTP Only
+
+```bash
+# Server A
+export QUEEN_PEERS="http://queen-b:6632,http://queen-c:6632"
+./bin/queen-server
+
+# Server B
+export QUEEN_PEERS="http://queen-a:6632,http://queen-c:6632"
+./bin/queen-server
+```
+
+### Cluster with UDP Only (Lowest Latency)
+
+```bash
+# Server A
+export QUEEN_UDP_PEERS="queen-b:6633,queen-c:6633"
+export QUEEN_UDP_NOTIFY_PORT=6633
+./bin/queen-server
+
+# Server B
+export QUEEN_UDP_PEERS="queen-a:6633,queen-c:6633"
+export QUEEN_UDP_NOTIFY_PORT=6633
+./bin/queen-server
+```
+
+### Kubernetes StatefulSet (Both Protocols)
+
+```yaml
+env:
+  # HTTP - guaranteed delivery, batched
+  - name: QUEEN_PEERS
+    value: "http://queen-mq-0.queen-mq-headless.ns.svc.cluster.local:6632,http://queen-mq-1.queen-mq-headless.ns.svc.cluster.local:6632,http://queen-mq-2.queen-mq-headless.ns.svc.cluster.local:6632"
+  # UDP - fire-and-forget, lowest latency
+  - name: QUEEN_UDP_PEERS
+    value: "queen-mq-0.queen-mq-headless.ns.svc.cluster.local:6633,queen-mq-1.queen-mq-headless.ns.svc.cluster.local:6633,queen-mq-2.queen-mq-headless.ns.svc.cluster.local:6633"
+  - name: QUEEN_UDP_NOTIFY_PORT
+    value: "6633"
+```
+
+### Endpoints
+
+| Endpoint | Description |
+|----------|-------------|
+| `POST /internal/api/notify` | HTTP endpoint for peer notifications |
+| `UDP port 6633` | UDP listener (when `QUEEN_UDP_PEERS` is set) |
+| `GET /internal/api/inter-instance/stats` | Peer notification statistics |
+
+Statistics are also included in the `/health` endpoint response.
+
 ## System Events Configuration
 
 | Variable | Type | Default | Description |
