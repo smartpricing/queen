@@ -2575,6 +2575,23 @@ AsyncQueueManager::AckResult AsyncQueueManager::acknowledge_message(
         std::string partition_id = *partition_id_param;
         spdlog::debug("Using provided partition_id {} for transaction {}", partition_id, transaction_id);
         
+        // Query queue_name and partition_name for peer notification support
+        std::string queue_name, partition_name;
+        {
+            std::string info_sql = R"(
+                SELECT q.name as queue_name, p.name as partition_name
+                FROM queen.partitions p
+                JOIN queen.queues q ON q.id = p.queue_id
+                WHERE p.id = $1::uuid
+            )";
+            sendQueryParamsAsync(conn.get(), info_sql, {partition_id});
+            auto info_result = getTuplesResult(conn.get());
+            if (PQntuples(info_result.get()) > 0) {
+                queue_name = PQgetvalue(info_result.get(), 0, 0);
+                partition_name = PQgetvalue(info_result.get(), 0, 1);
+            }
+        }
+        
         // Validate lease if provided
         if (lease_id.has_value()) {
             spdlog::debug("Validating lease {} for transaction {}", *lease_id, transaction_id);
@@ -2663,6 +2680,8 @@ AsyncQueueManager::AckResult AsyncQueueManager::acknowledge_message(
                 
                 result.success = true;
                 result.message = "completed";
+                result.queue_name = queue_name;
+                result.partition_name = partition_name;
             }
             
             return result;
@@ -2729,6 +2748,8 @@ AsyncQueueManager::AckResult AsyncQueueManager::acknowledge_message(
                 
                 result.success = true;
                 result.message = "failed_retry";
+                result.queue_name = queue_name;
+                result.partition_name = partition_name;
                 return result;
             }
             
@@ -2816,6 +2837,8 @@ AsyncQueueManager::AckResult AsyncQueueManager::acknowledge_message(
             spdlog::warn("Message failed and moved to DLQ: {} - {}", transaction_id, error.value_or("No error message"));
             result.success = true;
             result.message = "failed_dlq";
+            result.queue_name = queue_name;
+            result.partition_name = partition_name;
             return result;
         }
         

@@ -8,5 +8,5 @@ IMAGE=$REGISTRY/$NAME:$TAG
 
 docker build . --platform linux/amd64 -t $IMAGE
 docker push $IMAGE
-docker tag $IMAGE $REGISTRY/$NAME:latest
-docker push $REGISTRY/$NAME:latest
+#docker tag $IMAGE $REGISTRY/$NAME:latest
+#docker push $REGISTRY/$NAME:latest

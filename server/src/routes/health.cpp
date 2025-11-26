@@ -2,6 +2,7 @@
 #include "queen/routes/route_context.hpp"
 #include "queen/routes/route_helpers.hpp"
 #include "queen/async_queue_manager.hpp"
+#include "queen/inter_instance_comms.hpp"
 #include <spdlog/spdlog.h>
 
 namespace queen {
@@ -28,6 +29,14 @@ void setup_health_routes(uWS::App* app, const RouteContext& ctx) {
                 {"worker_id", ctx.worker_id},
                 {"version", "1.0.0"}
             };
+            
+            // Add peer notification status
+            if (global_inter_instance_comms) {
+                response["peer_notify"] = global_inter_instance_comms->get_stats();
+            } else {
+                response["peer_notify"] = {{"enabled", false}};
+            }
+            
             send_json_response(res, response, healthy ? 200 : 503);
         } catch (const std::exception& e) {
             send_error_response(res, e.what(), 500);

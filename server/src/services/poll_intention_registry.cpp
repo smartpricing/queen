@@ -90,6 +90,146 @@ bool PollIntentionRegistry::is_group_in_flight(const std::string& group_key) con
     return in_flight_groups_.count(group_key) > 0;
 }
 
+// ============================================================
+// Backoff State Management
+// ============================================================
+
+void PollIntentionRegistry::set_base_poll_interval(int ms) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    base_poll_interval_ms_ = ms;
+    spdlog::info("PollIntentionRegistry: base_poll_interval set to {}ms", ms);
+}
+
+int PollIntentionRegistry::get_current_interval(const std::string& group_key) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    auto it = backoff_states_.find(group_key);
+    if (it == backoff_states_.end()) {
+        // Initialize new state
+        backoff_states_.emplace(group_key, GroupBackoffState(base_poll_interval_ms_));
+        return base_poll_interval_ms_;
+    }
+    it->second.last_accessed = std::chrono::steady_clock::now();
+    return it->second.current_interval_ms;
+}
+
+void PollIntentionRegistry::update_backoff_state(const std::string& group_key, bool had_messages,
+                                                  int backoff_threshold, double backoff_multiplier, 
+                                                  int max_poll_interval) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    
+    auto it = backoff_states_.find(group_key);
+    if (it == backoff_states_.end()) {
+        backoff_states_.emplace(group_key, GroupBackoffState(base_poll_interval_ms_));
+        it = backoff_states_.find(group_key);
+    }
+    
+    auto& state = it->second;
+    state.last_accessed = std::chrono::steady_clock::now();
+    
+    if (had_messages) {
+        // Reset backoff on success
+        if (state.consecutive_empty_pops > 0) {
+            spdlog::debug("Resetting backoff for group '{}' (was: {}ms, {} empty)",
+                        group_key, state.current_interval_ms, state.consecutive_empty_pops);
+        }
+        state.consecutive_empty_pops = 0;
+        state.current_interval_ms = base_poll_interval_ms_;
+    } else {
+        // Increase backoff on empty
+        state.consecutive_empty_pops++;
+        if (state.consecutive_empty_pops >= backoff_threshold) {
+            int old_interval = state.current_interval_ms;
+            state.current_interval_ms = std::min(
+                static_cast<int>(state.current_interval_ms * backoff_multiplier),
+                max_poll_interval
+            );
+            
+            if (state.current_interval_ms > old_interval) {
+                spdlog::debug("Backoff increased for group '{}': {}ms -> {}ms (empty count: {})",
+                            group_key, old_interval, state.current_interval_ms,
+                            state.consecutive_empty_pops);
+            }
+        }
+    }
+}
+
+void PollIntentionRegistry::reset_backoff_for_group(const std::string& group_key) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    auto it = backoff_states_.find(group_key);
+    if (it != backoff_states_.end()) {
+        int old_interval = it->second.current_interval_ms;
+        it->second.consecutive_empty_pops = 0;
+        it->second.current_interval_ms = base_poll_interval_ms_;
+        it->second.last_accessed = std::chrono::steady_clock::now();
+        
+        if (old_interval > base_poll_interval_ms_) {
+            spdlog::info("Poll worker notified: Reset backoff for '{}' ({}ms -> {}ms)", 
+                         group_key, old_interval, base_poll_interval_ms_);
+        }
+    }
+}
+
+void PollIntentionRegistry::reset_backoff_for_queue_partition(const std::string& queue_name,
+                                                               const std::string& partition_name) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    
+    // Build prefixes to match
+    std::string exact_prefix = queue_name + ":" + partition_name + ":";
+    std::string wildcard_prefix = queue_name + ":*:";
+    
+    int reset_count = 0;
+    for (auto& [key, state] : backoff_states_) {
+        // Match exact partition or wildcard partition patterns
+        if (key.rfind(exact_prefix, 0) == 0 || key.rfind(wildcard_prefix, 0) == 0) {
+            if (state.current_interval_ms > base_poll_interval_ms_) {
+                state.consecutive_empty_pops = 0;
+                state.current_interval_ms = base_poll_interval_ms_;
+                state.last_accessed = std::chrono::steady_clock::now();
+                reset_count++;
+            }
+        }
+    }
+    
+    if (reset_count > 0) {
+        spdlog::info("Poll worker notified: Reset backoff for {} group(s) matching {}:{}", 
+                     reset_count, queue_name, partition_name);
+    }
+}
+
+void PollIntentionRegistry::cleanup_backoff_states(int max_age_seconds) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    auto now = std::chrono::steady_clock::now();
+    
+    size_t initial_size = backoff_states_.size();
+    
+    for (auto it = backoff_states_.begin(); it != backoff_states_.end();) {
+        auto age = std::chrono::duration_cast<std::chrono::seconds>(
+            now - it->second.last_accessed).count();
+        if (age > max_age_seconds) {
+            it = backoff_states_.erase(it);
+        } else {
+            ++it;
+        }
+    }
+    
+    size_t cleaned = initial_size - backoff_states_.size();
+    if (cleaned > 0) {
+        spdlog::debug("Cleaned {} stale backoff states (remaining: {})", 
+                     cleaned, backoff_states_.size());
+    }
+}
+
+std::vector<std::string> PollIntentionRegistry::get_active_group_keys() const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    std::vector<std::string> keys;
+    keys.reserve(backoff_states_.size());
+    for (const auto& [key, _] : backoff_states_) {
+        keys.push_back(key);
+    }
+    return keys;
+}
+
+
 // Helper function implementations
 
 std::map<std::string, std::vector<PollIntention>> 

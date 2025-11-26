@@ -37,10 +37,10 @@ COPY ./ /usr/build/
 WORKDIR /usr/build/server
 
 # Download dependencies FIRST (so wildcards can find the files)
-RUN make deps
+RUN make deps -j 8
 
 # Now build (wildcards will work because vendor/uSockets exists)
-RUN make build-only
+RUN make build-only -j 8
 
 # Verify
 RUN test -f bin/queen-server && echo "✅ Build successful"

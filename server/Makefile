@@ -70,6 +70,7 @@ TARGET = $(BIN_DIR)/queen-server
 UWS_URL = https://github.com/uNetworking/uWebSockets/archive/refs/heads/master.zip
 USOCKETS_URL = https://github.com/uNetworking/uSockets/archive/refs/heads/master.zip
 NLOHMANN_JSON_URL = https://github.com/nlohmann/json/releases/download/v3.11.3/json.hpp
+CPPHTTPLIB_URL = https://raw.githubusercontent.com/yhirose/cpp-httplib/master/httplib.h
 SPDLOG_URL = https://github.com/gabime/spdlog/archive/refs/heads/v1.x.zip
 
 .PHONY: all clean deps setup test build-only debug-objects
@@ -92,6 +93,9 @@ $(VENDOR_DIR)/.deps_ready: setup
 	
 	# Download nlohmann/json (single header)
 	@curl -L $(NLOHMANN_JSON_URL) -o $(VENDOR_DIR)/json.hpp
+	
+	# Download cpp-httplib (single header for HTTP client)
+	@curl -L $(CPPHTTPLIB_URL) -o $(VENDOR_DIR)/httplib.h
 	
 	# Download uWebSockets
 	@cd $(VENDOR_DIR) && \

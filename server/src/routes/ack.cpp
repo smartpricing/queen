@@ -2,6 +2,8 @@
 #include "queen/routes/route_context.hpp"
 #include "queen/routes/route_helpers.hpp"
 #include "queen/async_queue_manager.hpp"
+#include "queen/inter_instance_comms.hpp"
+#include "queen/poll_intention_registry.hpp"
 #include <spdlog/spdlog.h>
 #include <chrono>
 
@@ -59,6 +61,11 @@ void setup_ack_routes(uWS::App* app, const RouteContext& ctx) {
                         spdlog::info("[Worker {}] ACK BATCH: {} items, {}ms (success: {}, failed: {})", 
                                     ctx.worker_id, batch_result.results.size(), ack_duration_ms,
                                     batch_result.successful_acks, batch_result.failed_acks);
+                        
+                        // Note: Peer notification for batch ACK would require additional tracking of
+                        // queue/partition per item. Currently, peer notification only happens
+                        // for single ACKs. Batch ACKs still benefit from peer notifications
+                        // triggered by single ACKs from other consumers.
                         
                         nlohmann::json response = {
                             {"successful", batch_result.successful_acks},
@@ -151,6 +158,37 @@ void setup_ack_routes(uWS::App* app, const RouteContext& ctx) {
                         spdlog::debug("[Worker {}] ACK: 1 item, {}ms", ctx.worker_id, ack_duration_ms);
                         
                         if (ack_result.success) {
+                            // Notify local poll registry + peers that partition is free
+                            if (ack_result.queue_name.has_value() &&
+                                ack_result.partition_name.has_value()) {
+                                
+                                // Notify LOCAL poll registry (this server's own poll workers)
+                                if (queen::global_poll_intention_registry) {
+                                    std::string group_key = *ack_result.queue_name + ":" +
+                                                           *ack_result.partition_name + ":" +
+                                                           consumer_group;
+                                    queen::global_poll_intention_registry->reset_backoff_for_group(group_key);
+                                    
+                                    // Also reset wildcard partition
+                                    std::string wildcard_key = *ack_result.queue_name + ":*:" + consumer_group;
+                                    queen::global_poll_intention_registry->reset_backoff_for_group(wildcard_key);
+                                    
+                                    spdlog::info("[Worker {}] ACK: Notify local poll workers for {}:{}:{}", 
+                                                ctx.worker_id, *ack_result.queue_name, *ack_result.partition_name, consumer_group);
+                                }
+                                
+                                // Notify PEER servers via WebSocket
+                                if (global_inter_instance_comms && global_inter_instance_comms->is_enabled()) {
+                                    global_inter_instance_comms->notify_partition_free(
+                                        *ack_result.queue_name,
+                                        *ack_result.partition_name,
+                                        consumer_group
+                                    );
+                                    spdlog::info("[Worker {}] ACK: Notify peers for {}:{}:{}", 
+                                                ctx.worker_id, *ack_result.queue_name, *ack_result.partition_name, consumer_group);
+                                }
+                            }
+                            
                             auto now = std::chrono::system_clock::now();
                             std::string ack_timestamp = format_timestamp_iso8601(now);
                             

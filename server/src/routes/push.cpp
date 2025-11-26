@@ -4,8 +4,11 @@
 #include "queen/async_queue_manager.hpp"
 #include "queen/queue_types.hpp"
 #include "queen/file_buffer.hpp"
+#include "queen/inter_instance_comms.hpp"
+#include "queen/poll_intention_registry.hpp"
 #include <spdlog/spdlog.h>
 #include <chrono>
+#include <set>
 
 namespace queen {
 namespace routes {
@@ -74,6 +77,40 @@ void setup_push_routes(uWS::App* app, const RouteContext& ctx) {
                     
                     spdlog::info("[Worker {}] PUSH: Async push_messages completed in {}ms ({} items)", 
                                 ctx.worker_id, push_ms, items.size());
+                    
+                    // Notify local poll registry + peers of new messages
+                    {
+                        std::set<std::pair<std::string, std::string>> notified;
+                        for (size_t i = 0; i < results.size(); i++) {
+                            // Status is "queued" for successful push, or "buffered" for file buffer
+                            if ((results[i].status == "queued" || results[i].status == "buffered") && i < items.size()) {
+                                auto key = std::make_pair(items[i].queue, items[i].partition);
+                                if (notified.find(key) == notified.end()) {
+                                    // Notify LOCAL poll registry (this server's own poll workers)
+                                    if (queen::global_poll_intention_registry) {
+                                        queen::global_poll_intention_registry->reset_backoff_for_queue_partition(
+                                            items[i].queue,
+                                            items[i].partition
+                                        );
+                                        spdlog::info("[Worker {}] PUSH: Notify local poll workers for {}:{}", 
+                                                    ctx.worker_id, items[i].queue, items[i].partition);
+                                    }
+                                    
+                                    // Notify PEER servers via WebSocket
+                                    if (global_inter_instance_comms && global_inter_instance_comms->is_enabled()) {
+                                        global_inter_instance_comms->notify_message_available(
+                                            items[i].queue,
+                                            items[i].partition
+                                        );
+                                        spdlog::info("[Worker {}] PUSH: Notify peers for {}:{}", 
+                                                    ctx.worker_id, items[i].queue, items[i].partition);
+                                    }
+                                    
+                                    notified.insert(key);
+                                }
+                            }
+                        }
+                    }
                     
                     // Convert results to JSON and respond immediately
                     nlohmann::json json_results = nlohmann::json::array();

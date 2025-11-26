@@ -187,6 +187,9 @@ public:
         bool success;
         std::string message;
         std::optional<std::string> error;
+        // For peer notification support - populated on successful ack
+        std::optional<std::string> queue_name;
+        std::optional<std::string> partition_name;
     };
     
     AckResult acknowledge_message(

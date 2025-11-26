@@ -1,6 +1,7 @@
 #pragma once
 
 #include <string>
+#include <vector>
 #include <cstdlib>
 #include <cstring>
 
@@ -521,6 +522,51 @@ struct FileBufferConfig {
     }
 };
 
+struct InterInstanceConfig {
+    std::string peers = "";
+    int batch_ms = 10;  // Batch notifications for this many ms before sending
+    
+    static InterInstanceConfig from_env() {
+        InterInstanceConfig config;
+        config.peers = get_env_string("QUEEN_PEERS", "");
+        config.batch_ms = get_env_int("PEER_NOTIFY_BATCH_MS", 10);
+        return config;
+    }
+    
+    // Returns true if peer notification is enabled (peers are configured)
+    bool has_peers() const {
+        return !peers.empty();
+    }
+    
+    // Parse comma-separated peer URLs into vector
+    std::vector<std::string> parse_peer_urls() const {
+        std::vector<std::string> urls;
+        if (peers.empty()) return urls;
+        
+        std::string remaining = peers;
+        size_t pos = 0;
+        while ((pos = remaining.find(',')) != std::string::npos) {
+            std::string url = remaining.substr(0, pos);
+            // Trim whitespace
+            size_t start = url.find_first_not_of(" \t");
+            size_t end = url.find_last_not_of(" \t");
+            if (start != std::string::npos && end != std::string::npos) {
+                urls.push_back(url.substr(start, end - start + 1));
+            }
+            remaining = remaining.substr(pos + 1);
+        }
+        // Handle last element
+        if (!remaining.empty()) {
+            size_t start = remaining.find_first_not_of(" \t");
+            size_t end = remaining.find_last_not_of(" \t");
+            if (start != std::string::npos && end != std::string::npos) {
+                urls.push_back(remaining.substr(start, end - start + 1));
+            }
+        }
+        return urls;
+    }
+};
+
 struct Config {
     ServerConfig server;
     DatabaseConfig database;
@@ -535,6 +581,7 @@ struct Config {
     MonitoringConfig monitoring;
     LoggingConfig logging;
     FileBufferConfig file_buffer;
+    InterInstanceConfig inter_instance;
     
     static Config load() {
         Config config;
@@ -551,6 +598,7 @@ struct Config {
         config.monitoring = MonitoringConfig::from_env();
         config.logging = LoggingConfig::from_env();
         config.file_buffer = FileBufferConfig::from_env();
+        config.inter_instance = InterInstanceConfig::from_env();
         return config;
     }
 };

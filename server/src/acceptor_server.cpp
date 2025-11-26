@@ -13,6 +13,7 @@
 #include "queen/stream_poll_worker.hpp"
 #include "queen/stream_poll_intention_registry.hpp"
 #include "queen/stream_manager.hpp"
+#include "queen/inter_instance_comms.hpp"
 #include "threadpool.hpp"
 #include "queen/routes/route_registry.hpp"
 #include "queen/routes/route_context.hpp"
@@ -172,6 +173,9 @@ static void setup_worker_routes(uWS::App* app,
     spdlog::debug("[Worker {}] Setting up consumer group routes...", worker_id);
     queen::routes::setup_consumer_group_routes(app, ctx);
     
+    spdlog::debug("[Worker {}] Setting up internal routes (peer notification)...", worker_id);
+    queen::routes::setup_internal_routes(app, ctx);
+    
     spdlog::debug("[Worker {}] Setting up static file routes...", worker_id);
     queen::routes::setup_static_file_routes(app, ctx);
 }
@@ -318,6 +322,9 @@ static void worker_thread(const Config& config, int worker_id, int num_workers,
             // Create global poll intention registry (shared by all workers)
             queen::global_poll_intention_registry = std::make_shared<queen::PollIntentionRegistry>();
             
+            // Set base poll interval for backoff tracking (for peer notification support)
+            queen::global_poll_intention_registry->set_base_poll_interval(config.queue.poll_db_interval);
+            
             // Create global stream poll registry (shared by all workers)
             queen::global_stream_poll_registry = std::make_shared<queen::StreamPollIntentionRegistry>();
             
@@ -333,6 +340,27 @@ static void worker_thread(const Config& config, int worker_id, int num_workers,
             // Get system info for metrics
             global_system_info = SystemInfo::get_current();
             global_system_info.port = config.server.port;
+            
+            // Initialize Inter-Instance Communication (peer notification)
+            // Always create the instance - it will only broadcast if peers are configured
+            queen::global_inter_instance_comms = std::make_shared<queen::InterInstanceComms>(
+                config.inter_instance,
+                queen::global_poll_intention_registry,
+                config.server.host,
+                config.server.port,
+                global_system_info.hostname  // For K8s self-detection
+            );
+            
+            if (config.inter_instance.has_peers()) {
+                spdlog::info("Inter-Instance Peer Notifications:");
+                spdlog::info("  - Peers: {}", config.inter_instance.peers);
+                spdlog::info("  - Batch interval: {}ms", config.inter_instance.batch_ms);
+                queen::global_inter_instance_comms->start();
+                spdlog::info("Peer notifications started with {} peer(s)", 
+                            config.inter_instance.parse_peer_urls().size());
+            } else {
+                spdlog::info("Peer notifications: Disabled (single server mode, set QUEEN_PEERS to enable)");
+            }
             
             spdlog::info("System info: hostname={}, port={}", 
                          global_system_info.hostname, 

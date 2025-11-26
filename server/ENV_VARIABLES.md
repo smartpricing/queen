@@ -311,6 +311,54 @@ export DEFAULT_SUBSCRIPTION_MODE="new"
 | `WS_MAX_CONNECTIONS` | int | 1000 | Maximum concurrent connections |
 | `WS_HEARTBEAT_INTERVAL` | int | 30000 | Heartbeat interval (ms) |
 
+## Inter-Instance Communication (Peer Notifications)
+
+Queen provides real-time notifications for faster poll worker response times:
+
+1. **Local notifications** (always active): When a message is pushed or acknowledged, the server's own poll workers are immediately notified to reset their backoff timers.
+
+2. **Peer notifications** (when `QUEEN_PEERS` is set): In clustered deployments, servers notify each other via WebSocket so poll workers on all instances respond immediately.
+
+| Variable | Type | Default | Description |
+|----------|------|---------|-------------|
+| `QUEEN_PEERS` | string | "" | Comma-separated peer URLs (e.g., `http://queen2:6632,http://queen3:6632`). When set, enables HTTP peer notifications. |
+| `PEER_NOTIFY_BATCH_MS` | int | 10 | Batch notifications for N ms before sending (0 = immediate) |
+
+**How it works:**
+
+Queen servers notify (locally and via HTTP POST to peers) when:
+- A new message is pushed (MESSAGE_AVAILABLE notification)
+- A message is acknowledged (PARTITION_FREE notification)
+
+This allows poll workers to immediately reset their backoff timers and query the database, instead of waiting for their exponential backoff interval (up to 2000ms).
+
+**Single server (default):**
+```bash
+# Local poll worker notification is automatic - no config needed
+./bin/queen-server
+```
+
+**Cluster setup:**
+```bash
+# Server A - just define peers
+export QUEEN_PEERS="http://queen-b:6632,http://queen-c:6632"
+./bin/queen-server
+
+# Server B
+export QUEEN_PEERS="http://queen-a:6632,http://queen-c:6632"
+./bin/queen-server
+
+# Server C
+export QUEEN_PEERS="http://queen-a:6632,http://queen-b:6632"
+./bin/queen-server
+```
+
+**Endpoints:**
+- `WS /internal/ws/peer` - WebSocket endpoint for peer connections
+- `POST /internal/api/notify` - HTTP fallback for notifications
+- `GET /internal/api/inter-instance/stats` - Peer notification statistics
+- Stats also included in `/health` response
+
 ## Encryption Configuration
 
 | Variable | Type | Default | Description |

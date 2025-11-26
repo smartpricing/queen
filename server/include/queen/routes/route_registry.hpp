@@ -162,6 +162,15 @@ void setup_consumer_group_routes(uWS::App* app, const RouteContext& ctx);
  */
 void setup_static_file_routes(uWS::App* app, const RouteContext& ctx);
 
+/**
+ * Setup internal endpoints for inter-instance communication
+ * Routes:
+ *   WS /internal/ws/peer - WebSocket for peer notifications
+ *   POST /internal/api/notify - HTTP fallback for notifications
+ *   GET /internal/api/inter-instance/stats - Peer notification statistics
+ */
+void setup_internal_routes(uWS::App* app, const RouteContext& ctx);
+
 } // namespace routes
 } // namespace queen
 
