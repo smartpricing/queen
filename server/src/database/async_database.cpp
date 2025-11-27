@@ -266,8 +266,16 @@ void getCommandResult(PGconn* conn) {
         throw std::runtime_error("Server returned no result.");
     }
     if (PQresultStatus(res.get()) != PGRES_COMMAND_OK) {
-        throw std::runtime_error("Query command failed: " + 
-                                 std::string(PQresultErrorMessage(res.get())));
+        std::string errMsg = PQresultErrorMessage(res.get());
+        
+        // IMPORTANT: Drain any remaining results before throwing to avoid
+        // "another command is already in progress" errors on subsequent queries
+        PGresult* drain;
+        while ((drain = PQgetResult(conn)) != nullptr) {
+            PQclear(drain);
+        }
+        
+        throw std::runtime_error("Query command failed: " + errMsg);
     }
     
     // Verify no extra results
@@ -287,6 +295,14 @@ PGResultPtr getCommandResultPtr(PGconn* conn) {
     if (PQresultStatus(result) != PGRES_COMMAND_OK) {
         std::string errMsg = PQresultErrorMessage(result);
         PQclear(result);
+        
+        // IMPORTANT: Drain any remaining results before throwing to avoid
+        // "another command is already in progress" errors on subsequent queries
+        PGresult* drain;
+        while ((drain = PQgetResult(conn)) != nullptr) {
+            PQclear(drain);
+        }
+        
         throw std::runtime_error("Query command failed: " + errMsg);
     }
     
@@ -311,6 +327,14 @@ PGResultPtr getTuplesResult(PGconn* conn) {
     if (PQresultStatus(result) != PGRES_TUPLES_OK) {
         std::string errMsg = PQresultErrorMessage(result);
         PQclear(result);
+        
+        // IMPORTANT: Drain any remaining results before throwing to avoid
+        // "another command is already in progress" errors on subsequent queries
+        PGresult* drain;
+        while ((drain = PQgetResult(conn)) != nullptr) {
+            PQclear(drain);
+        }
+        
         throw std::runtime_error("SELECT query failed: " + errMsg);
     }
     

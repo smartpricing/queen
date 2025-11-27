@@ -422,10 +422,31 @@ void FileBufferManager::background_processor() {
         retry_counter++;
         
         try {
-            // CHECK: If drain is paused (maintenance mode), skip processing
-            if (drain_paused_.load()) {
-                spdlog::debug("Background processor: Drain paused (maintenance mode active), skipping cycle");
-                continue;  // Only finalize files, don't drain
+            // CHECK: Maintenance mode - check DB as source of truth for multi-server sync
+            bool db_maintenance = false;
+            bool db_check_succeeded = false;
+            try {
+                if (queue_manager_) {
+                    db_maintenance = queue_manager_->get_maintenance_mode_fresh();
+                    db_check_succeeded = true;
+                }
+            } catch (const std::exception& e) {
+                // DB check failed - DON'T skip processing!
+                // The drain itself will fail if DB is actually down, which is fine.
+                // We must NOT fall back to local flag because it might be stale.
+                spdlog::warn("Background processor: DB maintenance check failed ({}), proceeding with drain", e.what());
+                db_maintenance = false;  // Assume maintenance is OFF, let drain try
+            }
+            
+            if (db_maintenance) {
+                spdlog::debug("Background processor: Maintenance mode active, skipping cycle");
+                continue;
+            }
+            
+            // Sync local flag with DB state (handles cross-server disable)
+            if (db_check_succeeded && drain_paused_.load()) {
+                drain_paused_.store(false);
+                spdlog::info("Background processor: Maintenance disabled (synced from DB)");
             }
             
             // Circuit breaker: If too many consecutive failures, cool down

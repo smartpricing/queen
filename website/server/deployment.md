@@ -500,6 +500,175 @@ const queen = new Queen({
 7. ✅ **Monitor health status** in your application logs
 8. ✅ **Resolve DNS at startup** and periodically refresh (optional)
 
+---
+
+## Distributed Cache (UDPSYNC)
+
+When running multiple Queen servers, enable the distributed cache to share state between instances via UDP. This significantly reduces database queries and enables targeted notifications.
+
+### Benefits
+
+- **80-90% fewer DB queries** - Cache partition IDs, queue configs, and lease hints
+- **Instant notifications** - Only notify servers with active consumers
+- **Faster failover** - Heartbeat-based dead server detection
+
+### How It Works
+
+```
+┌─────────────┐
+│    Load     │
+│  Balancer   │
+└──────┬──────┘
+       │
+   ┌───┼────┬────────┐
+   ↓   ↓    ↓        ↓
+Server1 Server2 Server3 ... ServerN
+   │   │    │        │
+   └───┴────┴────────┘
+     ↕ UDP Sync (UDPSYNC)
+          ↓
+    PostgreSQL
+```
+
+Servers communicate via UDP to sync:
+- **Queue configurations** (lease time, encryption settings, etc.)
+- **Consumer presence** (which servers have active consumers)
+- **Partition ID cache** (partition name → UUID mappings)
+- **Lease hints** (which server likely holds a lease)
+- **Health status** (heartbeats every 1 second)
+
+### Configuration
+
+Enable by setting `QUEEN_UDP_PEERS` with the list of peer hostnames and UDP ports:
+
+```bash
+# Server 1
+export QUEEN_UDP_PEERS="queen-2:6634,queen-3:6634"
+export QUEEN_UDP_NOTIFY_PORT=6634
+./bin/queen-server
+
+# Server 2
+export QUEEN_UDP_PEERS="queen-1:6634,queen-3:6634"
+export QUEEN_UDP_NOTIFY_PORT=6634
+./bin/queen-server
+
+# Server 3
+export QUEEN_UDP_PEERS="queen-1:6634,queen-2:6634"
+export QUEEN_UDP_NOTIFY_PORT=6634
+./bin/queen-server
+```
+
+> **Note:** Self-detection is automatic. Each server excludes itself from the peer list based on hostname matching.
+
+### Kubernetes Configuration
+
+For Kubernetes StatefulSet deployments, add the UDP port and peer configuration:
+
+```yaml
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: queen-mq
+spec:
+  serviceName: queen-mq-headless
+  replicas: 3
+  template:
+    spec:
+      containers:
+        - name: queen-mq
+          image: smartnessai/queen-mq:latest
+          ports:
+            - containerPort: 6632  # HTTP API
+              name: http
+            - containerPort: 6634  # UDP sync
+              name: udp
+              protocol: UDP
+          env:
+            # Database
+            - name: PG_HOST
+              value: "postgres.default.svc.cluster.local"
+            
+            # UDP Peers (list all replicas)
+            - name: QUEEN_UDP_PEERS
+              value: "queen-mq-0.queen-mq-headless:6634,queen-mq-1.queen-mq-headless:6634,queen-mq-2.queen-mq-headless:6634"
+            - name: QUEEN_UDP_NOTIFY_PORT
+              value: "6634"
+            
+            # Security (recommended for production)
+            - name: QUEEN_SYNC_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: queen-secrets
+                  key: sync-secret
+```
+
+### Security
+
+For production, sign UDP packets with HMAC-SHA256:
+
+```bash
+# Generate a 64-character hex secret
+export QUEEN_SYNC_SECRET=$(openssl rand -hex 32)
+```
+
+Without a secret, packets are unsigned (acceptable for development only).
+
+### Environment Variables
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `QUEEN_UDP_PEERS` | "" | Comma-separated peer hostnames with ports |
+| `QUEEN_UDP_NOTIFY_PORT` | 6633 | UDP port for peer communication |
+| `QUEEN_SYNC_ENABLED` | true | Enable/disable distributed cache |
+| `QUEEN_SYNC_SECRET` | "" | HMAC-SHA256 secret for packet signing |
+| `QUEEN_CACHE_PARTITION_MAX` | 10000 | Max partition IDs to cache |
+| `QUEEN_CACHE_PARTITION_TTL_MS` | 300000 | Partition cache TTL (5 minutes) |
+| `QUEEN_SYNC_HEARTBEAT_MS` | 1000 | Heartbeat interval |
+| `QUEEN_SYNC_DEAD_THRESHOLD_MS` | 5000 | Server dead threshold |
+
+### Monitoring
+
+View cache statistics in the dashboard or via API:
+
+```bash
+curl http://localhost:6632/api/v1/system/shared-state
+```
+
+Response includes:
+- Cache hit rates for each tier
+- Peer connectivity status
+- Server health information
+
+### Correctness Guarantee
+
+The distributed cache is **always advisory**. Even with stale or missing cache data:
+- ✅ Messages are never lost
+- ✅ Duplicate deliveries never occur
+- ✅ Leases are always correct (PostgreSQL is authoritative)
+- ✅ Only impact is slightly increased DB queries
+
+### Local Development (Multiple Servers)
+
+When running multiple servers on the same machine, use different buffer directories:
+
+```bash
+# Terminal 1
+export QUEEN_UDP_PEERS="127.0.0.1:6635"
+export QUEEN_UDP_NOTIFY_PORT=6634
+export FILE_BUFFER_DIR=/tmp/queen-s1
+./bin/queen-server --port 6632 --internal-port 6634
+
+# Terminal 2
+export QUEEN_UDP_PEERS="127.0.0.1:6634"
+export QUEEN_UDP_NOTIFY_PORT=6635
+export FILE_BUFFER_DIR=/tmp/queen-s2
+./bin/queen-server --port 6633 --internal-port 6635
+```
+
+> **Important:** Each server must have its own `FILE_BUFFER_DIR` to prevent file conflicts.
+
+---
+
 ## See Also
 
 - [Server Installation](/server/installation) - Build and install Queen

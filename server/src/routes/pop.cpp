@@ -5,6 +5,7 @@
 #include "queen/poll_intention_registry.hpp"
 #include "queen/response_queue.hpp"
 #include "queen/queue_types.hpp"
+#include "queen/shared_state_manager.hpp"
 #include <spdlog/spdlog.h>
 #include <chrono>
 
@@ -12,6 +13,7 @@
 namespace queen {
 extern std::shared_ptr<ResponseRegistry> global_response_registry;
 extern std::shared_ptr<PollIntentionRegistry> global_poll_intention_registry;
+extern std::shared_ptr<SharedStateManager> global_shared_state;
 }
 
 namespace queen {
@@ -129,6 +131,11 @@ void setup_pop_routes(uWS::App* app, const RouteContext& ctx) {
                 
                 global_poll_intention_registry->register_intention(intention);
                 
+                // Register consumer presence for targeted notifications
+                if (global_shared_state && global_shared_state->is_enabled()) {
+                    global_shared_state->register_consumer(queue_name);
+                }
+                
                 spdlog::info("[Worker {}] SPOP: Registered poll intention {} for queue {}/{} (wait=true)", 
                             ctx.worker_id, request_id, queue_name, partition_name);
                 
@@ -237,6 +244,11 @@ void setup_pop_routes(uWS::App* app, const RouteContext& ctx) {
                 };
                 
                 global_poll_intention_registry->register_intention(intention);
+                
+                // Register consumer presence for targeted notifications
+                if (global_shared_state && global_shared_state->is_enabled()) {
+                    global_shared_state->register_consumer(queue_name);
+                }
                 
                 spdlog::info("[Worker {}] QPOP: Registered poll intention {} for queue {} (wait=true)", 
                             ctx.worker_id, request_id, queue_name);

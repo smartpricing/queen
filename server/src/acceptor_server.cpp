@@ -14,6 +14,7 @@
 #include "queen/stream_poll_intention_registry.hpp"
 #include "queen/stream_manager.hpp"
 #include "queen/inter_instance_comms.hpp"
+#include "queen/shared_state_manager.hpp"
 #include "threadpool.hpp"
 #include "queen/routes/route_registry.hpp"
 #include "queen/routes/route_context.hpp"
@@ -341,6 +342,31 @@ static void worker_thread(const Config& config, int worker_id, int num_workers,
             global_system_info = SystemInfo::get_current();
             global_system_info.port = config.server.port;
             
+            // Initialize Shared State Manager (distributed cache for multi-instance)
+            // Use hostname:udp_port as unique server_id (important for local testing)
+            std::string server_id = global_system_info.hostname + ":" + 
+                                    std::to_string(config.inter_instance.udp_port);
+            queen::global_shared_state = std::make_shared<queen::SharedStateManager>(
+                config.inter_instance,
+                server_id,
+                global_async_db_pool
+            );
+            
+            if (config.inter_instance.has_udp_peers() && config.inter_instance.shared_state.enabled) {
+                spdlog::info("Shared State Manager (UDPSYNC):");
+                spdlog::info("  - UDP Peers: {}", config.inter_instance.udp_peers);
+                spdlog::info("  - UDP Port: {}", config.inter_instance.udp_port);
+                spdlog::info("  - Partition cache: {} max entries, {}ms TTL",
+                            config.inter_instance.shared_state.partition_cache_max,
+                            config.inter_instance.shared_state.partition_cache_ttl_ms);
+                spdlog::info("  - Heartbeat: {}ms interval, {}ms dead threshold",
+                            config.inter_instance.shared_state.heartbeat_interval_ms,
+                            config.inter_instance.shared_state.dead_threshold_ms);
+                queen::global_shared_state->start();
+            } else {
+                spdlog::info("Shared State Manager: Disabled (no UDP peers or sync disabled)");
+            }
+            
             // Initialize Inter-Instance Communication (peer notification)
             // Always create the instance - it will only broadcast if peers are configured
             queen::global_inter_instance_comms = std::make_shared<queen::InterInstanceComms>(
@@ -365,6 +391,12 @@ static void worker_thread(const Config& config, int worker_id, int num_workers,
                 spdlog::info("Peer notifications started: {} HTTP peer(s), {} UDP peer(s)", 
                             queen::global_inter_instance_comms->http_peer_count(),
                             queen::global_inter_instance_comms->udp_peer_count());
+                
+                // Connect InterInstanceComms to SharedStateManager for targeted notifications
+                if (queen::global_shared_state && queen::global_shared_state->is_running()) {
+                    queen::global_inter_instance_comms->set_shared_state(queen::global_shared_state);
+                    spdlog::info("Inter-Instance Comms connected to SharedStateManager for targeted notifications");
+                }
             } else {
                 spdlog::info("Peer notifications: Disabled (single server mode)");
                 spdlog::info("  - Set QUEEN_PEERS for HTTP notifications");

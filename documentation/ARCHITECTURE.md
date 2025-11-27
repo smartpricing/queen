@@ -554,8 +554,9 @@ Deploy multiple server instances behind a load balancer:
    ┌───┼────┬────────┐
    ↓   ↓    ↓        ↓
 Server1 Server2 Server3 ... ServerN
-   ↓   ↓    ↓        ↓
+   │   │    │        │
    └───┴────┴────────┘
+     ↕ UDP Sync (UDPSYNC)
           ↓
     PostgreSQL
 ```
@@ -565,10 +566,172 @@ Server1 Server2 Server3 ... ServerN
 - ✅ Shared PostgreSQL (no data sharding needed)
 - ✅ Session-less design (any server handles any request)
 - ✅ Built-in failover (server dies, others continue)
+- ✅ Distributed cache reduces database load
+- ✅ Real-time peer notifications for instant message delivery
 
 **Considerations:**
 - FIFO ordering guaranteed per partition per server
 - For strict global ordering, use single server or partition coordination
+
+### Configuring Multi-Server Setup
+
+Queen servers can communicate via UDP for:
+1. **Peer Notifications** - Instant notification when messages are available
+2. **Distributed Cache (UDPSYNC)** - Share state between servers to reduce DB queries
+
+#### Basic Multi-Server Configuration
+
+```bash
+# Server 1 (port 6632, UDP port 6634)
+export QUEEN_UDP_PEERS="server2.local:6635,server3.local:6636"
+export QUEEN_UDP_NOTIFY_PORT=6634
+./bin/queen-server --port 6632 --internal-port 6634
+
+# Server 2 (port 6633, UDP port 6635)
+export QUEEN_UDP_PEERS="server1.local:6634,server3.local:6636"
+export QUEEN_UDP_NOTIFY_PORT=6635
+./bin/queen-server --port 6633 --internal-port 6635
+
+# Server 3 (port 6634, UDP port 6636)
+export QUEEN_UDP_PEERS="server1.local:6634,server2.local:6635"
+export QUEEN_UDP_NOTIFY_PORT=6636
+./bin/queen-server --port 6634 --internal-port 6636
+```
+
+#### Local Development (Multiple Servers on Same Machine)
+
+When running multiple servers on the same machine, use different buffer directories:
+
+```bash
+# Terminal 1 - Server 1
+export QUEEN_UDP_PEERS="127.0.0.1:6635"
+export QUEEN_UDP_NOTIFY_PORT=6634
+export FILE_BUFFER_DIR=/tmp/queen-s1
+./bin/queen-server --port 6632 --internal-port 6634
+
+# Terminal 2 - Server 2
+export QUEEN_UDP_PEERS="127.0.0.1:6634"
+export QUEEN_UDP_NOTIFY_PORT=6635
+export FILE_BUFFER_DIR=/tmp/queen-s2
+./bin/queen-server --port 6633 --internal-port 6635
+```
+
+> **Important:** Each server must have its own `FILE_BUFFER_DIR` to prevent file conflicts during maintenance mode operations.
+
+#### Kubernetes StatefulSet Configuration
+
+For Kubernetes deployments, use StatefulSet with headless service for stable DNS names:
+
+```yaml
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: queen-mq
+spec:
+  serviceName: queen-mq-headless
+  replicas: 3
+  template:
+    spec:
+      containers:
+      - name: queen
+        image: smartnessai/queen-mq:latest
+        ports:
+        - containerPort: 6632  # HTTP API
+          name: http
+        - containerPort: 6634  # UDP sync
+          name: udp
+          protocol: UDP
+        env:
+        # Database
+        - name: PG_HOST
+          value: "postgres.default.svc.cluster.local"
+        
+        # UDP Peers (all replicas)
+        - name: QUEEN_UDP_PEERS
+          value: "queen-mq-0.queen-mq-headless:6634,queen-mq-1.queen-mq-headless:6634,queen-mq-2.queen-mq-headless:6634"
+        - name: QUEEN_UDP_NOTIFY_PORT
+          value: "6634"
+        
+        # Distributed Cache Security (recommended for production)
+        - name: QUEEN_SYNC_SECRET
+          valueFrom:
+            secretKeyRef:
+              name: queen-secrets
+              key: sync-secret
+        
+        # Cache tuning (optional)
+        - name: QUEEN_CACHE_PARTITION_MAX
+          value: "50000"
+        - name: QUEEN_SYNC_HEARTBEAT_MS
+          value: "1000"
+        - name: QUEEN_SYNC_DEAD_THRESHOLD_MS
+          value: "5000"
+```
+
+> **Note:** Self-detection is automatic. Each server excludes itself from the peer list based on hostname matching.
+
+### Distributed Cache (UDPSYNC)
+
+When `QUEEN_UDP_PEERS` is configured, Queen automatically enables a distributed cache layer that:
+
+1. **Reduces DB Queries** - Caches partition IDs, queue configs, and lease hints
+2. **Enables Targeted Notifications** - Only notifies servers with active consumers
+3. **Tracks Server Health** - Detects dead servers for faster failover
+
+#### Cache Tiers
+
+| Tier | Data | Sync Method | TTL |
+|------|------|-------------|-----|
+| Queue Configs | lease_time, encryption, etc. | Full sync every 60s | Indefinite |
+| Consumer Presence | Which servers have consumers | Broadcast on register/deregister | Until deregistration |
+| Partition IDs | partition name → UUID | Local LRU cache | 5 minutes |
+| Lease Hints | Which server holds lease | Broadcast on acquire/release | Until release |
+| Server Health | Heartbeat status | UDP heartbeats (1s) | 5s dead threshold |
+
+#### Cache Statistics
+
+Monitor cache performance via the dashboard or API:
+
+```bash
+curl http://localhost:6632/api/v1/system/shared-state
+```
+
+Response includes hit rates, cache sizes, and peer connectivity.
+
+#### Security
+
+For production, set a sync secret to sign UDP packets:
+
+```bash
+# Generate a secure 64-character hex secret
+export QUEEN_SYNC_SECRET=$(openssl rand -hex 32)
+```
+
+Without a secret, packets are unsigned (acceptable for development only).
+
+#### Correctness Guarantees
+
+The distributed cache is **always advisory**:
+- ✅ Messages are never lost (DB is authoritative)
+- ✅ Duplicate deliveries never occur (lease system protects)
+- ✅ Stale cache only causes extra DB queries (self-healing)
+- ✅ Cache failures don't affect correctness
+
+### Environment Variables Reference
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `QUEEN_UDP_PEERS` | "" | Comma-separated peer hostnames with ports (e.g., `host1:6634,host2:6635`) |
+| `QUEEN_UDP_NOTIFY_PORT` | 6633 | UDP port for peer communication |
+| `QUEEN_SYNC_ENABLED` | true | Enable/disable distributed cache (auto-enabled with peers) |
+| `QUEEN_SYNC_SECRET` | "" | HMAC-SHA256 secret for packet signing (64 hex chars) |
+| `QUEEN_CACHE_PARTITION_MAX` | 10000 | Max partition IDs to cache |
+| `QUEEN_CACHE_PARTITION_TTL_MS` | 300000 | Partition cache TTL (5 minutes) |
+| `QUEEN_SYNC_HEARTBEAT_MS` | 1000 | Heartbeat interval |
+| `QUEEN_SYNC_DEAD_THRESHOLD_MS` | 5000 | Server dead threshold |
+| `FILE_BUFFER_DIR` | Platform-specific | Directory for file buffers (must be unique per server on same machine) |
+
+See `ENV_VARIABLES.md` for complete configuration reference
 
 ### Vertical Scaling
 

@@ -18,6 +18,9 @@
 namespace queen {
 
 // Forward declaration
+class SharedStateManager;
+
+// Forward declaration
 class StreamPollIntentionRegistry;
 
 /**
@@ -168,6 +171,19 @@ public:
     void handle_peer_notification(const PeerNotification& notification);
     
     // ============================================================
+    // Shared State Integration
+    // ============================================================
+    
+    /**
+     * Set shared state manager for targeted notifications
+     * When set, UDP notifications will use consumer presence cache
+     * to send only to servers that have consumers for the queue.
+     */
+    void set_shared_state(std::shared_ptr<SharedStateManager> shared_state) {
+        shared_state_ = shared_state;
+    }
+    
+    // ============================================================
     // Stats & Monitoring
     // ============================================================
     
@@ -207,6 +223,7 @@ private:
     int own_port_;
     std::string own_hostname_;
     std::shared_ptr<PollIntentionRegistry> poll_registry_;
+    std::shared_ptr<SharedStateManager> shared_state_;  // For targeted notifications
     std::atomic<bool> running_{false};
     
     // ============================================================

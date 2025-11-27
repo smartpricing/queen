@@ -533,6 +533,39 @@ curl "http://localhost:6632/api/v1/pop?namespace=billing&batch=10"
 
 See [FAILOVER.md](FAILOVER.md) for details.
 
+### 21. Multi-Server & Distributed Cache (UDPSYNC)
+
+#### Horizontal Scaling with Shared State
+- Deploy multiple server instances behind a load balancer
+- Distributed cache reduces database queries by 80-90%
+- Real-time peer notifications for instant message delivery
+- Automatic server health tracking and failover
+
+**Key Features:**
+- **Queue Config Cache** - Share queue configurations across servers
+- **Consumer Presence** - Track which servers have active consumers (targeted notifications)
+- **Partition ID Cache** - Local LRU cache for partition lookups
+- **Lease Hints** - Advisory hints about which server holds leases
+- **Server Health** - Heartbeat-based dead server detection
+
+**Configuration:**
+```bash
+# Enable distributed cache by configuring UDP peers
+export QUEEN_UDP_PEERS="server2:6634,server3:6634"
+export QUEEN_UDP_NOTIFY_PORT=6634
+
+# Optional: Add security for production
+export QUEEN_SYNC_SECRET=$(openssl rand -hex 32)
+```
+
+**Monitoring:**
+- Dashboard shows cache hit rates and peer connectivity
+- API endpoint: `GET /api/v1/system/shared-state`
+
+**Correctness Guarantee:** The cache is always advisory. Even with stale data, correctness is never compromised - only extra DB queries occur.
+
+See [ARCHITECTURE.md](ARCHITECTURE.md) for detailed multi-server setup guide.
+
 ## Advanced Features
 
 ### 21. Metrics & Monitoring

@@ -1,4 +1,5 @@
 #include "queen/inter_instance_comms.hpp"
+#include "queen/shared_state_manager.hpp"
 #include <spdlog/spdlog.h>
 #include <httplib.h>
 #include <chrono>
@@ -354,9 +355,15 @@ void InterInstanceComms::notify_message_available(
         std::chrono::system_clock::now().time_since_epoch()
     ).count();
     
-    // UDP: Send immediately (fire-and-forget, lowest latency)
+    // UDP: Use SharedStateManager for targeted notifications if available
     if (udp_enabled_) {
+        if (shared_state_ && shared_state_->is_running()) {
+            // Use SharedStateManager for targeted notifications
+            shared_state_->notify_message_available(queue_name, partition_name);
+        } else {
+            // Fallback to broadcasting to all peers
         udp_send_notification(n);
+        }
     }
     
     // HTTP: Queue for batched sending
@@ -382,9 +389,15 @@ void InterInstanceComms::notify_partition_free(
         std::chrono::system_clock::now().time_since_epoch()
     ).count();
     
-    // UDP: Send immediately
+    // UDP: Use SharedStateManager for targeted notifications if available
     if (udp_enabled_) {
+        if (shared_state_ && shared_state_->is_running()) {
+            // Use SharedStateManager for targeted notifications
+            shared_state_->notify_partition_free(queue_name, partition_name, consumer_group);
+        } else {
+            // Fallback to broadcasting to all peers
         udp_send_notification(n);
+        }
     }
     
     // HTTP: Queue for batched sending

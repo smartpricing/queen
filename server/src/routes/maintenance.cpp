@@ -2,7 +2,11 @@
 #include "queen/routes/route_context.hpp"
 #include "queen/routes/route_helpers.hpp"
 #include "queen/async_queue_manager.hpp"
+#include "queen/shared_state_manager.hpp"
 #include <spdlog/spdlog.h>
+
+// External reference to global shared state manager
+extern std::shared_ptr<queen::SharedStateManager> global_shared_state;
 
 namespace queen {
 namespace routes {
@@ -62,6 +66,20 @@ void setup_maintenance_routes(uWS::App* app, const RouteContext& ctx) {
                 send_error_response(res, error, 400);
             }
         );
+    });
+    
+    // GET shared state / UDPSYNC cache stats
+    app->get("/api/v1/system/shared-state", [](auto* res, auto* req) {
+        (void)req;
+        
+        nlohmann::json stats;
+        if (global_shared_state) {
+            stats = global_shared_state->get_stats();
+        } else {
+            stats = {{"enabled", false}, {"reason", "not_initialized"}};
+        }
+        
+        send_json_response(res, stats, 200);
     });
 }
 

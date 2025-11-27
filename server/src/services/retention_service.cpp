@@ -1,6 +1,10 @@
 #include "queen/retention_service.hpp"
+#include "queen/shared_state_manager.hpp"
 
 namespace queen {
+
+// External global for shared state
+extern std::shared_ptr<SharedStateManager> global_shared_state;
 
 RetentionService::RetentionService(
     std::shared_ptr<AsyncDbPool> db_pool,
@@ -179,6 +183,32 @@ int RetentionService::cleanup_inactive_partitions() {
     try {
         auto conn = db_pool_->acquire();
         
+        // First, get the partitions we're about to delete (for cache invalidation)
+        std::string select_sql = R"(
+            SELECT q.name as queue_name, p.name as partition_name
+            FROM queen.partitions p
+            JOIN queen.queues q ON p.queue_id = q.id
+            WHERE p.last_activity < NOW() - ($1 || ' days')::INTERVAL
+              AND p.id NOT IN (SELECT DISTINCT partition_id FROM queen.messages WHERE partition_id IS NOT NULL)
+            LIMIT 1000
+        )";
+        
+        sendQueryParamsAsync(conn.get(), select_sql, {std::to_string(partition_cleanup_days_)});
+        auto select_result = getTuplesResult(conn.get());
+        
+        int num_to_delete = PQntuples(select_result.get());
+        if (num_to_delete == 0) {
+            return 0;
+        }
+        
+        // Collect partition info for broadcasting
+        std::vector<std::pair<std::string, std::string>> partitions_to_invalidate;
+        for (int i = 0; i < num_to_delete; i++) {
+            std::string queue_name = PQgetvalue(select_result.get(), i, 0);
+            std::string partition_name = PQgetvalue(select_result.get(), i, 1);
+            partitions_to_invalidate.emplace_back(queue_name, partition_name);
+        }
+        
         // Delete partitions that:
         // 1. Have no activity for partition_cleanup_days
         // 2. Have no messages
@@ -192,7 +222,18 @@ int RetentionService::cleanup_inactive_partitions() {
         auto result = getCommandResultPtr(conn.get());
         
         char* affected_str = PQcmdTuples(result.get());
-        return (affected_str && *affected_str) ? std::stoi(affected_str) : 0;
+        int deleted = (affected_str && *affected_str) ? std::stoi(affected_str) : 0;
+        
+        // Phase 6: Broadcast PARTITION_DELETED to invalidate caches on peers
+        if (deleted > 0 && global_shared_state && global_shared_state->is_enabled()) {
+            for (const auto& [queue_name, partition_name] : partitions_to_invalidate) {
+                global_shared_state->invalidate_partition(queue_name, partition_name);
+            }
+            spdlog::debug("RetentionService: Broadcast PARTITION_DELETED for {} partitions", 
+                         partitions_to_invalidate.size());
+        }
+        
+        return deleted;
         
     } catch (const std::exception& e) {
         spdlog::error("cleanup_inactive_partitions error: {}", e.what());

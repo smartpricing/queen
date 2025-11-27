@@ -2,6 +2,7 @@
 #include "queen/routes/route_context.hpp"
 #include "queen/routes/route_helpers.hpp"
 #include "queen/inter_instance_comms.hpp"
+#include "queen/shared_state_manager.hpp"
 #include <spdlog/spdlog.h>
 
 namespace queen {
@@ -52,7 +53,23 @@ void setup_internal_routes(uWS::App* app, const RouteContext& ctx) {
         send_json_response(res, stats, 200);
     });
     
-    spdlog::debug("Internal routes configured (inter-instance HTTP endpoints)");
+    // ============================================================
+    // Stats endpoint for SharedStateManager (UDPSYNC distributed cache)
+    // ============================================================
+    app->get("/internal/api/shared-state/stats", [](auto* res, auto* req) {
+        (void)req;
+        
+        nlohmann::json stats;
+        if (global_shared_state) {
+            stats = global_shared_state->get_stats();
+        } else {
+            stats = {{"enabled", false}, {"reason", "not_initialized"}};
+        }
+        
+        send_json_response(res, stats, 200);
+    });
+    
+    spdlog::debug("Internal routes configured (inter-instance HTTP endpoints, shared state stats)");
 }
 
 } // namespace routes

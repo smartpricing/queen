@@ -18,11 +18,26 @@ import * as bufferingTests from './ai_buffering.js'
 import * as priorityTests from './ai_priority.js'
 import * as ttlRetentionTests from './ai_ttl_retention.js'
 import * as mixedScenariosTests from './ai_mixed_scenarios.js'
+import { LoadBalancer } from '../client-v2/http/LoadBalancer.js';
 
 
 // Test configuration
-export const TEST_CONFIG = {
-  baseUrls: ['http://localhost:6632'],
+
+export const TEST_CONFIG_SINGLE = {
+    baseUrls: ['http://localhost:6632'],
+    loadBalancingStrategy: 'affinity',
+    dbConfig: {
+      host: process.env.PG_HOST || 'localhost',
+      port: process.env.PG_PORT || 5432,
+      database: process.env.PG_DB || 'postgres',
+      user: process.env.PG_USER || 'postgres',
+      password: process.env.PG_PASSWORD || 'postgres'
+    }
+  };
+
+export const TEST_CONFIG_MULTIPLE = {
+  baseUrls: ['http://localhost:6632','http://localhost:6633'],
+  loadBalancingStrategy: 'round-robin',
   dbConfig: {
     host: process.env.PG_HOST || 'localhost',
     port: process.env.PG_PORT || 5432,
@@ -31,6 +46,9 @@ export const TEST_CONFIG = {
     password: process.env.PG_PASSWORD || 'postgres'
   }
 };
+
+export const TEST_CONFIG = process.env.TEST_CONFIG === 'multiple' ? TEST_CONFIG_MULTIPLE : TEST_CONFIG_SINGLE;
+console.log('TEST_CONFIG:', TEST_CONFIG);
 
 // Global test state
 export let dbPool;  
@@ -82,7 +100,10 @@ export const cleanupTestData = async () => {
   };
 
 async function main() {
-    const client = new Queen(TEST_CONFIG.baseUrls)
+    const client = new Queen({
+        urls: TEST_CONFIG.baseUrls,
+        loadBalancingStrategy: TEST_CONFIG.loadBalancingStrategy
+    })
     await initDb()
 
     // Separate human and AI tests

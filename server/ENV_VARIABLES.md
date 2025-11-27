@@ -396,7 +396,71 @@ env:
 - `POST /internal/api/notify` - HTTP endpoint for notifications
 - `UDP port 6633` - UDP listener for notifications (when `QUEEN_UDP_PEERS` is set)
 - `GET /internal/api/inter-instance/stats` - Peer notification statistics (HTTP + UDP)
+- `GET /internal/api/shared-state/stats` - Distributed cache statistics (UDPSYNC)
 - Stats also included in `/health` response
+
+## Distributed Cache (UDPSYNC)
+
+Queen includes a distributed cache layer that shares state between server instances to reduce database queries and improve notification targeting. This is an **optimization layer only** - PostgreSQL remains the authoritative source of truth.
+
+### Cache Configuration
+
+| Variable | Type | Default | Description |
+|----------|------|---------|-------------|
+| `QUEEN_SYNC_ENABLED` | bool | true | Enable/disable distributed cache sync |
+| `QUEEN_SYNC_SECRET` | string | "" | HMAC-SHA256 secret for packet signing (64 hex chars, optional but recommended) |
+| `QUEEN_CACHE_PARTITION_MAX` | int | 10000 | Maximum partition IDs to cache (LRU eviction) |
+| `QUEEN_CACHE_PARTITION_TTL_MS` | int | 300000 | Partition ID cache TTL in milliseconds (5 minutes) |
+| `QUEEN_CACHE_REFRESH_INTERVAL_MS` | int | 60000 | Queue config refresh interval from DB (60 seconds) |
+| `QUEEN_SYNC_CACHE_SHARDS` | int | 16 | Number of cache shards for lock distribution |
+| `QUEEN_SYNC_HEARTBEAT_MS` | int | 1000 | Heartbeat interval in milliseconds (1 second) |
+| `QUEEN_SYNC_DEAD_THRESHOLD_MS` | int | 5000 | Server dead threshold (5 seconds = 5 missed heartbeats) |
+| `QUEEN_SYNC_RECV_BUFFER_MB` | int | 8 | UDP receive buffer size in MB |
+
+### Cache Tiers
+
+The distributed cache has 5 tiers, each optimized for different data types:
+
+1. **Queue Config Cache** - Full sync of queue configurations (lease_time, encryption, etc.)
+2. **Consumer Presence** - Tracks which servers have consumers for which queues (for targeted notifications)
+3. **Partition ID Cache** - Local LRU cache for partition name → UUID mappings
+4. **Lease Hints** - Advisory hints about which server holds which partition lease
+5. **Server Health** - Heartbeat-based dead server detection for faster failover
+
+### Security
+
+For production deployments, set `QUEEN_SYNC_SECRET` to a 64-character hex string:
+
+```bash
+# Generate a secure secret
+export QUEEN_SYNC_SECRET=$(openssl rand -hex 32)
+```
+
+Without a secret, packets are NOT signed (insecure mode - acceptable for development only).
+
+### Correctness Guarantees
+
+The cache is **always advisory**. Even with stale or missing cache data:
+- Messages are never lost
+- Duplicate deliveries never occur
+- Leases are always correct (database is authoritative)
+- The only impact is slightly increased DB queries
+
+### Example Configuration
+
+```bash
+# Enable distributed caching with security
+export QUEEN_SYNC_ENABLED=true
+export QUEEN_SYNC_SECRET="your-64-character-hex-secret-here"
+
+# Tune for high-partition workloads
+export QUEEN_CACHE_PARTITION_MAX=50000
+export QUEEN_CACHE_PARTITION_TTL_MS=600000  # 10 minutes
+
+# Faster failover detection
+export QUEEN_SYNC_HEARTBEAT_MS=500
+export QUEEN_SYNC_DEAD_THRESHOLD_MS=2500
+```
 
 ## Encryption Configuration
 

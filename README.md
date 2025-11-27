@@ -49,6 +49,14 @@ docker run --name postgres --network queen \
 
 docker run -p 6632:6632 --network queen \
   -e PG_HOST=postgres -e PG_PASSWORD=postgres \
+  -e DB_POOL_SIZE=20 \  
+  -e NUM_WORKERS=2 \
+  -e DEFAULT_SUBSCRIPTION_MODE=new \
+  -e LOG_LEVEL=info \
+  -e POLL_WORKER_COUNT=2 \
+  -e POLL_DB_INTERVAL=100 \
+  -e POLL_WORKER_INTERVAL=10 \
+  -e QUEUE_MAX_POLL_INTERVAL=2000 \
   smartnessai/queen-mq
 ```
 

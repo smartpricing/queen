@@ -4,8 +4,14 @@
 #include "queen/async_queue_manager.hpp"
 #include "queen/inter_instance_comms.hpp"
 #include "queen/poll_intention_registry.hpp"
+#include "queen/shared_state_manager.hpp"
 #include <spdlog/spdlog.h>
 #include <chrono>
+
+// External global for shared state
+namespace queen {
+extern std::shared_ptr<SharedStateManager> global_shared_state;
+}
 
 namespace queen {
 namespace routes {
@@ -186,6 +192,13 @@ void setup_ack_routes(uWS::App* app, const RouteContext& ctx) {
                                     );
                                     spdlog::info("[Worker {}] ACK: Notify peers for {}:{}:{}", 
                                                 ctx.worker_id, *ack_result.queue_name, *ack_result.partition_name, consumer_group);
+                                }
+                                
+                                // Phase 5: Broadcast lease release hint
+                                if (partition_id.has_value() && global_shared_state && global_shared_state->is_enabled()) {
+                                    global_shared_state->hint_lease_released(*partition_id, consumer_group);
+                                    spdlog::trace("[Worker {}] ACK: Broadcast lease release hint for {}:{}", 
+                                                 ctx.worker_id, *partition_id, consumer_group);
                                 }
                             }
                             

@@ -13,5 +13,13 @@ export const systemMetricsApi = {
   getSystemMetrics(params = {}) {
     return client.get('/api/v1/analytics/system-metrics', { params });
   },
+  
+  /**
+   * Get shared state (UDPSYNC) stats for distributed cache monitoring
+   * @returns {Promise} Axios response with shared state statistics
+   */
+  getSharedStateStats() {
+    return client.get('/api/v1/system/shared-state');
+  },
 };
 

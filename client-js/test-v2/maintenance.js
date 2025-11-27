@@ -71,12 +71,14 @@ export async function test_maintenance_mode(client = null) {
             
             // Acknowledge messages
             await queen.ack(messages);
+            
           }
         } catch (err) {
           if (consumerActive) {
             console.error('  ❌ Consumer error:', err.message);
           }
         }
+        await sleep(10);
       }
     })();
     

@@ -528,6 +528,54 @@ struct UdpPeerEntry {
     int port;
 };
 
+struct SharedStateConfig {
+    bool enabled = true;
+    
+    // Security - HMAC secret for packet signing
+    std::string sync_secret;
+    
+    // Cache limits
+    int partition_cache_max = 10000;
+    int cache_shards = 16;
+    
+    // TTL settings (milliseconds)
+    int partition_cache_ttl_ms = 300000;  // 5 minutes
+    // lease_hint_ttl is dynamic: queue.lease_time * 1000 / 5
+    
+    // Periodic refresh
+    int queue_config_refresh_ms = 60000;  // 60 seconds
+    
+    // Heartbeat
+    int heartbeat_interval_ms = 1000;   // 1 second
+    int dead_threshold_ms = 5000;       // 5 seconds (5 missed heartbeats)
+    
+    // Performance
+    int recv_buffer_mb = 8;             // UDP receive buffer size
+    
+    static SharedStateConfig from_env() {
+        SharedStateConfig config;
+        config.enabled = get_env_bool("QUEEN_SYNC_ENABLED", true);
+        config.sync_secret = get_env_string("QUEEN_SYNC_SECRET", "");
+        config.partition_cache_max = get_env_int("QUEEN_CACHE_PARTITION_MAX", 10000);
+        config.cache_shards = get_env_int("QUEEN_SYNC_CACHE_SHARDS", 16);
+        config.partition_cache_ttl_ms = get_env_int("QUEEN_CACHE_PARTITION_TTL_MS", 300000);
+        config.queue_config_refresh_ms = get_env_int("QUEEN_CACHE_REFRESH_INTERVAL_MS", 60000);
+        config.heartbeat_interval_ms = get_env_int("QUEEN_SYNC_HEARTBEAT_MS", 1000);
+        config.dead_threshold_ms = get_env_int("QUEEN_SYNC_DEAD_THRESHOLD_MS", 5000);
+        config.recv_buffer_mb = get_env_int("QUEEN_SYNC_RECV_BUFFER_MB", 8);
+        return config;
+    }
+    
+    bool validate() const {
+        // Secret is only required if sync is enabled AND there are UDP peers
+        // For now, allow empty secret (insecure mode for development)
+        if (enabled && !sync_secret.empty() && sync_secret.length() != 64) {
+            return false;
+        }
+        return true;
+    }
+};
+
 struct InterInstanceConfig {
     // HTTP peers (existing) - full URLs like http://host:port
     std::string peers = "";
@@ -537,6 +585,9 @@ struct InterInstanceConfig {
     std::string udp_peers = "";
     int udp_port = 6633;  // Default UDP notification port
     
+    // Shared state configuration
+    SharedStateConfig shared_state;
+    
     static InterInstanceConfig from_env() {
         InterInstanceConfig config;
         // HTTP peers (existing)
@@ -545,6 +596,8 @@ struct InterInstanceConfig {
         // UDP peers (new)
         config.udp_peers = get_env_string("QUEEN_UDP_PEERS", "");
         config.udp_port = get_env_int("QUEEN_UDP_NOTIFY_PORT", 6633);
+        // Shared state config
+        config.shared_state = SharedStateConfig::from_env();
         return config;
     }
     

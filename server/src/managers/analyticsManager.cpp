@@ -72,6 +72,14 @@ static nlohmann::json exec_query_json(PGconn* conn, const std::string& sql) {
     if (PQresultStatus(res) != PGRES_TUPLES_OK && PQresultStatus(res) != PGRES_COMMAND_OK) {
         std::string error = PQresultErrorMessage(res);
         PQclear(res);
+        
+        // IMPORTANT: Drain any remaining results before throwing to avoid
+        // "another command is already in progress" errors on subsequent queries
+        PGresult* drain;
+        while ((drain = PQgetResult(conn)) != nullptr) {
+            PQclear(drain);
+        }
+        
         throw std::runtime_error("Query failed: " + error);
     }
     
@@ -184,6 +192,14 @@ static nlohmann::json exec_query_params_json(PGconn* conn, const std::string& sq
     if (PQresultStatus(res) != PGRES_TUPLES_OK && PQresultStatus(res) != PGRES_COMMAND_OK) {
         std::string error = PQresultErrorMessage(res);
         PQclear(res);
+        
+        // IMPORTANT: Drain any remaining results before throwing to avoid
+        // "another command is already in progress" errors on subsequent queries
+        PGresult* drain;
+        while ((drain = PQgetResult(conn)) != nullptr) {
+            PQclear(drain);
+        }
+        
         throw std::runtime_error("Query failed: " + error);
     }
     

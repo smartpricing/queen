@@ -148,6 +148,9 @@
             </div>
           </div>
 
+          <!-- Shared State Panel (UDPSYNC) -->
+          <SharedStatePanel />
+
           <!-- Stats Summary -->
           <div class="grid grid-cols-1 lg:grid-cols-3 gap-5">
             <div class="info-card-white">
@@ -249,6 +252,7 @@ import DetailedMemoryChart from '../components/system-metrics/DetailedMemoryChar
 import DetailedDatabaseChart from '../components/system-metrics/DetailedDatabaseChart.vue';
 import DetailedThreadPoolChart from '../components/system-metrics/DetailedThreadPoolChart.vue';
 import DetailedRegistryChart from '../components/system-metrics/DetailedRegistryChart.vue';
+import SharedStatePanel from '../components/system-metrics/SharedStatePanel.vue';
 
 const loading = ref(false);
 const error = ref(null);

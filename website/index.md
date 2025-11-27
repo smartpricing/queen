@@ -67,6 +67,10 @@ features:
   - title: Multi-Language Clients
     details: JavaScript, Python, and C++ clients with idiomatic APIs. Or use the HTTP API directly from any language.
     link: /clients/javascript
+  
+  - title: Distributed Cache (UDPSYNC)
+    details: Multi-server deployments share state via UDP sync to reduce database queries by 80-90%. Real-time peer notifications for instant message delivery.
+    link: /server/deployment#distributed-cache-udpsync
 ---
 
 <style>
@@ -244,6 +248,7 @@ await queen.queue('orders')
 | Dead Letter Queue | ✅ Automatic | ✅ | ⚠️ Manual | ❌ |
 | Message Replay | ✅ Timestamp | ❌ | ✅ | ✅ |
 | Persistence | ✅ PostgreSQL | ✅ Disk | ✅ Disk | ⚠️ Memory |
+| Distributed Cache | ✅ UDPSYNC | ❌ | ✅ ZooKeeper | ❌ |
 | Web Dashboard | ✅ Modern | ⚠️ Basic | ⚠️ External | ❌ |
 
 ## Use Cases
@@ -267,6 +272,7 @@ Queen uses a high-performance **acceptor/worker pattern** with fully asynchronou
 - **Network Layer**: uWebSockets with configurable workers (default: 10)
 - **Database Layer**: Async connection pool (142 non-blocking connections)
 - **Failover Layer**: Automatic disk buffering when PostgreSQL unavailable
+- **Distributed Cache**: UDP-based state sync between servers (UDPSYNC)
 - **Background Services**: Poll workers, metrics, retention, eviction
 
 [Learn more about the architecture →](/server/architecture)

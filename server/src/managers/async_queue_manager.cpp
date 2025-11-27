@@ -1,7 +1,13 @@
 #include "queen/async_queue_manager.hpp"
 #include "queen/file_buffer.hpp"
 #include "queen/encryption.hpp"
+#include "queen/shared_state_manager.hpp"
 #include <spdlog/spdlog.h>
+
+// External global for shared state
+namespace queen {
+extern std::shared_ptr<SharedStateManager> global_shared_state;
+}
 #include <random>
 #include <iomanip>
 #include <sstream>
@@ -1330,9 +1336,19 @@ std::vector<PushResult> AsyncQueueManager::push_messages_batch(const std::vector
     
     // Dynamic size-based batching
     if (config_.batch_push_use_size_based) {
-        // Check if queue has encryption enabled
+        // Check if queue has encryption enabled (Phase 2: Check cache first)
         bool encryption_enabled = false;
         try {
+            if (global_shared_state && global_shared_state->is_enabled()) {
+                auto cached_config = global_shared_state->get_queue_config(queue_name);
+                if (cached_config) {
+                    encryption_enabled = cached_config->encryption_enabled;
+                    spdlog::trace("Queue config cache hit for {}: encryption={}", queue_name, encryption_enabled);
+                }
+            }
+            
+            if (!encryption_enabled) {
+                // Cache miss - fall back to DB query
             auto check_conn = async_db_pool_->acquire();
             sendQueryParamsAsync(check_conn.get(), 
                                 "SELECT encryption_enabled FROM queen.queues WHERE name = $1", 
@@ -1342,6 +1358,7 @@ std::vector<PushResult> AsyncQueueManager::push_messages_batch(const std::vector
             if (PQntuples(encryption_result.get()) > 0) {
                 const char* enc_str = PQgetvalue(encryption_result.get(), 0, 0);
                 encryption_enabled = (enc_str && (std::string(enc_str) == "t" || std::string(enc_str) == "true"));
+                }
             }
         } catch (const std::exception& e) {
             spdlog::warn("Failed to check encryption status, assuming disabled: {}", e.what());
@@ -1423,6 +1440,18 @@ std::vector<PushResult> AsyncQueueManager::push_messages_batch(const std::vector
     return results;
 }
 
+// --- Helper: Check if error is connection-related (not retryable via cache invalidation) ---
+static bool is_connection_error(const std::string& error_msg) {
+    // Connection errors should NOT trigger cache invalidation retry
+    // These indicate the DB is down, not that cache is stale
+    return error_msg.find("connection") != std::string::npos ||
+           error_msg.find("Connection") != std::string::npos ||
+           error_msg.find("server closed") != std::string::npos ||
+           error_msg.find("could not connect") != std::string::npos ||
+           error_msg.find("timeout") != std::string::npos ||
+           error_msg.find("SSL") != std::string::npos;
+}
+
 // --- Push Messages Chunk (Core Batch INSERT with Async DB) ---
 
 std::vector<PushResult> AsyncQueueManager::push_messages_chunk(const std::vector<PushItem>& items,
@@ -1431,6 +1460,18 @@ std::vector<PushResult> AsyncQueueManager::push_messages_chunk(const std::vector
     auto chunk_start = std::chrono::steady_clock::now();
     std::vector<PushResult> results;
     results.reserve(items.size());
+    
+    // Retry logic: if we used cached values and got a non-connection error,
+    // invalidate cache and retry once with fresh DB lookup
+    int attempt = 0;
+    const int max_attempts = 2;
+    bool used_partition_cache = false;
+    
+retry_after_cache_invalidation:
+    attempt++;
+    results.clear();
+    results.reserve(items.size());
+    used_partition_cache = false;
     
     try {
         auto conn = async_db_pool_->acquire();
@@ -1462,21 +1503,48 @@ std::vector<PushResult> AsyncQueueManager::push_messages_chunk(const std::vector
             return results;
         }
         
-        // Check encryption enabled
+        // Check encryption enabled (Phase 2: Check cache first)
         auto encryption_check_start = std::chrono::steady_clock::now();
+        bool encryption_enabled = false;
+        bool encryption_cache_hit = false;
+        
+        if (global_shared_state && global_shared_state->is_enabled()) {
+            auto cached_config = global_shared_state->get_queue_config(queue_name);
+            if (cached_config) {
+                encryption_enabled = cached_config->encryption_enabled;
+                encryption_cache_hit = true;
+            }
+        }
+        
+        if (!encryption_cache_hit) {
+            // Cache miss - fall back to DB
         sendQueryParamsAsync(conn.get(), "SELECT encryption_enabled FROM queen.queues WHERE name = $1", {queue_name});
         auto encryption_result = getTuplesResult(conn.get());
         
-        bool encryption_enabled = false;
         if (PQntuples(encryption_result.get()) > 0) {
             const char* enc_str = PQgetvalue(encryption_result.get(), 0, 0);
             encryption_enabled = (enc_str && (std::string(enc_str) == "t" || std::string(enc_str) == "true"));
+            }
         }
         
         // Get encryption service if needed
         EncryptionService* enc_service = encryption_enabled ? get_encryption_service() : nullptr;
         
-        // Get partition ID
+        // Get partition ID (Phase 4: Check cache first, but skip on retry)
+        std::string partition_id;
+        bool partition_cache_hit = false;
+        if (attempt == 1 && global_shared_state && global_shared_state->is_enabled()) {
+            auto cached = global_shared_state->get_partition_id(queue_name, partition_name);
+            if (cached) {
+                partition_id = *cached;
+                partition_cache_hit = true;
+                used_partition_cache = true;
+                spdlog::trace("Partition ID cache HIT: {}:{} -> {}", queue_name, partition_name, partition_id);
+            }
+        }
+        
+        if (!partition_cache_hit) {
+            // Cache miss or retry - query DB for fresh partition ID
         std::string partition_id_sql = R"(
             SELECT p.id FROM queen.partitions p
             JOIN queen.queues q ON p.queue_id = q.id
@@ -1496,7 +1564,14 @@ std::vector<PushResult> AsyncQueueManager::push_messages_chunk(const std::vector
             return results;
         }
         
-        std::string partition_id = PQgetvalue(partition_result.get(), 0, 0);
+            partition_id = PQgetvalue(partition_result.get(), 0, 0);
+            
+            // Cache the partition ID for next time
+            if (global_shared_state && global_shared_state->is_enabled()) {
+                global_shared_state->cache_partition_id(queue_name, partition_name, partition_id);
+                spdlog::trace("Cached partition ID: {}:{} -> {}", queue_name, partition_name, partition_id);
+            }
+        }
         auto encryption_check_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
         std::chrono::steady_clock::now() - encryption_check_start).count();
         spdlog::debug("TIMING: Encryption check + partition ID lookup took {}ms", encryption_check_ms);
@@ -1759,9 +1834,26 @@ std::vector<PushResult> AsyncQueueManager::push_messages_chunk(const std::vector
         }
         
     } catch (const std::exception& e) {
+        std::string error_msg = e.what();
+        
+        // If we used cached partition_id and got a non-connection error, 
+        // invalidate cache and retry once with fresh DB lookup
+        if (used_partition_cache && attempt < max_attempts && !is_connection_error(error_msg)) {
+            spdlog::warn("Push failed with cached partition_id (attempt {}): {}. Invalidating cache and retrying...", 
+                        attempt, error_msg);
+            
+            // Invalidate the partition cache for this queue:partition
+            if (global_shared_state && global_shared_state->is_enabled()) {
+                global_shared_state->invalidate_partition(queue_name, partition_name);
+            }
+            
+            // Retry with fresh DB lookup
+            goto retry_after_cache_invalidation;
+        }
+        
         // Database batch push failed - try file buffer failover for all items
-        spdlog::warn("Database batch push failed: {}. Attempting file buffer failover for {} items...", 
-                    e.what(), items.size());
+        spdlog::warn("Database batch push failed (attempt {}/{}): {}. Attempting file buffer failover for {} items...", 
+                    attempt, max_attempts, error_msg, items.size());
         
         if (file_buffer_manager_) {
             // Mark database as unhealthy for faster failover on subsequent requests
@@ -2039,6 +2131,26 @@ std::string AsyncQueueManager::acquire_partition_lease(
         
         if (PQntuples(result.get()) > 0) {
             spdlog::debug("Lease acquired successfully: {}", lease_id);
+            
+            // Phase 5: Broadcast lease hint to peers
+            if (global_shared_state && global_shared_state->is_enabled()) {
+                // Get partition_id for the hint (we need it for the cache key)
+                std::string pid_sql = R"(
+                    SELECT p.id FROM queen.partitions p
+                    JOIN queen.queues q ON p.queue_id = q.id
+                    WHERE q.name = $1 AND p.name = $2
+                )";
+                sendQueryParamsAsync(conn, pid_sql, {queue_name, partition_name});
+                auto pid_result = getTuplesResult(conn);
+                if (PQntuples(pid_result.get()) > 0) {
+                    std::string partition_id = PQgetvalue(pid_result.get(), 0, 0);
+                    global_shared_state->hint_lease_acquired(partition_id, consumer_group, 
+                                                            lease_time_seconds);
+                    spdlog::trace("Broadcast lease hint: {} acquired for {}:{}", 
+                                 partition_id, consumer_group, lease_time_seconds);
+                }
+            }
+            
             return lease_id;
         } else {
             spdlog::debug("Lease acquisition failed - partition may be locked by another consumer");
@@ -2058,6 +2170,21 @@ void AsyncQueueManager::release_partition_lease(
     const std::string& consumer_group
 ) {
     try {
+        // Get partition_id BEFORE releasing (for hint broadcast)
+        std::string partition_id;
+        if (global_shared_state && global_shared_state->is_enabled()) {
+            std::string pid_sql = R"(
+                SELECT p.id FROM queen.partitions p
+                JOIN queen.queues q ON p.queue_id = q.id
+                WHERE q.name = $1 AND p.name = $2
+            )";
+            sendQueryParamsAsync(conn, pid_sql, {queue_name, partition_name});
+            auto pid_result = getTuplesResult(conn);
+            if (PQntuples(pid_result.get()) > 0) {
+                partition_id = PQgetvalue(pid_result.get(), 0, 0);
+            }
+        }
+        
         std::string release_sql = R"(
             UPDATE queen.partition_consumers
             SET lease_expires_at = NULL,
@@ -2073,6 +2200,12 @@ void AsyncQueueManager::release_partition_lease(
         
         sendQueryParamsAsync(conn, release_sql, {queue_name, partition_name, consumer_group});
         getCommandResult(conn);
+        
+        // Broadcast lease release hint to peers
+        if (!partition_id.empty() && global_shared_state && global_shared_state->is_enabled()) {
+            global_shared_state->hint_lease_released(partition_id, consumer_group);
+            spdlog::trace("Broadcast lease hint: {} released for {}", partition_id, consumer_group);
+        }
         
     } catch (const std::exception& e) {
         spdlog::warn("Failed to release lease: {}", e.what());
@@ -2455,6 +2588,14 @@ PopResult AsyncQueueManager::pop_messages_from_queue(
         // Try each partition until we get messages (using optimized _by_id function)
         for (int i = 0; i < PQntuples(partitions_result.get()); ++i) {
             std::string partition_id = PQgetvalue(partitions_result.get(), i, 0);
+            
+            // Phase 5: Check lease hint - skip partition if likely leased elsewhere
+            if (global_shared_state && global_shared_state->is_enabled()) {
+                if (global_shared_state->is_likely_leased_elsewhere(partition_id, consumer_group)) {
+                    spdlog::trace("Skipping partition_id '{}' - lease hint says likely leased elsewhere", partition_id);
+                    continue;  // Try next partition
+                }
+            }
             
             spdlog::debug("Trying partition_id '{}' (priority by last_consumed_at)", partition_id);
             
@@ -3300,14 +3441,24 @@ PushResult AsyncQueueManager::push_single_message_transactional(
         // Generate message ID
         std::string message_id = generate_uuid();
         
-        // Check encryption
+        // Check encryption (Phase 2: Check cache first)
+        bool encryption_enabled = false;
+        if (global_shared_state && global_shared_state->is_enabled()) {
+            auto cached_config = global_shared_state->get_queue_config(item.queue);
+            if (cached_config) {
+                encryption_enabled = cached_config->encryption_enabled;
+            }
+        }
+        
+        if (!encryption_enabled) {
+            // Cache miss - fall back to DB
         sendQueryParamsAsync(conn, "SELECT encryption_enabled FROM queen.queues WHERE name = $1", {item.queue});
         auto encryption_result = getTuplesResult(conn);
         
-        bool encryption_enabled = false;
         if (PQntuples(encryption_result.get()) > 0) {
             const char* enc_str = PQgetvalue(encryption_result.get(), 0, 0);
             encryption_enabled = (enc_str && (std::string(enc_str) == "t" || std::string(enc_str) == "true"));
+            }
         }
         
         // Prepare payload
@@ -3924,6 +4075,35 @@ bool AsyncQueueManager::configure_queue(const std::string& queue_name,
         // Ensure default partition exists
         ensure_partition_exists(conn.get(), queue_name, "Default");
         
+        // Invalidate partition cache since partition may have been recreated with new ID
+        if (global_shared_state && global_shared_state->is_enabled()) {
+            global_shared_state->invalidate_partition(queue_name, "Default");
+            spdlog::debug("Invalidated partition cache for {}:Default", queue_name);
+        }
+        
+        // Broadcast queue config to peers (Phase 2: Queue Config Cache)
+        if (global_shared_state && global_shared_state->is_enabled()) {
+            caches::CachedQueueConfig cached_config;
+            cached_config.name = queue_name;
+            cached_config.namespace_name = namespace_name;
+            cached_config.task = task_name;
+            cached_config.priority = options.priority;
+            cached_config.lease_time = options.lease_time;
+            cached_config.retry_limit = options.retry_limit;
+            cached_config.retry_delay = options.retry_delay;
+            cached_config.max_size = options.max_size;
+            cached_config.ttl = options.ttl;
+            cached_config.dlq_enabled = options.dead_letter_queue;
+            cached_config.dlq_after_max_retries = options.dlq_after_max_retries;
+            cached_config.delayed_processing = options.delayed_processing;
+            cached_config.window_buffer = options.window_buffer;
+            cached_config.retention_seconds = options.retention_seconds;
+            cached_config.completed_retention_seconds = options.completed_retention_seconds;
+            cached_config.encryption_enabled = options.encryption_enabled;
+            global_shared_state->set_queue_config(queue_name, cached_config);
+            spdlog::debug("Queue '{}' config broadcast to peers", queue_name);
+        }
+        
         spdlog::info("Queue '{}' fully configured with Default partition", queue_name);
         return true;
         
@@ -3973,6 +4153,12 @@ bool AsyncQueueManager::delete_queue(const std::string& queue_name) {
             // Commit transaction
             sendAndWait(conn.get(), "COMMIT");
             getCommandResult(conn.get());
+            
+            // Broadcast queue deletion to peers (Phase 2: Queue Config Cache)
+            if (global_shared_state && global_shared_state->is_enabled()) {
+                global_shared_state->delete_queue_config(queue_name);
+                spdlog::debug("Queue '{}' deletion broadcast to peers", queue_name);
+            }
             
             spdlog::info("Queue deleted successfully: {}", queue_name);
             return true;
