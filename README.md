@@ -164,6 +164,17 @@ asyncio.run(main())
 
 ---
 
+## Release History
+
+| Server Version | Description | Compatible Clients |
+|----------------|-------------|-------------------|
+| **0.8.0** | Added Shared Cache with UDP sync for clustered deployment | JS ≥0.7.4, Python ≥0.7.4 |
+| **0.7.5** | First stable release | JS ≥0.7.4, Python ≥0.7.4 |
+
+**[Full Release Notes →](https://smartpricing.github.io/queen/server/releases)**
+
+---
+
 ## Webapp
 
 A modern Vue 3 dashboard for monitoring and managing Queen MQ:

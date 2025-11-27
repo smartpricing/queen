@@ -128,15 +128,16 @@ export default defineConfig({
             { text: 'Deployment', link: '/server/deployment' }
           ]
         },
-        {
-          text: 'Operations',
-          items: [
-            { text: 'Monitoring', link: '/server/monitoring' },
-            { text: 'Benchmarks', link: '/server/benchmarks' },
-            { text: 'Benchmarking Tool', link: '/server/benchmarking' },
-            { text: 'Troubleshooting', link: '/server/troubleshooting' }
-          ]
-        }
+      {
+        text: 'Operations',
+        items: [
+          { text: 'Monitoring', link: '/server/monitoring' },
+          { text: 'Benchmarks', link: '/server/benchmarks' },
+          { text: 'Benchmarking Tool', link: '/server/benchmarking' },
+          { text: 'Troubleshooting', link: '/server/troubleshooting' },
+          { text: 'Release History', link: '/server/releases' }
+        ]
+      }
       ],
       
       '/webapp/': [
