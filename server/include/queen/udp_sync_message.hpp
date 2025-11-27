@@ -8,6 +8,7 @@
 #include <chrono>
 #include <random>
 #include <array>
+#include <atomic>
 #include <openssl/hmac.h>
 #include <openssl/evp.h>
 

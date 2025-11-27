@@ -90,18 +90,24 @@ InterInstanceComms::InterInstanceComms(
     // ========================================
     // Parse UDP peers (new)
     // ========================================
-    std::vector<UdpPeerEntry> udp_peers_to_resolve;
-    for (const auto& peer : config.parse_udp_peers()) {
-        if (!is_self_udp_peer(peer.host, peer.port)) {
-            udp_peers_to_resolve.push_back(peer);
-        } else {
-            spdlog::info("InterInstanceComms: Excluding self UDP peer: {}:{}", peer.host, peer.port);
+    // If UDPSYNC is enabled, skip setting up UDP here - UDPSyncTransport handles it
+    if (config.shared_state.enabled && !config.udp_peers.empty()) {
+        spdlog::info("InterInstanceComms: UDPSYNC enabled, skipping UDP listener (UDPSyncTransport handles it)");
+        udp_enabled_ = false;
+    } else {
+        std::vector<UdpPeerEntry> udp_peers_to_resolve;
+        for (const auto& peer : config.parse_udp_peers()) {
+            if (!is_self_udp_peer(peer.host, peer.port)) {
+                udp_peers_to_resolve.push_back(peer);
+            } else {
+                spdlog::info("InterInstanceComms: Excluding self UDP peer: {}:{}", peer.host, peer.port);
+            }
         }
-    }
-    
-    if (!udp_peers_to_resolve.empty()) {
-        resolve_udp_peers(udp_peers_to_resolve);
-        udp_enabled_ = !udp_endpoints_.empty();
+        
+        if (!udp_peers_to_resolve.empty()) {
+            resolve_udp_peers(udp_peers_to_resolve);
+            udp_enabled_ = !udp_endpoints_.empty();
+        }
     }
     
     spdlog::info("InterInstanceComms: http_enabled={}, http_peers={}, udp_enabled={}, udp_peers={}, own={}:{}, hostname={}", 
