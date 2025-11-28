@@ -24,36 +24,72 @@
 
 namespace queen {
 
+// Forward declaration
+class SharedStateManager;
+
 // Single sample of system metrics
 struct MetricsSample {
     std::chrono::system_clock::time_point timestamp;
     
     // CPU (microseconds of CPU time)
-    uint64_t cpu_user_us;
-    uint64_t cpu_system_us;
+    uint64_t cpu_user_us = 0;
+    uint64_t cpu_system_us = 0;
     
     // Memory (bytes)
-    uint64_t memory_rss_bytes;
-    uint64_t memory_virtual_bytes;
+    uint64_t memory_rss_bytes = 0;
+    uint64_t memory_virtual_bytes = 0;
     
     // Database pool
-    int db_pool_size;
-    int db_pool_idle;
-    int db_pool_active;
+    int db_pool_size = 0;
+    int db_pool_idle = 0;
+    int db_pool_active = 0;
     
     // ThreadPools
-    int db_threadpool_size;
-    int db_threadpool_queue_size;
-    int system_threadpool_size;
-    int system_threadpool_queue_size;
+    int db_threadpool_size = 0;
+    int db_threadpool_queue_size = 0;
+    int system_threadpool_size = 0;
+    int system_threadpool_queue_size = 0;
     
     // Registries
-    int poll_intention_registry_size;
-    int stream_poll_intention_registry_size;
-    int response_registry_size;
+    int poll_intention_registry_size = 0;
+    int stream_poll_intention_registry_size = 0;
+    int response_registry_size = 0;
     
     // Uptime
-    int uptime_seconds;
+    int uptime_seconds = 0;
+    
+    // SharedState / UDPSYNC metrics
+    bool shared_state_enabled = false;
+    
+    // Queue config cache
+    int qc_cache_size = 0;
+    uint64_t qc_cache_hits = 0;
+    uint64_t qc_cache_misses = 0;
+    
+    // Partition ID cache
+    int pid_cache_size = 0;
+    uint64_t pid_cache_hits = 0;
+    uint64_t pid_cache_misses = 0;
+    uint64_t pid_cache_evictions = 0;
+    
+    // Lease hints
+    int lease_hints_size = 0;
+    uint64_t lease_hints_used = 0;
+    uint64_t lease_hints_wrong = 0;
+    
+    // Consumer presence
+    int consumer_queues_tracked = 0;
+    int consumer_servers_tracked = 0;
+    int consumer_total_registrations = 0;
+    
+    // Server health
+    int servers_alive = 0;
+    int servers_dead = 0;
+    
+    // Transport
+    uint64_t transport_sent = 0;
+    uint64_t transport_received = 0;
+    uint64_t transport_dropped = 0;
 };
 
 // Aggregated metric (avg, min, max, last)
@@ -93,8 +129,35 @@ struct AggregatedMetrics {
     AggregatedMetric response_registry_size;
     int uptime_seconds;
     
+    // SharedState / UDPSYNC metrics
+    bool shared_state_enabled = false;
+    
+    AggregatedMetric qc_cache_size;
+    AggregatedMetric qc_cache_hits;
+    AggregatedMetric qc_cache_misses;
+    
+    AggregatedMetric pid_cache_size;
+    AggregatedMetric pid_cache_hits;
+    AggregatedMetric pid_cache_misses;
+    AggregatedMetric pid_cache_evictions;
+    
+    AggregatedMetric lease_hints_size;
+    AggregatedMetric lease_hints_used;
+    AggregatedMetric lease_hints_wrong;
+    
+    AggregatedMetric consumer_queues_tracked;
+    AggregatedMetric consumer_servers_tracked;
+    AggregatedMetric consumer_total_registrations;
+    
+    AggregatedMetric servers_alive;
+    AggregatedMetric servers_dead;
+    
+    AggregatedMetric transport_sent;
+    AggregatedMetric transport_received;
+    AggregatedMetric transport_dropped;
+    
     nlohmann::json to_json() const {
-        return {
+        nlohmann::json result = {
             {"cpu", {
                 {"user_us", cpu_user_us.to_json()},
                 {"system_us", cpu_system_us.to_json()}
@@ -125,6 +188,45 @@ struct AggregatedMetrics {
             }},
             {"uptime_seconds", uptime_seconds}
         };
+        
+        // Add SharedState metrics if enabled
+        if (shared_state_enabled) {
+            result["shared_state"] = {
+                {"enabled", true},
+                {"queue_config_cache", {
+                    {"size", qc_cache_size.to_json()},
+                    {"hits", qc_cache_hits.to_json()},
+                    {"misses", qc_cache_misses.to_json()}
+                }},
+                {"partition_id_cache", {
+                    {"size", pid_cache_size.to_json()},
+                    {"hits", pid_cache_hits.to_json()},
+                    {"misses", pid_cache_misses.to_json()},
+                    {"evictions", pid_cache_evictions.to_json()}
+                }},
+                {"lease_hints", {
+                    {"size", lease_hints_size.to_json()},
+                    {"used", lease_hints_used.to_json()},
+                    {"wrong", lease_hints_wrong.to_json()}
+                }},
+                {"consumer_presence", {
+                    {"queues_tracked", consumer_queues_tracked.to_json()},
+                    {"servers_tracked", consumer_servers_tracked.to_json()},
+                    {"total_registrations", consumer_total_registrations.to_json()}
+                }},
+                {"server_health", {
+                    {"alive", servers_alive.to_json()},
+                    {"dead", servers_dead.to_json()}
+                }},
+                {"transport", {
+                    {"sent", transport_sent.to_json()},
+                    {"received", transport_received.to_json()},
+                    {"dropped", transport_dropped.to_json()}
+                }}
+            };
+        }
+        
+        return result;
     }
 };
 
@@ -141,6 +243,7 @@ private:
     std::shared_ptr<PollIntentionRegistry> poll_intention_registry_;
     std::shared_ptr<StreamPollIntentionRegistry> stream_poll_intention_registry_;
     std::shared_ptr<ResponseRegistry> response_registry_;
+    std::shared_ptr<SharedStateManager> shared_state_manager_;
     
     std::atomic<bool> running_{false};
     std::chrono::steady_clock::time_point start_time_;
@@ -166,6 +269,7 @@ public:
         std::shared_ptr<PollIntentionRegistry> poll_intention_registry,
         std::shared_ptr<StreamPollIntentionRegistry> stream_poll_intention_registry,
         std::shared_ptr<ResponseRegistry> response_registry,
+        std::shared_ptr<SharedStateManager> shared_state_manager,
         const std::string& hostname,
         int port,
         const std::string& worker_id = "worker-0",

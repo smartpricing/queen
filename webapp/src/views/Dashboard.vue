@@ -1,5 +1,5 @@
 <template>
-  <div class="dashboard-professional">
+  <div class="dashboard-professional dashboard-dense">
     <!-- Dashboard Content -->
     <div class="dashboard-content">
       <LoadingSpinner v-if="loading && !overview" />
@@ -295,6 +295,7 @@
                   </div>
                 </div>
               </div>
+
             </div>
           </div>
         </div>
@@ -374,6 +375,35 @@ const status = ref(null);
 const systemMetrics = ref(null);
 const topQueues = ref([]);
 const streamStats = ref(null);
+
+// Get latest SharedState from system metrics
+const latestSharedState = computed(() => {
+  if (!systemMetrics.value?.replicas?.length) return null;
+  
+  // Get the latest from the first replica
+  const firstReplica = systemMetrics.value.replicas[0];
+  if (!firstReplica?.timeSeries?.length) return null;
+  
+  const lastPoint = firstReplica.timeSeries[firstReplica.timeSeries.length - 1];
+  return lastPoint?.metrics?.shared_state || null;
+});
+
+// Calculate cache hit rate from SharedState
+const cacheHitRate = computed(() => {
+  const ss = latestSharedState.value;
+  if (!ss || !ss.enabled) return null;
+  
+  const qcHits = ss.queue_config_cache?.hits || 0;
+  const qcMisses = ss.queue_config_cache?.misses || 0;
+  const pidHits = ss.partition_id_cache?.hits || 0;
+  const pidMisses = ss.partition_id_cache?.misses || 0;
+  
+  const totalHits = qcHits + pidHits;
+  const totalMisses = qcMisses + pidMisses;
+  const total = totalHits + totalMisses;
+  
+  return total > 0 ? (totalHits / total * 100).toFixed(1) : '100.0';
+});
 
 // Calculate pending as: total - completed - failed - deadLetter
 const calculatedPending = computed(() => {
@@ -561,6 +591,11 @@ function navigateToStreams() {
   @apply px-6 lg:px-8 py-6 space-y-6;
 }
 
+/* Dense layout overrides */
+.dashboard-dense .dashboard-content {
+  @apply px-2 lg:px-4 py-3 space-y-3;
+}
+
 /* Section Headers */
 .section-header {
   @apply mt-6 mb-3 first:mt-0;
@@ -576,6 +611,10 @@ function navigateToStreams() {
   @apply grid grid-cols-1 lg:grid-cols-3 gap-5;
 }
 
+.dashboard-dense .main-metrics-grid {
+  @apply gap-3;
+}
+
 /* Status Cards (New Large Cards) */
 .status-card {
   @apply bg-white dark:bg-[#161b22] border border-gray-200/40 dark:border-gray-800/40;
@@ -588,6 +627,10 @@ function navigateToStreams() {
   box-shadow: 0 1px 3px 0 rgba(0, 0, 0, 0.4), 0 1px 2px 0 rgba(0, 0, 0, 0.2);
 }
 
+.dashboard-dense .status-card {
+  @apply rounded-lg;
+}
+
 .status-card-header {
   @apply px-6 py-4 border-b border-gray-200/60 dark:border-gray-800/60;
   @apply flex items-center justify-between;
@@ -598,6 +641,10 @@ function navigateToStreams() {
   background: linear-gradient(to bottom, rgba(22, 27, 34, 0.5), transparent);
 }
 
+.dashboard-dense .status-card-header {
+  @apply px-3 py-2;
+}
+
 .status-icon-wrapper {
   @apply flex items-center justify-center;
   @apply w-8 h-8 rounded-lg;
@@ -605,9 +652,17 @@ function navigateToStreams() {
   @apply text-gray-600 dark:text-gray-400;
 }
 
+.dashboard-dense .status-icon-wrapper {
+  @apply w-6 h-6 rounded-md;
+}
+
 .status-card-title {
   @apply text-sm font-semibold text-gray-900 dark:text-white tracking-tight;
   letter-spacing: -0.01em;
+}
+
+.dashboard-dense .status-card-title {
+  @apply text-xs;
 }
 
 .view-all-button {
@@ -617,8 +672,16 @@ function navigateToStreams() {
   @apply font-medium;
 }
 
+.dashboard-dense .view-all-button {
+  @apply text-[10px];
+}
+
 .status-card-body-improved {
   @apply p-6 space-y-6;
+}
+
+.dashboard-dense .status-card-body-improved {
+  @apply p-3 space-y-3;
 }
 
 /* Improved Status Sections */
@@ -626,8 +689,16 @@ function navigateToStreams() {
   @apply space-y-3;
 }
 
+.dashboard-dense .status-section-improved {
+  @apply space-y-2;
+}
+
 .status-section-header {
   @apply flex items-center gap-2 mb-4;
+}
+
+.dashboard-dense .status-section-header {
+  @apply mb-2;
 }
 
 .status-section-title {
@@ -636,8 +707,16 @@ function navigateToStreams() {
   letter-spacing: 0.05em;
 }
 
+.dashboard-dense .status-section-title {
+  @apply text-[10px];
+}
+
 .status-metrics-grid-improved {
   @apply grid grid-cols-2 gap-3;
+}
+
+.dashboard-dense .status-metrics-grid-improved {
+  @apply gap-2;
 }
 
 .status-metric-box {
@@ -645,6 +724,10 @@ function navigateToStreams() {
   @apply border border-gray-200/50 dark:border-gray-800/50;
   @apply rounded-lg p-4;
   transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.dashboard-dense .status-metric-box {
+  @apply p-2.5 rounded-md;
 }
 
 .status-metric-box.metric-card-clickable:hover {
@@ -661,14 +744,26 @@ function navigateToStreams() {
   letter-spacing: 0.08em;
 }
 
+.dashboard-dense .status-metric-label-improved {
+  @apply text-[8px];
+}
+
 .status-metric-value-lg {
   @apply text-2xl font-bold tracking-tight mt-2;
   letter-spacing: -0.025em;
   line-height: 1.1;
 }
 
+.dashboard-dense .status-metric-value-lg {
+  @apply text-lg mt-1;
+}
+
 .status-metric-detail {
   @apply text-[10px] text-gray-500 dark:text-gray-500 font-medium mt-1.5;
+}
+
+.dashboard-dense .status-metric-detail {
+  @apply mt-0.5;
 }
 
 /* Queue Overview Grid */
@@ -676,12 +771,20 @@ function navigateToStreams() {
   @apply grid grid-cols-2 gap-4;
 }
 
+.dashboard-dense .queue-overview-grid {
+  @apply gap-2;
+}
+
 .queue-overview-item {
-  @apply text-center p-4 rounded-lg;
+  @apply p-4 rounded-lg;
   @apply bg-gradient-to-br from-gray-50 to-gray-100/50;
   @apply dark:from-gray-900/40 dark:to-gray-900/20;
   @apply border border-gray-200/40 dark:border-gray-800/40;
   transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.dashboard-dense .queue-overview-item {
+  @apply p-2.5 rounded-md;
 }
 
 .queue-overview-item.metric-card-clickable:hover {
@@ -697,6 +800,10 @@ function navigateToStreams() {
   letter-spacing: 0.08em;
 }
 
+.dashboard-dense .queue-overview-label {
+  @apply text-[8px] mb-1;
+}
+
 .queue-overview-value {
   @apply text-3xl font-bold tracking-tight;
   @apply text-gray-900 dark:text-gray-100;
@@ -704,8 +811,16 @@ function navigateToStreams() {
   line-height: 1;
 }
 
+.dashboard-dense .queue-overview-value {
+  @apply text-xl;
+}
+
 .queue-overview-subtext {
   @apply text-[10px] text-gray-500 dark:text-gray-500 font-medium mt-2;
+}
+
+.dashboard-dense .queue-overview-subtext {
+  @apply mt-1;
 }
 
 
@@ -789,6 +904,10 @@ function navigateToStreams() {
   @apply grid grid-cols-1 lg:grid-cols-2 gap-5;
 }
 
+.dashboard-dense .charts-grid {
+  @apply gap-3;
+}
+
 .chart-card {
   @apply bg-white dark:bg-[#161b22] border border-gray-200/40 dark:border-gray-800/40;
   @apply rounded-xl overflow-hidden;
@@ -798,6 +917,10 @@ function navigateToStreams() {
 
 .dark .chart-card {
   box-shadow: 0 1px 3px 0 rgba(0, 0, 0, 0.4), 0 1px 2px 0 rgba(0, 0, 0, 0.2);
+}
+
+.dashboard-dense .chart-card {
+  @apply rounded-lg;
 }
 
 .chart-card-clickable {
@@ -824,9 +947,17 @@ function navigateToStreams() {
   background: transparent;
 }
 
+.dashboard-dense .chart-header {
+  @apply px-3 py-2;
+}
+
 .chart-title {
   @apply text-sm font-semibold text-gray-900 dark:text-white tracking-tight;
   letter-spacing: -0.01em;
+}
+
+.dashboard-dense .chart-title {
+  @apply text-xs;
 }
 
 .chart-badge {
@@ -839,8 +970,16 @@ function navigateToStreams() {
   border-color: rgba(255, 255, 255, 0.06);
 }
 
+.dashboard-dense .chart-badge {
+  @apply text-[9px] px-2 py-0.5;
+}
+
 .chart-body {
   @apply p-5;
+}
+
+.dashboard-dense .chart-body {
+  @apply p-2;
 }
 
 /* Error card */

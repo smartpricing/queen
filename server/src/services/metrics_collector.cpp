@@ -2,6 +2,7 @@
 #include "queen/poll_intention_registry.hpp"
 #include "queen/stream_poll_intention_registry.hpp"
 #include "queen/response_queue.hpp"
+#include "queen/shared_state_manager.hpp"
 
 namespace queen {
 
@@ -12,6 +13,7 @@ MetricsCollector::MetricsCollector(
     std::shared_ptr<PollIntentionRegistry> poll_intention_registry,
     std::shared_ptr<StreamPollIntentionRegistry> stream_poll_intention_registry,
     std::shared_ptr<ResponseRegistry> response_registry,
+    std::shared_ptr<SharedStateManager> shared_state_manager,
     const std::string& hostname,
     int port,
     const std::string& worker_id,
@@ -23,6 +25,7 @@ MetricsCollector::MetricsCollector(
     poll_intention_registry_(poll_intention_registry),
     stream_poll_intention_registry_(stream_poll_intention_registry),
     response_registry_(response_registry),
+    shared_state_manager_(shared_state_manager),
     start_time_(std::chrono::steady_clock::now()),
     hostname_(hostname),
     port_(port),
@@ -155,6 +158,66 @@ MetricsSample MetricsCollector::collect_sample() {
         now - start_time_
     );
     sample.uptime_seconds = uptime.count();
+    
+    // SharedState / UDPSYNC metrics
+    if (shared_state_manager_ && shared_state_manager_->is_enabled()) {
+        sample.shared_state_enabled = true;
+        
+        try {
+            auto stats = shared_state_manager_->get_stats();
+            
+            // Queue config cache
+            if (stats.contains("queue_config_cache")) {
+                auto& qc = stats["queue_config_cache"];
+                sample.qc_cache_size = qc.value("size", 0);
+                sample.qc_cache_hits = qc.value("hits", 0ULL);
+                sample.qc_cache_misses = qc.value("misses", 0ULL);
+            }
+            
+            // Partition ID cache
+            if (stats.contains("partition_id_cache")) {
+                auto& pid = stats["partition_id_cache"];
+                sample.pid_cache_size = pid.value("size", 0);
+                sample.pid_cache_hits = pid.value("hits", 0ULL);
+                sample.pid_cache_misses = pid.value("misses", 0ULL);
+                sample.pid_cache_evictions = pid.value("evictions", 0ULL);
+            }
+            
+            // Lease hints
+            if (stats.contains("lease_hints")) {
+                auto& lh = stats["lease_hints"];
+                sample.lease_hints_size = lh.value("size", 0);
+                sample.lease_hints_used = lh.value("hints_used", 0ULL);
+                sample.lease_hints_wrong = lh.value("hints_wrong", 0ULL);
+            }
+            
+            // Consumer presence
+            if (stats.contains("consumer_presence")) {
+                auto& cp = stats["consumer_presence"];
+                sample.consumer_queues_tracked = cp.value("queues_tracked", 0);
+                sample.consumer_servers_tracked = cp.value("servers_tracked", 0);
+                sample.consumer_total_registrations = cp.value("total_registrations", 0);
+            }
+            
+            // Server health
+            if (stats.contains("server_health")) {
+                auto& sh = stats["server_health"];
+                sample.servers_alive = sh.value("servers_alive", 0);
+                sample.servers_dead = sh.value("servers_dead", 0);
+            }
+            
+            // Transport
+            if (stats.contains("transport")) {
+                auto& tr = stats["transport"];
+                sample.transport_sent = tr.value("messages_sent", 0ULL);
+                sample.transport_received = tr.value("messages_received", 0ULL);
+                sample.transport_dropped = tr.value("messages_dropped", 0ULL);
+            }
+            
+        } catch (const std::exception& e) {
+            spdlog::warn("Failed to collect SharedState metrics: {}", e.what());
+        }
+    }
     
     return sample;
 }
@@ -342,6 +405,37 @@ AggregatedMetrics MetricsCollector::aggregate(const std::vector<MetricsSample>& 
     agg.poll_intention_registry_size = aggregate_metric([](const auto& s) { return s.poll_intention_registry_size; });
     agg.stream_poll_intention_registry_size = aggregate_metric([](const auto& s) { return s.stream_poll_intention_registry_size; });
     agg.response_registry_size = aggregate_metric([](const auto& s) { return s.response_registry_size; });
+    
+    // SharedState / UDPSYNC metrics
+    // Check if any sample has shared_state enabled
+    agg.shared_state_enabled = std::any_of(samples.begin(), samples.end(), 
+        [](const MetricsSample& s) { return s.shared_state_enabled; });
+    
+    if (agg.shared_state_enabled) {
+        agg.qc_cache_size = aggregate_metric([](const auto& s) { return s.qc_cache_size; });
+        agg.qc_cache_hits = aggregate_metric([](const auto& s) { return s.qc_cache_hits; });
+        agg.qc_cache_misses = aggregate_metric([](const auto& s) { return s.qc_cache_misses; });
+        
+        agg.pid_cache_size = aggregate_metric([](const auto& s) { return s.pid_cache_size; });
+        agg.pid_cache_hits = aggregate_metric([](const auto& s) { return s.pid_cache_hits; });
+        agg.pid_cache_misses = aggregate_metric([](const auto& s) { return s.pid_cache_misses; });
+        agg.pid_cache_evictions = aggregate_metric([](const auto& s) { return s.pid_cache_evictions; });
+        
+        agg.lease_hints_size = aggregate_metric([](const auto& s) { return s.lease_hints_size; });
+        agg.lease_hints_used = aggregate_metric([](const auto& s) { return s.lease_hints_used; });
+        agg.lease_hints_wrong = aggregate_metric([](const auto& s) { return s.lease_hints_wrong; });
+        
+        agg.consumer_queues_tracked = aggregate_metric([](const auto& s) { return s.consumer_queues_tracked; });
+        agg.consumer_servers_tracked = aggregate_metric([](const auto& s) { return s.consumer_servers_tracked; });
+        agg.consumer_total_registrations = aggregate_metric([](const auto& s) { return s.consumer_total_registrations; });
+        
+        agg.servers_alive = aggregate_metric([](const auto& s) { return s.servers_alive; });
+        agg.servers_dead = aggregate_metric([](const auto& s) { return s.servers_dead; });
+        
+        agg.transport_sent = aggregate_metric([](const auto& s) { return s.transport_sent; });
+        agg.transport_received = aggregate_metric([](const auto& s) { return s.transport_received; });
+        agg.transport_dropped = aggregate_metric([](const auto& s) { return s.transport_dropped; });
+    }
     
     return agg;
 }

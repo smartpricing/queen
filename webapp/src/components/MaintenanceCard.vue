@@ -107,7 +107,7 @@ const maintenanceMode = ref(false);
 const bufferedMessages = ref(0);
 const bufferHealthy = ref(true);
 const bufferStats = ref(null);
-const sharedState = ref(null);
+const sharedStateRaw = ref(null);
 let refreshInterval = null;
 
 const failedFiles = computed(() => {
@@ -117,24 +117,80 @@ const failedFiles = computed(() => {
   return bufferStats.value.failedFiles;
 });
 
+// Transform DB metrics format to display format
+const sharedState = computed(() => {
+  const ss = sharedStateRaw.value;
+  if (!ss || !ss.enabled) return null;
+  
+  // Calculate hit rates from hits/misses
+  const calcHitRate = (hits, misses) => {
+    const total = (hits || 0) + (misses || 0);
+    return total > 0 ? hits / total : 1.0;
+  };
+  
+  return {
+    enabled: true,
+    server_health: {
+      servers_alive: ss.server_health?.alive || 0,
+      servers_dead: ss.server_health?.dead || 0
+    },
+    transport: {
+      peer_count: (ss.server_health?.alive || 0) + (ss.server_health?.dead || 0),
+      messages_sent: ss.transport?.sent || 0,
+      messages_received: ss.transport?.received || 0
+    },
+    queue_config_cache: {
+      size: ss.queue_config_cache?.size || 0,
+      hits: ss.queue_config_cache?.hits || 0,
+      misses: ss.queue_config_cache?.misses || 0,
+      hit_rate: calcHitRate(ss.queue_config_cache?.hits, ss.queue_config_cache?.misses)
+    },
+    partition_id_cache: {
+      size: ss.partition_id_cache?.size || 0,
+      hits: ss.partition_id_cache?.hits || 0,
+      misses: ss.partition_id_cache?.misses || 0,
+      hit_rate: calcHitRate(ss.partition_id_cache?.hits, ss.partition_id_cache?.misses)
+    },
+    consumer_presence: {
+      queues_tracked: ss.consumer_presence?.queues_tracked || 0,
+      servers_tracked: ss.consumer_presence?.servers_tracked || 0
+    },
+    lease_hints: {
+      size: ss.lease_hints?.size || 0,
+      hints_used: ss.lease_hints?.used || 0,
+      hints_wrong: ss.lease_hints?.wrong || 0,
+      accuracy: calcHitRate(ss.lease_hints?.used, ss.lease_hints?.wrong)
+    }
+  };
+});
+
 async function loadData() {
   // Only show loading on initial load
-  if (!sharedState.value && !maintenanceMode.value) {
-  loading.value = true;
+  if (!sharedStateRaw.value && !maintenanceMode.value) {
+    loading.value = true;
   }
   error.value = null;
   
   try {
-    const [maintenanceRes, sharedStateRes] = await Promise.all([
+    // Fetch maintenance status and system metrics (DB) in parallel
+    const [maintenanceRes, systemMetricsRes] = await Promise.all([
       systemApi.getMaintenanceStatus(),
-      systemMetricsApi.getSharedStateStats().catch(() => ({ data: null }))
+      systemMetricsApi.getSystemMetrics().catch(() => ({ data: null }))
     ]);
     
     maintenanceMode.value = maintenanceRes.data.maintenanceMode;
     bufferedMessages.value = maintenanceRes.data.bufferedMessages || 0;
     bufferHealthy.value = maintenanceRes.data.bufferHealthy !== false;
     bufferStats.value = maintenanceRes.data.bufferStats || null;
-    sharedState.value = sharedStateRes.data;
+    
+    // Extract shared_state from the latest system metrics
+    if (systemMetricsRes.data?.replicas?.length > 0) {
+      const firstReplica = systemMetricsRes.data.replicas[0];
+      if (firstReplica?.timeSeries?.length > 0) {
+        const lastPoint = firstReplica.timeSeries[firstReplica.timeSeries.length - 1];
+        sharedStateRaw.value = lastPoint?.metrics?.shared_state || null;
+      }
+    }
   } catch (err) {
     error.value = err.message;
   } finally {

@@ -1,7 +1,7 @@
 <template>
   <div class="threadpool-chart">
     <!-- Metric Toggles -->
-    <div class="flex items-center gap-2 flex-wrap mb-4">
+    <div class="flex items-center gap-1.5 flex-wrap mb-2">
       <button
         @click="selectedMetrics.dbPoolSize = !selectedMetrics.dbPoolSize"
         :class="[
@@ -86,6 +86,10 @@ const props = defineProps({
     type: String,
     default: 'avg',
   },
+  viewMode: {
+    type: String,
+    default: 'individual', // 'individual' or 'aggregate'
+  },
 });
 
 const selectedMetrics = ref({
@@ -106,6 +110,18 @@ const replicaColors = [
   { dbPool: 'rgba(75, 85, 99, 1)', dbQueue: 'rgba(217, 119, 6, 1)', sysPool: 'rgba(96, 165, 250, 1)', sysQueue: 'rgba(74, 222, 128, 1)' },
 ];
 
+// Helper function to aggregate values across replicas
+function aggregateValues(values, aggregationType) {
+  if (values.length === 0) return null;
+  if (aggregationType === 'max') {
+    return Math.max(...values);
+  } else if (aggregationType === 'min') {
+    return Math.min(...values);
+  } else {
+    return values.reduce((a, b) => a + b, 0) / values.length;
+  }
+}
+
 const chartData = computed(() => {
   if (!props.data?.replicas?.length) return null;
 
@@ -124,94 +140,217 @@ const chartData = computed(() => {
   // Determine if we need to show dates (time range > 24 hours)
   const showDates = isMultiDay();
 
-  replicas.forEach((replica, replicaIndex) => {
-    const colorScheme = replicaColors[replicaIndex % replicaColors.length];
-    const replicaLabel = `${replica.hostname}`;
+  if (props.viewMode === 'aggregate') {
+    // Aggregate mode: combine all replicas into single lines per metric
+    const aggregateColors = {
+      dbPool: 'rgba(107, 114, 128, 1)',
+      dbQueue: 'rgba(245, 158, 11, 1)',
+      sysPool: 'rgba(255, 107, 0, 1)',
+      sysQueue: 'rgba(34, 197, 94, 1)',
+    };
 
     if (selectedMetrics.value.dbPoolSize) {
-      const dataMap = new Map();
-      replica.timeSeries.forEach(point => {
-        const value = getNestedValue(point.metrics, 'threadpool.db.pool_size');
-        dataMap.set(point.timestamp, value?.[props.aggregation] ?? null);
+      const aggregatedData = sortedTimestamps.map(ts => {
+        const values = [];
+        replicas.forEach(replica => {
+          const point = replica.timeSeries.find(p => p.timestamp === ts);
+          if (point) {
+            const value = getNestedValue(point.metrics, 'threadpool.db.pool_size');
+            const rawValue = value?.[props.aggregation];
+            if (rawValue !== undefined && rawValue !== null) values.push(rawValue);
+          }
+        });
+        return aggregateValues(values, props.aggregation);
       });
 
       datasets.push({
-        label: `${replicaLabel} - DB Pool Size`,
-        data: sortedTimestamps.map(ts => dataMap.get(ts) ?? null),
-        borderColor: colorScheme.dbPool,
-        backgroundColor: 'transparent',
+        label: `DB Pool Size (${props.aggregation})`,
+        data: aggregatedData,
+        borderColor: aggregateColors.dbPool,
+        backgroundColor: 'rgba(107, 114, 128, 0.1)',
         borderWidth: 2,
-        fill: false,
-        tension: 0,
+        fill: true,
+        tension: 0.2,
         pointRadius: 0,
         pointHoverRadius: 5,
-        pointHoverBackgroundColor: colorScheme.dbPool,
+        pointHoverBackgroundColor: aggregateColors.dbPool,
       });
     }
 
     if (selectedMetrics.value.dbQueueSize) {
-      const dataMap = new Map();
-      replica.timeSeries.forEach(point => {
-        const value = getNestedValue(point.metrics, 'threadpool.db.queue_size');
-        dataMap.set(point.timestamp, value?.[props.aggregation] ?? null);
+      const aggregatedData = sortedTimestamps.map(ts => {
+        const values = [];
+        replicas.forEach(replica => {
+          const point = replica.timeSeries.find(p => p.timestamp === ts);
+          if (point) {
+            const value = getNestedValue(point.metrics, 'threadpool.db.queue_size');
+            const rawValue = value?.[props.aggregation];
+            if (rawValue !== undefined && rawValue !== null) values.push(rawValue);
+          }
+        });
+        return aggregateValues(values, props.aggregation);
       });
 
       datasets.push({
-        label: `${replicaLabel} - DB Queue`,
-        data: sortedTimestamps.map(ts => dataMap.get(ts) ?? null),
-        borderColor: colorScheme.dbQueue,
-        backgroundColor: 'transparent',
+        label: `DB Queue (${props.aggregation})`,
+        data: aggregatedData,
+        borderColor: aggregateColors.dbQueue,
+        backgroundColor: 'rgba(245, 158, 11, 0.1)',
         borderWidth: 2,
-        fill: false,
-        tension: 0,
+        fill: true,
+        tension: 0.2,
         pointRadius: 0,
         pointHoverRadius: 5,
-        pointHoverBackgroundColor: colorScheme.dbQueue,
+        pointHoverBackgroundColor: aggregateColors.dbQueue,
       });
     }
 
     if (selectedMetrics.value.systemPoolSize) {
-      const dataMap = new Map();
-      replica.timeSeries.forEach(point => {
-        const value = getNestedValue(point.metrics, 'threadpool.system.pool_size');
-        dataMap.set(point.timestamp, value?.[props.aggregation] ?? null);
+      const aggregatedData = sortedTimestamps.map(ts => {
+        const values = [];
+        replicas.forEach(replica => {
+          const point = replica.timeSeries.find(p => p.timestamp === ts);
+          if (point) {
+            const value = getNestedValue(point.metrics, 'threadpool.system.pool_size');
+            const rawValue = value?.[props.aggregation];
+            if (rawValue !== undefined && rawValue !== null) values.push(rawValue);
+          }
+        });
+        return aggregateValues(values, props.aggregation);
       });
 
       datasets.push({
-        label: `${replicaLabel} - System Pool`,
-        data: sortedTimestamps.map(ts => dataMap.get(ts) ?? null),
-        borderColor: colorScheme.sysPool,
-        backgroundColor: 'transparent',
+        label: `System Pool (${props.aggregation})`,
+        data: aggregatedData,
+        borderColor: aggregateColors.sysPool,
+        backgroundColor: 'rgba(255, 107, 0, 0.1)',
         borderWidth: 2,
-        fill: false,
-        tension: 0,
+        fill: true,
+        tension: 0.2,
         pointRadius: 0,
         pointHoverRadius: 5,
-        pointHoverBackgroundColor: colorScheme.sysPool,
+        pointHoverBackgroundColor: aggregateColors.sysPool,
       });
     }
 
     if (selectedMetrics.value.systemQueueSize) {
-      const dataMap = new Map();
-      replica.timeSeries.forEach(point => {
-        const value = getNestedValue(point.metrics, 'threadpool.system.queue_size');
-        dataMap.set(point.timestamp, value?.[props.aggregation] ?? null);
+      const aggregatedData = sortedTimestamps.map(ts => {
+        const values = [];
+        replicas.forEach(replica => {
+          const point = replica.timeSeries.find(p => p.timestamp === ts);
+          if (point) {
+            const value = getNestedValue(point.metrics, 'threadpool.system.queue_size');
+            const rawValue = value?.[props.aggregation];
+            if (rawValue !== undefined && rawValue !== null) values.push(rawValue);
+          }
+        });
+        return aggregateValues(values, props.aggregation);
       });
 
       datasets.push({
-        label: `${replicaLabel} - System Queue`,
-        data: sortedTimestamps.map(ts => dataMap.get(ts) ?? null),
-        borderColor: colorScheme.sysQueue,
-        backgroundColor: 'transparent',
+        label: `System Queue (${props.aggregation})`,
+        data: aggregatedData,
+        borderColor: aggregateColors.sysQueue,
+        backgroundColor: 'rgba(34, 197, 94, 0.1)',
         borderWidth: 2,
-        fill: false,
-        tension: 0,
+        fill: true,
+        tension: 0.2,
         pointRadius: 0,
         pointHoverRadius: 5,
-        pointHoverBackgroundColor: colorScheme.sysQueue,
+        pointHoverBackgroundColor: aggregateColors.sysQueue,
       });
     }
-  });
+  } else {
+    // Individual mode: one line per replica per metric
+    replicas.forEach((replica, replicaIndex) => {
+      const colorScheme = replicaColors[replicaIndex % replicaColors.length];
+      const replicaLabel = `${replica.hostname}`;
+
+      if (selectedMetrics.value.dbPoolSize) {
+        const dataMap = new Map();
+        replica.timeSeries.forEach(point => {
+          const value = getNestedValue(point.metrics, 'threadpool.db.pool_size');
+          dataMap.set(point.timestamp, value?.[props.aggregation] ?? null);
+        });
+
+        datasets.push({
+          label: `${replicaLabel} - DB Pool Size`,
+          data: sortedTimestamps.map(ts => dataMap.get(ts) ?? null),
+          borderColor: colorScheme.dbPool,
+          backgroundColor: 'transparent',
+          borderWidth: 2,
+          fill: false,
+          tension: 0,
+          pointRadius: 0,
+          pointHoverRadius: 5,
+          pointHoverBackgroundColor: colorScheme.dbPool,
+        });
+      }
+
+      if (selectedMetrics.value.dbQueueSize) {
+        const dataMap = new Map();
+        replica.timeSeries.forEach(point => {
+          const value = getNestedValue(point.metrics, 'threadpool.db.queue_size');
+          dataMap.set(point.timestamp, value?.[props.aggregation] ?? null);
+        });
+
+        datasets.push({
+          label: `${replicaLabel} - DB Queue`,
+          data: sortedTimestamps.map(ts => dataMap.get(ts) ?? null),
+          borderColor: colorScheme.dbQueue,
+          backgroundColor: 'transparent',
+          borderWidth: 2,
+          fill: false,
+          tension: 0,
+          pointRadius: 0,
+          pointHoverRadius: 5,
+          pointHoverBackgroundColor: colorScheme.dbQueue,
+        });
+      }
+
+      if (selectedMetrics.value.systemPoolSize) {
+        const dataMap = new Map();
+        replica.timeSeries.forEach(point => {
+          const value = getNestedValue(point.metrics, 'threadpool.system.pool_size');
+          dataMap.set(point.timestamp, value?.[props.aggregation] ?? null);
+        });
+
+        datasets.push({
+          label: `${replicaLabel} - System Pool`,
+          data: sortedTimestamps.map(ts => dataMap.get(ts) ?? null),
+          borderColor: colorScheme.sysPool,
+          backgroundColor: 'transparent',
+          borderWidth: 2,
+          fill: false,
+          tension: 0,
+          pointRadius: 0,
+          pointHoverRadius: 5,
+          pointHoverBackgroundColor: colorScheme.sysPool,
+        });
+      }
+
+      if (selectedMetrics.value.systemQueueSize) {
+        const dataMap = new Map();
+        replica.timeSeries.forEach(point => {
+          const value = getNestedValue(point.metrics, 'threadpool.system.queue_size');
+          dataMap.set(point.timestamp, value?.[props.aggregation] ?? null);
+        });
+
+        datasets.push({
+          label: `${replicaLabel} - System Queue`,
+          data: sortedTimestamps.map(ts => dataMap.get(ts) ?? null),
+          borderColor: colorScheme.sysQueue,
+          backgroundColor: 'transparent',
+          borderWidth: 2,
+          fill: false,
+          tension: 0,
+          pointRadius: 0,
+          pointHoverRadius: 5,
+          pointHoverBackgroundColor: colorScheme.sysQueue,
+        });
+      }
+    });
+  }
 
   return {
     labels: sortedTimestamps.map(ts => formatTimestamp(ts, showDates)),
@@ -337,7 +476,7 @@ const chartOptions = {
 }
 
 .chart-container {
-  height: 350px;
+  height: 200px;
   position: relative;
 }
 

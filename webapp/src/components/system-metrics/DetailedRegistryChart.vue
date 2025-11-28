@@ -1,7 +1,7 @@
 <template>
   <div class="registry-chart">
     <!-- Metric Toggles -->
-    <div class="flex items-center gap-2 flex-wrap mb-4">
+    <div class="flex items-center gap-1.5 flex-wrap mb-2">
       <button
         @click="selectedMetrics.pollIntention = !selectedMetrics.pollIntention"
         :class="[
@@ -76,6 +76,10 @@ const props = defineProps({
     type: String,
     default: 'avg',
   },
+  viewMode: {
+    type: String,
+    default: 'individual', // 'individual' or 'aggregate'
+  },
 });
 
 const selectedMetrics = ref({
@@ -95,6 +99,18 @@ const replicaColors = [
   { pollIntention: 'rgba(96, 165, 250, 1)', streamPollIntention: 'rgba(192, 132, 252, 1)', response: 'rgba(248, 113, 113, 1)' },
 ];
 
+// Helper function to aggregate values across replicas
+function aggregateValues(values, aggregationType) {
+  if (values.length === 0) return null;
+  if (aggregationType === 'max') {
+    return Math.max(...values);
+  } else if (aggregationType === 'min') {
+    return Math.min(...values);
+  } else {
+    return values.reduce((a, b) => a + b, 0) / values.length;
+  }
+}
+
 const chartData = computed(() => {
   if (!props.data?.replicas?.length) return null;
 
@@ -113,73 +129,167 @@ const chartData = computed(() => {
   // Determine if we need to show dates (time range > 24 hours)
   const showDates = isMultiDay();
 
-  replicas.forEach((replica, replicaIndex) => {
-    const colorScheme = replicaColors[replicaIndex % replicaColors.length];
-    const replicaLabel = `${replica.hostname}`;
+  if (props.viewMode === 'aggregate') {
+    // Aggregate mode: combine all replicas into single lines per metric
+    const aggregateColors = {
+      pollIntention: 'rgba(255, 107, 0, 1)',
+      streamPollIntention: 'rgba(168, 85, 247, 1)',
+      response: 'rgba(244, 63, 94, 1)',
+    };
 
     if (selectedMetrics.value.pollIntention) {
-      const dataMap = new Map();
-      replica.timeSeries.forEach(point => {
-        const value = getNestedValue(point.metrics, 'registries.poll_intention');
-        dataMap.set(point.timestamp, value?.[props.aggregation] ?? null);
+      const aggregatedData = sortedTimestamps.map(ts => {
+        const values = [];
+        replicas.forEach(replica => {
+          const point = replica.timeSeries.find(p => p.timestamp === ts);
+          if (point) {
+            const value = getNestedValue(point.metrics, 'registries.poll_intention');
+            const rawValue = value?.[props.aggregation];
+            if (rawValue !== undefined && rawValue !== null) values.push(rawValue);
+          }
+        });
+        return aggregateValues(values, props.aggregation);
       });
 
       datasets.push({
-        label: `${replicaLabel} - Poll Intentions`,
-        data: sortedTimestamps.map(ts => dataMap.get(ts) ?? null),
-        borderColor: colorScheme.pollIntention,
-        backgroundColor: 'transparent',
+        label: `Poll Intentions (${props.aggregation})`,
+        data: aggregatedData,
+        borderColor: aggregateColors.pollIntention,
+        backgroundColor: 'rgba(255, 107, 0, 0.1)',
         borderWidth: 2,
-        fill: false,
-        tension: 0,
+        fill: true,
+        tension: 0.2,
         pointRadius: 0,
         pointHoverRadius: 5,
-        pointHoverBackgroundColor: colorScheme.pollIntention,
+        pointHoverBackgroundColor: aggregateColors.pollIntention,
       });
     }
 
     if (selectedMetrics.value.streamPollIntention) {
-      const dataMap = new Map();
-      replica.timeSeries.forEach(point => {
-        const value = getNestedValue(point.metrics, 'registries.stream_poll_intention');
-        dataMap.set(point.timestamp, value?.[props.aggregation] ?? null);
+      const aggregatedData = sortedTimestamps.map(ts => {
+        const values = [];
+        replicas.forEach(replica => {
+          const point = replica.timeSeries.find(p => p.timestamp === ts);
+          if (point) {
+            const value = getNestedValue(point.metrics, 'registries.stream_poll_intention');
+            const rawValue = value?.[props.aggregation];
+            if (rawValue !== undefined && rawValue !== null) values.push(rawValue);
+          }
+        });
+        return aggregateValues(values, props.aggregation);
       });
 
       datasets.push({
-        label: `${replicaLabel} - Stream Poll Intentions`,
-        data: sortedTimestamps.map(ts => dataMap.get(ts) ?? null),
-        borderColor: colorScheme.streamPollIntention,
-        backgroundColor: 'transparent',
+        label: `Stream Poll Intentions (${props.aggregation})`,
+        data: aggregatedData,
+        borderColor: aggregateColors.streamPollIntention,
+        backgroundColor: 'rgba(168, 85, 247, 0.1)',
         borderWidth: 2,
-        fill: false,
-        tension: 0,
+        fill: true,
+        tension: 0.2,
         pointRadius: 0,
         pointHoverRadius: 5,
-        pointHoverBackgroundColor: colorScheme.streamPollIntention,
+        pointHoverBackgroundColor: aggregateColors.streamPollIntention,
       });
     }
 
     if (selectedMetrics.value.response) {
-      const dataMap = new Map();
-      replica.timeSeries.forEach(point => {
-        const value = getNestedValue(point.metrics, 'registries.response');
-        dataMap.set(point.timestamp, value?.[props.aggregation] ?? null);
+      const aggregatedData = sortedTimestamps.map(ts => {
+        const values = [];
+        replicas.forEach(replica => {
+          const point = replica.timeSeries.find(p => p.timestamp === ts);
+          if (point) {
+            const value = getNestedValue(point.metrics, 'registries.response');
+            const rawValue = value?.[props.aggregation];
+            if (rawValue !== undefined && rawValue !== null) values.push(rawValue);
+          }
+        });
+        return aggregateValues(values, props.aggregation);
       });
 
       datasets.push({
-        label: `${replicaLabel} - Response Registry`,
-        data: sortedTimestamps.map(ts => dataMap.get(ts) ?? null),
-        borderColor: colorScheme.response,
-        backgroundColor: 'transparent',
+        label: `Response Registry (${props.aggregation})`,
+        data: aggregatedData,
+        borderColor: aggregateColors.response,
+        backgroundColor: 'rgba(244, 63, 94, 0.1)',
         borderWidth: 2,
-        fill: false,
-        tension: 0,
+        fill: true,
+        tension: 0.2,
         pointRadius: 0,
         pointHoverRadius: 5,
-        pointHoverBackgroundColor: colorScheme.response,
+        pointHoverBackgroundColor: aggregateColors.response,
       });
     }
-  });
+  } else {
+    // Individual mode: one line per replica per metric
+    replicas.forEach((replica, replicaIndex) => {
+      const colorScheme = replicaColors[replicaIndex % replicaColors.length];
+      const replicaLabel = `${replica.hostname}`;
+
+      if (selectedMetrics.value.pollIntention) {
+        const dataMap = new Map();
+        replica.timeSeries.forEach(point => {
+          const value = getNestedValue(point.metrics, 'registries.poll_intention');
+          dataMap.set(point.timestamp, value?.[props.aggregation] ?? null);
+        });
+
+        datasets.push({
+          label: `${replicaLabel} - Poll Intentions`,
+          data: sortedTimestamps.map(ts => dataMap.get(ts) ?? null),
+          borderColor: colorScheme.pollIntention,
+          backgroundColor: 'transparent',
+          borderWidth: 2,
+          fill: false,
+          tension: 0,
+          pointRadius: 0,
+          pointHoverRadius: 5,
+          pointHoverBackgroundColor: colorScheme.pollIntention,
+        });
+      }
+
+      if (selectedMetrics.value.streamPollIntention) {
+        const dataMap = new Map();
+        replica.timeSeries.forEach(point => {
+          const value = getNestedValue(point.metrics, 'registries.stream_poll_intention');
+          dataMap.set(point.timestamp, value?.[props.aggregation] ?? null);
+        });
+
+        datasets.push({
+          label: `${replicaLabel} - Stream Poll Intentions`,
+          data: sortedTimestamps.map(ts => dataMap.get(ts) ?? null),
+          borderColor: colorScheme.streamPollIntention,
+          backgroundColor: 'transparent',
+          borderWidth: 2,
+          fill: false,
+          tension: 0,
+          pointRadius: 0,
+          pointHoverRadius: 5,
+          pointHoverBackgroundColor: colorScheme.streamPollIntention,
+        });
+      }
+
+      if (selectedMetrics.value.response) {
+        const dataMap = new Map();
+        replica.timeSeries.forEach(point => {
+          const value = getNestedValue(point.metrics, 'registries.response');
+          dataMap.set(point.timestamp, value?.[props.aggregation] ?? null);
+        });
+
+        datasets.push({
+          label: `${replicaLabel} - Response Registry`,
+          data: sortedTimestamps.map(ts => dataMap.get(ts) ?? null),
+          borderColor: colorScheme.response,
+          backgroundColor: 'transparent',
+          borderWidth: 2,
+          fill: false,
+          tension: 0,
+          pointRadius: 0,
+          pointHoverRadius: 5,
+          pointHoverBackgroundColor: colorScheme.response,
+        });
+      }
+    });
+  }
 
   return {
     labels: sortedTimestamps.map(ts => formatTimestamp(ts, showDates)),
@@ -305,7 +415,7 @@ const chartOptions = {
 }
 
 .chart-container {
-  height: 350px;
+  height: 200px;
   position: relative;
 }
 

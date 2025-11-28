@@ -40,6 +40,10 @@ const props = defineProps({
     type: String,
     default: 'avg',
   },
+  viewMode: {
+    type: String,
+    default: 'individual', // 'individual' or 'aggregate'
+  },
 });
 
 function getNestedValue(obj, path) {
@@ -72,32 +76,71 @@ const chartData = computed(() => {
   // Determine if we need to show dates (time range > 24 hours)
   const showDates = isMultiDay();
 
-  // Create datasets for each replica
-  replicas.forEach((replica, replicaIndex) => {
-    const colorScheme = replicaColors[replicaIndex % replicaColors.length];
-    const replicaLabel = `${replica.hostname}`;
-
-    // Memory MB dataset for this replica
-    const dataMap = new Map();
-    replica.timeSeries.forEach(point => {
-      const value = getNestedValue(point.metrics, 'memory.rss_bytes');
-      const rawValue = value?.[props.aggregation] !== undefined ? value[props.aggregation] : null;
-      dataMap.set(point.timestamp, rawValue !== null ? (rawValue / 1024 / 1024) : null);
+  if (props.viewMode === 'aggregate') {
+    // Aggregate mode: combine all replicas into a single line
+    const aggregatedData = sortedTimestamps.map(ts => {
+      const values = [];
+      replicas.forEach(replica => {
+        const point = replica.timeSeries.find(p => p.timestamp === ts);
+        if (point) {
+          const value = getNestedValue(point.metrics, 'memory.rss_bytes');
+          const rawValue = value?.[props.aggregation];
+          if (rawValue !== undefined && rawValue !== null) {
+            values.push(rawValue / 1024 / 1024);
+          }
+        }
+      });
+      if (values.length === 0) return null;
+      // Aggregate based on selected aggregation type
+      if (props.aggregation === 'max') {
+        return Math.max(...values);
+      } else if (props.aggregation === 'min') {
+        return Math.min(...values);
+      } else {
+        return values.reduce((a, b) => a + b, 0) / values.length;
+      }
     });
 
     datasets.push({
-      label: replicaLabel,
-      data: sortedTimestamps.map(ts => dataMap.get(ts) ?? null),
-      borderColor: colorScheme.color,
-      backgroundColor: colorScheme.bg,
+      label: `All Servers (${props.aggregation})`,
+      data: aggregatedData,
+      borderColor: 'rgba(168, 85, 247, 1)',
+      backgroundColor: 'rgba(168, 85, 247, 0.1)',
       borderWidth: 2,
-      fill: false,
-      tension: 0,
+      fill: true,
+      tension: 0.2,
       pointRadius: 0,
       pointHoverRadius: 5,
-      pointHoverBackgroundColor: colorScheme.color,
+      pointHoverBackgroundColor: 'rgba(168, 85, 247, 1)',
     });
-  });
+  } else {
+    // Individual mode: one line per replica
+    replicas.forEach((replica, replicaIndex) => {
+      const colorScheme = replicaColors[replicaIndex % replicaColors.length];
+      const replicaLabel = `${replica.hostname}`;
+
+      // Memory MB dataset for this replica
+      const dataMap = new Map();
+      replica.timeSeries.forEach(point => {
+        const value = getNestedValue(point.metrics, 'memory.rss_bytes');
+        const rawValue = value?.[props.aggregation] !== undefined ? value[props.aggregation] : null;
+        dataMap.set(point.timestamp, rawValue !== null ? (rawValue / 1024 / 1024) : null);
+      });
+
+      datasets.push({
+        label: replicaLabel,
+        data: sortedTimestamps.map(ts => dataMap.get(ts) ?? null),
+        borderColor: colorScheme.color,
+        backgroundColor: colorScheme.bg,
+        borderWidth: 2,
+        fill: false,
+        tension: 0,
+        pointRadius: 0,
+        pointHoverRadius: 5,
+        pointHoverBackgroundColor: colorScheme.color,
+      });
+    });
+  }
 
   return {
     labels: sortedTimestamps.map(ts => formatTimestamp(ts, showDates)),
@@ -224,7 +267,7 @@ const chartOptions = {
 }
 
 .chart-container {
-  height: 300px;
+  height: 180px;
   position: relative;
 }
 </style>

@@ -1,40 +1,86 @@
 <template>
-  <div class="page-professional">
+  <div class="page-professional metrics-dense">
     <div class="page-content">
-      <div class="page-inner">
-        <!-- Header with Time Range Selector -->
+      <div class="page-inner-compact">
+        <!-- Controls Bar -->
         <div class="filter-card">
-          <div class="flex flex-col gap-4">
-            <div class="flex items-center justify-between">
-              <h2 class="text-lg font-semibold text-gray-900 dark:text-white">System Metrics</h2>
-              
-              <!-- Quick Time Range Selector -->
-              <div class="flex items-center gap-2">
-                <button
-                  v-for="range in timeRanges"
-                  :key="range.value"
-                  @click="selectQuickRange(range.value)"
-                  :class="[
-                    'time-range-btn',
-                    selectedTimeRange === range.value && !customMode ? 'time-range-active' : 'time-range-inactive'
-                  ]"
-                >
-                  {{ range.label }}
-                </button>
-                <button
-                  @click="toggleCustomMode"
-                  :class="[
-                    'time-range-btn',
-                    customMode ? 'time-range-active' : 'time-range-inactive'
-                  ]"
-                >
-                  Custom
-                </button>
+          <div class="flex flex-col gap-2">
+            <div class="flex items-center justify-between flex-wrap gap-3">
+              <!-- Left side: View Mode & Aggregation -->
+              <div class="flex items-center gap-4 flex-wrap">
+                <!-- View Mode Selector -->
+                <div class="flex items-center gap-1.5">
+                  <svg class="w-3.5 h-3.5 text-gray-400 dark:text-gray-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2H6a2 2 0 01-2-2V6zM14 6a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2h-2a2 2 0 01-2-2V6zM4 16a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2H6a2 2 0 01-2-2v-2zM14 16a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2h-2a2 2 0 01-2-2v-2z" />
+                  </svg>
+                  <div class="flex items-center gap-1">
+                    <button
+                      v-for="mode in viewModes"
+                      :key="mode.value"
+                      @click="selectedViewMode = mode.value"
+                      :class="[
+                        'view-mode-btn',
+                        selectedViewMode === mode.value ? 'view-mode-active' : 'view-mode-inactive'
+                      ]"
+                    >
+                      {{ mode.label }}
+                    </button>
+                  </div>
+                </div>
+
+                <!-- Aggregation Type Selector -->
+                <div class="flex items-center gap-1.5">
+                  <svg class="w-3.5 h-3.5 text-gray-400 dark:text-gray-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 6V4m0 2a2 2 0 100 4m0-4a2 2 0 110 4m-6 8a2 2 0 100-4m0 4a2 2 0 110-4m0 4v2m0-6V4m6 6v10m6-2a2 2 0 100-4m0 4a2 2 0 110-4m0 4v2m0-6V4" />
+                  </svg>
+                  <div class="flex items-center gap-1">
+                    <button
+                      v-for="agg in aggregationTypes"
+                      :key="agg.value"
+                      @click="selectedAggregation = agg.value"
+                      :class="[
+                        'agg-type-btn',
+                        selectedAggregation === agg.value ? 'agg-type-active' : 'agg-type-inactive'
+                      ]"
+                    >
+                      {{ agg.label }}
+                    </button>
+                  </div>
+                </div>
+              </div>
+
+              <!-- Right side: Time Range Selector -->
+              <div class="flex items-center gap-1.5">
+                <svg class="w-3.5 h-3.5 text-gray-400 dark:text-gray-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
+                </svg>
+                <div class="flex items-center gap-1">
+                  <button
+                    v-for="range in timeRanges"
+                    :key="range.value"
+                    @click="selectQuickRange(range.value)"
+                    :class="[
+                      'time-range-btn',
+                      selectedTimeRange === range.value && !customMode ? 'time-range-active' : 'time-range-inactive'
+                    ]"
+                  >
+                    {{ range.label }}
+                  </button>
+                  <button
+                    @click="toggleCustomMode"
+                    :class="[
+                      'time-range-btn',
+                      customMode ? 'time-range-active' : 'time-range-inactive'
+                    ]"
+                  >
+                    Custom
+                  </button>
+                </div>
               </div>
             </div>
 
-            <!-- Custom Date/Time Range -->
-            <div v-if="customMode" class="flex flex-col sm:flex-row items-start sm:items-center gap-3 pt-2 border-t border-gray-200 dark:border-gray-700">
+            <!-- Custom Date/Time Range (expandable) -->
+            <div v-if="customMode" class="flex flex-col sm:flex-row items-start sm:items-center gap-2 pt-2 border-t border-gray-200 dark:border-gray-700">
               <div class="flex items-center gap-2 flex-1 w-full sm:w-auto">
                 <label class="text-sm font-medium text-gray-700 dark:text-gray-300 whitespace-nowrap">From:</label>
                 <DateTimePicker
@@ -70,167 +116,110 @@
         </div>
 
         <template v-else>
-          <!-- Aggregation Type Selector -->
-          <div class="info-card-white">
-            <div class="flex items-center justify-between">
-              <div class="flex items-center gap-2">
-                <svg class="w-5 h-5 text-gray-600 dark:text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 6V4m0 2a2 2 0 100 4m0-4a2 2 0 110 4m-6 8a2 2 0 100-4m0 4a2 2 0 110-4m0 4v2m0-6V4m6 6v10m6-2a2 2 0 100-4m0 4a2 2 0 110-4m0 4v2m0-6V4" />
-                </svg>
-                <span class="text-sm font-semibold text-gray-700 dark:text-gray-300">Aggregation Type</span>
+
+          <!-- Row 1: CPU & Memory Charts -->
+          <div class="grid grid-cols-1 lg:grid-cols-2 gap-3">
+            <div class="chart-card-compact">
+              <div class="chart-header-compact">
+                <h3 class="chart-title-compact">CPU Usage</h3>
               </div>
-              <div class="flex items-center gap-2">
-                <button
-                  v-for="agg in aggregationTypes"
-                  :key="agg.value"
-                  @click="selectedAggregation = agg.value"
-                  :class="[
-                    'agg-type-btn',
-                    selectedAggregation === agg.value ? 'agg-type-active' : 'agg-type-inactive'
-                  ]"
-                >
-                  {{ agg.label }}
-                </button>
+              <div class="chart-body-compact">
+                <DetailedCpuChart :data="data" :aggregation="selectedAggregation" :viewMode="selectedViewMode" />
+              </div>
+            </div>
+            <div class="chart-card-compact">
+              <div class="chart-header-compact">
+                <h3 class="chart-title-compact">Memory Usage</h3>
+              </div>
+              <div class="chart-body-compact">
+                <DetailedMemoryChart :data="data" :aggregation="selectedAggregation" :viewMode="selectedViewMode" />
               </div>
             </div>
           </div>
 
-          <!-- CPU & Memory Charts (Side by Side) -->
-          <div class="grid grid-cols-1 lg:grid-cols-2 gap-5">
-            <!-- CPU Chart -->
-            <div class="chart-card-professional">
-              <div class="chart-header">
-                <h3 class="chart-title">CPU Usage</h3>
+          <!-- Row 2: Database Pool & Registries -->
+          <div class="grid grid-cols-1 lg:grid-cols-2 gap-3">
+            <div class="chart-card-compact">
+              <div class="chart-header-compact">
+                <h3 class="chart-title-compact">Database Pool</h3>
               </div>
-              <div class="chart-body">
-                <DetailedCpuChart :data="data" :aggregation="selectedAggregation" />
+              <div class="chart-body-compact">
+                <DetailedDatabaseChart :data="data" :aggregation="selectedAggregation" :viewMode="selectedViewMode" />
               </div>
             </div>
-
-            <!-- Memory Chart -->
-            <div class="chart-card-professional">
-              <div class="chart-header">
-                <h3 class="chart-title">Memory Usage</h3>
+            <div class="chart-card-compact">
+              <div class="chart-header-compact">
+                <h3 class="chart-title-compact">Registries</h3>
               </div>
-              <div class="chart-body">
-                <DetailedMemoryChart :data="data" :aggregation="selectedAggregation" />
+              <div class="chart-body-compact">
+                <DetailedRegistryChart :data="data" :aggregation="selectedAggregation" :viewMode="selectedViewMode" />
               </div>
             </div>
           </div>
 
-          <!-- Database Metrics Chart -->
-          <div class="chart-card-professional">
-            <div class="chart-header">
-              <h3 class="chart-title">Database Pool</h3>
-            </div>
-            <div class="chart-body">
-              <DetailedDatabaseChart :data="data" :aggregation="selectedAggregation" />
-            </div>
-          </div>
+          <!-- Row 3: Shared State Panel (Full Width) -->
+          <SharedStatePanel :data="lastSharedState" :timeSeriesData="data" :loading="loading" />
 
-          <!-- ThreadPool Metrics Chart -->
-          <div class="chart-card-professional">
-            <div class="chart-header">
-              <h3 class="chart-title">Thread Pool</h3>
-            </div>
-            <div class="chart-body">
-              <DetailedThreadPoolChart :data="data" :aggregation="selectedAggregation" />
-            </div>
-          </div>
-
-          <!-- Registry Metrics Chart -->
-          <div class="chart-card-professional">
-            <div class="chart-header">
-              <h3 class="chart-title">Registries</h3>
-            </div>
-            <div class="chart-body">
-              <DetailedRegistryChart :data="data" :aggregation="selectedAggregation" />
-            </div>
-          </div>
-
-          <!-- Shared State Panel (UDPSYNC) -->
-          <SharedStatePanel />
-
-          <!-- Stats Summary -->
-          <div class="grid grid-cols-1 lg:grid-cols-3 gap-5">
-            <div class="info-card-white">
-              <h3 class="text-xs font-semibold text-gray-600 dark:text-gray-400 mb-3">Current Status</h3>
-              <div class="space-y-2">
-                <div class="flex justify-between text-sm">
-                  <span class="text-gray-600 dark:text-gray-400">Replicas</span>
-                  <span class="font-semibold font-mono">{{ data?.replicaCount || 0 }}</span>
-                </div>
-                <div class="flex justify-between text-sm">
-                  <span class="text-gray-600 dark:text-gray-400">Time Range</span>
-                  <span class="font-semibold font-mono text-xs">{{ formatTimeRange() }}</span>
-                </div>
-                <div class="flex justify-between text-sm">
-                  <span class="text-gray-600 dark:text-gray-400">Bucket Size</span>
-                  <span class="font-semibold font-mono">{{ formatBucketSize() }}</span>
-                </div>
-                <div class="flex justify-between text-sm">
-                  <span class="text-gray-600 dark:text-gray-400">Data Points</span>
-                  <span class="font-semibold font-mono">{{ data?.pointCount || 0 }}</span>
-                </div>
+          <!-- Row 4: Thread Pool & Status -->
+          <div class="grid grid-cols-1 lg:grid-cols-3 gap-3">
+            <div class="chart-card-compact lg:col-span-2">
+              <div class="chart-header-compact">
+                <h3 class="chart-title-compact">Thread Pool</h3>
+              </div>
+              <div class="chart-body-compact">
+                <DetailedThreadPoolChart :data="data" :aggregation="selectedAggregation" :viewMode="selectedViewMode" />
               </div>
             </div>
-
-            <div class="info-card-white" v-if="lastMetrics">
-              <h3 class="text-xs font-semibold text-gray-600 dark:text-gray-400 mb-3">Latest Values</h3>
-              <div class="space-y-2">
-                <div class="flex justify-between text-sm">
-                  <span class="text-gray-600 dark:text-gray-400">CPU %</span>
-                  <span class="font-semibold font-mono text-rose-600 dark:text-rose-400">
-                    {{ formatCPU(lastMetrics.cpu?.user_us?.last) }}
-                  </span>
-                </div>
-                <div class="flex justify-between text-sm">
-                  <span class="text-gray-600 dark:text-gray-400">Memory</span>
-                  <span class="font-semibold font-mono text-purple-600 dark:text-purple-400">
-                    {{ formatMemory(lastMetrics.memory?.rss_bytes?.last) }}
-                  </span>
-                </div>
-                <div class="flex justify-between text-sm">
-                  <span class="text-gray-600 dark:text-gray-400">DB Active</span>
-                  <span class="font-semibold font-mono text-gray-900 dark:text-gray-100">
-                    {{ lastMetrics.database?.pool_active?.last || 0 }}
-                  </span>
-                </div>
-                <div class="flex justify-between text-sm">
-                  <span class="text-gray-600 dark:text-gray-400">Poll Intentions</span>
-                  <span class="font-semibold font-mono text-gray-900 dark:text-gray-100">
-                    {{ lastMetrics.registries?.poll_intention?.last || 0 }}
-                  </span>
+            <div class="stats-compact-card">
+              <div class="stats-section">
+                <h4 class="stats-section-title">Status</h4>
+                <div class="stats-grid">
+                  <div class="stat-item">
+                    <span class="stat-label">Replicas</span>
+                    <span class="stat-value">{{ data?.replicaCount || 0 }}</span>
+                  </div>
+                  <div class="stat-item">
+                    <span class="stat-label">Points</span>
+                    <span class="stat-value">{{ data?.pointCount || 0 }}</span>
+                  </div>
+                  <div class="stat-item">
+                    <span class="stat-label">Bucket</span>
+                    <span class="stat-value">{{ formatBucketSize() }}</span>
+                  </div>
                 </div>
               </div>
-            </div>
-
-            <div class="info-card-white" v-if="lastMetrics">
-              <h3 class="text-xs font-semibold text-gray-600 dark:text-gray-400 mb-3">Peak Values</h3>
-              <div class="space-y-2">
-                <div class="flex justify-between text-sm">
-                  <span class="text-gray-600 dark:text-gray-400">CPU % (max)</span>
-                  <span class="font-semibold font-mono text-rose-600 dark:text-rose-400">
-                    {{ formatCPU(lastMetrics.cpu?.user_us?.max) }}
-                  </span>
+              <div class="stats-section" v-if="lastMetrics">
+                <h4 class="stats-section-title">Latest</h4>
+                <div class="stats-grid">
+                  <div class="stat-item">
+                    <span class="stat-label">CPU</span>
+                    <span class="stat-value text-rose-600 dark:text-rose-400">{{ formatCPU(lastMetrics.cpu?.user_us?.last) }}</span>
+                  </div>
+                  <div class="stat-item">
+                    <span class="stat-label">Memory</span>
+                    <span class="stat-value text-purple-600 dark:text-purple-400">{{ formatMemory(lastMetrics.memory?.rss_bytes?.last) }}</span>
+                  </div>
+                  <div class="stat-item">
+                    <span class="stat-label">DB Active</span>
+                    <span class="stat-value">{{ lastMetrics.database?.pool_active?.last || 0 }}</span>
+                  </div>
                 </div>
-                <div class="flex justify-between text-sm">
-                  <span class="text-gray-600 dark:text-gray-400">Memory (max)</span>
-                  <span class="font-semibold font-mono text-purple-600 dark:text-purple-400">
-                    {{ formatMemory(lastMetrics.memory?.rss_bytes?.max) }}
-                  </span>
-                </div>
-                <div class="flex justify-between text-sm">
-                  <span class="text-gray-600 dark:text-gray-400">DB Queue (max)</span>
-                  <span class="font-semibold font-mono text-amber-600 dark:text-amber-400">
-                    {{ lastMetrics.threadpool?.db?.queue_size?.max || 0 }}
-                  </span>
-                </div>
-                <div class="flex justify-between text-sm">
-                  <span class="text-gray-600 dark:text-gray-400">Poll Intentions (max)</span>
-                  <span class="font-semibold font-mono text-gray-900 dark:text-gray-100">
-                    {{ lastMetrics.registries?.poll_intention?.max || 0 }}
-                  </span>
+              </div>
+              <div class="stats-section" v-if="lastMetrics">
+                <h4 class="stats-section-title">Peak</h4>
+                <div class="stats-grid">
+                  <div class="stat-item">
+                    <span class="stat-label">CPU</span>
+                    <span class="stat-value text-rose-600 dark:text-rose-400">{{ formatCPU(lastMetrics.cpu?.user_us?.max) }}</span>
+                  </div>
+                  <div class="stat-item">
+                    <span class="stat-label">Memory</span>
+                    <span class="stat-value text-purple-600 dark:text-purple-400">{{ formatMemory(lastMetrics.memory?.rss_bytes?.max) }}</span>
+                  </div>
+                  <div class="stat-item">
+                    <span class="stat-label">DB Queue</span>
+                    <span class="stat-value text-amber-600 dark:text-amber-400">{{ lastMetrics.threadpool?.db?.queue_size?.max || 0 }}</span>
+                  </div>
                 </div>
               </div>
             </div>
@@ -280,12 +269,32 @@ const aggregationTypes = [
 
 const selectedAggregation = ref('avg');
 
+const viewModes = [
+  { label: 'Per Server', value: 'individual' },
+  { label: 'Aggregate', value: 'aggregate' },
+];
+
+const selectedViewMode = ref('aggregate');
+
 const lastMetrics = computed(() => {
   if (!data.value?.replicas?.length) return null;
   // Get the last data point from the first replica
   const firstReplica = data.value.replicas[0];
   if (!firstReplica?.timeSeries?.length) return null;
   return firstReplica.timeSeries[firstReplica.timeSeries.length - 1]?.metrics;
+});
+
+// Get the latest shared_state from system metrics
+const lastSharedState = computed(() => {
+  if (!data.value?.replicas?.length) return null;
+  
+  // Aggregate shared_state from all replicas (get the latest from each and combine)
+  // For now, just get from first replica
+  const firstReplica = data.value.replicas[0];
+  if (!firstReplica?.timeSeries?.length) return null;
+  
+  const lastPoint = firstReplica.timeSeries[firstReplica.timeSeries.length - 1];
+  return lastPoint?.metrics?.shared_state || null;
 });
 
 function formatTimeRange() {
@@ -434,14 +443,27 @@ onUnmounted(() => {
 </script>
 
 <style scoped>
-/* Styles inherited from professional.css */
+/* Dense layout overrides */
+.metrics-dense .page-content {
+  @apply py-3;
+  @apply px-1;
+}
+
+.page-inner-compact {
+  @apply px-2 lg:px-3 space-y-3;
+}
+
+/* Compact filter card */
+.metrics-dense .filter-card {
+  @apply p-2 px-3;
+}
 
 .time-range-btn {
-  padding: 0.5rem 1rem;
-  border-radius: 0.5rem;
-  font-size: 0.875rem;
-  font-weight: 500;
-  transition: all 0.2s ease;
+  padding: 0.25rem 0.5rem;
+  border-radius: 0.375rem;
+  font-size: 0.6875rem;
+  font-weight: 600;
+  transition: all 0.15s ease;
   cursor: pointer;
 }
 
@@ -477,10 +499,60 @@ onUnmounted(() => {
   background: rgba(255, 255, 255, 0.05);
 }
 
+.view-mode-btn {
+  padding: 0.25rem 0.5rem;
+  border-radius: 0.375rem;
+  font-size: 0.625rem;
+  font-weight: 600;
+  transition: background-color 0.15s cubic-bezier(0.4, 0, 0.2, 1), border-color 0.15s cubic-bezier(0.4, 0, 0.2, 1), color 0.15s cubic-bezier(0.4, 0, 0.2, 1);
+  cursor: pointer;
+  letter-spacing: 0.01em;
+}
+
+.view-mode-active {
+  background: rgba(99, 102, 241, 0.12);
+  color: #6366f1;
+  border: 1px solid rgba(99, 102, 241, 0.3);
+  box-shadow: 0 1px 2px 0 rgba(99, 102, 241, 0.1);
+}
+
+.dark .view-mode-active {
+  background: rgba(99, 102, 241, 0.18);
+  color: #818cf8;
+  border: 1px solid rgba(99, 102, 241, 0.4);
+}
+
+.view-mode-inactive {
+  background: transparent;
+  color: #6b7280;
+  border: 1px solid rgba(0, 0, 0, 0.12);
+}
+
+.dark .view-mode-inactive {
+  color: #9ca3af;
+  border-color: rgba(255, 255, 255, 0.12);
+}
+
+.view-mode-active:hover {
+  background: rgba(99, 102, 241, 0.15);
+}
+
+.dark .view-mode-active:hover {
+  background: rgba(99, 102, 241, 0.2);
+}
+
+.view-mode-inactive:hover {
+  background: rgba(0, 0, 0, 0.03);
+}
+
+.dark .view-mode-inactive:hover {
+  background: rgba(255, 255, 255, 0.05);
+}
+
 .agg-type-btn {
-  padding: 0.5rem 0.75rem;
-  border-radius: 0.5rem;
-  font-size: 0.6875rem;
+  padding: 0.25rem 0.5rem;
+  border-radius: 0.375rem;
+  font-size: 0.625rem;
   font-weight: 600;
   transition: background-color 0.15s cubic-bezier(0.4, 0, 0.2, 1), border-color 0.15s cubic-bezier(0.4, 0, 0.2, 1), color 0.15s cubic-bezier(0.4, 0, 0.2, 1);
   cursor: pointer;
@@ -567,6 +639,58 @@ onUnmounted(() => {
 .dark .datetime-input:focus {
   border-color: #FF6B00;
   box-shadow: 0 0 0 3px rgba(255, 107, 0, 0.2);
+}
+
+/* Compact Chart Cards */
+.chart-card-compact {
+  @apply bg-white dark:bg-[#161b22] border border-gray-200/40 dark:border-gray-800/40;
+  @apply rounded-lg overflow-hidden;
+  box-shadow: 0 1px 2px 0 rgba(0, 0, 0, 0.03);
+}
+
+.chart-header-compact {
+  @apply px-3 py-2 border-b border-gray-200/60 dark:border-gray-800/60;
+  @apply flex items-center justify-between;
+}
+
+.chart-title-compact {
+  @apply text-xs font-semibold text-gray-700 dark:text-gray-300;
+}
+
+.chart-body-compact {
+  @apply p-2;
+}
+
+/* Compact Stats Card */
+.stats-compact-card {
+  @apply bg-white dark:bg-[#161b22] border border-gray-200/40 dark:border-gray-800/40;
+  @apply rounded-lg p-3 space-y-3;
+  box-shadow: 0 1px 2px 0 rgba(0, 0, 0, 0.03);
+}
+
+.stats-section {
+  @apply space-y-1.5;
+}
+
+.stats-section-title {
+  @apply text-[10px] font-bold uppercase tracking-wider text-gray-500 dark:text-gray-500;
+  letter-spacing: 0.05em;
+}
+
+.stats-grid {
+  @apply grid grid-cols-3 gap-2;
+}
+
+.stat-item {
+  @apply flex flex-col;
+}
+
+.stat-label {
+  @apply text-[10px] text-gray-500 dark:text-gray-500;
+}
+
+.stat-value {
+  @apply text-xs font-semibold font-mono text-gray-900 dark:text-gray-100;
 }
 </style>
 

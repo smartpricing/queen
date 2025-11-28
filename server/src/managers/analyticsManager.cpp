@@ -2409,7 +2409,43 @@ nlohmann::json AnalyticsManager::get_system_metrics(const SystemMetricsFilters& 
                             'max', MAX((metrics->'registries'->'response'->>'max')::numeric),
                             'last', (array_agg((metrics->'registries'->'response'->>'last')::numeric ORDER BY timestamp DESC))[1]
                         )
-                    )
+                    ),
+                    'shared_state', CASE 
+                        WHEN bool_or((metrics->'shared_state'->>'enabled')::boolean) THEN jsonb_build_object(
+                            'enabled', true,
+                            'queue_config_cache', jsonb_build_object(
+                                'size', (array_agg((metrics->'shared_state'->'queue_config_cache'->'size'->>'last')::numeric ORDER BY timestamp DESC))[1],
+                                'hits', (array_agg((metrics->'shared_state'->'queue_config_cache'->'hits'->>'last')::numeric ORDER BY timestamp DESC))[1],
+                                'misses', (array_agg((metrics->'shared_state'->'queue_config_cache'->'misses'->>'last')::numeric ORDER BY timestamp DESC))[1]
+                            ),
+                            'partition_id_cache', jsonb_build_object(
+                                'size', (array_agg((metrics->'shared_state'->'partition_id_cache'->'size'->>'last')::numeric ORDER BY timestamp DESC))[1],
+                                'hits', (array_agg((metrics->'shared_state'->'partition_id_cache'->'hits'->>'last')::numeric ORDER BY timestamp DESC))[1],
+                                'misses', (array_agg((metrics->'shared_state'->'partition_id_cache'->'misses'->>'last')::numeric ORDER BY timestamp DESC))[1],
+                                'evictions', (array_agg((metrics->'shared_state'->'partition_id_cache'->'evictions'->>'last')::numeric ORDER BY timestamp DESC))[1]
+                            ),
+                            'lease_hints', jsonb_build_object(
+                                'size', (array_agg((metrics->'shared_state'->'lease_hints'->'size'->>'last')::numeric ORDER BY timestamp DESC))[1],
+                                'used', (array_agg((metrics->'shared_state'->'lease_hints'->'used'->>'last')::numeric ORDER BY timestamp DESC))[1],
+                                'wrong', (array_agg((metrics->'shared_state'->'lease_hints'->'wrong'->>'last')::numeric ORDER BY timestamp DESC))[1]
+                            ),
+                            'consumer_presence', jsonb_build_object(
+                                'queues_tracked', (array_agg((metrics->'shared_state'->'consumer_presence'->'queues_tracked'->>'last')::numeric ORDER BY timestamp DESC))[1],
+                                'servers_tracked', (array_agg((metrics->'shared_state'->'consumer_presence'->'servers_tracked'->>'last')::numeric ORDER BY timestamp DESC))[1],
+                                'total_registrations', (array_agg((metrics->'shared_state'->'consumer_presence'->'total_registrations'->>'last')::numeric ORDER BY timestamp DESC))[1]
+                            ),
+                            'server_health', jsonb_build_object(
+                                'alive', (array_agg((metrics->'shared_state'->'server_health'->'alive'->>'last')::numeric ORDER BY timestamp DESC))[1],
+                                'dead', (array_agg((metrics->'shared_state'->'server_health'->'dead'->>'last')::numeric ORDER BY timestamp DESC))[1]
+                            ),
+                            'transport', jsonb_build_object(
+                                'sent', (array_agg((metrics->'shared_state'->'transport'->'sent'->>'last')::numeric ORDER BY timestamp DESC))[1],
+                                'received', (array_agg((metrics->'shared_state'->'transport'->'received'->>'last')::numeric ORDER BY timestamp DESC))[1],
+                                'dropped', (array_agg((metrics->'shared_state'->'transport'->'dropped'->>'last')::numeric ORDER BY timestamp DESC))[1]
+                            )
+                        )
+                        ELSE jsonb_build_object('enabled', false)
+                    END
                 ) as metrics
             FROM bucketed_data
             GROUP BY bucket_timestamp, hostname, port, worker_id

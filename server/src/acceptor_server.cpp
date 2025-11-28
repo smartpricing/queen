@@ -448,6 +448,7 @@ static void worker_thread(const Config& config, int worker_id, int num_workers,
                     queen::global_poll_intention_registry,
                     queen::global_stream_poll_registry,
                     queen::global_response_registry,
+                    queen::global_shared_state,  // SharedState metrics
                     global_system_info.hostname,
                     global_system_info.port,
                     config.server.worker_id,
