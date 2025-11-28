@@ -139,13 +139,18 @@ void UDPSyncTransport::add_peer(const std::string& hostname, int port) {
                  hostname, port, peers_.back().server_id);
 }
 
-void UDPSyncTransport::resolve_peers() {
+int UDPSyncTransport::resolve_peers() {
     std::lock_guard<std::mutex> lock(peers_mutex_);
     
     peer_by_server_id_.clear();
+    int changes = 0;
     
     for (size_t i = 0; i < peers_.size(); i++) {
         auto& peer = peers_[i];
+        
+        // Store old address for comparison
+        sockaddr_in old_addr = peer.addr;
+        bool was_resolved = peer.resolved;
         
         struct addrinfo hints{}, *res = nullptr;
         hints.ai_family = AF_INET;
@@ -153,15 +158,35 @@ void UDPSyncTransport::resolve_peers() {
         
         int err = getaddrinfo(peer.hostname.c_str(), nullptr, &hints, &res);
         if (err == 0 && res != nullptr) {
+            sockaddr_in* new_addr = reinterpret_cast<sockaddr_in*>(res->ai_addr);
+            
+            // Check if IP changed
+            bool ip_changed = !was_resolved || 
+                              (old_addr.sin_addr.s_addr != new_addr->sin_addr.s_addr);
+            
             memcpy(&peer.addr, res->ai_addr, sizeof(sockaddr_in));
             peer.addr.sin_port = htons(peer.port);
             peer.resolved = true;
             freeaddrinfo(res);
             
-            char ip_str[INET_ADDRSTRLEN];
-            inet_ntop(AF_INET, &peer.addr.sin_addr, ip_str, sizeof(ip_str));
-            spdlog::info("UDPSyncTransport: Resolved {}:{} -> {}:{} (server_id={})",
-                        peer.hostname, peer.port, ip_str, peer.port, peer.server_id);
+            char new_ip_str[INET_ADDRSTRLEN];
+            inet_ntop(AF_INET, &peer.addr.sin_addr, new_ip_str, sizeof(new_ip_str));
+            
+            if (ip_changed) {
+                changes++;
+                if (was_resolved) {
+                    char old_ip_str[INET_ADDRSTRLEN];
+                    inet_ntop(AF_INET, &old_addr.sin_addr, old_ip_str, sizeof(old_ip_str));
+                    spdlog::warn("UDPSyncTransport: DNS changed for {} - {} -> {} (server_id={})",
+                                peer.hostname, old_ip_str, new_ip_str, peer.server_id);
+                } else {
+                    spdlog::info("UDPSyncTransport: Resolved {}:{} -> {}:{} (server_id={})",
+                                peer.hostname, peer.port, new_ip_str, peer.port, peer.server_id);
+                }
+            } else {
+                spdlog::debug("UDPSyncTransport: DNS unchanged for {} = {} (server_id={})",
+                             peer.hostname, new_ip_str, peer.server_id);
+            }
         } else {
             spdlog::warn("UDPSyncTransport: Failed to resolve {}:{} - {}",
                         peer.hostname, peer.port, gai_strerror(err));
@@ -169,6 +194,8 @@ void UDPSyncTransport::resolve_peers() {
         
         peer_by_server_id_[peer.server_id] = i;
     }
+    
+    return changes;
 }
 
 void UDPSyncTransport::broadcast(UDPSyncMessageType type, const nlohmann::json& payload) {

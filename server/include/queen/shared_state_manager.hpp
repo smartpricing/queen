@@ -250,6 +250,7 @@ private:
     std::thread heartbeat_thread_;
     std::thread refresh_thread_;
     std::thread cleanup_thread_;
+    std::thread dns_refresh_thread_;
     
     // ============================================================
     // Message Handlers
@@ -275,6 +276,7 @@ private:
     void heartbeat_loop();
     void refresh_loop();
     void cleanup_loop();
+    void dns_refresh_loop();
     
     void refresh_queue_configs_from_db();
     

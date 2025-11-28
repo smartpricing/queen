@@ -83,8 +83,9 @@ public:
     /**
      * Resolve peer hostnames to IP addresses
      * Called after adding peers, can be called again to re-resolve
+     * @return Number of peers whose IP address changed
      */
-    void resolve_peers();
+    int resolve_peers();
     
     /**
      * Send a message to all peers

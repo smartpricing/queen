@@ -81,6 +81,7 @@ void SharedStateManager::start() {
     }
     
     cleanup_thread_ = std::thread(&SharedStateManager::cleanup_loop, this);
+    dns_refresh_thread_ = std::thread(&SharedStateManager::dns_refresh_loop, this);
     
     spdlog::info("SharedStateManager: Started");
 }
@@ -94,6 +95,7 @@ void SharedStateManager::stop() {
     if (heartbeat_thread_.joinable()) heartbeat_thread_.join();
     if (refresh_thread_.joinable()) refresh_thread_.join();
     if (cleanup_thread_.joinable()) cleanup_thread_.join();
+    if (dns_refresh_thread_.joinable()) dns_refresh_thread_.join();
     
     if (transport_) {
         transport_->stop();
@@ -565,6 +567,36 @@ void SharedStateManager::cleanup_loop() {
     }
     
     spdlog::info("SharedStateManager: Cleanup thread stopped");
+}
+
+void SharedStateManager::dns_refresh_loop() {
+    // DNS refresh interval: 30 seconds
+    // This ensures that if a pod restarts and gets a new IP, other pods
+    // will discover the new IP within 30 seconds
+    constexpr int DNS_REFRESH_INTERVAL_SECONDS = 30;
+    
+    spdlog::info("SharedStateManager: DNS refresh thread started (interval={}s)",
+                 DNS_REFRESH_INTERVAL_SECONDS);
+    
+    while (running_) {
+        // Sleep first - initial resolution is done in start()
+        std::this_thread::sleep_for(std::chrono::seconds(DNS_REFRESH_INTERVAL_SECONDS));
+        
+        if (!running_) break;
+        
+        try {
+            int changes = transport_->resolve_peers();
+            
+            if (changes > 0) {
+                spdlog::warn("SharedStateManager: DNS refresh detected {} IP change(s) - "
+                            "peer addresses updated", changes);
+            }
+        } catch (const std::exception& e) {
+            spdlog::error("SharedStateManager: DNS refresh failed: {}", e.what());
+        }
+    }
+    
+    spdlog::info("SharedStateManager: DNS refresh thread stopped");
 }
 
 void SharedStateManager::refresh_queue_configs_from_db() {
