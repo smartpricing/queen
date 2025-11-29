@@ -8,13 +8,15 @@ namespace queen {
 
 SidecarDbPool::SidecarDbPool(const std::string& conn_str, 
                              int pool_size,
-                             int statement_timeout_ms)
+                             int statement_timeout_ms,
+                             std::shared_ptr<astp::ThreadPool> thread_pool)
     : conn_str_(conn_str),
       pool_size_(pool_size),
-      statement_timeout_ms_(statement_timeout_ms) {
+      statement_timeout_ms_(statement_timeout_ms),
+      thread_pool_(thread_pool) {
     
     slots_.resize(pool_size_);
-    spdlog::info("[SidecarDbPool] Created with {} connection slots", pool_size_);
+    spdlog::info("[SidecarDbPool] Created with {} connection slots (using global threadpool)", pool_size_);
 }
 
 SidecarDbPool::~SidecarDbPool() {
@@ -43,10 +45,12 @@ void SidecarDbPool::start() {
         return;
     }
     
-    // Start poller thread
+    // Start poller in global threadpool (reserves 1 thread permanently)
     running_ = true;
-    poller_thread_ = std::thread(&SidecarDbPool::poller_loop, this);
-    spdlog::info("[SidecarDbPool] Poller thread started");
+    thread_pool_->push([this]() {
+        this->poller_loop();
+    });
+    spdlog::info("[SidecarDbPool] Poller started in global threadpool");
 }
 
 void SidecarDbPool::stop() {
@@ -54,10 +58,8 @@ void SidecarDbPool::stop() {
     
     spdlog::info("[SidecarDbPool] Stopping...");
     running_ = false;
-    
-    if (poller_thread_.joinable()) {
-        poller_thread_.join();
-    }
+    // Poller loop will exit on next iteration when running_ is false
+    // No need to join - it's managed by the threadpool
     
     spdlog::info("[SidecarDbPool] Stopped");
 }
@@ -306,7 +308,7 @@ void SidecarDbPool::poller_loop() {
                     if (next_req.op_type != batch_op_type) {
                         break;
                     }
-                    
+
                     if (total_items_in_batch > 0 && 
                         (total_items_in_batch + next_req.item_count > MAX_ITEMS_PER_TX)) {
                         break; 

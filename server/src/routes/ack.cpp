@@ -61,75 +61,30 @@ void setup_ack_routes(uWS::App* app, const RouteContext& ctx) {
                     
                     spdlog::info("[Worker {}] ACK BATCH: Executing batch ACK ({} items)", ctx.worker_id, ack_items.size());
                     
-                    // Use sidecar for async ACK if enabled
-                    if (ctx.config.queue.ack_use_sidecar && global_sidecar_pool_ptr) {
-                        std::string request_id = global_response_registry->register_response(
-                            res, ctx.worker_id, nullptr
-                        );
+                    std::string request_id = global_response_registry->register_response(
+                        res, ctx.worker_id, nullptr
+                    );
                         
-                        // Build JSON array with index for result routing
-                        nlohmann::json ack_json = nlohmann::json::array();
-                        int idx = 0;
-                        for (const auto& ack : ack_items) {
-                            nlohmann::json ack_item = ack;
-                            ack_item["index"] = idx++;
-                            ack_json.push_back(ack_item);
-                        }
-                        
-                        SidecarRequest req;
-                        req.op_type = SidecarOpType::ACK_BATCH;
-                        req.request_id = request_id;
-                        req.sql = "SELECT queen.ack_messages_v2($1::jsonb)";
-                        req.params = {ack_json.dump()};
-                        req.worker_id = ctx.worker_id;
-                        req.item_count = ack_items.size();
-                        
-                        global_sidecar_pool_ptr->submit(std::move(req));
-                        spdlog::debug("[Worker {}] ACK BATCH: Submitted {} items to sidecar (request_id={})", 
-                                     ctx.worker_id, ack_items.size(), request_id);
-                        return;
+                    // Build JSON array with index for result routing
+                    nlohmann::json ack_json = nlohmann::json::array();
+                    int idx = 0;
+                    for (const auto& ack : ack_items) {
+                        nlohmann::json ack_item = ack;
+                        ack_item["index"] = idx++;
+                        ack_json.push_back(ack_item);
                     }
                     
-                    // Fallback: Execute batch ACK operation directly in uWS event loop
-                    try {
-                        auto ack_start = std::chrono::steady_clock::now();
-                        auto batch_result = ctx.async_queue_manager->acknowledge_messages_batch(ack_items);
-                        auto ack_end = std::chrono::steady_clock::now();
-                        auto ack_duration_ms = std::chrono::duration_cast<std::chrono::milliseconds>(ack_end - ack_start).count();
-                        
-                        spdlog::info("[Worker {}] ACK BATCH: {} items, {}ms (success: {}, failed: {})", 
-                                    ctx.worker_id, batch_result.results.size(), ack_duration_ms,
-                                    batch_result.successful_acks, batch_result.failed_acks);
-                        
-                        // Note: Peer notification for batch ACK would require additional tracking of
-                        // queue/partition per item. Currently, peer notification only happens
-                        // for single ACKs. Batch ACKs still benefit from peer notifications
-                        // triggered by single ACKs from other consumers.
-                        
-                        nlohmann::json response = {
-                            {"successful", batch_result.successful_acks},
-                            {"failed", batch_result.failed_acks},
-                            {"results", nlohmann::json::array()}
-                        };
-                        
-                        for (const auto& ack_result : batch_result.results) {
-                            nlohmann::json result_item = {
-                                {"success", ack_result.success},
-                                {"message", ack_result.message}
-                            };
-                            if (ack_result.error.has_value()) {
-                                result_item["error"] = *ack_result.error;
-                            }
-                            response["results"].push_back(result_item);
-                        }
-                        
-                        send_json_response(res, response, 200);
-                        spdlog::info("[Worker {}] ACK BATCH: Sent response ({} items)", ctx.worker_id, batch_result.results.size());
-                        
-                    } catch (const std::exception& e) {
-                        send_error_response(res, e.what(), 500);
-                        spdlog::error("[Worker {}] ACK BATCH: Error: {}", ctx.worker_id, e.what());
-                    }
+                    SidecarRequest req;
+                    req.op_type = SidecarOpType::ACK_BATCH;
+                    req.request_id = request_id;
+                    req.sql = "SELECT queen.ack_messages_v2($1::jsonb)";
+                    req.params = {ack_json.dump()};
+                    req.worker_id = ctx.worker_id;
+                    req.item_count = ack_items.size();
+                    
+                    global_sidecar_pool_ptr->submit(std::move(req));
+                    spdlog::debug("[Worker {}] ACK BATCH: Submitted {} items to sidecar (request_id={})", 
+                                 ctx.worker_id, ack_items.size(), request_id);
                     
                 } catch (const std::exception& e) {
                     send_error_response(res, e.what(), 500);
@@ -187,108 +142,33 @@ void setup_ack_routes(uWS::App* app, const RouteContext& ctx) {
                     
                     spdlog::info("[Worker {}] ACK: Executing ACK", ctx.worker_id);
                     
-                    // Use sidecar for async ACK if enabled
-                    if (ctx.config.queue.ack_use_sidecar && global_sidecar_pool_ptr) {
-                        std::string request_id = global_response_registry->register_response(
-                            res, ctx.worker_id, nullptr
-                        );
-                        
-                        // Build JSON array with single ACK
-                        nlohmann::json ack_json = nlohmann::json::array();
-                        ack_json.push_back({
-                            {"index", 0},
-                            {"transactionId", transaction_id},
-                            {"partitionId", partition_id.value()},
-                            {"leaseId", lease_id.value_or("")},
-                            {"status", status},
-                            {"consumerGroup", consumer_group},
-                            {"error", error.value_or("")}
-                        });
-                        
-                        SidecarRequest req;
-                        req.op_type = SidecarOpType::ACK_BATCH;  // Use batch procedure even for single ACK
-                        req.request_id = request_id;
-                        req.sql = "SELECT queen.ack_messages_v2($1::jsonb)";
-                        req.params = {ack_json.dump()};
-                        req.worker_id = ctx.worker_id;
-                        req.item_count = 1;
-                        
-                        global_sidecar_pool_ptr->submit(std::move(req));
-                        spdlog::debug("[Worker {}] ACK: Submitted to sidecar (request_id={})", 
-                                     ctx.worker_id, request_id);
-                        return;
-                    }
+                    std::string request_id = global_response_registry->register_response(
+                        res, ctx.worker_id, nullptr
+                    );
                     
-                    // Fallback: Execute ACK operation directly in uWS event loop
-                    try {
-                        auto ack_start = std::chrono::steady_clock::now();
-                        auto ack_result = ctx.async_queue_manager->acknowledge_message(transaction_id, status, error, consumer_group, lease_id, partition_id);
-                        auto ack_end = std::chrono::steady_clock::now();
-                        auto ack_duration_ms = std::chrono::duration_cast<std::chrono::milliseconds>(ack_end - ack_start).count();
-                        
-                        spdlog::debug("[Worker {}] ACK: 1 item, {}ms", ctx.worker_id, ack_duration_ms);
-                        
-                        if (ack_result.success) {
-                            // Notify local poll registry + peers that partition is free
-                            if (ack_result.queue_name.has_value() &&
-                                ack_result.partition_name.has_value()) {
-                                
-                                // Notify LOCAL poll registry (this server's own poll workers)
-                                if (queen::global_poll_intention_registry) {
-                                    std::string group_key = *ack_result.queue_name + ":" +
-                                                           *ack_result.partition_name + ":" +
-                                                           consumer_group;
-                                    queen::global_poll_intention_registry->reset_backoff_for_group(group_key);
-                                    
-                                    // Also reset wildcard partition
-                                    std::string wildcard_key = *ack_result.queue_name + ":*:" + consumer_group;
-                                    queen::global_poll_intention_registry->reset_backoff_for_group(wildcard_key);
-                                    
-                                    spdlog::info("[Worker {}] ACK: Notify local poll workers for {}:{}:{}", 
-                                                ctx.worker_id, *ack_result.queue_name, *ack_result.partition_name, consumer_group);
-                                }
-                                
-                                // Notify PEER servers via WebSocket
-                                if (global_inter_instance_comms && global_inter_instance_comms->is_enabled()) {
-                                    global_inter_instance_comms->notify_partition_free(
-                                        *ack_result.queue_name,
-                                        *ack_result.partition_name,
-                                        consumer_group
-                                    );
-                                    spdlog::info("[Worker {}] ACK: Notify peers for {}:{}:{}", 
-                                                ctx.worker_id, *ack_result.queue_name, *ack_result.partition_name, consumer_group);
-                                }
-                                
-                                // Phase 5: Broadcast lease release hint
-                                if (partition_id.has_value() && global_shared_state && global_shared_state->is_enabled()) {
-                                    global_shared_state->hint_lease_released(*partition_id, consumer_group);
-                                    spdlog::trace("[Worker {}] ACK: Broadcast lease release hint for {}:{}", 
-                                                 ctx.worker_id, *partition_id, consumer_group);
-                                }
-                            }
-                            
-                            auto now = std::chrono::system_clock::now();
-                            std::string ack_timestamp = format_timestamp_iso8601(now);
-                            
-                            nlohmann::json response = {
+                    // Build JSON array with single ACK
+                    nlohmann::json ack_json = nlohmann::json::array();
+                    ack_json.push_back({
+                        {"index", 0},
                                 {"transactionId", transaction_id},
-                                {"status", ack_result.message},
-                                {"consumerGroup", consumer_group == "__QUEUE_MODE__" ? nlohmann::json(nullptr) : nlohmann::json(consumer_group)},
-                                {"acknowledgedAt", ack_timestamp}
-                            };
-                            
-                            send_json_response(res, response, 200);
-                            spdlog::info("[Worker {}] ACK: Sent success response", ctx.worker_id);
-                        } else {
-                            nlohmann::json error_response = {{"error", "Failed to acknowledge message: " + ack_result.message}};
-                            send_json_response(res, error_response, 500);
-                            spdlog::warn("[Worker {}] ACK: Sent error response: {}", ctx.worker_id, ack_result.message);
-                        }
-                        
-                    } catch (const std::exception& e) {
-                        send_error_response(res, e.what(), 500);
-                        spdlog::error("[Worker {}] ACK: Error: {}", ctx.worker_id, e.what());
-                    }
+                        {"partitionId", partition_id.value()},
+                        {"leaseId", lease_id.value_or("")},
+                        {"status", status},
+                        {"consumerGroup", consumer_group},
+                        {"error", error.value_or("")}
+                    });
+                    
+                    SidecarRequest req;
+                    req.op_type = SidecarOpType::ACK_BATCH;  // Use batch procedure even for single ACK
+                    req.request_id = request_id;
+                    req.sql = "SELECT queen.ack_messages_v2($1::jsonb)";
+                    req.params = {ack_json.dump()};
+                    req.worker_id = ctx.worker_id;
+                    req.item_count = 1;
+                    
+                    global_sidecar_pool_ptr->submit(std::move(req));
+                    spdlog::debug("[Worker {}] ACK: Submitted to sidecar (request_id={})", 
+                                 ctx.worker_id, request_id);
                     
                 } catch (const std::exception& e) {
                     send_error_response(res, e.what(), 500);

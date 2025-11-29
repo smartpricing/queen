@@ -227,33 +227,13 @@ void poll_worker_loop(
                             opts.subscription_mode = intention.subscription_mode;
                             opts.subscription_from = intention.subscription_from;
                             
-                            // Execute pop based on intention type
-                            if (intention.is_queue_based()) {
-                                if (intention.partition_name.has_value()) {
-                                    // Specific partition
-                                    result = async_queue_manager->pop_messages_from_partition(
+                            // Execute pop using stored procedure
+                            result = async_queue_manager->pop_messages_sp(
                                         intention.queue_name.value(),
-                                        intention.partition_name.value(),
-                                        intention.consumer_group,
-                                        opts
-                                    );
-                                } else {
-                                    // Any partition in queue
-                                    result = async_queue_manager->pop_messages_from_queue(
-                                        intention.queue_name.value(),
-                                        intention.consumer_group,
-                                        opts
-                                    );
-                                }
-                            } else {
-                                // Namespace/task-based pop (bus mode)
-                                result = async_queue_manager->pop_messages_filtered(
-                                    intention.namespace_name,
-                                    intention.task_name,
+                                intention.partition_name.value_or(""),  // Empty for any partition
                                     intention.consumer_group,
                                     opts
                                 );
-                            }
                             
                             if (!result.messages.empty()) {
                                 // Success - send to this client

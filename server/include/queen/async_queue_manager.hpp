@@ -88,46 +88,7 @@ private:
     
     // Message operations - async versions
     PushResult push_single_message(const PushItem& item);
-    
-    // Internal batch processing - async versions
-    std::vector<PushResult> push_messages_batch(const std::vector<PushItem>& items);
-    std::vector<PushResult> push_messages_chunk(const std::vector<PushItem>& items,
-                                                const std::string& queue_name,
-                                                const std::string& partition_name);
-    
-    // Size estimation for dynamic batching
-    size_t estimate_row_size(const PushItem& item, bool encryption_enabled) const;
-    
-    // Lease management - async versions
-    std::string acquire_partition_lease(
-        PGconn* conn,
-        const std::string& queue_name,
-        const std::string& partition_name,
-        const std::string& consumer_group,
-        int lease_time_seconds,
-        const PopOptions& options
-    );
-    
-    void release_partition_lease(
-        PGconn* conn,
-        const std::string& queue_name,
-        const std::string& partition_name,
-        const std::string& consumer_group
-    );
-    
-    bool ensure_consumer_group_exists(
-        PGconn* conn,
-        const std::string& queue_name,
-        const std::string& partition_name,
-        const std::string& consumer_group
-    );
-    
-    // Transaction helpers - use provided connection for atomicity
-    PushResult push_single_message_transactional(
-        PGconn* conn,
-        const PushItem& item
-    );
-    
+
     // Helper for sending queries and getting results asynchronously
     void send_query_async(PGconn* conn, const std::string& sql, const std::vector<std::string>& params);
     PGResultPtr get_query_result_async(PGconn* conn);
@@ -145,43 +106,17 @@ public:
     // Schema initialization
     bool initialize_schema();
     
-    // Core message operations - async versions
-    std::vector<PushResult> push_messages(const std::vector<PushItem>& items);
-    
-    // HIGH-PERFORMANCE: Push using stored procedure (single round trip)
-    // This is significantly faster than push_messages for large batches
-    std::vector<PushResult> push_messages_sp(const std::vector<PushItem>& items);
-    
     // INTERNAL ONLY: Push messages directly to database, bypassing maintenance mode
     // Used by: file buffer drain, internal operations, admin tools
     // NEVER call this from user-facing code paths!
     std::vector<PushResult> push_messages_internal(const std::vector<PushItem>& items);
+
     
-    // Pop operations - async versions
-    PopResult pop_messages_from_partition(
+    // HIGH-PERFORMANCE: Pop using stored procedure (single round trip)
+    // Used by poll_worker for wait=true long-polling
+    PopResult pop_messages_sp(
         const std::string& queue_name,
-        const std::string& partition_name,
-        const std::string& consumer_group,
-        const PopOptions& options
-    );
-    
-    // Optimized version using partition_id directly (avoids name->id lookup)
-    PopResult pop_messages_from_partition_by_id(
-        const std::string& queue_name,
-        const std::string& partition_id,
-        const std::string& consumer_group,
-        const PopOptions& options
-    );
-    
-    PopResult pop_messages_from_queue(
-        const std::string& queue_name,
-        const std::string& consumer_group,
-        const PopOptions& options
-    );
-    
-    PopResult pop_messages_filtered(
-        const std::optional<std::string>& namespace_name,
-        const std::optional<std::string>& task_name,
+        const std::string& partition_name,  // Empty for any partition
         const std::string& consumer_group,
         const PopOptions& options
     );
@@ -196,26 +131,6 @@ public:
         std::optional<std::string> partition_name;
     };
     
-    AckResult acknowledge_message(
-        const std::string& transaction_id,
-        const std::string& status,
-        const std::optional<std::string>& error,
-        const std::string& consumer_group,
-        const std::optional<std::string>& lease_id,
-        const std::optional<std::string>& partition_id
-    );
-    
-private:
-    // Transactional version - uses provided connection (no retry logic)
-    AckResult acknowledge_message_transactional(
-        PGconn* conn,
-        const std::string& transaction_id,
-        const std::string& status,
-        const std::optional<std::string>& error,
-        const std::string& consumer_group,
-        const std::optional<std::string>& partition_id
-    );
-    
 public:
     
     struct BatchAckResult {
@@ -224,10 +139,6 @@ public:
         std::vector<AckResult> results;
     };
     
-    BatchAckResult acknowledge_messages_batch(
-        const std::vector<nlohmann::json>& acknowledgments
-    );
-    
     // Transaction operations - async version
     struct TransactionResult {
         bool success;
@@ -235,10 +146,6 @@ public:
         std::vector<nlohmann::json> results;
         std::optional<std::string> error;
     };
-    
-    TransactionResult execute_transaction(
-        const std::vector<nlohmann::json>& operations
-    );
     
     // Health check
     bool health_check();
@@ -266,9 +173,6 @@ public:
                         const std::string& task_name = "");
     
     bool delete_queue(const std::string& queue_name);
-    
-    // Lease management
-    bool extend_message_lease(const std::string& lease_id, int seconds = 60);
     
     // Message tracing
     bool record_trace(

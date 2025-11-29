@@ -35,89 +35,55 @@ void setup_transaction_routes(uWS::App* app, const RouteContext& ctx) {
                     
                     spdlog::info("[Worker {}] TRANSACTION: Executing transaction ({} operations)", ctx.worker_id, operations.size());
                     
-                    // Use sidecar for async transaction if enabled
-                    if (ctx.config.queue.transaction_use_sidecar && global_sidecar_pool_ptr) {
-                        std::string request_id = global_response_registry->register_response(
-                            res, ctx.worker_id, nullptr
-                        );
-                        
-                        // Flatten and normalize operations for stored procedure
-                        // Client sends: {type:"push", items:[{queue, payload}]}
-                        // SP expects:   {type:"push", queue, payload, messageId}
-                        nlohmann::json ops_json = nlohmann::json::array();
+                    std::string request_id = global_response_registry->register_response(
+                        res, ctx.worker_id, nullptr
+                    );
+                    
+                    // Flatten and normalize operations for stored procedure
+                    // Client sends: {type:"push", items:[{queue, payload}]}
+                    // SP expects:   {type:"push", queue, payload, messageId}
+                    nlohmann::json ops_json = nlohmann::json::array();
                         for (const auto& op : operations) {
-                            std::string op_type = op.value("type", "");
-                            
-                            if (op_type == "push" && op.contains("items")) {
-                                // Flatten items array into individual push operations
-                                for (const auto& item : op["items"]) {
-                                    nlohmann::json flat_op = {
-                                        {"type", "push"},
-                                        {"queue", item.value("queue", "")},
-                                        {"partition", item.value("partition", "Default")},
-                                        {"payload", item.value("payload", nlohmann::json::object())},
-                                        {"messageId", ctx.async_queue_manager->generate_uuid()}
-                                    };
-                                    if (item.contains("transactionId")) {
-                                        flat_op["transactionId"] = item["transactionId"];
-                                    }
-                                    if (item.contains("traceId")) {
-                                        flat_op["traceId"] = item["traceId"];
-                                    }
-                                    ops_json.push_back(flat_op);
-                                }
-                            } else if (op_type == "ack") {
-                                // ACK operations are already in correct format
-                                ops_json.push_back(op);
-                            } else {
-                                // Copy other operations as-is
-                                ops_json.push_back(op);
-                            }
+                        std::string op_type = op.value("type", "");
+                        
+                        if (op_type == "push" && op.contains("items")) {
+                            // Flatten items array into individual push operations
+                            for (const auto& item : op["items"]) {
+                                nlohmann::json flat_op = {
+                                    {"type", "push"},
+                                    {"queue", item.value("queue", "")},
+                                    {"partition", item.value("partition", "Default")},
+                                    {"payload", item.value("payload", nlohmann::json::object())},
+                                    {"messageId", ctx.async_queue_manager->generate_uuid()}
+                        };
+                                if (item.contains("transactionId")) {
+                                    flat_op["transactionId"] = item["transactionId"];
                         }
-                        
-                        SidecarRequest req;
-                        req.op_type = SidecarOpType::TRANSACTION;
-                        req.request_id = request_id;
-                        req.sql = "SELECT queen.execute_transaction_v2($1::jsonb)";
-                        req.params = {ops_json.dump()};
-                        req.worker_id = ctx.worker_id;
-                        req.item_count = ops_json.size();
-                        
-                        global_sidecar_pool_ptr->submit(std::move(req));
-                        spdlog::debug("[Worker {}] TRANSACTION: Submitted {} ops to sidecar (request_id={})", 
-                                     ctx.worker_id, ops_json.size(), request_id);
-                        return;
+                                if (item.contains("traceId")) {
+                                    flat_op["traceId"] = item["traceId"];
+                                }
+                                ops_json.push_back(flat_op);
+                            }
+                        } else if (op_type == "ack") {
+                            // ACK operations are already in correct format
+                            ops_json.push_back(op);
+                        } else {
+                            // Copy other operations as-is
+                            ops_json.push_back(op);
+                        }
                     }
                     
-                    // Fallback: Execute entire transaction directly in uWS event loop
-                    try {
-                        // Convert operations to vector for execute_transaction
-                        std::vector<nlohmann::json> ops_vec;
-                        for (const auto& op : operations) {
-                            ops_vec.push_back(op);
-                        }
-                        
-                        auto txn_result = ctx.async_queue_manager->execute_transaction(ops_vec);
-                        
-                        nlohmann::json response = {
-                            {"transactionId", txn_result.transaction_id},
-                            {"success", txn_result.success},
-                            {"results", txn_result.results}
-                        };
-                        
-                        if (txn_result.error.has_value()) {
-                            response["error"] = *txn_result.error;
-                        }
-                        
-                        int status_code = txn_result.success ? 200 : 400;
-                        send_json_response(res, response, status_code);
-                        spdlog::info("[Worker {}] TRANSACTION: Sent response ({} operations, success={})", 
-                                   ctx.worker_id, txn_result.results.size(), txn_result.success);
-                        
-                    } catch (const std::exception& e) {
-                        send_error_response(res, e.what(), 500);
-                        spdlog::error("[Worker {}] TRANSACTION: Error: {}", ctx.worker_id, e.what());
-                    }
+                    SidecarRequest req;
+                    req.op_type = SidecarOpType::TRANSACTION;
+                    req.request_id = request_id;
+                    req.sql = "SELECT queen.execute_transaction_v2($1::jsonb)";
+                    req.params = {ops_json.dump()};
+                    req.worker_id = ctx.worker_id;
+                    req.item_count = ops_json.size();
+                    
+                    global_sidecar_pool_ptr->submit(std::move(req));
+                    spdlog::debug("[Worker {}] TRANSACTION: Submitted {} ops to sidecar (request_id={})", 
+                                 ctx.worker_id, ops_json.size(), request_id);
                     
                 } catch (const std::exception& e) {
                     send_error_response(res, e.what(), 500);

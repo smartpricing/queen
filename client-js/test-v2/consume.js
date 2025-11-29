@@ -51,60 +51,6 @@ export async function testConsumerTrace(client) {
     return { success: msgToReturn !== null, message: 'Consumer test completed successfully' }
 }
 
-export async function testConsumerNamespace(client) { 
-    const queue = await client.queue('test-queue-v2-namespace')
-    .namespace('test-namespace')
-    .create()
-    if (!queue.configured) {
-        return { success: false, message: 'Queue not created' }
-    }
-
-    await client
-    .queue('test-queue-v2-namespace')
-    .push([{ data: { message: 'Hello, world!' } }])
-
-    let msgToReturn = null
-
-    await client
-    .queue()
-    .namespace('test-namespace')
-    .batch(1)
-    .limit(1)
-    .each()
-    .consume(async msg => {
-        msgToReturn = msg
-    })
-
-    return { success: msgToReturn !== null, message: 'Consumer test completed successfully' }
-}
-
-export async function testConsumerTask(client) { 
-    const queue = await client.queue('test-queue-v2-task')
-    .task('test-task')
-    .create()
-    if (!queue.configured) {
-        return { success: false, message: 'Queue not created' }
-    }
-
-    await client
-    .queue('test-queue-v2-task')
-    .push([{ data: { message: 'Hello, world!' } }])
-
-    let msgToReturn = null
-
-    await client
-    .queue()
-    .task('test-task')
-    .batch(1)
-    .limit(1)
-    .each()
-    .consume(async msg => {
-        msgToReturn = msg
-    })
-
-    return { success: msgToReturn !== null, message: 'Consumer test completed successfully' }
-}
-
 export async function testConsumerWithPartition(client) { 
     const queue = await client.queue('test-queue-v2-consume-with-partition').create()
     if (!queue.configured) {

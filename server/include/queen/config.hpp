@@ -183,16 +183,7 @@ struct QueueConfig {
     int batch_push_min_messages = 100;   // Minimum messages per batch (even if size not reached)
     int batch_push_max_messages = 10000; // Maximum messages per batch (even if under size limit)
     bool batch_push_use_size_based = true; // Enable size-based batching (false = use legacy count-based)
-    bool push_use_stored_procedure = true; // Use stored procedure for push (single round trip, faster)
-    bool push_use_sidecar = false;          // Use sidecar pattern for non-blocking push (requires stored procedure)
     int sidecar_pool_size = 50;             // Number of connections in sidecar pool
-    
-    // Per-operation sidecar flags (ALL_ASYNC plan)
-    bool pop_use_sidecar = false;           // Use sidecar pattern for non-blocking pop (wait=false)
-    bool ack_use_sidecar = false;           // Use sidecar pattern for non-blocking ack
-    bool transaction_use_sidecar = false;   // Use sidecar pattern for non-blocking transactions
-    bool renew_lease_use_sidecar = false;   // Use sidecar pattern for non-blocking lease renewal
-    bool all_ops_use_sidecar = false;       // Master switch: enable sidecar for all operations
     
     // Queue defaults
     int default_lease_time = 300;        // 5 minutes
@@ -270,21 +261,7 @@ struct QueueConfig {
         config.batch_push_min_messages = get_env_int("BATCH_PUSH_MIN_MESSAGES", 100);
         config.batch_push_max_messages = get_env_int("BATCH_PUSH_MAX_MESSAGES", 10000);
         config.batch_push_use_size_based = get_env_bool("BATCH_PUSH_USE_SIZE_BASED", true);
-        config.push_use_stored_procedure = get_env_bool("PUSH_USE_STORED_PROCEDURE", false);
-        config.push_use_sidecar = get_env_bool("PUSH_USE_SIDECAR", false);
         config.sidecar_pool_size = get_env_int("SIDECAR_POOL_SIZE", 50);
-        
-        // Per-operation sidecar flags
-        config.all_ops_use_sidecar = get_env_bool("ALL_OPS_USE_SIDECAR", false);
-        config.pop_use_sidecar = get_env_bool("POP_USE_SIDECAR", false) || config.all_ops_use_sidecar;
-        config.ack_use_sidecar = get_env_bool("ACK_USE_SIDECAR", false) || config.all_ops_use_sidecar;
-        config.transaction_use_sidecar = get_env_bool("TRANSACTION_USE_SIDECAR", false) || config.all_ops_use_sidecar;
-        config.renew_lease_use_sidecar = get_env_bool("RENEW_LEASE_USE_SIDECAR", false) || config.all_ops_use_sidecar;
-        
-        // If all_ops enabled, also enable push sidecar
-        if (config.all_ops_use_sidecar) {
-            config.push_use_sidecar = true;
-        }
         
         config.default_lease_time = get_env_int("DEFAULT_LEASE_TIME", 300);
         config.default_retry_limit = get_env_int("DEFAULT_RETRY_LIMIT", 3);

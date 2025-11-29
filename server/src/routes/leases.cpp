@@ -26,47 +26,29 @@ void setup_lease_routes(uWS::App* app, const RouteContext& ctx) {
                     
                     spdlog::debug("[Worker {}] Extending lease: {}, seconds: {}", ctx.worker_id, lease_id, seconds);
                     
-                    // Use sidecar for async lease renewal if enabled
-                    if (ctx.config.queue.renew_lease_use_sidecar && global_sidecar_pool_ptr) {
-                        std::string request_id = global_response_registry->register_response(
-                            res, ctx.worker_id, nullptr
-                        );
-                        
-                        // Build JSON array with single renewal
-                        nlohmann::json items_json = nlohmann::json::array();
-                        items_json.push_back({
-                            {"index", 0},
-                            {"leaseId", lease_id},
-                            {"extendSeconds", seconds}
-                        });
-                        
-                        SidecarRequest req;
-                        req.op_type = SidecarOpType::RENEW_LEASE;
-                        req.request_id = request_id;
-                        req.sql = "SELECT queen.renew_lease_v2($1::jsonb)";
-                        req.params = {items_json.dump()};
-                        req.worker_id = ctx.worker_id;
-                        req.item_count = 1;
-                        
-                        global_sidecar_pool_ptr->submit(std::move(req));
-                        spdlog::debug("[Worker {}] RENEW_LEASE: Submitted to sidecar (request_id={})", 
-                                     ctx.worker_id, request_id);
-                        return;
-                    }
+                    std::string request_id = global_response_registry->register_response(
+                        res, ctx.worker_id, nullptr
+                    );
                     
-                    // Fallback: use AsyncQueueManager directly
-                    bool success = ctx.async_queue_manager->extend_message_lease(lease_id, seconds);
-                    
-                    if (success) {
-                        nlohmann::json response = {
+                    // Build JSON array with single renewal
+                    nlohmann::json items_json = nlohmann::json::array();
+                    items_json.push_back({
+                        {"index", 0},
                             {"leaseId", lease_id},
-                            {"extended", true},
-                            {"seconds", seconds}
-                        };
-                        send_json_response(res, response);
-                    } else {
-                        send_error_response(res, "Lease not found or expired", 404);
-                    }
+                        {"extendSeconds", seconds}
+                    });
+                    
+                    SidecarRequest sidecar_req;
+                    sidecar_req.op_type = SidecarOpType::RENEW_LEASE;
+                    sidecar_req.request_id = request_id;
+                    sidecar_req.sql = "SELECT queen.renew_lease_v2($1::jsonb)";
+                    sidecar_req.params = {items_json.dump()};
+                    sidecar_req.worker_id = ctx.worker_id;
+                    sidecar_req.item_count = 1;
+                    
+                    global_sidecar_pool_ptr->submit(std::move(sidecar_req));
+                    spdlog::debug("[Worker {}] RENEW_LEASE: Submitted to sidecar (request_id={})", 
+                                 ctx.worker_id, request_id);
                     
                 } catch (const std::exception& e) {
                     send_error_response(res, e.what(), 500);

@@ -11,7 +11,9 @@
 #include <optional>
 #include <chrono>
 #include <unordered_map>
+#include <memory>
 #include <json.hpp>
+#include "threadpool.hpp"
 
 namespace queen {
 
@@ -69,10 +71,12 @@ public:
      * @param conn_str PostgreSQL connection string
      * @param pool_size Number of connections (= max concurrent queries)
      * @param statement_timeout_ms Statement timeout in milliseconds
+     * @param thread_pool ThreadPool to run the poller loop in (1 thread reserved)
      */
     SidecarDbPool(const std::string& conn_str, 
                   int pool_size,
-                  int statement_timeout_ms = 30000);
+                  int statement_timeout_ms,
+                  std::shared_ptr<astp::ThreadPool> thread_pool);
     
     ~SidecarDbPool();
     
@@ -173,8 +177,8 @@ private:
     std::deque<SidecarResponse> completed_responses_;
     mutable std::mutex completed_mutex_;
     
-    // Poller thread
-    std::thread poller_thread_;
+    // Poller runs in threadpool
+    std::shared_ptr<astp::ThreadPool> thread_pool_;
     std::atomic<bool> running_{false};
     
     // Statistics

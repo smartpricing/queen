@@ -25,10 +25,6 @@ struct PollIntention {
     std::optional<std::string> queue_name;
     std::optional<std::string> partition_name;
     
-    // Namespace/task-based polling
-    std::optional<std::string> namespace_name;
-    std::optional<std::string> task_name;
-    
     std::string consumer_group;
     int batch_size;
     std::chrono::steady_clock::time_point deadline;
@@ -43,29 +39,9 @@ struct PollIntention {
      * Intentions with the same key can be served by a single DB query
      */
     std::string grouping_key() const {
-        if (queue_name.has_value()) {
-            return queue_name.value() + ":" + 
+        return queue_name.value_or("*") + ":" + 
                    partition_name.value_or("*") + ":" + 
                    consumer_group;
-        } else {
-            return namespace_name.value_or("*") + ":" + 
-                   task_name.value_or("*") + ":" + 
-                   consumer_group;
-        }
-    }
-    
-    /**
-     * Check if this intention is for queue-based polling
-     */
-    bool is_queue_based() const {
-        return queue_name.has_value();
-    }
-    
-    /**
-     * Check if this intention is for namespace/task-based polling
-     */
-    bool is_namespace_based() const {
-        return namespace_name.has_value() || task_name.has_value();
     }
 };
 

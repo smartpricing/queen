@@ -408,29 +408,17 @@ static void worker_thread(const Config& config, int worker_id, int num_workers,
                 spdlog::info("  - Created response queue for worker {}", i);
             }
             
-            // Create sidecar pool if any sidecar flag is enabled
-            bool any_sidecar_enabled = config.queue.push_use_sidecar || 
-                                       config.queue.pop_use_sidecar ||
-                                       config.queue.ack_use_sidecar ||
-                                       config.queue.transaction_use_sidecar ||
-                                       config.queue.renew_lease_use_sidecar ||
-                                       config.queue.all_ops_use_sidecar;
-            
-            if (any_sidecar_enabled) {
-                spdlog::info("  - Creating Sidecar DB Pool ({} connections) for async operations", 
+            // Create sidecar pool (always enabled - this is the only mode)
+            spdlog::info("  - Creating Sidecar DB Pool ({} connections) for ALL async operations", 
                             config.queue.sidecar_pool_size);
-                spdlog::info("    Enabled ops: push={} pop={} ack={} transaction={} renew_lease={}",
-                            config.queue.push_use_sidecar, config.queue.pop_use_sidecar,
-                            config.queue.ack_use_sidecar, config.queue.transaction_use_sidecar,
-                            config.queue.renew_lease_use_sidecar);
                 global_sidecar_pool = std::make_shared<queen::SidecarDbPool>(
                     config.database.connection_string(),
                     config.queue.sidecar_pool_size,
-                    config.database.statement_timeout
+                config.database.statement_timeout,
+                global_db_thread_pool  // Pass threadpool for sidecar to use
                 );
                 queen::global_sidecar_pool_ptr = global_sidecar_pool.get();
                 spdlog::info("  - Sidecar pool created (will start after uWS loop is ready)");
-            }
             
             // Create global response registry (shared across workers)
             queen::global_response_registry = std::make_shared<queen::ResponseRegistry>();
@@ -738,7 +726,7 @@ static void worker_thread(const Config& config, int worker_id, int num_workers,
                     worker_id, timer_interval, timer_ctx->batch_size, timer_ctx->batch_max);
         
         // Start sidecar pool from Worker 0 (after event loop is initialized)
-        if (worker_id == 0 && global_sidecar_pool) {
+        if (worker_id == 0) {
             spdlog::info("[Worker 0] Starting sidecar pool...");
             global_sidecar_pool->start();
             spdlog::info("[Worker 0] Sidecar pool started with {} connections", 
