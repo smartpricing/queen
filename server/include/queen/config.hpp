@@ -183,6 +183,9 @@ struct QueueConfig {
     int batch_push_min_messages = 100;   // Minimum messages per batch (even if size not reached)
     int batch_push_max_messages = 10000; // Maximum messages per batch (even if under size limit)
     bool batch_push_use_size_based = true; // Enable size-based batching (false = use legacy count-based)
+    bool push_use_stored_procedure = true; // Use stored procedure for push (single round trip, faster)
+    bool push_use_sidecar = false;          // Use sidecar pattern for non-blocking push (requires stored procedure)
+    int sidecar_pool_size = 50;             // Number of connections in sidecar pool
     
     // Queue defaults
     int default_lease_time = 300;        // 5 minutes
@@ -260,6 +263,9 @@ struct QueueConfig {
         config.batch_push_min_messages = get_env_int("BATCH_PUSH_MIN_MESSAGES", 100);
         config.batch_push_max_messages = get_env_int("BATCH_PUSH_MAX_MESSAGES", 10000);
         config.batch_push_use_size_based = get_env_bool("BATCH_PUSH_USE_SIZE_BASED", true);
+        config.push_use_stored_procedure = get_env_bool("PUSH_USE_STORED_PROCEDURE", false);
+        config.push_use_sidecar = get_env_bool("PUSH_USE_SIDECAR", false);
+        config.sidecar_pool_size = get_env_int("SIDECAR_POOL_SIZE", 50);
         
         config.default_lease_time = get_env_int("DEFAULT_LEASE_TIME", 300);
         config.default_retry_limit = get_env_int("DEFAULT_RETRY_LIMIT", 3);

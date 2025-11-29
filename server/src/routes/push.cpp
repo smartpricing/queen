@@ -6,15 +6,25 @@
 #include "queen/file_buffer.hpp"
 #include "queen/inter_instance_comms.hpp"
 #include "queen/poll_intention_registry.hpp"
+#include "queen/response_queue.hpp"
+#include "queen/sidecar_db_pool.hpp"
 #include <spdlog/spdlog.h>
 #include <chrono>
 #include <set>
 
 namespace queen {
+
+// External globals (declared in acceptor_server.cpp)
+extern std::shared_ptr<ResponseRegistry> global_response_registry;
+extern SidecarDbPool* global_sidecar_pool_ptr;
+
 namespace routes {
 
 void setup_push_routes(uWS::App* app, const RouteContext& ctx) {
-    // ASYNC PUSH - NON-BLOCKING WITH ASYNC DB POOL (NO THREAD POOL NEEDED!)
+    // PUSH endpoint with multiple modes:
+    // 1. Legacy (push_use_stored_procedure=false): Multiple round trips, blocking
+    // 2. Stored Procedure (push_use_stored_procedure=true, push_use_sidecar=false): Single round trip, blocking
+    // 3. Sidecar (push_use_sidecar=true): Single round trip, NON-BLOCKING
     app->post("/api/v1/push", [ctx](auto* res, auto* req) {
         (void)req;
         read_json_body(res,
@@ -25,8 +35,8 @@ void setup_push_routes(uWS::App* app, const RouteContext& ctx) {
                         return;
                     }
                     
-                    spdlog::debug("[Worker {}] PUSH: Processing {} items (async, non-blocking)", 
-                                 ctx.worker_id, body["items"].size());
+                    size_t item_count = body["items"].size();
+                    spdlog::debug("[Worker {}] PUSH: Processing {} items", ctx.worker_id, item_count);
                     
                     // Parse and validate items
                     std::vector<PushItem> items;
@@ -68,15 +78,73 @@ void setup_push_routes(uWS::App* app, const RouteContext& ctx) {
                         items.push_back(std::move(item));
                     }
                     
-                    // Execute async push operation (non-blocking, polls socket internally)
-                    // This runs directly in the uWebSockets thread!
+                    // =================================================================
+                    // MODE 3: SIDECAR (TRUE ASYNC - NON-BLOCKING)
+                    // =================================================================
+                    if (ctx.config.queue.push_use_sidecar && global_sidecar_pool_ptr) {
+                        // Register response for async delivery
+                        std::string request_id = global_response_registry->register_response(
+                            res, ctx.worker_id, nullptr
+                        );
+                        
+                        // Build JSON array for stored procedure
+                        nlohmann::json items_json = nlohmann::json::array();
+                        for (const auto& item : items) {
+                            nlohmann::json item_json = {
+                                {"queue", item.queue},
+                                {"partition", item.partition},
+                                {"payload", item.payload}
+                            };
+                            if (item.transaction_id.has_value() && !item.transaction_id->empty()) {
+                                item_json["transactionId"] = *item.transaction_id;
+                            }
+                            if (item.trace_id.has_value() && !item.trace_id->empty()) {
+                                item_json["traceId"] = *item.trace_id;
+                            }
+                            items_json.push_back(item_json);
+                        }
+                        
+                        // Build sidecar request
+                        SidecarRequest req;
+                        req.request_id = request_id;
+                        req.sql = "SELECT queen.push_messages_v2($1::jsonb, $2::boolean, $3::boolean)";
+                        req.params = {items_json.dump(), "true", "true"};
+                        req.worker_id = ctx.worker_id;
+                        req.item_count = items.size();  // For micro-batching decisions
+                        
+                        // Submit to sidecar - RETURNS IMMEDIATELY!
+                        global_sidecar_pool_ptr->submit(std::move(req));
+                        
+                        spdlog::debug("[Worker {}] PUSH: Submitted {} items to sidecar (request_id={})", 
+                                     ctx.worker_id, item_count, request_id);
+                        
+                        // Don't send response here - sidecar will deliver it via response queue
+                        return;
+                    }
+                    
+                    // =================================================================
+                    // MODE 1 & 2: BLOCKING (stored procedure or legacy)
+                    // =================================================================
                     auto push_start = std::chrono::steady_clock::now();
-                    auto results = ctx.async_queue_manager->push_messages(items);
+                    std::vector<PushResult> results;
+                    
+                    if (ctx.config.queue.push_use_stored_procedure) {
+                        // MODE 2: Stored procedure (single round trip, but blocking)
+                        spdlog::debug("[Worker {}] PUSH: Using stored procedure for {} items", 
+                                     ctx.worker_id, items.size());
+                        results = ctx.async_queue_manager->push_messages_sp(items);
+                    } else {
+                        // MODE 1: Legacy (multiple round trips)
+                        results = ctx.async_queue_manager->push_messages(items);
+                    }
+                    
                     auto push_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
                         std::chrono::steady_clock::now() - push_start).count();
                     
-                    spdlog::info("[Worker {}] PUSH: Async push_messages completed in {}ms ({} items)", 
-                                ctx.worker_id, push_ms, items.size());
+                    spdlog::info("[Worker {}] PUSH: {} completed in {}ms ({} items)", 
+                                ctx.worker_id, 
+                                ctx.config.queue.push_use_stored_procedure ? "push_messages_sp" : "push_messages",
+                                push_ms, items.size());
                     
                     // Notify local poll registry + peers of new messages
                     {
@@ -92,7 +160,7 @@ void setup_push_routes(uWS::App* app, const RouteContext& ctx) {
                                             items[i].queue,
                                             items[i].partition
                                         );
-                                        spdlog::info("[Worker {}] PUSH: Notify local poll workers for {}:{}", 
+                                        spdlog::debug("[Worker {}] PUSH: Notify local poll workers for {}:{}", 
                                                     ctx.worker_id, items[i].queue, items[i].partition);
                                     }
                                     
@@ -102,7 +170,7 @@ void setup_push_routes(uWS::App* app, const RouteContext& ctx) {
                                             items[i].queue,
                                             items[i].partition
                                         );
-                                        spdlog::info("[Worker {}] PUSH: Notify peers for {}:{}", 
+                                        spdlog::debug("[Worker {}] PUSH: Notify peers for {}:{}", 
                                                     ctx.worker_id, items[i].queue, items[i].partition);
                                     }
                                     
@@ -149,4 +217,3 @@ void setup_push_routes(uWS::App* app, const RouteContext& ctx) {
 
 } // namespace routes
 } // namespace queen
-

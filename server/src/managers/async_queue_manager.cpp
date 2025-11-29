@@ -1139,6 +1139,144 @@ std::vector<PushResult> AsyncQueueManager::push_messages(const std::vector<PushI
     return push_messages_internal(items);
 }
 
+// --- Push Messages via Stored Procedure (Single Round Trip) ---
+
+std::vector<PushResult> AsyncQueueManager::push_messages_sp(const std::vector<PushItem>& items) {
+    if (items.empty()) {
+        return {};
+    }
+    
+    auto start_time = std::chrono::steady_clock::now();
+    
+    // Check maintenance mode
+    bool is_maintenance = check_maintenance_mode_with_cache();
+    if (is_maintenance && file_buffer_manager_) {
+        spdlog::info("push_messages_sp: Routing {} messages to file buffer (maintenance mode)", items.size());
+        // Fall back to regular push for file buffer handling
+        return push_messages(items);
+    }
+    
+    std::vector<PushResult> results;
+    results.reserve(items.size());
+    
+    try {
+        // Build JSON array of items
+        nlohmann::json items_json = nlohmann::json::array();
+        for (size_t i = 0; i < items.size(); ++i) {
+            const auto& item = items[i];
+            nlohmann::json item_json = {
+                {"queue", item.queue},
+                {"partition", item.partition}
+            };
+            
+            // Add payload
+            item_json["payload"] = item.payload;
+            
+            // Add optional fields
+            if (item.transaction_id.has_value() && !item.transaction_id->empty()) {
+                item_json["transactionId"] = *item.transaction_id;
+            }
+            if (item.trace_id.has_value() && !item.trace_id->empty()) {
+                item_json["traceId"] = *item.trace_id;
+            }
+            
+            items_json.push_back(item_json);
+        }
+        
+        std::string items_str = items_json.dump();
+        
+        // Call stored procedure
+        auto conn = async_db_pool_->acquire();
+        
+        std::string sql = "SELECT queen.push_messages_v2($1::jsonb, $2::boolean, $3::boolean)";
+        std::vector<std::string> params = {
+            items_str,
+            "true",  // check_duplicates
+            "true"   // check_capacity
+        };
+        
+        auto query_start = std::chrono::steady_clock::now();
+        sendQueryParamsAsync(conn.get(), sql, params);
+        auto result = getTuplesResult(conn.get());
+        auto query_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::steady_clock::now() - query_start).count();
+        
+        spdlog::info("push_messages_sp: Stored procedure executed in {}ms for {} items", 
+                    query_ms, items.size());
+        
+        if (PQntuples(result.get()) == 0) {
+            throw std::runtime_error("Stored procedure returned no result");
+        }
+        
+        // Parse JSON result
+        const char* result_str = PQgetvalue(result.get(), 0, 0);
+        if (!result_str || strlen(result_str) == 0) {
+            throw std::runtime_error("Stored procedure returned empty result");
+        }
+        
+        nlohmann::json results_json = nlohmann::json::parse(result_str);
+        
+        // Initialize results with pending status (will be overwritten)
+        for (size_t i = 0; i < items.size(); ++i) {
+            PushResult r;
+            r.transaction_id = items[i].transaction_id.value_or("");
+            r.status = "pending";  // Default, will be updated
+            results.push_back(r);
+        }
+        
+        // Process stored procedure results
+        for (const auto& res_item : results_json) {
+            int idx = res_item.value("index", -1);
+            if (idx < 0 || idx >= static_cast<int>(items.size())) {
+                spdlog::warn("push_messages_sp: Invalid result index {}", idx);
+                continue;
+            }
+            
+            results[idx].transaction_id = res_item.value("transaction_id", results[idx].transaction_id);
+            results[idx].status = res_item.value("status", "failed");
+            
+            if (res_item.contains("message_id") && !res_item["message_id"].is_null()) {
+                results[idx].message_id = res_item["message_id"].get<std::string>();
+            }
+            if (res_item.contains("trace_id") && !res_item["trace_id"].is_null()) {
+                results[idx].trace_id = res_item["trace_id"].get<std::string>();
+            }
+            if (res_item.contains("error") && !res_item["error"].is_null()) {
+                results[idx].error = res_item["error"].get<std::string>();
+            }
+        }
+        
+        auto total_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::steady_clock::now() - start_time).count();
+        
+        // Log summary
+        int queued = 0, duplicates = 0, rejected = 0, failed = 0;
+        for (const auto& r : results) {
+            if (r.status == "queued") queued++;
+            else if (r.status == "duplicate") duplicates++;
+            else if (r.status == "rejected") rejected++;
+            else failed++;
+        }
+        
+        spdlog::info("push_messages_sp: Completed in {}ms - {} queued, {} duplicates, {} rejected, {} failed (total: {})", 
+                    total_ms, queued, duplicates, rejected, failed, items.size());
+        
+    } catch (const std::exception& e) {
+        spdlog::error("push_messages_sp: Error: {}", e.what());
+        
+        // Return error for all items
+        for (const auto& item : items) {
+            PushResult r;
+            r.transaction_id = item.transaction_id.value_or(generate_transaction_id());
+            r.status = "failed";
+            r.error = e.what();
+            results.push_back(r);
+        }
+    }
+    
+    return results;
+}
+
 // --- Push Messages Internal (Bypasses Maintenance Mode) ---
 
 std::vector<PushResult> AsyncQueueManager::push_messages_internal(const std::vector<PushItem>& items) {

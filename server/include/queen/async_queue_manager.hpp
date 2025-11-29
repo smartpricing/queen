@@ -148,6 +148,10 @@ public:
     // Core message operations - async versions
     std::vector<PushResult> push_messages(const std::vector<PushItem>& items);
     
+    // HIGH-PERFORMANCE: Push using stored procedure (single round trip)
+    // This is significantly faster than push_messages for large batches
+    std::vector<PushResult> push_messages_sp(const std::vector<PushItem>& items);
+    
     // INTERNAL ONLY: Push messages directly to database, bypassing maintenance mode
     // Used by: file buffer drain, internal operations, admin tools
     // NEVER call this from user-facing code paths!
