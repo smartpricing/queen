@@ -210,6 +210,8 @@ static void response_timer_callback(us_timer_t* timer) {
         std::vector<queen::SidecarResponse> sidecar_responses;
         global_sidecar_pool->pop_responses(sidecar_responses, 100);  // Process up to 100
         
+        spdlog::info("[Sidecar Router] Popped {} responses from sidecar pool", sidecar_responses.size());
+        
         for (const auto& resp : sidecar_responses) {
             nlohmann::json json_response;
             int status_code = 201;
@@ -219,14 +221,20 @@ static void response_timer_callback(us_timer_t* timer) {
                 // Parse the stored procedure result (it's a JSON array)
                 try {
                     json_response = nlohmann::json::parse(resp.result_json);
+                    spdlog::info("[Sidecar Router] Parsed response for request {} (worker {}): {} items", 
+                                resp.request_id, resp.worker_id, json_response.size());
                 } catch (const std::exception& e) {
                     json_response = nlohmann::json::array();
-                    spdlog::error("[Sidecar] Failed to parse result JSON: {}", e.what());
+                    spdlog::error("[Sidecar] Failed to parse result JSON for {}: {} | Raw: {}", 
+                                 resp.request_id, e.what(), 
+                                 resp.result_json.substr(0, 200));
                 }
             } else {
                 json_response = {{"error", resp.error_message}};
                 status_code = 500;
                 is_error = true;
+                spdlog::warn("[Sidecar Router] Error response for request {}: {}", 
+                            resp.request_id, resp.error_message);
             }
             
             // Route to correct worker's response queue (NOT direct send!)
@@ -234,8 +242,8 @@ static void response_timer_callback(us_timer_t* timer) {
             if (target_worker >= 0 && target_worker < static_cast<int>(worker_response_queues.size())) {
                 worker_response_queues[target_worker]->push(
                     resp.request_id, json_response, is_error, status_code);
-                spdlog::debug("[Sidecar] Routed response {} to worker {} (success={}, time={}us)", 
-                             resp.request_id, target_worker, resp.success, resp.query_time_us);
+                spdlog::info("[Sidecar Router] Routed response {} to worker {} queue (size now: {})", 
+                            resp.request_id, target_worker, worker_response_queues[target_worker]->size());
             } else {
                 spdlog::error("[Sidecar] Invalid worker_id {} for response {}", 
                              target_worker, resp.request_id);
@@ -267,8 +275,13 @@ static void response_timer_callback(us_timer_t* timer) {
         bool sent = queen::global_response_registry->send_response(
             item.request_id, item.data, item.is_error, item.status_code);
         
-        if (!sent) {
-            spdlog::debug("Response {} was aborted or expired", item.request_id);
+        if (sent) {
+            spdlog::info("[Response Timer] Sent response {} (status={}, items={})", 
+                        item.request_id, item.status_code, 
+                        item.data.is_array() ? item.data.size() : 1);
+        } else {
+            spdlog::warn("[Response Timer] FAILED to send response {} - was aborted or not found", 
+                        item.request_id);
         }
         processed++;
     }

@@ -132,10 +132,10 @@ bool SidecarDbPool::has_responses() const {
 }
 
 void SidecarDbPool::poller_loop() {
-    spdlog::info("[SidecarDbPool] Poller loop started with MICRO-BATCHING enabled (5ms collection window)");
+    spdlog::info("[SidecarDbPool] Poller loop started with MICRO-BATCHING DISABLED for testing");
     
-    constexpr int MICRO_BATCH_WAIT_MS = 5;  // Wait up to 5ms to collect requests
-    constexpr int MAX_ITEMS_PER_TX = 500;
+    constexpr int MICRO_BATCH_WAIT_MS = 5;  // DISABLED: No wait for micro-batching
+    constexpr int MAX_ITEMS_PER_TX = 100;     // DISABLED: One request per batch
     
     while (running_) {
         // ============================================================
@@ -144,13 +144,16 @@ void SidecarDbPool::poller_loop() {
         {
             // Check if we have pending requests
             bool has_pending = false;
+            size_t pending_count = 0;
             {
                 std::lock_guard<std::mutex> lock(pending_mutex_);
                 has_pending = !pending_requests_.empty();
+                pending_count = pending_requests_.size();
             }
             
             // If we have pending requests, wait a bit to collect more (micro-batching)
-            if (has_pending && pending_requests_.size() < 5) {
+            // DISABLED: Skip waiting when MICRO_BATCH_WAIT_MS is 0
+            if (MICRO_BATCH_WAIT_MS > 0 && has_pending && pending_count < 5) {
                 std::this_thread::sleep_for(std::chrono::milliseconds(MICRO_BATCH_WAIT_MS));
             }
             
@@ -192,55 +195,85 @@ void SidecarDbPool::poller_loop() {
                 
                 if (batch.empty()) break;
                 
-                // Build combined JSON array from all requests
-                nlohmann::json combined_items = nlohmann::json::array();
+                // ============================================================
+                // STRING SPLICING: Combine JSON arrays WITHOUT parsing
+                // Each req.params[0] is "[{...},{...}]" - we strip brackets and concatenate
+                // ============================================================
+                std::string combined_json;
+                combined_json.reserve(2 * 1024 * 1024);  // 2MB reserve for large batches
+                combined_json += "[";
+                
                 std::vector<BatchedRequestInfo> batch_info;
                 size_t current_index = 0;
+                bool first_item = true;
                 
                 for (const auto& req : batch) {
-                    // Parse the items JSON from params[0]
-                    if (!req.params.empty()) {
-                        try {
-                            nlohmann::json items = nlohmann::json::parse(req.params[0]);
-                            size_t item_count = items.size();
-                            
-                            // Track this request's range in the combined batch
-                            BatchedRequestInfo info;
-                            info.request_id = req.request_id;
-                            info.worker_id = req.worker_id;
-                            info.start_index = current_index;
-                            info.item_count = item_count;
-                            batch_info.push_back(info);
-                            
-                            // Add items to combined array
-                            for (const auto& item : items) {
-                                combined_items.push_back(item);
-                            }
-                            current_index += item_count;
-                        } catch (const std::exception& e) {
-                            spdlog::error("[SidecarDbPool] Failed to parse request JSON: {}", e.what());
-                            // Return error for this request
-                            SidecarResponse error_resp;
-                            error_resp.request_id = req.request_id;
-                            error_resp.worker_id = req.worker_id;
-                            error_resp.success = false;
-                            error_resp.error_message = std::string("JSON parse error: ") + e.what();
-                            
-                            std::lock_guard<std::mutex> resp_lock(completed_mutex_);
-                            completed_responses_.push_back(std::move(error_resp));
+                    if (req.params.empty()) continue;
+                    
+                    const std::string& raw = req.params[0];
+                    
+                    // Minimum valid JSON array is "[]" (2 chars)
+                    if (raw.size() < 2) continue;
+                    
+                    // Strip outer brackets: "[{...}]" -> "{...}"
+                    // Find first '[' and last ']' to handle whitespace
+                    size_t start = raw.find('[');
+                    size_t end = raw.rfind(']');
+                    
+                    if (start == std::string::npos || end == std::string::npos || end <= start) {
+                        spdlog::error("[SidecarDbPool] Invalid JSON array format for request {}", req.request_id);
+                        SidecarResponse error_resp;
+                        error_resp.request_id = req.request_id;
+                        error_resp.worker_id = req.worker_id;
+                        error_resp.success = false;
+                        error_resp.error_message = "Invalid JSON array format";
+                        
+                        std::lock_guard<std::mutex> resp_lock(completed_mutex_);
+                        completed_responses_.push_back(std::move(error_resp));
+                        continue;
+                    }
+                    
+                    // Extract inner content (between [ and ])
+                    std::string_view inner(raw.data() + start + 1, end - start - 1);
+                    
+                    // Skip empty arrays
+                    bool has_content = false;
+                    for (char c : inner) {
+                        if (!std::isspace(static_cast<unsigned char>(c))) {
+                            has_content = true;
+                            break;
                         }
                     }
+                    
+                    if (!has_content) continue;
+                    
+                    // Track this request's range in the combined batch
+                    // Use the pre-computed item_count from the request
+                    BatchedRequestInfo info;
+                    info.request_id = req.request_id;
+                    info.worker_id = req.worker_id;
+                    info.start_index = current_index;
+                    info.item_count = req.item_count;
+                    batch_info.push_back(info);
+                    
+                    // Append with comma separator
+                    if (!first_item) {
+                        combined_json += ",";
+                    }
+                    combined_json.append(inner.data(), inner.size());
+                    first_item = false;
+                    
+                    current_index += req.item_count;
                 }
                 
-                if (combined_items.empty() || batch_info.empty()) {
+                combined_json += "]";
+                
+                if (batch_info.empty() || current_index == 0) {
                     continue;
                 }
                 
-                spdlog::info("[SidecarDbPool] MICRO-BATCH: Combined {} requests into {} items", 
-                            batch_info.size(), combined_items.size());
-                
-                // Build the SP call with combined items
-                std::string combined_json = combined_items.dump();
+                spdlog::info("[SidecarDbPool] MICRO-BATCH: Combined {} requests into {} items (string-splice, no parse)", 
+                            batch_info.size(), current_index);
                 std::string sql = "SELECT queen.push_messages_v2($1::jsonb, $2::boolean, $3::boolean)";
                 std::vector<const char*> param_values = {
                     combined_json.c_str(),
@@ -462,10 +495,11 @@ void SidecarDbPool::poller_loop() {
                             PQclear(last_result);
                         }
                         
-                        spdlog::info("[SidecarDbPool] MICRO-BATCH complete: {} requests, {} total items in {}ms",
-                                    slot.batched_requests.size(), all_results.size(), query_time / 1000);
+                        spdlog::info("[SidecarDbPool] MICRO-BATCH complete: {} requests, {} total items in {}ms (db_success={})",
+                                    slot.batched_requests.size(), all_results.size(), query_time / 1000, db_success);
                         
-                        // Split results by request
+                        // Split results by request using the 'index' field from stored procedure
+                        // The SP returns results in unpredictable order, so we MUST match by index
                         for (const auto& info : slot.batched_requests) {
                             SidecarResponse resp;
                             resp.request_id = info.request_id;
@@ -473,16 +507,26 @@ void SidecarDbPool::poller_loop() {
                             resp.query_time_us = query_time;
                             
                             if (db_success && all_results.is_array()) {
-                                // Extract this request's results by index range
+                                // FIX: Filter by 'index' field, not by array position!
+                                // Each result has {"index": N, ...} where N is the original input position
                                 nlohmann::json request_results = nlohmann::json::array();
-                                for (size_t i = info.start_index; i < info.start_index + info.item_count && i < all_results.size(); i++) {
-                                    request_results.push_back(all_results[i]);
+                                for (const auto& result : all_results) {
+                                    int idx = result.value("index", -1);
+                                    // Check if this result's index falls within this request's range
+                                    if (idx >= static_cast<int>(info.start_index) && 
+                                        idx < static_cast<int>(info.start_index + info.item_count)) {
+                                        request_results.push_back(result);
+                                    }
                                 }
                                 resp.success = true;
                                 resp.result_json = request_results.dump();
+                                spdlog::info("[SidecarDbPool] Request {} (worker {}): matched {} results (start={}, count={})", 
+                                            info.request_id, info.worker_id, request_results.size(), 
+                                            info.start_index, info.item_count);
                             } else {
                                 resp.success = false;
                                 resp.error_message = error_msg.empty() ? "Unknown error" : error_msg;
+                                spdlog::warn("[SidecarDbPool] Request {} failed: {}", info.request_id, resp.error_message);
                             }
                             
                             response_batch.push_back(std::move(resp));
@@ -536,9 +580,12 @@ void SidecarDbPool::poller_loop() {
             // ============================================================
             if (!response_batch.empty()) {
                 std::lock_guard<std::mutex> lock(completed_mutex_);
+                size_t before_size = completed_responses_.size();
                 for (auto& resp : response_batch) {
                     completed_responses_.push_back(std::move(resp));
                 }
+                spdlog::info("[SidecarDbPool] Added {} responses to queue (queue size: {} -> {})", 
+                            response_batch.size(), before_size, completed_responses_.size());
                 // Responses will be picked up by the existing response timer
                 // No async wakeup needed - timer polls at configured interval
             }

@@ -472,6 +472,7 @@ export async function manualAck(client) {
     .limit(1)
     .consume(async msgs => {
         for (const msg of msgs) {
+            console.log('Message: ' + msg.data.id)
             if (lastId === null) {
                 lastId = msg.data.id
             } else {

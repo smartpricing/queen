@@ -78,6 +78,12 @@ void setup_push_routes(uWS::App* app, const RouteContext& ctx) {
                         items.push_back(std::move(item));
                     }
                     
+                    // Handle empty push immediately - no need for DB call
+                    if (items.empty()) {
+                        send_json_response(res, nlohmann::json::array(), 201);
+                        return;
+                    }
+                    
                     // =================================================================
                     // MODE 3: SIDECAR (TRUE ASYNC - NON-BLOCKING)
                     // =================================================================
@@ -88,12 +94,14 @@ void setup_push_routes(uWS::App* app, const RouteContext& ctx) {
                         );
                         
                         // Build JSON array for stored procedure
+                        // Generate UUIDv7 message IDs on C++ side for consistency with non-sidecar path
                         nlohmann::json items_json = nlohmann::json::array();
                         for (const auto& item : items) {
                             nlohmann::json item_json = {
                                 {"queue", item.queue},
                                 {"partition", item.partition},
-                                {"payload", item.payload}
+                                {"payload", item.payload},
+                                {"messageId", ctx.async_queue_manager->generate_uuid()}  // UUIDv7
                             };
                             if (item.transaction_id.has_value() && !item.transaction_id->empty()) {
                                 item_json["transactionId"] = *item.transaction_id;
