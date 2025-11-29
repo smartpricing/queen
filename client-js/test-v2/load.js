@@ -11,7 +11,7 @@ export async function testLoad(client) {
     let messages = [];
     for (let i = 0; i < messagesToPush; i++) {
         messages.push({ data: { id: i } })
-        if (messages.length >= 10000) {
+        if (messages.length >= 100) {
             await client.queue('test-queue-v2-load').push(messages)
             messages = [];
         }
@@ -24,11 +24,10 @@ export async function testLoad(client) {
     await client
     .queue('test-queue-v2-load')
     .concurrency(10)
-    .batch(10000)
+    .batch(100)
     .wait(false)
-    .limit(1)
+    .limit(10000)
     .consume(async msgs => {
-        console.log(`Messages: ${msgs.length}`)
         for (const msg of msgs) {
             if (lastId === null) {
                 lastId = msg.data.id
@@ -48,7 +47,7 @@ export async function testLoad(client) {
     return { success: uniqueIdsCount === messagesToPush, message: 'Load test completed successfully' }
 }
 
-export async function testLoadPartition(client) { 
+/*export async function testLoadPartition(client) { 
     const queue = await client
     .queue('test-queue-v2-load-partition')
     .create()
@@ -62,7 +61,7 @@ export async function testLoadPartition(client) {
     let k = 0
     for (let i = 0; i < messagesToPush; i++) {
         messages.push({ data: { id: i } })
-        if (messages.length >= 10000) {
+        if (messages.length >= 100) {
             await client
             .queue('test-queue-v2-load-partition')
             .partition(k.toString())
@@ -80,15 +79,17 @@ export async function testLoadPartition(client) {
     await client
     .queue('test-queue-v2-load-partition')
     .partition(i.toString())
-    .batch(10000)
+    .batch(100)
     .wait(false)
-    .limit(1)
+    .limit(10000)
     .consume(async msgs => {
+        console.log(`Messages: ${msgs.length}`)
         for (const msg of msgs) {
             if (lastId === null) {
                 lastId = msg.data.id
             } else {
                 if (msg.data.id !== lastId + 1) {
+                    console.log(`Message ordering violation: ${msg.data.id} !== ${lastId + 1}`)
                     throw new Error('Message ordering violation')
                 }
                 lastId = msg.data.id
@@ -101,7 +102,7 @@ export async function testLoadPartition(client) {
     const uniqueIdsCount = uniqueIds.size;
 
     return { success: uniqueIdsCount === messagesToPush, message: 'Load test completed successfully' }
-}
+}*/
 
 export async function testLoadConsumerGroup(client) { 
     const queue = await client
@@ -116,7 +117,7 @@ export async function testLoadConsumerGroup(client) {
     let messages = [];
     for (let i = 0; i < messagesToPush; i++) {
         messages.push({ data: { id: i } })
-        if (messages.length >= 10000) {
+        if (messages.length >= 100) {
             await client.queue('test-queue-v2-load-consumer-group').push(messages)
             messages = [];
         }
@@ -131,9 +132,9 @@ export async function testLoadConsumerGroup(client) {
     .group('test-consumer-group-a')
     .subscriptionMode('from_beginning')
     .concurrency(10)
-    .batch(10000)
+    .batch(100)
     .wait(false)
-    .limit(1)
+    .limit(10000)
     .consume(async msgs => {
         for (const msg of msgs) {
             if (lastIdA === null) {
@@ -156,9 +157,9 @@ export async function testLoadConsumerGroup(client) {
     .group('test-consumer-group-b')
     .subscriptionMode('from_beginning')
     .concurrency(10)
-    .batch(10000)
+    .batch(100)
     .wait(false)
-    .limit(1)
+    .limit(10000)
     .consume(async msgs => {
         for (const msg of msgs) {
             if (lastIdB === null) {

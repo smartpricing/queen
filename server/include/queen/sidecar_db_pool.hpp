@@ -10,14 +10,29 @@
 #include <string>
 #include <optional>
 #include <chrono>
+#include <unordered_map>
 #include <json.hpp>
 
 namespace queen {
 
 /**
+ * Operation type for sidecar requests
+ * Determines how the request is processed and batched
+ */
+enum class SidecarOpType {
+    PUSH,           // Push messages (batchable)
+    POP,            // Pop messages (batchable via pop_batch_v2)
+    ACK,            // Single acknowledge
+    ACK_BATCH,      // Batch acknowledge (batchable)
+    TRANSACTION,    // Atomic transaction (NOT batchable)
+    RENEW_LEASE     // Renew message lease (batchable)
+};
+
+/**
  * Request to be executed by the sidecar
  */
 struct SidecarRequest {
+    SidecarOpType op_type = SidecarOpType::PUSH;  // Operation type
     std::string request_id;
     std::string sql;
     std::vector<std::string> params;
@@ -30,6 +45,7 @@ struct SidecarRequest {
  * Response from the sidecar
  */
 struct SidecarResponse {
+    SidecarOpType op_type = SidecarOpType::PUSH;  // Operation type (for response parsing)
     std::string request_id;
     int worker_id;
     bool success;
@@ -93,6 +109,13 @@ public:
      */
     bool has_responses() const;
     
+    // Per-operation statistics
+    struct OpStats {
+        uint64_t count = 0;           // Number of operations
+        uint64_t total_time_us = 0;   // Total time in microseconds
+        uint64_t items_processed = 0; // Total items processed (for batched ops)
+    };
+    
     // Statistics
     struct Stats {
         size_t total_connections;
@@ -101,6 +124,9 @@ public:
         size_t completed_responses;
         uint64_t total_queries;
         uint64_t total_query_time_us;
+        
+        // Per-operation stats
+        std::unordered_map<SidecarOpType, OpStats> op_stats;
     };
     Stats get_stats() const;
     
@@ -125,6 +151,10 @@ private:
         // Micro-batching: tracks multiple requests in one SP call
         std::vector<BatchedRequestInfo> batched_requests;
         bool is_batched = false;
+        
+        // Operation type for this slot
+        SidecarOpType op_type = SidecarOpType::PUSH;
+        size_t total_items = 0;  // Total items in this batch
     };
     
     // Configuration
@@ -150,6 +180,9 @@ private:
     // Statistics
     std::atomic<uint64_t> total_queries_{0};
     std::atomic<uint64_t> total_query_time_us_{0};
+    
+    // Per-operation statistics (protected by completed_mutex_ for simplicity)
+    mutable std::unordered_map<SidecarOpType, OpStats> op_stats_;
     
     // Internal methods
     bool connect_slot(ConnectionSlot& slot);

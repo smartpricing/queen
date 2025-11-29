@@ -6,6 +6,7 @@
 #include "queen/response_queue.hpp"
 #include "queen/queue_types.hpp"
 #include "queen/shared_state_manager.hpp"
+#include "queen/sidecar_db_pool.hpp"
 #include <spdlog/spdlog.h>
 #include <chrono>
 
@@ -14,6 +15,7 @@ namespace queen {
 extern std::shared_ptr<ResponseRegistry> global_response_registry;
 extern std::shared_ptr<PollIntentionRegistry> global_poll_intention_registry;
 extern std::shared_ptr<SharedStateManager> global_shared_state;
+extern SidecarDbPool* global_sidecar_pool_ptr;
 }
 
 namespace queen {
@@ -143,9 +145,42 @@ void setup_pop_routes(uWS::App* app, const RouteContext& ctx) {
                 return;
             }
             
-            // Non-waiting mode: use AsyncQueueManager directly in uWS event loop
+            // Non-waiting mode: check for sidecar or use AsyncQueueManager
             spdlog::info("[Worker {}] SPOP: Executing immediate pop for {}/{} (wait=false)", ctx.worker_id, queue_name, partition_name);
+            
+            // Use sidecar for async pop if enabled
+            // NOTE: POP is non-batchable - each request gets its own transaction for lease acquisition
+            if (ctx.config.queue.pop_use_sidecar && global_sidecar_pool_ptr) {
+                // Register response for async delivery
+                std::string request_id = global_response_registry->register_response(
+                    res, ctx.worker_id, nullptr
+                );
                 
+                // Build sidecar request with direct pop_messages_v2 call
+                // leaseTime=0 means "use queue's configured lease_time from database"
+                SidecarRequest req;
+                req.op_type = SidecarOpType::POP;
+                req.request_id = request_id;
+                req.sql = "SELECT queen.pop_messages_v2($1, $2, $3, $4, $5, $6, $7)";
+                req.params = {
+                    queue_name,                                      // p_queue_name
+                    partition_name,                                  // p_partition_name (specific partition)
+                    consumer_group,                                  // p_consumer_group
+                    std::to_string(options.batch),                   // p_batch_size
+                    "0",                                             // p_lease_time_seconds (0 = use queue config)
+                    options.subscription_mode.value_or("all"),       // p_subscription_mode
+                    options.subscription_from.value_or("")           // p_subscription_from
+                };
+                req.worker_id = ctx.worker_id;
+                req.item_count = 1;
+                
+                global_sidecar_pool_ptr->submit(std::move(req));
+                spdlog::debug("[Worker {}] SPOP: Submitted to sidecar (request_id={})", 
+                             ctx.worker_id, request_id);
+                return;
+            }
+            
+            // Fallback: use AsyncQueueManager directly in uWS event loop
             try {
                 auto start_time = std::chrono::steady_clock::now();
                 auto result = ctx.async_queue_manager->pop_messages_from_partition(queue_name, partition_name, consumer_group, options);
@@ -257,9 +292,42 @@ void setup_pop_routes(uWS::App* app, const RouteContext& ctx) {
                 return;
             }
             
-            // Non-waiting mode: use AsyncQueueManager directly in uWS event loop
+            // Non-waiting mode: check for sidecar or use AsyncQueueManager
             spdlog::info("[Worker {}] QPOP: Executing immediate pop for {}/* (wait=false)", ctx.worker_id, queue_name);
+            
+            // Use sidecar for async pop if enabled
+            // NOTE: POP is non-batchable - each request gets its own transaction for lease acquisition
+            if (ctx.config.queue.pop_use_sidecar && global_sidecar_pool_ptr) {
+                std::string request_id = global_response_registry->register_response(
+                    res, ctx.worker_id, nullptr
+                );
                 
+                // Build sidecar request with direct pop_messages_v2 call
+                // Pass NULL for partition to pop from any partition
+                // leaseTime=0 means "use queue's configured lease_time from database"
+                SidecarRequest req;
+                req.op_type = SidecarOpType::POP;
+                req.request_id = request_id;
+                req.sql = "SELECT queen.pop_messages_v2($1, $2, $3, $4, $5, $6, $7)";
+                req.params = {
+                    queue_name,                                      // p_queue_name
+                    "",                                              // p_partition_name (empty = any partition, will be NULL)
+                    consumer_group,                                  // p_consumer_group
+                    std::to_string(options.batch),                   // p_batch_size
+                    "0",                                             // p_lease_time_seconds (0 = use queue config)
+                    options.subscription_mode.value_or("all"),       // p_subscription_mode
+                    options.subscription_from.value_or("")           // p_subscription_from
+                };
+                req.worker_id = ctx.worker_id;
+                req.item_count = 1;
+                
+                global_sidecar_pool_ptr->submit(std::move(req));
+                spdlog::debug("[Worker {}] QPOP: Submitted to sidecar (request_id={})", 
+                             ctx.worker_id, request_id);
+                return;
+            }
+            
+            // Fallback: use AsyncQueueManager directly
             try {
                 auto start_time = std::chrono::steady_clock::now();
                 auto result = ctx.async_queue_manager->pop_messages_from_queue(queue_name, consumer_group, options);
@@ -363,6 +431,8 @@ void setup_pop_routes(uWS::App* app, const RouteContext& ctx) {
             }
             
             // Non-waiting mode: use AsyncQueueManager directly in uWS event loop
+            // Note: Filtered POP (namespace/task) doesn't use sidecar yet - it requires 
+            // more complex logic to find the right queue/partition first
             spdlog::info("[Worker {}] POP: Executing immediate pop for namespace={} task={} (wait=false)", 
                         ctx.worker_id, namespace_name.value_or("*"), task_name.value_or("*"));
                 

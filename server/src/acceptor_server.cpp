@@ -214,15 +214,44 @@ static void response_timer_callback(us_timer_t* timer) {
         
         for (const auto& resp : sidecar_responses) {
             nlohmann::json json_response;
-            int status_code = 201;
+            int status_code = 200;
             bool is_error = false;
             
             if (resp.success) {
-                // Parse the stored procedure result (it's a JSON array)
+                // Parse the stored procedure result
                 try {
                     json_response = nlohmann::json::parse(resp.result_json);
-                    spdlog::info("[Sidecar Router] Parsed response for request {} (worker {}): {} items", 
-                                resp.request_id, resp.worker_id, json_response.size());
+                    
+                    // Set status code based on operation type
+                    switch (resp.op_type) {
+                        case queen::SidecarOpType::PUSH:
+                            status_code = 201;
+                            break;
+                        case queen::SidecarOpType::POP:
+                            // For POP, check if messages were returned
+                            // POP batch returns [{idx, result: {messages: [...], leaseId: ...}}]
+                            // Single POP returns {messages: [...], leaseId: ...}
+                            if (json_response.is_array() && json_response.size() == 1 && 
+                                json_response[0].contains("result")) {
+                                // Extract the result from batch format for single request
+                                json_response = json_response[0]["result"];
+                            }
+                            if (json_response.contains("messages") && json_response["messages"].empty()) {
+                                status_code = 204;  // No Content
+                            }
+                            break;
+                        case queen::SidecarOpType::ACK:
+                        case queen::SidecarOpType::ACK_BATCH:
+                        case queen::SidecarOpType::TRANSACTION:
+                        case queen::SidecarOpType::RENEW_LEASE:
+                            status_code = 200;
+                            break;
+                    }
+                    
+                    spdlog::debug("[Sidecar Router] Parsed response for request {} (worker {}): op={} items={}", 
+                                resp.request_id, resp.worker_id, 
+                                static_cast<int>(resp.op_type),
+                                json_response.is_array() ? json_response.size() : 1);
                 } catch (const std::exception& e) {
                     json_response = nlohmann::json::array();
                     spdlog::error("[Sidecar] Failed to parse result JSON for {}: {} | Raw: {}", 
@@ -242,7 +271,7 @@ static void response_timer_callback(us_timer_t* timer) {
             if (target_worker >= 0 && target_worker < static_cast<int>(worker_response_queues.size())) {
                 worker_response_queues[target_worker]->push(
                     resp.request_id, json_response, is_error, status_code);
-                spdlog::info("[Sidecar Router] Routed response {} to worker {} queue (size now: {})", 
+                spdlog::debug("[Sidecar Router] Routed response {} to worker {} queue (size now: {})", 
                             resp.request_id, target_worker, worker_response_queues[target_worker]->size());
             } else {
                 spdlog::error("[Sidecar] Invalid worker_id {} for response {}", 
@@ -379,10 +408,21 @@ static void worker_thread(const Config& config, int worker_id, int num_workers,
                 spdlog::info("  - Created response queue for worker {}", i);
             }
             
-            // Create sidecar pool if enabled
-            if (config.queue.push_use_sidecar) {
-                spdlog::info("  - Creating Sidecar DB Pool ({} connections) for async push", 
+            // Create sidecar pool if any sidecar flag is enabled
+            bool any_sidecar_enabled = config.queue.push_use_sidecar || 
+                                       config.queue.pop_use_sidecar ||
+                                       config.queue.ack_use_sidecar ||
+                                       config.queue.transaction_use_sidecar ||
+                                       config.queue.renew_lease_use_sidecar ||
+                                       config.queue.all_ops_use_sidecar;
+            
+            if (any_sidecar_enabled) {
+                spdlog::info("  - Creating Sidecar DB Pool ({} connections) for async operations", 
                             config.queue.sidecar_pool_size);
+                spdlog::info("    Enabled ops: push={} pop={} ack={} transaction={} renew_lease={}",
+                            config.queue.push_use_sidecar, config.queue.pop_use_sidecar,
+                            config.queue.ack_use_sidecar, config.queue.transaction_use_sidecar,
+                            config.queue.renew_lease_use_sidecar);
                 global_sidecar_pool = std::make_shared<queen::SidecarDbPool>(
                     config.database.connection_string(),
                     config.queue.sidecar_pool_size,
@@ -698,7 +738,7 @@ static void worker_thread(const Config& config, int worker_id, int num_workers,
                     worker_id, timer_interval, timer_ctx->batch_size, timer_ctx->batch_max);
         
         // Start sidecar pool from Worker 0 (after event loop is initialized)
-        if (worker_id == 0 && config.queue.push_use_sidecar && global_sidecar_pool) {
+        if (worker_id == 0 && global_sidecar_pool) {
             spdlog::info("[Worker 0] Starting sidecar pool...");
             global_sidecar_pool->start();
             spdlog::info("[Worker 0] Sidecar pool started with {} connections", 

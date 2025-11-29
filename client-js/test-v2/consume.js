@@ -471,8 +471,8 @@ export async function manualAck(client) {
     .wait(false)
     .limit(1)
     .consume(async msgs => {
+        console.log('Messages: ' + msgs.length)
         for (const msg of msgs) {
-            console.log('Message: ' + msg.data.id)
             if (lastId === null) {
                 lastId = msg.data.id
             } else {
@@ -526,6 +526,7 @@ export async function retries(client) {
     .limit(300)  // Allow up to 300 messages (3 batches of 100)
     .consume(async msgs => {
         attemptCount++;
+        console.log('Attempt: ' + attemptCount)
         if (attemptCount < 3) {
             // Fail first 2 attempts, succeed on 3rd
             throw new Error('Test error - triggering retry')

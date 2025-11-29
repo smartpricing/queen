@@ -14,6 +14,14 @@ This document describes the engineering plan to move **POP (wait=false)**, **ACK
 ### Target State
 All operations use the sidecar for non-blocking I/O, freeing HTTP workers during DB operations.
 
+### Performance Optimizations (Code Review)
+
+| Issue | Risk | Solution |
+|-------|------|----------|
+| **SKIP LOCKED trap** | Sequential scans under load | Two-phase locking: find candidates first, then lock |
+| **ACK deadlocks** | Concurrent ACKs deadlock | Sort by (partitionId, transactionId) before locking |
+| **JSON overhead** | CPU bottleneck in Postgres | Use `to_jsonb()` instead of `jsonb_build_object()` |
+
 ---
 
 ## Architecture Overview
@@ -167,6 +175,11 @@ for (const auto& resp : sidecar_responses) {
 
 ## Phase 2: Stored Procedures
 
+> **⚠️ PERFORMANCE OPTIMIZATIONS** (from code review):
+> 1. **SKIP LOCKED trap**: Use CTE to find candidate IDs first, then lock
+> 2. **Deadlock prevention**: Always sort inputs by ID before locking  
+> 3. **JSON performance**: Use `to_jsonb()` instead of `jsonb_build_object()`
+
 ### 2.1 pop_messages_v2
 
 **File**: `server/migrations/004_pop_stored_procedure.sql`
@@ -189,13 +202,15 @@ DECLARE
     v_messages JSONB;
     v_cursor_id UUID;
     v_cursor_ts TIMESTAMPTZ;
+    v_queue_name TEXT;
+    v_partition_name TEXT;
 BEGIN
     -- Generate lease ID
     v_lease_id := gen_random_uuid();
     
     -- Find partition (specific or any with messages)
     IF p_partition_name IS NOT NULL THEN
-        SELECT p.id INTO v_partition_id
+        SELECT p.id, q.name, p.name INTO v_partition_id, v_queue_name, v_partition_name
         FROM queen.partitions p
         JOIN queen.queues q ON p.queue_id = q.id
         WHERE q.name = p_queue_name AND p.name = p_partition_name;
@@ -214,48 +229,59 @@ BEGIN
     FROM queen.partition_consumers
     WHERE partition_id = v_partition_id AND consumer_group = p_consumer_group;
     
-    -- Select and lease messages in one atomic operation
-    WITH selected AS (
-        SELECT m.id, m.transaction_id, m.payload, m.trace_id, 
-               m.retry_count, m.priority, m.created_at,
-               q.name as queue_name, p.name as partition_name, p.id as partition_id
+    -- OPTIMIZED: Two-phase locking to avoid SKIP LOCKED performance trap
+    -- Phase 1: Cheaply identify candidate IDs (index scan only, no locks)
+    -- Phase 2: Lock and update only the candidates
+    WITH candidates AS (
+        -- Lightweight index scan to find candidate message IDs
+        -- Grab extras in case some are locked by concurrent consumers
+        SELECT m.id
         FROM queen.messages m
-        JOIN queen.partitions p ON m.partition_id = p.id
-        JOIN queen.queues q ON p.queue_id = q.id
         WHERE m.partition_id = v_partition_id
           AND m.status = 'pending'
           AND (m.lease_expires_at IS NULL OR m.lease_expires_at < NOW())
           AND (v_cursor_ts IS NULL OR m.created_at > v_cursor_ts 
                OR (m.created_at = v_cursor_ts AND m.id > v_cursor_id))
         ORDER BY m.created_at, m.id
-        LIMIT p_batch_size
+        LIMIT p_batch_size * 2  -- Overfetch to handle locked rows
+    ),
+    locked_ids AS (
+        -- Lock only what we need from candidates
+        SELECT id FROM candidates
         FOR UPDATE SKIP LOCKED
+        LIMIT p_batch_size
     ),
     leased AS (
+        -- Update the locked messages
         UPDATE queen.messages m
         SET lease_id = v_lease_id,
             lease_expires_at = NOW() + (p_lease_time_seconds || ' seconds')::interval,
             status = 'leased'
-        FROM selected s
-        WHERE m.id = s.id
+        WHERE m.id IN (SELECT id FROM locked_ids)
         RETURNING m.id, m.transaction_id, m.payload, m.trace_id,
-                  m.retry_count, m.priority, m.created_at,
-                  s.queue_name, s.partition_name, s.partition_id
+                  m.retry_count, m.priority, m.created_at
     )
-    SELECT jsonb_agg(jsonb_build_object(
-        'id', id::text,
-        'transactionId', transaction_id,
-        'partitionId', partition_id::text,
-        'traceId', trace_id::text,
-        'queue', queue_name,
-        'partition', partition_name,
-        'data', payload,
-        'retryCount', retry_count,
-        'priority', priority,
-        'createdAt', to_char(created_at, 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"')
-    ) ORDER BY created_at, id)
+    -- OPTIMIZED: Use to_jsonb() instead of jsonb_build_object() (C-native, faster)
+    SELECT jsonb_agg(
+        to_jsonb(sub) || jsonb_build_object(
+            'queue', v_queue_name,
+            'partition', v_partition_name,
+            'partitionId', v_partition_id::text
+        )
+        ORDER BY sub.created_at, sub.id
+    )
     INTO v_messages
-    FROM leased;
+    FROM (
+        SELECT 
+            id::text as id,
+            transaction_id as "transactionId",
+            trace_id::text as "traceId",
+            payload as data,
+            retry_count as "retryCount",
+            priority,
+            to_char(created_at, 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"') as "createdAt"
+        FROM leased
+    ) sub;
     
     RETURN jsonb_build_object(
         'messages', COALESCE(v_messages, '[]'::jsonb),
@@ -269,10 +295,13 @@ $$;
 
 **File**: `server/migrations/005_ack_stored_procedure.sql`
 
+> **⚠️ DEADLOCK PREVENTION**: Sort inputs by (partitionId, transactionId) before locking.
+> Without sorting, concurrent requests ACKing `[Msg1, Msg2]` and `[Msg2, Msg1]` will deadlock.
+
 ```sql
 CREATE OR REPLACE FUNCTION queen.ack_messages_v2(
     p_acknowledgments JSONB
-    -- [{transactionId, partitionId, leaseId, status, consumerGroup, error}, ...]
+    -- [{index, transactionId, partitionId, leaseId, status, consumerGroup, error}, ...]
 ) RETURNS JSONB
 LANGUAGE plpgsql
 AS $$
@@ -286,9 +315,13 @@ DECLARE
     v_success BOOLEAN;
     v_error TEXT;
     v_new_status TEXT;
-    v_idx INT := 0;
 BEGIN
-    FOR v_ack IN SELECT * FROM jsonb_array_elements(p_acknowledgments)
+    -- ⚠️ CRITICAL: Sort by partitionId + transactionId to prevent deadlocks
+    -- When two concurrent requests ACK overlapping messages in different order,
+    -- sorting ensures consistent lock acquisition order across all transactions
+    FOR v_ack IN 
+        SELECT value FROM jsonb_array_elements(p_acknowledgments)
+        ORDER BY (value->>'partitionId'), (value->>'transactionId')
     LOOP
         v_success := false;
         v_error := NULL;
@@ -327,7 +360,7 @@ BEGIN
                     ELSE 'consumed'
                 END;
                 
-                -- Update message
+                -- Update message (FOR UPDATE implicit in UPDATE)
                 UPDATE queen.messages
                 SET status = v_new_status,
                     consumed_at = NOW(),
@@ -353,17 +386,21 @@ BEGIN
             END IF;
         END IF;
         
+        -- Use original index from input for result ordering
         v_results := v_results || jsonb_build_object(
-            'index', v_idx,
+            'index', (v_ack->>'index')::int,
             'transactionId', v_ack->>'transactionId',
             'success', v_success,
             'error', v_error,
             'queueName', v_queue_name,
             'partitionName', v_partition_name
         );
-        
-        v_idx := v_idx + 1;
     END LOOP;
+    
+    -- Sort results by original index before returning
+    SELECT COALESCE(jsonb_agg(item ORDER BY (item->>'index')::int), '[]'::jsonb)
+    INTO v_results
+    FROM jsonb_array_elements(v_results) item;
     
     RETURN v_results;
 END;
@@ -445,10 +482,13 @@ $$;
 
 **File**: `server/migrations/007_renew_lease_stored_procedure.sql`
 
+> **Note**: Lease renewals on the same message are rare, so deadlock risk is low.
+> But we sort anyway for consistency with the other procedures.
+
 ```sql
 CREATE OR REPLACE FUNCTION queen.renew_lease_v2(
     p_items JSONB
-    -- [{leaseId, extendSeconds}, ...]
+    -- [{index, leaseId, extendSeconds}, ...]
 ) RETURNS JSONB
 LANGUAGE plpgsql
 AS $$
@@ -456,9 +496,11 @@ DECLARE
     v_item JSONB;
     v_results JSONB := '[]'::jsonb;
     v_success BOOLEAN;
-    v_idx INT := 0;
 BEGIN
-    FOR v_item IN SELECT * FROM jsonb_array_elements(p_items)
+    -- Sort by leaseId for consistent lock ordering
+    FOR v_item IN 
+        SELECT value FROM jsonb_array_elements(p_items)
+        ORDER BY (value->>'leaseId')
     LOOP
         UPDATE queen.messages
         SET lease_expires_at = NOW() + ((v_item->>'extendSeconds')::int || ' seconds')::interval
@@ -468,18 +510,44 @@ BEGIN
         v_success := FOUND;
         
         v_results := v_results || jsonb_build_object(
-            'index', v_idx,
+            'index', (v_item->>'index')::int,
             'leaseId', v_item->>'leaseId',
             'success', v_success,
             'error', CASE WHEN NOT v_success THEN 'Lease not found or expired' ELSE NULL END
         );
-        
-        v_idx := v_idx + 1;
     END LOOP;
+    
+    -- Sort results by original index
+    SELECT COALESCE(jsonb_agg(item ORDER BY (item->>'index')::int), '[]'::jsonb)
+    INTO v_results
+    FROM jsonb_array_elements(v_results) item;
     
     RETURN v_results;
 END;
 $$;
+```
+
+### 2.5 Required Indexes
+
+The two-phase locking optimization in `pop_messages_v2` relies on efficient index scans.
+
+**File**: `server/migrations/004_pop_stored_procedure.sql` (include with procedure)
+
+```sql
+-- Critical index for POP performance
+-- Enables efficient candidate selection without table locks
+CREATE INDEX IF NOT EXISTS idx_messages_pop_candidates 
+ON queen.messages (partition_id, status, created_at, id)
+WHERE status = 'pending';
+
+-- Index for lease lookups (RENEW_LEASE)
+CREATE INDEX IF NOT EXISTS idx_messages_lease_id 
+ON queen.messages (lease_id)
+WHERE lease_id IS NOT NULL;
+
+-- Index for ACK lookups by transaction_id
+CREATE INDEX IF NOT EXISTS idx_messages_transaction_partition 
+ON queen.messages (transaction_id, partition_id);
 ```
 
 ---
@@ -630,31 +698,52 @@ if (ctx.config.queue.renew_lease_use_sidecar && global_sidecar_pool_ptr) {
 
 ## Phase 4: Sidecar Modifications
 
-### 4.1 Remove PUSH-specific assumptions
+### 4.1 Enable Micro-batching for All Batchable Operations
 
 **File**: `server/src/database/sidecar_db_pool.cpp`
 
-Current code assumes all requests are PUSH and does string-splicing of JSON arrays. This won't work for other operations.
+Current code assumes all requests are PUSH and does string-splicing of JSON arrays. We need to extend this to support other operations.
 
-**Option A: Disable micro-batching for non-PUSH operations**
+**Operation-specific batching strategies:**
+
+| Operation | Batching Strategy |
+|-----------|------------------|
+| PUSH | Combine JSON arrays → `push_messages_v2([...])` |
+| ACK | Combine acknowledgments → `ack_messages_v2([...])` |
+| POP | Combine pop requests → `pop_messages_batch_v2([...])` |
+| TRANSACTION | **No batching** (each is atomic unit) |
+| RENEW_LEASE | Combine lease extensions → `renew_lease_v2([...])` |
 
 ```cpp
 // In poller_loop():
-if (req.op_type == SidecarOpType::PUSH) {
-    // Current micro-batching logic for PUSH
-} else {
-    // Simple 1:1 request:query for other operations
-    // Send each request as a single stored procedure call
+void process_batch(std::vector<SidecarRequest>& requests, SlotInfo& slot) {
+    if (requests.empty()) return;
+    
+    SidecarOpType op_type = requests[0].op_type;
+    
+    switch (op_type) {
+        case SidecarOpType::PUSH:
+        case SidecarOpType::ACK:
+        case SidecarOpType::POP:
+        case SidecarOpType::RENEW_LEASE:
+            // All use JSON array batching - combine into single SP call
+            combine_and_execute_batch(requests, slot);
+            break;
+            
+        case SidecarOpType::TRANSACTION:
+            // No batching - each transaction is atomic
+            for (auto& req : requests) {
+                execute_single(req, slot);
+            }
+            break;
+    }
 }
 ```
 
-**Option B: Operation-specific batching (future optimization)**
-
-Different operations could have different batching strategies:
-- PUSH: Combine JSON arrays (current)
-- ACK: Could also combine acknowledgments
-- POP: No batching (each consumer gets own messages)
-- RENEW_LEASE: Could batch multiple lease extensions
+**Batching constraints:**
+- Only batch requests of the **same operation type**
+- Collect for up to 5ms (when `MICRO_BATCH_WAIT_MS > 0`)
+- Max 500 items per batch (`MAX_ITEMS_PER_TX`)
 
 ### 4.2 Response Parsing
 
@@ -764,47 +853,237 @@ TRANSACTION_USE_SIDECAR=true
 
 ---
 
-## File Changes Summary
+## Design Decisions
+
+### 1. Micro-batching: Enabled for ACK and POP ✅
+
+Like PUSH, we will batch multiple ACK and POP requests in the sidecar's 5ms collection window.
+
+**ACK Micro-batching:**
+```
+┌────────────────────────────────────────────────────────────┐
+│ 5ms window                                                  │
+│                                                             │
+│ ACK Request 1: [{txn1, partition1}, {txn2, partition1}]    │
+│ ACK Request 2: [{txn3, partition2}]                        │
+│ ACK Request 3: [{txn4, partition1}, {txn5, partition3}]    │
+│                                                             │
+│ Combined: SELECT queen.ack_messages_v2('[                  │
+│   {txn1, partition1, start_idx: 0},                        │
+│   {txn2, partition1, start_idx: 0},                        │
+│   {txn3, partition2, start_idx: 2},                        │
+│   {txn4, partition1, start_idx: 3},                        │
+│   {txn5, partition3, start_idx: 3}                         │
+│ ]')                                                         │
+│                                                             │
+│ Results split back by start_idx → each client gets theirs  │
+└────────────────────────────────────────────────────────────┘
+```
+
+**POP Micro-batching:**
+```
+┌────────────────────────────────────────────────────────────┐
+│ 5ms window                                                  │
+│                                                             │
+│ POP Request 1: queue=orders, batch=10, consumer=group1     │
+│ POP Request 2: queue=orders, batch=5, consumer=group2      │
+│ POP Request 3: queue=events, batch=20, consumer=group1     │
+│                                                             │
+│ Combined: SELECT queen.pop_messages_batch_v2('[            │
+│   {queue: orders, batch: 10, consumer: group1, idx: 0},    │
+│   {queue: orders, batch: 5, consumer: group2, idx: 1},     │
+│   {queue: events, batch: 20, consumer: group1, idx: 2}     │
+│ ]')                                                         │
+│                                                             │
+│ SP returns: [{idx: 0, messages: [...]},                    │
+│              {idx: 1, messages: [...]},                    │
+│              {idx: 2, messages: [...]}]                    │
+│                                                             │
+│ Results routed back by idx                                  │
+└────────────────────────────────────────────────────────────┘
+```
+
+### 2. POP with wait=true: Use Sidecar for Final DB Query ✅
+
+Currently, Poll Intention Registry workers call AsyncQueueManager directly (blocking).
+We will modify poll workers to use sidecar for the actual DB query:
+
+```
+┌──────────────────────────────────────────────────────────────┐
+│ Current (Blocking):                                           │
+│                                                               │
+│ Poll Worker → AsyncQueueManager.pop_messages() → BLOCKS      │
+│            → Gets connection from pool                        │
+│            → Executes query                                   │
+│            → Returns messages                                 │
+│            → Sends HTTP response                              │
+└──────────────────────────────────────────────────────────────┘
+
+┌──────────────────────────────────────────────────────────────┐
+│ New (Async):                                                  │
+│                                                               │
+│ Poll Worker → Sidecar.submit(pop_request) → RETURNS IMMEDIATELY
+│                                                               │
+│ Sidecar Poller → Executes query                               │
+│               → Adds to completed_responses_                  │
+│                                                               │
+│ Response Timer → Pops response                                │
+│               → Routes to correct worker queue                │
+│               → Worker sends HTTP response                    │
+└──────────────────────────────────────────────────────────────┘
+```
+
+**File changes needed:**
+- `server/src/services/poll_worker.cpp` - Submit to sidecar instead of direct call
+- Poll workers need access to `global_sidecar_pool_ptr`
+
+### 3. No Fallback to Blocking Mode ✅
+
+This is new functionality. If sidecar is enabled, we use it exclusively.
+If it fails, we return an error to the client (500 Internal Server Error).
+
+```cpp
+// NO fallback code like this:
+if (sidecar_failed) {
+    // DON'T: return blocking_mode_fallback();
+    // DO: return error response
+}
+```
+
+### 4. Operation-Type-Specific Metrics ✅
+
+Add per-operation metrics to sidecar stats:
+
+```cpp
+struct Stats {
+    // Existing
+    size_t total_connections;
+    size_t busy_connections;
+    size_t pending_requests;
+    size_t completed_responses;
+    uint64_t total_queries;
+    uint64_t total_query_time_us;
+    
+    // NEW: Per-operation stats
+    struct OpStats {
+        uint64_t count;
+        uint64_t total_time_us;
+        uint64_t items_processed;  // For batched ops
+    };
+    
+    std::unordered_map<SidecarOpType, OpStats> op_stats;
+    // op_stats[PUSH] = {count: 1000, total_time_us: 50000, items: 50000}
+    // op_stats[ACK]  = {count: 2000, total_time_us: 20000, items: 10000}
+    // op_stats[POP]  = {count: 500, total_time_us: 15000, items: 2500}
+};
+```
+
+**Expose via metrics endpoint:**
+```json
+{
+  "sidecar": {
+    "connections": {"total": 85, "busy": 12},
+    "queue": {"pending": 5, "completed": 0},
+    "operations": {
+      "push": {"count": 1000, "avg_ms": 50, "items": 50000},
+      "pop": {"count": 500, "avg_ms": 30, "items": 2500},
+      "ack": {"count": 2000, "avg_ms": 10, "items": 10000},
+      "transaction": {"count": 100, "avg_ms": 45, "items": 300},
+      "renew_lease": {"count": 5000, "avg_ms": 2, "items": 5000}
+    }
+  }
+}
+```
+
+---
+
+## Updated Stored Procedures (with Batching)
+
+### pop_messages_batch_v2 (NEW - for micro-batching)
+
+> **I/O Optimization**: Sort requests by (queue, partition) to minimize random disk I/O.
+> Sequential access to the same partition's messages is faster than jumping around.
+
+```sql
+CREATE OR REPLACE FUNCTION queen.pop_messages_batch_v2(
+    p_requests JSONB
+    -- [{idx, queue, partition, consumerGroup, batch, leaseTime, subMode, subFrom}, ...]
+) RETURNS JSONB
+LANGUAGE plpgsql
+AS $$
+DECLARE
+    v_req JSONB;
+    v_results JSONB := '[]'::jsonb;
+    v_pop_result JSONB;
+BEGIN
+    -- Sort by queue/partition to optimize I/O locality
+    -- Accessing messages from the same partition sequentially is faster
+    FOR v_req IN 
+        SELECT value FROM jsonb_array_elements(p_requests)
+        ORDER BY (value->>'queue'), (value->>'partition')
+    LOOP
+        -- Call single pop for each request
+        v_pop_result := queen.pop_messages_v2(
+            v_req->>'queue',
+            v_req->>'partition',
+            v_req->>'consumerGroup',
+            (v_req->>'batch')::int,
+            (v_req->>'leaseTime')::int,
+            v_req->>'subMode',
+            v_req->>'subFrom'
+        );
+        
+        v_results := v_results || jsonb_build_object(
+            'idx', (v_req->>'idx')::int,
+            'result', v_pop_result
+        );
+    END LOOP;
+    
+    -- Sort results by original index for response routing
+    SELECT COALESCE(jsonb_agg(item ORDER BY (item->>'idx')::int), '[]'::jsonb)
+    INTO v_results
+    FROM jsonb_array_elements(v_results) item;
+    
+    RETURN v_results;
+END;
+$$;
+```
+
+---
+
+## Updated File Changes Summary
 
 | File | Changes |
 |------|---------|
-| `include/queen/sidecar_db_pool.hpp` | Add `SidecarOpType` enum |
+| `include/queen/sidecar_db_pool.hpp` | Add `SidecarOpType` enum, per-op stats |
 | `include/queen/config.hpp` | Add per-operation sidecar flags |
-| `src/database/sidecar_db_pool.cpp` | Handle different operation types |
+| `src/database/sidecar_db_pool.cpp` | Handle different op types, micro-batch ACK/POP |
 | `src/acceptor_server.cpp` | Parse responses by operation type |
 | `src/routes/pop.cpp` | Add sidecar path for wait=false |
 | `src/routes/ack.cpp` | Add sidecar path |
 | `src/routes/transactions.cpp` | Add sidecar path |
 | `src/routes/leases.cpp` | Add sidecar path |
+| `src/services/poll_worker.cpp` | **NEW**: Use sidecar for wait=true final query |
+| `src/routes/metrics.cpp` | Add per-operation sidecar metrics |
 | `migrations/004_pop_stored_procedure.sql` | NEW |
-| `migrations/005_ack_stored_procedure.sql` | NEW |
-| `migrations/006_transaction_stored_procedure.sql` | NEW |
-| `migrations/007_renew_lease_stored_procedure.sql` | NEW |
+| `migrations/005_pop_batch_stored_procedure.sql` | NEW (for micro-batching) |
+| `migrations/006_ack_stored_procedure.sql` | NEW |
+| `migrations/007_transaction_stored_procedure.sql` | NEW |
+| `migrations/008_renew_lease_stored_procedure.sql` | NEW |
 
 ---
 
-## Estimated Effort
+## Updated Estimated Effort
 
 | Phase | Effort | Description |
 |-------|--------|-------------|
-| Phase 1 | 2 hours | Infrastructure (types, config) |
-| Phase 2 | 4 hours | Stored procedures |
-| Phase 3 | 3 hours | Route modifications |
-| Phase 4 | 2 hours | Sidecar modifications |
-| Phase 5 | 4 hours | Testing |
-| Phase 6 | 2 hours | Rollout |
+| Phase 1 | 3 hours | Infrastructure (types, config, metrics) |
+| Phase 2 | 6 hours | Stored procedures (incl. batch versions) |
+| Phase 3 | 4 hours | Route modifications |
+| Phase 4 | 3 hours | Sidecar modifications (micro-batching) |
+| Phase 5 | 2 hours | Poll worker integration (wait=true) |
+| Phase 6 | 4 hours | Testing |
+| Phase 7 | 2 hours | Rollout |
 
-**Total: ~17 hours**
-
----
-
-## Open Questions
-
-1. **Micro-batching for ACK**: Should we batch multiple ACK requests like we do for PUSH? Could improve throughput but adds complexity.
-
-2. **POP with wait=true**: Currently handled by Poll Intention Registry. Should this also use sidecar for the final DB query?
-
-3. **Error handling**: If sidecar fails, should we fallback to blocking mode or return error?
-
-4. **Metrics**: Should we add operation-type-specific metrics to sidecar stats?
+**Total: ~24 hours**
 

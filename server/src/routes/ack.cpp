@@ -5,12 +5,16 @@
 #include "queen/inter_instance_comms.hpp"
 #include "queen/poll_intention_registry.hpp"
 #include "queen/shared_state_manager.hpp"
+#include "queen/sidecar_db_pool.hpp"
+#include "queen/response_queue.hpp"
 #include <spdlog/spdlog.h>
 #include <chrono>
 
-// External global for shared state
+// External globals
 namespace queen {
 extern std::shared_ptr<SharedStateManager> global_shared_state;
+extern std::shared_ptr<ResponseRegistry> global_response_registry;
+extern SidecarDbPool* global_sidecar_pool_ptr;
 }
 
 namespace queen {
@@ -55,9 +59,38 @@ void setup_ack_routes(uWS::App* app, const RouteContext& ctx) {
                         ack_items.push_back(ack_item);
                     }
                     
-                    spdlog::info("[Worker {}] ACK BATCH: Executing immediate batch ACK ({} items)", ctx.worker_id, ack_items.size());
+                    spdlog::info("[Worker {}] ACK BATCH: Executing batch ACK ({} items)", ctx.worker_id, ack_items.size());
                     
-                    // Execute batch ACK operation directly in uWS event loop
+                    // Use sidecar for async ACK if enabled
+                    if (ctx.config.queue.ack_use_sidecar && global_sidecar_pool_ptr) {
+                        std::string request_id = global_response_registry->register_response(
+                            res, ctx.worker_id, nullptr
+                        );
+                        
+                        // Build JSON array with index for result routing
+                        nlohmann::json ack_json = nlohmann::json::array();
+                        int idx = 0;
+                        for (const auto& ack : ack_items) {
+                            nlohmann::json ack_item = ack;
+                            ack_item["index"] = idx++;
+                            ack_json.push_back(ack_item);
+                        }
+                        
+                        SidecarRequest req;
+                        req.op_type = SidecarOpType::ACK_BATCH;
+                        req.request_id = request_id;
+                        req.sql = "SELECT queen.ack_messages_v2($1::jsonb)";
+                        req.params = {ack_json.dump()};
+                        req.worker_id = ctx.worker_id;
+                        req.item_count = ack_items.size();
+                        
+                        global_sidecar_pool_ptr->submit(std::move(req));
+                        spdlog::debug("[Worker {}] ACK BATCH: Submitted {} items to sidecar (request_id={})", 
+                                     ctx.worker_id, ack_items.size(), request_id);
+                        return;
+                    }
+                    
+                    // Fallback: Execute batch ACK operation directly in uWS event loop
                     try {
                         auto ack_start = std::chrono::steady_clock::now();
                         auto batch_result = ctx.async_queue_manager->acknowledge_messages_batch(ack_items);
@@ -152,9 +185,41 @@ void setup_ack_routes(uWS::App* app, const RouteContext& ctx) {
                         return;
                     }
                     
-                    spdlog::info("[Worker {}] ACK: Executing immediate ACK", ctx.worker_id);
+                    spdlog::info("[Worker {}] ACK: Executing ACK", ctx.worker_id);
                     
-                    // Execute ACK operation directly in uWS event loop
+                    // Use sidecar for async ACK if enabled
+                    if (ctx.config.queue.ack_use_sidecar && global_sidecar_pool_ptr) {
+                        std::string request_id = global_response_registry->register_response(
+                            res, ctx.worker_id, nullptr
+                        );
+                        
+                        // Build JSON array with single ACK
+                        nlohmann::json ack_json = nlohmann::json::array();
+                        ack_json.push_back({
+                            {"index", 0},
+                            {"transactionId", transaction_id},
+                            {"partitionId", partition_id.value()},
+                            {"leaseId", lease_id.value_or("")},
+                            {"status", status},
+                            {"consumerGroup", consumer_group},
+                            {"error", error.value_or("")}
+                        });
+                        
+                        SidecarRequest req;
+                        req.op_type = SidecarOpType::ACK_BATCH;  // Use batch procedure even for single ACK
+                        req.request_id = request_id;
+                        req.sql = "SELECT queen.ack_messages_v2($1::jsonb)";
+                        req.params = {ack_json.dump()};
+                        req.worker_id = ctx.worker_id;
+                        req.item_count = 1;
+                        
+                        global_sidecar_pool_ptr->submit(std::move(req));
+                        spdlog::debug("[Worker {}] ACK: Submitted to sidecar (request_id={})", 
+                                     ctx.worker_id, request_id);
+                        return;
+                    }
+                    
+                    // Fallback: Execute ACK operation directly in uWS event loop
                     try {
                         auto ack_start = std::chrono::steady_clock::now();
                         auto ack_result = ctx.async_queue_manager->acknowledge_message(transaction_id, status, error, consumer_group, lease_id, partition_id);

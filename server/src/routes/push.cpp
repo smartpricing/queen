@@ -114,6 +114,7 @@ void setup_push_routes(uWS::App* app, const RouteContext& ctx) {
                         
                         // Build sidecar request
                         SidecarRequest req;
+                        req.op_type = SidecarOpType::PUSH;
                         req.request_id = request_id;
                         req.sql = "SELECT queen.push_messages_v2($1::jsonb, $2::boolean, $3::boolean)";
                         req.params = {items_json.dump(), "true", "true"};
