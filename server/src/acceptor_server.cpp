@@ -38,9 +38,8 @@
 static std::shared_ptr<astp::ThreadPool> global_db_thread_pool;
 static std::shared_ptr<astp::ThreadPool> global_system_thread_pool;
 // Removed: global_db_pool - Now using only AsyncDbPool
-static std::shared_ptr<queen::AsyncDbPool> global_async_db_pool;  // Async DB pool for non-blocking push
-static std::shared_ptr<queen::SidecarDbPool> global_sidecar_pool;  // Sidecar pool for true async push
-static std::vector<std::shared_ptr<queen::ResponseQueue>> worker_response_queues;  // Per-worker queues
+static std::shared_ptr<queen::AsyncDbPool> global_async_db_pool;  // Async DB pool for non-blocking operations
+static std::vector<std::shared_ptr<queen::ResponseQueue>> worker_response_queues;  // Per-worker queues (for poll workers)
 static std::shared_ptr<queen::MetricsCollector> global_metrics_collector;
 static std::shared_ptr<queen::RetentionService> global_retention_service;
 static std::shared_ptr<queen::EvictionService> global_eviction_service;
@@ -50,8 +49,6 @@ namespace queen {
 std::shared_ptr<ResponseRegistry> global_response_registry;
 std::shared_ptr<PollIntentionRegistry> global_poll_intention_registry;
 std::shared_ptr<StreamPollIntentionRegistry> global_stream_poll_registry;
-std::vector<std::shared_ptr<ResponseQueue>> global_worker_response_queues;  // Exposed for sidecar
-SidecarDbPool* global_sidecar_pool_ptr = nullptr;  // Raw pointer for routes (owned by static)
 std::shared_ptr<StreamManager> global_stream_manager;
 }
 
@@ -112,6 +109,7 @@ static void setup_worker_routes(uWS::App* app,
                                 std::shared_ptr<queen::AsyncQueueManager> async_queue_manager,
                                 std::shared_ptr<AnalyticsManager> analytics_manager,
                                 std::shared_ptr<FileBufferManager> file_buffer,
+                                queen::SidecarDbPool* sidecar,
                                 const Config& config,
                                 int worker_id,
                                 std::shared_ptr<astp::ThreadPool> db_thread_pool) {
@@ -121,6 +119,7 @@ static void setup_worker_routes(uWS::App* app,
         async_queue_manager,
         analytics_manager,
         file_buffer,
+        sidecar,
         config,
         worker_id,
         db_thread_pool
@@ -197,90 +196,12 @@ struct ResponseTimerContext {
     int batch_max;
 };
 
-// Timer callback for processing response queue
+// Timer callback for processing response queue (poll worker responses only)
+// NOTE: Sidecar responses are now delivered directly via loop->defer() - no routing needed
 static void response_timer_callback(us_timer_t* timer) {
     auto* ctx = (ResponseTimerContext*)us_timer_ext(timer);
     
-    // First, check for sidecar responses and route them to per-worker response queues
-    // IMPORTANT: We pop ALL responses and route to correct worker queues
-    // Only one timer should do this to avoid races - use worker 0's queue as indicator
-    if (global_sidecar_pool && global_sidecar_pool->has_responses() && 
-        ctx->queue == worker_response_queues[0].get()) {
-        
-        std::vector<queen::SidecarResponse> sidecar_responses;
-        global_sidecar_pool->pop_responses(sidecar_responses, 100);  // Process up to 100
-        
-        spdlog::info("[Sidecar Router] Popped {} responses from sidecar pool", sidecar_responses.size());
-        
-        for (const auto& resp : sidecar_responses) {
-            nlohmann::json json_response;
-            int status_code = 200;
-            bool is_error = false;
-            
-            if (resp.success) {
-                // Parse the stored procedure result
-                try {
-                    json_response = nlohmann::json::parse(resp.result_json);
-                    
-                    // Set status code based on operation type
-                    switch (resp.op_type) {
-                        case queen::SidecarOpType::PUSH:
-                            status_code = 201;
-                            break;
-                        case queen::SidecarOpType::POP:
-                            // For POP, check if messages were returned
-                            // POP batch returns [{idx, result: {messages: [...], leaseId: ...}}]
-                            // Single POP returns {messages: [...], leaseId: ...}
-                            if (json_response.is_array() && json_response.size() == 1 && 
-                                json_response[0].contains("result")) {
-                                // Extract the result from batch format for single request
-                                json_response = json_response[0]["result"];
-                            }
-                            if (json_response.contains("messages") && json_response["messages"].empty()) {
-                                status_code = 204;  // No Content
-                            }
-                            break;
-                        case queen::SidecarOpType::ACK:
-                        case queen::SidecarOpType::ACK_BATCH:
-                        case queen::SidecarOpType::TRANSACTION:
-                        case queen::SidecarOpType::RENEW_LEASE:
-                            status_code = 200;
-                            break;
-                    }
-                    
-                    spdlog::debug("[Sidecar Router] Parsed response for request {} (worker {}): op={} items={}", 
-                                resp.request_id, resp.worker_id, 
-                                static_cast<int>(resp.op_type),
-                                json_response.is_array() ? json_response.size() : 1);
-                } catch (const std::exception& e) {
-                    json_response = nlohmann::json::array();
-                    spdlog::error("[Sidecar] Failed to parse result JSON for {}: {} | Raw: {}", 
-                                 resp.request_id, e.what(), 
-                                 resp.result_json.substr(0, 200));
-                }
-            } else {
-                json_response = {{"error", resp.error_message}};
-                status_code = 500;
-                is_error = true;
-                spdlog::warn("[Sidecar Router] Error response for request {}: {}", 
-                            resp.request_id, resp.error_message);
-            }
-            
-            // Route to correct worker's response queue (NOT direct send!)
-            int target_worker = resp.worker_id;
-            if (target_worker >= 0 && target_worker < static_cast<int>(worker_response_queues.size())) {
-                worker_response_queues[target_worker]->push(
-                    resp.request_id, json_response, is_error, status_code);
-                spdlog::debug("[Sidecar Router] Routed response {} to worker {} queue (size now: {})", 
-                            resp.request_id, target_worker, worker_response_queues[target_worker]->size());
-            } else {
-                spdlog::error("[Sidecar] Invalid worker_id {} for response {}", 
-                             target_worker, resp.request_id);
-            }
-        }
-    }
-    
-    // Then process this worker's response queue items
+    // Process this worker's response queue items (from poll workers)
     queen::ResponseQueue::ResponseItem item;
     int processed = 0;
     
@@ -354,29 +275,33 @@ static void worker_thread(const Config& config, int worker_id, int num_workers,
             // ALL workers use ThreadPool for proper resource management and visibility
             // - Regular poll workers: reserve threads in db_thread_pool
             // - Stream poll workers: reserve threads + submit concurrent window checks
+            // - Sidecar pollers: one per HTTP worker (each runs a blocking poller loop)
             // - Background services: use system_thread_pool for scheduling
             
             // DB ThreadPool Formula:
             // = Regular poll workers (reserved)
             // + Stream poll workers (reserved) 
             // + Stream concurrent checks (N × C)
+            // + Sidecar pollers (one per HTTP worker)
             // + Service threads (metrics, etc.)
             int poll_workers = config.queue.poll_worker_count;
             int stream_workers = config.queue.stream_poll_worker_count;
             int stream_concurrent = config.queue.stream_poll_worker_count * config.queue.stream_concurrent_checks;
+            int sidecar_pollers = num_workers;  // Each HTTP worker has its own sidecar poller
             int service_threads = config.queue.db_thread_pool_service_threads;
-            int db_thread_pool_size = poll_workers + stream_workers + stream_concurrent + service_threads;
+            int db_thread_pool_size = poll_workers + stream_workers + stream_concurrent + sidecar_pollers + service_threads;
             
             // System ThreadPool: Used by background services (metrics sampling, retention, eviction)
             int system_threads = 4; // MetricsCollector, RetentionService, EvictionService scheduling
             
             spdlog::info("Initializing GLOBAL shared resources (ASYNC-ONLY MODE):");
             spdlog::info("  - Total DB connections: {} (95% of {}) - ALL ASYNC", total_connections, config.database.pool_size);
-            spdlog::info("  - DB ThreadPool size: {} = {} poll + {} stream + {} stream concurrent + {} service", 
-                        db_thread_pool_size, poll_workers, stream_workers, stream_concurrent, service_threads);
+            spdlog::info("  - DB ThreadPool size: {} = {} poll + {} stream + {} stream concurrent + {} sidecar + {} service", 
+                        db_thread_pool_size, poll_workers, stream_workers, stream_concurrent, sidecar_pollers, service_threads);
             spdlog::info("    * Regular poll workers: {} (reserved threads for long-polling)", poll_workers);
             spdlog::info("    * Stream poll workers: {} (reserved threads)", stream_workers);
             spdlog::info("    * Stream concurrent checks: {} ({} per worker)", stream_concurrent, config.queue.stream_concurrent_checks);
+            spdlog::info("    * Sidecar pollers: {} (one per HTTP worker)", sidecar_pollers);
             spdlog::info("    * Service DB threads: {} (metrics, retention, eviction)", service_threads);
             spdlog::info("  - System ThreadPool threads: {} (for background service scheduling)", system_threads);
             spdlog::info("  - Number of HTTP workers: {}", num_workers);
@@ -398,27 +323,17 @@ static void worker_thread(const Config& config, int worker_id, int num_workers,
             // Create global System operations ThreadPool (for metrics, cleanup, etc.)
             global_system_thread_pool = std::make_shared<astp::ThreadPool>(system_threads);
             
-            // Create per-worker response queues
+            // Create per-worker response queues (for poll workers - sidecar uses direct delivery)
             num_workers_global = num_workers;
             worker_response_queues.resize(num_workers);
-            queen::global_worker_response_queues.resize(num_workers);  // Expose for sidecar
             for (int i = 0; i < num_workers; i++) {
                 worker_response_queues[i] = std::make_shared<queen::ResponseQueue>();
-                queen::global_worker_response_queues[i] = worker_response_queues[i];  // Share reference
-                spdlog::info("  - Created response queue for worker {}", i);
+                spdlog::info("  - Created response queue for worker {} (poll workers)", i);
             }
             
-            // Create sidecar pool (always enabled - this is the only mode)
-            spdlog::info("  - Creating Sidecar DB Pool ({} connections) for ALL async operations", 
-                            config.queue.sidecar_pool_size);
-                global_sidecar_pool = std::make_shared<queen::SidecarDbPool>(
-                    config.database.connection_string(),
-                    config.queue.sidecar_pool_size,
-                config.database.statement_timeout,
-                global_db_thread_pool  // Pass threadpool for sidecar to use
-                );
-                queen::global_sidecar_pool_ptr = global_sidecar_pool.get();
-                spdlog::info("  - Sidecar pool created (will start after uWS loop is ready)");
+            // NOTE: Per-worker sidecars are created in worker_thread() after uWS::App
+            // Each worker gets its own sidecar with callback-based delivery via loop->defer()
+            spdlog::info("  - Per-worker sidecars will be created in each worker thread");
             
             // Create global response registry (shared across workers)
             queen::global_response_registry = std::make_shared<queen::ResponseRegistry>();
@@ -682,9 +597,103 @@ static void worker_thread(const Config& config, int worker_id, int num_workers,
         spdlog::info("[Worker {}] Creating uWS::App...", worker_id);
         auto worker_app = new uWS::App();
         
-        // Setup routes
+        // Get the event loop for this worker (needed for sidecar callback)
+        uWS::Loop* worker_loop = uWS::Loop::get();
+        
+        // Calculate per-worker sidecar connections (divide total among workers)
+        // Ensure at least 1 connection per worker
+        int per_worker_connections = std::max(1, config.queue.sidecar_pool_size / num_workers);
+        // Give any remainder connections to the first workers
+        if (worker_id < (config.queue.sidecar_pool_size % num_workers)) {
+            per_worker_connections++;
+        }
+        
+        // Create per-worker sidecar with callback-based response delivery
+        // The callback uses loop->defer() to safely deliver responses to the HTTP response
+        spdlog::info("[Worker {}] Creating per-worker sidecar ({} connections, total pool split across {} workers)...", 
+                    worker_id, per_worker_connections, num_workers);
+        
+        auto sidecar_callback = [worker_loop, worker_id](queen::SidecarResponse resp) {
+            // Capture response data by value, then defer to event loop for safe delivery
+            worker_loop->defer([resp = std::move(resp), worker_id]() {
+                // Parse JSON and determine status code based on operation type
+                nlohmann::json json_response;
+                int status_code = 200;
+                bool is_error = false;
+                
+                if (resp.success) {
+                    try {
+                        json_response = nlohmann::json::parse(resp.result_json);
+                        
+                        // Set status code based on operation type
+                        switch (resp.op_type) {
+                            case queen::SidecarOpType::PUSH:
+                                status_code = 201;
+                                break;
+                            case queen::SidecarOpType::POP:
+                                // For POP, check if messages were returned
+                                if (json_response.is_array() && json_response.size() == 1 && 
+                                    json_response[0].contains("result")) {
+                                    json_response = json_response[0]["result"];
+                                }
+                                if (json_response.contains("messages") && json_response["messages"].empty()) {
+                                    status_code = 204;  // No Content
+                                }
+                                break;
+                            case queen::SidecarOpType::ACK:
+                            case queen::SidecarOpType::ACK_BATCH:
+                            case queen::SidecarOpType::TRANSACTION:
+                            case queen::SidecarOpType::RENEW_LEASE:
+                                status_code = 200;
+                                break;
+                        }
+                        
+                        spdlog::debug("[Worker {}] Sidecar response for {}: op={} status={}", 
+                                    worker_id, resp.request_id, 
+                                    static_cast<int>(resp.op_type), status_code);
+                    } catch (const std::exception& e) {
+                        json_response = nlohmann::json::array();
+                        spdlog::error("[Worker {}] Failed to parse sidecar result for {}: {}", 
+                                     worker_id, resp.request_id, e.what());
+                    }
+                } else {
+                    json_response = {{"error", resp.error_message}};
+                    status_code = 500;
+                    is_error = true;
+                    spdlog::warn("[Worker {}] Sidecar error for {}: {}", 
+                                worker_id, resp.request_id, resp.error_message);
+                }
+                
+                // Deliver directly via ResponseRegistry (safe - we're in the event loop)
+                bool sent = queen::global_response_registry->send_response(
+                    resp.request_id, json_response, is_error, status_code);
+                
+                if (sent) {
+                    spdlog::info("[Worker {}] Sent sidecar response {} (status={})", 
+                                worker_id, resp.request_id, status_code);
+                } else {
+                    spdlog::debug("[Worker {}] Sidecar response {} not sent (aborted or expired)", 
+                                worker_id, resp.request_id);
+                }
+            });
+        };
+        
+        auto worker_sidecar = std::make_unique<queen::SidecarDbPool>(
+            config.database.connection_string(),
+            per_worker_connections,  // Split connections among workers
+            config.database.statement_timeout,
+            global_db_thread_pool,
+            sidecar_callback
+        );
+        
+        // Start sidecar immediately (connections established, poller thread started)
+        worker_sidecar->start();
+        spdlog::info("[Worker {}] Per-worker sidecar started with {} connections", worker_id, per_worker_connections);
+        
+        // Setup routes (pass raw pointer - sidecar lifetime managed by this thread)
         spdlog::info("[Worker {}] Setting up routes...", worker_id);
-        setup_worker_routes(worker_app, async_queue_manager, analytics_manager, file_buffer, config, worker_id, db_thread_pool);
+        setup_worker_routes(worker_app, async_queue_manager, analytics_manager, file_buffer, 
+                           worker_sidecar.get(), config, worker_id, db_thread_pool);
         spdlog::info("[Worker {}] Routes configured", worker_id);
         
         // Register this worker app with the acceptor (thread-safe)
@@ -725,17 +734,14 @@ static void worker_thread(const Config& config, int worker_id, int num_workers,
         spdlog::info("[Worker {}] Response timer configured: {}ms interval, batch size {}-{}", 
                     worker_id, timer_interval, timer_ctx->batch_size, timer_ctx->batch_max);
         
-        // Start sidecar pool from Worker 0 (after event loop is initialized)
-        if (worker_id == 0) {
-            spdlog::info("[Worker 0] Starting sidecar pool...");
-            global_sidecar_pool->start();
-            spdlog::info("[Worker 0] Sidecar pool started with {} connections", 
-                        config.queue.sidecar_pool_size);
-        }
-        
         // Run worker event loop (blocks forever)
         // Will receive sockets adopted from the acceptor
+        // NOTE: worker_sidecar must stay alive during run() - it's owned by this thread
         worker_app->run();
+        
+        // Cleanup sidecar when event loop exits
+        spdlog::info("[Worker {}] Stopping sidecar...", worker_id);
+        worker_sidecar->stop();
         
         spdlog::info("[Worker {}] Event loop exited", worker_id);
         

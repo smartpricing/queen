@@ -9,7 +9,6 @@
 // External globals
 namespace queen {
 extern std::shared_ptr<ResponseRegistry> global_response_registry;
-extern SidecarDbPool* global_sidecar_pool_ptr;
 }
 
 namespace queen {
@@ -43,10 +42,9 @@ void setup_lease_routes(uWS::App* app, const RouteContext& ctx) {
                     sidecar_req.request_id = request_id;
                     sidecar_req.sql = "SELECT queen.renew_lease_v2($1::jsonb)";
                     sidecar_req.params = {items_json.dump()};
-                    sidecar_req.worker_id = ctx.worker_id;
                     sidecar_req.item_count = 1;
                     
-                    global_sidecar_pool_ptr->submit(std::move(sidecar_req));
+                    ctx.sidecar->submit(std::move(sidecar_req));
                     spdlog::debug("[Worker {}] RENEW_LEASE: Submitted to sidecar (request_id={})", 
                                  ctx.worker_id, request_id);
                     
@@ -63,4 +61,3 @@ void setup_lease_routes(uWS::App* app, const RouteContext& ctx) {
 
 } // namespace routes
 } // namespace queen
-

@@ -14,7 +14,6 @@
 namespace queen {
 extern std::shared_ptr<SharedStateManager> global_shared_state;
 extern std::shared_ptr<ResponseRegistry> global_response_registry;
-extern SidecarDbPool* global_sidecar_pool_ptr;
 }
 
 namespace queen {
@@ -74,15 +73,14 @@ void setup_ack_routes(uWS::App* app, const RouteContext& ctx) {
                         ack_json.push_back(ack_item);
                     }
                     
-                    SidecarRequest req;
-                    req.op_type = SidecarOpType::ACK_BATCH;
-                    req.request_id = request_id;
-                    req.sql = "SELECT queen.ack_messages_v2($1::jsonb)";
-                    req.params = {ack_json.dump()};
-                    req.worker_id = ctx.worker_id;
-                    req.item_count = ack_items.size();
+                    SidecarRequest sidecar_req;
+                    sidecar_req.op_type = SidecarOpType::ACK_BATCH;
+                    sidecar_req.request_id = request_id;
+                    sidecar_req.sql = "SELECT queen.ack_messages_v2($1::jsonb)";
+                    sidecar_req.params = {ack_json.dump()};
+                    sidecar_req.item_count = ack_items.size();
                     
-                    global_sidecar_pool_ptr->submit(std::move(req));
+                    ctx.sidecar->submit(std::move(sidecar_req));
                     spdlog::debug("[Worker {}] ACK BATCH: Submitted {} items to sidecar (request_id={})", 
                                  ctx.worker_id, ack_items.size(), request_id);
                     
@@ -158,15 +156,14 @@ void setup_ack_routes(uWS::App* app, const RouteContext& ctx) {
                         {"error", error.value_or("")}
                     });
                     
-                    SidecarRequest req;
-                    req.op_type = SidecarOpType::ACK_BATCH;  // Use batch procedure even for single ACK
-                    req.request_id = request_id;
-                    req.sql = "SELECT queen.ack_messages_v2($1::jsonb)";
-                    req.params = {ack_json.dump()};
-                    req.worker_id = ctx.worker_id;
-                    req.item_count = 1;
+                    SidecarRequest sidecar_req;
+                    sidecar_req.op_type = SidecarOpType::ACK_BATCH;  // Use batch procedure even for single ACK
+                    sidecar_req.request_id = request_id;
+                    sidecar_req.sql = "SELECT queen.ack_messages_v2($1::jsonb)";
+                    sidecar_req.params = {ack_json.dump()};
+                    sidecar_req.item_count = 1;
                     
-                    global_sidecar_pool_ptr->submit(std::move(req));
+                    ctx.sidecar->submit(std::move(sidecar_req));
                     spdlog::debug("[Worker {}] ACK: Submitted to sidecar (request_id={})", 
                                  ctx.worker_id, request_id);
                     

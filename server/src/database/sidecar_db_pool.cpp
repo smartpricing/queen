@@ -9,14 +9,16 @@ namespace queen {
 SidecarDbPool::SidecarDbPool(const std::string& conn_str, 
                              int pool_size,
                              int statement_timeout_ms,
-                             std::shared_ptr<astp::ThreadPool> thread_pool)
+                             std::shared_ptr<astp::ThreadPool> thread_pool,
+                             SidecarResponseCallback response_callback)
     : conn_str_(conn_str),
       pool_size_(pool_size),
       statement_timeout_ms_(statement_timeout_ms),
+      response_callback_(std::move(response_callback)),
       thread_pool_(thread_pool) {
     
     slots_.resize(pool_size_);
-    spdlog::info("[SidecarDbPool] Created with {} connection slots (using global threadpool)", pool_size_);
+    spdlog::info("[SidecarDbPool] Created with {} connection slots (callback-based delivery)", pool_size_);
 }
 
 SidecarDbPool::~SidecarDbPool() {
@@ -45,12 +47,12 @@ void SidecarDbPool::start() {
         return;
     }
     
-    // Start poller in global threadpool (reserves 1 thread permanently)
+    // Start poller in threadpool
     running_ = true;
     thread_pool_->push([this]() {
         this->poller_loop();
     });
-    spdlog::info("[SidecarDbPool] Poller started in global threadpool");
+    spdlog::info("[SidecarDbPool] Poller started in threadpool");
 }
 
 void SidecarDbPool::stop() {
@@ -59,7 +61,6 @@ void SidecarDbPool::stop() {
     spdlog::info("[SidecarDbPool] Stopping...");
     running_ = false;
     // Poller loop will exit on next iteration when running_ is false
-    // No need to join - it's managed by the threadpool
     
     spdlog::info("[SidecarDbPool] Stopped");
 }
@@ -113,24 +114,15 @@ void SidecarDbPool::submit(SidecarRequest request) {
     }
 }
 
-size_t SidecarDbPool::pop_responses(std::vector<SidecarResponse>& out, size_t max_count) {
-    std::lock_guard<std::mutex> lock(completed_mutex_);
-    
-    size_t count = max_count > 0 ? 
-        std::min(max_count, completed_responses_.size()) : 
-        completed_responses_.size();
-    
-    for (size_t i = 0; i < count; ++i) {
-        out.push_back(std::move(completed_responses_.front()));
-        completed_responses_.pop_front();
+void SidecarDbPool::deliver_response(SidecarResponse response) {
+    // Call the response callback (should use loop->defer internally)
+    if (response_callback_) {
+        try {
+            response_callback_(std::move(response));
+        } catch (const std::exception& e) {
+            spdlog::error("[SidecarDbPool] Response callback threw exception: {}", e.what());
+        }
     }
-    
-    return count;
-}
-
-bool SidecarDbPool::has_responses() const {
-    std::lock_guard<std::mutex> lock(completed_mutex_);
-    return !completed_responses_.empty();
 }
 
 // Helper: Check if an operation type supports micro-batching
@@ -187,7 +179,7 @@ static std::pair<std::string, std::vector<const char*>> get_batched_sql(
 }
 
 void SidecarDbPool::poller_loop() {
-    spdlog::info("[SidecarDbPool] Poller loop started with MULTI-OP SUPPORT enabled");
+    spdlog::info("[SidecarDbPool] Poller loop started with callback-based delivery");
     
     constexpr int MICRO_BATCH_WAIT_MS = 5;  // Wait for micro-batching
     constexpr int MAX_ITEMS_PER_TX = 100;   // Max items per batch
@@ -232,7 +224,7 @@ void SidecarDbPool::poller_loop() {
                 // Get the first request to determine operation type
                 SidecarOpType batch_op_type = pending_requests_.front().op_type;
                 
-                // For non-batchable operations (TRANSACTION), send one at a time
+                // For non-batchable operations (TRANSACTION, POP), send one at a time
                 if (!is_batchable_op(batch_op_type)) {
                     auto req = std::move(pending_requests_.front());
                     pending_requests_.pop_front();
@@ -266,19 +258,15 @@ void SidecarDbPool::poller_loop() {
                             SidecarResponse error_resp;
                             error_resp.op_type = req.op_type;
                             error_resp.request_id = req.request_id;
-                            error_resp.worker_id = req.worker_id;
                             error_resp.success = false;
                             error_resp.error_message = "PQflush failed";
-                            
-                            std::lock_guard<std::mutex> resp_lock(completed_mutex_);
-                            completed_responses_.push_back(std::move(error_resp));
+                            deliver_response(std::move(error_resp));
                             continue;
                         }
                         
                         free_slot->busy = true;
                         free_slot->is_batched = false;
                         free_slot->request_id = req.request_id;
-                        free_slot->worker_id = req.worker_id;
                         free_slot->op_type = req.op_type;
                         free_slot->total_items = req.item_count;
                         free_slot->query_start = std::chrono::steady_clock::now();
@@ -287,12 +275,9 @@ void SidecarDbPool::poller_loop() {
                         SidecarResponse error_resp;
                         error_resp.op_type = req.op_type;
                         error_resp.request_id = req.request_id;
-                        error_resp.worker_id = req.worker_id;
                         error_resp.success = false;
                         error_resp.error_message = "PQsendQuery failed";
-                        
-                        std::lock_guard<std::mutex> resp_lock(completed_mutex_);
-                        completed_responses_.push_back(std::move(error_resp));
+                        deliver_response(std::move(error_resp));
                     }
                     continue;
                 }
@@ -350,12 +335,9 @@ void SidecarDbPool::poller_loop() {
                         SidecarResponse error_resp;
                         error_resp.op_type = req.op_type;
                         error_resp.request_id = req.request_id;
-                        error_resp.worker_id = req.worker_id;
                         error_resp.success = false;
                         error_resp.error_message = "Invalid JSON array format";
-                        
-                        std::lock_guard<std::mutex> resp_lock(completed_mutex_);
-                        completed_responses_.push_back(std::move(error_resp));
+                        deliver_response(std::move(error_resp));
                         continue;
                     }
                     
@@ -376,7 +358,6 @@ void SidecarDbPool::poller_loop() {
                     // Track this request's range in the combined batch
                     BatchedRequestInfo info;
                     info.request_id = req.request_id;
-                    info.worker_id = req.worker_id;
                     info.start_index = current_index;
                     info.item_count = req.item_count;
                     batch_info.push_back(info);
@@ -433,15 +414,13 @@ void SidecarDbPool::poller_loop() {
                     
                     if (flush_result == -1) {
                         spdlog::error("[SidecarDbPool] PQflush failed: {}", PQerrorMessage(free_slot->conn));
-                        std::lock_guard<std::mutex> resp_lock(completed_mutex_);
                         for (const auto& info : batch_info) {
                             SidecarResponse error_resp;
                             error_resp.op_type = batch_op_type;
                             error_resp.request_id = info.request_id;
-                            error_resp.worker_id = info.worker_id;
                             error_resp.success = false;
                             error_resp.error_message = "PQflush failed";
-                            completed_responses_.push_back(std::move(error_resp));
+                            deliver_response(std::move(error_resp));
                         }
                         continue;
                     }
@@ -457,15 +436,13 @@ void SidecarDbPool::poller_loop() {
                 } else {
                     spdlog::error("[SidecarDbPool] PQsendQuery failed: {}", PQerrorMessage(free_slot->conn));
                     
-                    std::lock_guard<std::mutex> resp_lock(completed_mutex_);
                     for (const auto& info : batch_info) {
                         SidecarResponse error_resp;
                         error_resp.op_type = batch_op_type;
                         error_resp.request_id = info.request_id;
-                        error_resp.worker_id = info.worker_id;
                         error_resp.success = false;
                         error_resp.error_message = "PQsendQuery failed";
-                        completed_responses_.push_back(std::move(error_resp));
+                        deliver_response(std::move(error_resp));
                     }
                 }
             }
@@ -495,7 +472,7 @@ void SidecarDbPool::poller_loop() {
                 std::lock_guard<std::mutex> lock(pending_mutex_);
                 pending_count = pending_requests_.size();
             }
-            spdlog::info("[SidecarDbPool] Queries in flight: {}/{} connections, {} pending in queue",
+            spdlog::debug("[SidecarDbPool] Queries in flight: {}/{} connections, {} pending in queue",
                         active_count, pool_size_, pending_count);
             last_logged_count = active_count;
         } else if (active_count == 0) {
@@ -539,8 +516,6 @@ void SidecarDbPool::poller_loop() {
         // STEP 4: PROCESS READY CONNECTIONS
         // ============================================================
         if (ready > 0) {
-            std::vector<SidecarResponse> response_batch;
-            
             for (auto& slot : slots_) {
                 if (!slot.busy || slot.socket_fd < 0) continue;
                 if (!FD_ISSET(slot.socket_fd, &read_fds)) continue;
@@ -553,19 +528,19 @@ void SidecarDbPool::poller_loop() {
                     if (slot.is_batched) {
                         for (const auto& info : slot.batched_requests) {
                             SidecarResponse error_resp;
+                            error_resp.op_type = slot.op_type;
                             error_resp.request_id = info.request_id;
-                            error_resp.worker_id = info.worker_id;
                             error_resp.success = false;
                             error_resp.error_message = "Connection lost";
-                            response_batch.push_back(std::move(error_resp));
+                            deliver_response(std::move(error_resp));
                         }
                     } else {
                         SidecarResponse error_resp;
+                        error_resp.op_type = slot.op_type;
                         error_resp.request_id = slot.request_id;
-                        error_resp.worker_id = slot.worker_id;
                         error_resp.success = false;
                         error_resp.error_message = "Connection lost";
-                        response_batch.push_back(std::move(error_resp));
+                        deliver_response(std::move(error_resp));
                     }
                     
                     slot.busy = false;
@@ -624,13 +599,13 @@ void SidecarDbPool::poller_loop() {
                             PQclear(last_result);
                         }
                         
-                        spdlog::info("[SidecarDbPool] MICRO-BATCH complete: op={} {} requests, {} total items in {}ms (db_success={})",
+                        spdlog::debug("[SidecarDbPool] MICRO-BATCH complete: op={} {} requests, {} total items in {}ms",
                                     static_cast<int>(slot.op_type), slot.batched_requests.size(), 
-                                    slot.total_items, query_time / 1000, db_success);
+                                    slot.total_items, query_time / 1000);
                         
                         // Update per-op stats
                         {
-                            std::lock_guard<std::mutex> stats_lock(completed_mutex_);
+                            std::lock_guard<std::mutex> stats_lock(stats_mutex_);
                             auto& stats = op_stats_[slot.op_type];
                             stats.count++;
                             stats.total_time_us += query_time;
@@ -638,21 +613,16 @@ void SidecarDbPool::poller_loop() {
                         }
                         
                         // Split results by request using the 'index' or 'idx' field from stored procedure
-                        // The SP returns results in unpredictable order, so we MUST match by index
                         for (const auto& info : slot.batched_requests) {
                             SidecarResponse resp;
                             resp.op_type = slot.op_type;
                             resp.request_id = info.request_id;
-                            resp.worker_id = info.worker_id;
                             resp.query_time_us = query_time;
                             
                             if (db_success && all_results.is_array()) {
                                 // Filter by 'index' or 'idx' field
                                 nlohmann::json request_results = nlohmann::json::array();
                                 
-                                // For POP batch responses, the structure is different:
-                                // [{idx: 0, result: {...}}, {idx: 1, result: {...}}]
-                                // vs PUSH: [{index: 0, ...}, {index: 1, ...}]
                                 for (const auto& result : all_results) {
                                     int idx = result.value("index", result.value("idx", -1));
                                     if (idx >= static_cast<int>(info.start_index) && 
@@ -662,8 +632,8 @@ void SidecarDbPool::poller_loop() {
                                 }
                                 resp.success = true;
                                 resp.result_json = request_results.dump();
-                                spdlog::debug("[SidecarDbPool] Request {} (worker {}): matched {} results (start={}, count={})", 
-                                            info.request_id, info.worker_id, request_results.size(), 
+                                spdlog::debug("[SidecarDbPool] Request {}: matched {} results (start={}, count={})", 
+                                            info.request_id, request_results.size(), 
                                             info.start_index, info.item_count);
                             } else {
                                 resp.success = false;
@@ -671,7 +641,7 @@ void SidecarDbPool::poller_loop() {
                                 spdlog::warn("[SidecarDbPool] Request {} failed: {}", info.request_id, resp.error_message);
                             }
                             
-                            response_batch.push_back(std::move(resp));
+                            deliver_response(std::move(resp));
                         }
                         
                         slot.busy = false;
@@ -682,11 +652,10 @@ void SidecarDbPool::poller_loop() {
                         continue;
                     }
                     
-                    // Non-batched single request response (TRANSACTION, single ACK)
+                    // Non-batched single request response (TRANSACTION, POP, single ACK)
                     SidecarResponse resp;
                     resp.op_type = slot.op_type;
                     resp.request_id = slot.request_id;
-                    resp.worker_id = slot.worker_id;
                     resp.query_time_us = query_time;
                     
                     if (last_result) {
@@ -712,35 +681,20 @@ void SidecarDbPool::poller_loop() {
                     
                     // Update per-op stats
                     {
-                        std::lock_guard<std::mutex> stats_lock(completed_mutex_);
+                        std::lock_guard<std::mutex> stats_lock(stats_mutex_);
                         auto& stats = op_stats_[slot.op_type];
                         stats.count++;
                         stats.total_time_us += query_time;
                         stats.items_processed += slot.total_items;
                     }
                     
-                    response_batch.push_back(std::move(resp));
+                    deliver_response(std::move(resp));
                     
                     // Slot is now free
                     slot.busy = false;
                     slot.request_id.clear();
                     slot.total_items = 0;
                 }
-            }
-            
-            // ============================================================
-            // STEP 5: DELIVER RESPONSES (Timer will pick them up)
-            // ============================================================
-            if (!response_batch.empty()) {
-                std::lock_guard<std::mutex> lock(completed_mutex_);
-                size_t before_size = completed_responses_.size();
-                for (auto& resp : response_batch) {
-                    completed_responses_.push_back(std::move(resp));
-                }
-                spdlog::info("[SidecarDbPool] Added {} responses to queue (queue size: {} -> {})", 
-                            response_batch.size(), before_size, completed_responses_.size());
-                // Responses will be picked up by the existing response timer
-                // No async wakeup needed - timer polls at configured interval
             }
         }
     }
@@ -761,8 +715,7 @@ SidecarDbPool::Stats SidecarDbPool::get_stats() const {
         stats.pending_requests = pending_requests_.size();
     }
     {
-        std::lock_guard<std::mutex> lock(completed_mutex_);
-        stats.completed_responses = completed_responses_.size();
+        std::lock_guard<std::mutex> lock(stats_mutex_);
         stats.op_stats = op_stats_;  // Copy per-op stats
     }
     
@@ -773,4 +726,3 @@ SidecarDbPool::Stats SidecarDbPool::get_stats() const {
 }
 
 } // namespace queen
-

@@ -16,12 +16,11 @@ namespace queen {
 
 // External globals (declared in acceptor_server.cpp)
 extern std::shared_ptr<ResponseRegistry> global_response_registry;
-extern SidecarDbPool* global_sidecar_pool_ptr;
 
 namespace routes {
 
 void setup_push_routes(uWS::App* app, const RouteContext& ctx) {
-    // PUSH endpoint - uses sidecar for true async non-blocking operation
+    // PUSH endpoint - uses per-worker sidecar for true async non-blocking operation
     app->post("/api/v1/push", [ctx](auto* res, auto* req) {
         (void)req;
         read_json_body(res,
@@ -106,21 +105,20 @@ void setup_push_routes(uWS::App* app, const RouteContext& ctx) {
                         }
                         
                         // Build sidecar request
-                        SidecarRequest req;
-                    req.op_type = SidecarOpType::PUSH;
-                        req.request_id = request_id;
-                        req.sql = "SELECT queen.push_messages_v2($1::jsonb, $2::boolean, $3::boolean)";
-                        req.params = {items_json.dump(), "true", "true"};
-                        req.worker_id = ctx.worker_id;
-                        req.item_count = items.size();  // For micro-batching decisions
+                    SidecarRequest sidecar_req;
+                    sidecar_req.op_type = SidecarOpType::PUSH;
+                    sidecar_req.request_id = request_id;
+                    sidecar_req.sql = "SELECT queen.push_messages_v2($1::jsonb, $2::boolean, $3::boolean)";
+                    sidecar_req.params = {items_json.dump(), "true", "true"};
+                    sidecar_req.item_count = items.size();
                         
-                        // Submit to sidecar - RETURNS IMMEDIATELY!
-                        global_sidecar_pool_ptr->submit(std::move(req));
+                    // Submit to per-worker sidecar - RETURNS IMMEDIATELY!
+                    ctx.sidecar->submit(std::move(sidecar_req));
                         
                         spdlog::debug("[Worker {}] PUSH: Submitted {} items to sidecar (request_id={})", 
                                      ctx.worker_id, item_count, request_id);
                         
-                        // Don't send response here - sidecar will deliver it via response queue
+                    // Don't send response here - sidecar will deliver it via loop->defer()
                     
                 } catch (const std::exception& e) {
                     spdlog::error("[Worker {}] PUSH: Error: {}", ctx.worker_id, e.what());

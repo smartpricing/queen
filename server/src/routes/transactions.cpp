@@ -9,7 +9,6 @@
 // External globals
 namespace queen {
 extern std::shared_ptr<ResponseRegistry> global_response_registry;
-extern SidecarDbPool* global_sidecar_pool_ptr;
 }
 
 namespace queen {
@@ -73,15 +72,14 @@ void setup_transaction_routes(uWS::App* app, const RouteContext& ctx) {
                         }
                     }
                     
-                    SidecarRequest req;
-                    req.op_type = SidecarOpType::TRANSACTION;
-                    req.request_id = request_id;
-                    req.sql = "SELECT queen.execute_transaction_v2($1::jsonb)";
-                    req.params = {ops_json.dump()};
-                    req.worker_id = ctx.worker_id;
-                    req.item_count = ops_json.size();
+                    SidecarRequest sidecar_req;
+                    sidecar_req.op_type = SidecarOpType::TRANSACTION;
+                    sidecar_req.request_id = request_id;
+                    sidecar_req.sql = "SELECT queen.execute_transaction_v2($1::jsonb)";
+                    sidecar_req.params = {ops_json.dump()};
+                    sidecar_req.item_count = ops_json.size();
                     
-                    global_sidecar_pool_ptr->submit(std::move(req));
+                    ctx.sidecar->submit(std::move(sidecar_req));
                     spdlog::debug("[Worker {}] TRANSACTION: Submitted {} ops to sidecar (request_id={})", 
                                  ctx.worker_id, ops_json.size(), request_id);
                     
@@ -98,4 +96,3 @@ void setup_transaction_routes(uWS::App* app, const RouteContext& ctx) {
 
 } // namespace routes
 } // namespace queen
-

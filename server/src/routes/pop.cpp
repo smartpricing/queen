@@ -15,7 +15,6 @@ namespace queen {
 extern std::shared_ptr<ResponseRegistry> global_response_registry;
 extern std::shared_ptr<PollIntentionRegistry> global_poll_intention_registry;
 extern std::shared_ptr<SharedStateManager> global_shared_state;
-extern SidecarDbPool* global_sidecar_pool_ptr;
 }
 
 namespace queen {
@@ -151,11 +150,11 @@ void setup_pop_routes(uWS::App* app, const RouteContext& ctx) {
             
             // Build sidecar request with direct pop_messages_v2 call
             // leaseTime=0 means "use queue's configured lease_time from database"
-            SidecarRequest req;
-            req.op_type = SidecarOpType::POP;
-            req.request_id = request_id;
-            req.sql = "SELECT queen.pop_messages_v2($1, $2, $3, $4, $5, $6, $7)";
-            req.params = {
+            SidecarRequest sidecar_req;
+            sidecar_req.op_type = SidecarOpType::POP;
+            sidecar_req.request_id = request_id;
+            sidecar_req.sql = "SELECT queen.pop_messages_v2($1, $2, $3, $4, $5, $6, $7)";
+            sidecar_req.params = {
                 queue_name,                                      // p_queue_name
                 partition_name,                                  // p_partition_name (specific partition)
                 consumer_group,                                  // p_consumer_group
@@ -164,10 +163,9 @@ void setup_pop_routes(uWS::App* app, const RouteContext& ctx) {
                 options.subscription_mode.value_or("all"),       // p_subscription_mode
                 options.subscription_from.value_or("")           // p_subscription_from
             };
-            req.worker_id = ctx.worker_id;
-            req.item_count = 1;
+            sidecar_req.item_count = 1;
             
-            global_sidecar_pool_ptr->submit(std::move(req));
+            ctx.sidecar->submit(std::move(sidecar_req));
             spdlog::debug("[Worker {}] SPOP: Submitted to sidecar (request_id={})", 
                          ctx.worker_id, request_id);
             
@@ -259,11 +257,11 @@ void setup_pop_routes(uWS::App* app, const RouteContext& ctx) {
             // Build sidecar request with direct pop_messages_v2 call
             // Pass empty string for partition to pop from any partition
             // leaseTime=0 means "use queue's configured lease_time from database"
-            SidecarRequest req;
-            req.op_type = SidecarOpType::POP;
-            req.request_id = request_id;
-            req.sql = "SELECT queen.pop_messages_v2($1, $2, $3, $4, $5, $6, $7)";
-            req.params = {
+            SidecarRequest sidecar_req;
+            sidecar_req.op_type = SidecarOpType::POP;
+            sidecar_req.request_id = request_id;
+            sidecar_req.sql = "SELECT queen.pop_messages_v2($1, $2, $3, $4, $5, $6, $7)";
+            sidecar_req.params = {
                 queue_name,                                      // p_queue_name
                 "",                                              // p_partition_name (empty = any partition, will be NULL)
                 consumer_group,                                  // p_consumer_group
@@ -272,10 +270,9 @@ void setup_pop_routes(uWS::App* app, const RouteContext& ctx) {
                 options.subscription_mode.value_or("all"),       // p_subscription_mode
                 options.subscription_from.value_or("")           // p_subscription_from
             };
-            req.worker_id = ctx.worker_id;
-            req.item_count = 1;
+            sidecar_req.item_count = 1;
             
-            global_sidecar_pool_ptr->submit(std::move(req));
+            ctx.sidecar->submit(std::move(sidecar_req));
             spdlog::debug("[Worker {}] QPOP: Submitted to sidecar (request_id={})", 
                          ctx.worker_id, request_id);
             

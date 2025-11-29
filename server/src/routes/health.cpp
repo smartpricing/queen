@@ -6,11 +6,6 @@
 #include "queen/sidecar_db_pool.hpp"
 #include <spdlog/spdlog.h>
 
-// External globals
-namespace queen {
-extern SidecarDbPool* global_sidecar_pool_ptr;
-}
-
 namespace queen {
 namespace routes {
 
@@ -31,7 +26,7 @@ void setup_health_routes(uWS::App* app, const RouteContext& ctx) {
             nlohmann::json response = {
                 {"status", healthy ? "healthy" : "unhealthy"},
                 {"database", healthy ? "connected" : "disconnected"},
-                {"server", "C++ Queen Server (Acceptor/Worker)"},
+                {"server", "C++ Queen Server (Per-Worker Sidecar)"},
                 {"worker_id", ctx.worker_id},
                 {"version", "1.0.0"}
             };
@@ -43,9 +38,9 @@ void setup_health_routes(uWS::App* app, const RouteContext& ctx) {
                 response["peer_notify"] = {{"enabled", false}};
             }
             
-            // Add sidecar stats if enabled
-            if (global_sidecar_pool_ptr) {
-                auto sidecar_stats = global_sidecar_pool_ptr->get_stats();
+            // Add per-worker sidecar stats
+            if (ctx.sidecar) {
+                auto sidecar_stats = ctx.sidecar->get_stats();
                 
                 // Build per-operation stats
                 nlohmann::json op_stats_json = nlohmann::json::object();
@@ -67,14 +62,12 @@ void setup_health_routes(uWS::App* app, const RouteContext& ctx) {
                 }
                 
                 response["sidecar"] = {
+                    {"worker_id", ctx.worker_id},
                     {"connections", {
                         {"total", sidecar_stats.total_connections},
                         {"busy", sidecar_stats.busy_connections}
                     }},
-                    {"queue", {
-                        {"pending", sidecar_stats.pending_requests},
-                        {"completed", sidecar_stats.completed_responses}
-                    }},
+                    {"pending_requests", sidecar_stats.pending_requests},
                     {"total_queries", sidecar_stats.total_queries},
                     {"operations", op_stats_json}
                 };
@@ -89,4 +82,3 @@ void setup_health_routes(uWS::App* app, const RouteContext& ctx) {
 
 } // namespace routes
 } // namespace queen
-
