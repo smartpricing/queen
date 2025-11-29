@@ -1,4 +1,5 @@
 #include "queen/sidecar_db_pool.hpp"
+#include "queen/shared_state_manager.hpp"
 #include <spdlog/spdlog.h>
 #include <sys/select.h>
 #include <algorithm>
@@ -10,15 +11,17 @@ SidecarDbPool::SidecarDbPool(const std::string& conn_str,
                              int pool_size,
                              int statement_timeout_ms,
                              std::shared_ptr<astp::ThreadPool> thread_pool,
-                             SidecarResponseCallback response_callback)
+                             SidecarResponseCallback response_callback,
+                             int worker_id)
     : conn_str_(conn_str),
       pool_size_(pool_size),
       statement_timeout_ms_(statement_timeout_ms),
+      worker_id_(worker_id),
       response_callback_(std::move(response_callback)),
       thread_pool_(thread_pool) {
     
     slots_.resize(pool_size_);
-    spdlog::info("[SidecarDbPool] Created with {} connection slots (callback-based delivery)", pool_size_);
+    spdlog::info("[Worker {}] [Sidecar] Created with {} connections", worker_id_, pool_size_);
 }
 
 SidecarDbPool::~SidecarDbPool() {
@@ -108,9 +111,139 @@ void SidecarDbPool::disconnect_slot(ConnectionSlot& slot) {
 
 void SidecarDbPool::submit(SidecarRequest request) {
     request.queued_at = std::chrono::steady_clock::now();
+    
+    // POP_WAIT goes to waiting queue, not pending queue
+    if (request.op_type == SidecarOpType::POP_WAIT) {
+        std::lock_guard<std::mutex> lock(waiting_mutex_);
+        waiting_requests_.push_back(std::move(request));
+        return;
+    }
+    
     {
         std::lock_guard<std::mutex> lock(pending_mutex_);
         pending_requests_.push_back(std::move(request));
+    }
+}
+
+void SidecarDbPool::notify_queue_activity(const std::string& queue_name) {
+    auto now = std::chrono::steady_clock::now();
+    
+    std::lock_guard<std::mutex> lock(waiting_mutex_);
+    int notified = 0;
+    for (auto& req : waiting_requests_) {
+        if (req.queue_name == queue_name) {
+            req.next_check = now;  // Trigger immediate check
+            notified++;
+        }
+    }
+    if (notified > 0) {
+        spdlog::info("[Worker {}] [Sidecar] NOTIFY: Queue '{}' has activity, waking {} waiting consumers", 
+                     worker_id_, queue_name, notified);
+    }
+}
+
+std::string SidecarDbPool::make_group_key(const std::string& queue,
+                                           const std::string& partition,
+                                           const std::string& consumer_group) {
+    return queue + "/" + (partition.empty() ? "*" : partition) + "/" + consumer_group;
+}
+
+void SidecarDbPool::process_waiting_queue() {
+    auto now = std::chrono::steady_clock::now();
+    std::vector<SidecarRequest> to_process;
+    
+    // Collect requests that are due or expired
+    {
+        std::lock_guard<std::mutex> lock(waiting_mutex_);
+        auto it = waiting_requests_.begin();
+        while (it != waiting_requests_.end()) {
+            if (now >= it->wait_deadline) {
+                // Expired - send empty response immediately
+                spdlog::debug("[Worker {}] [Sidecar] POP_WAIT TIMEOUT: {} [{}@{}]", 
+                            worker_id_, it->queue_name, it->consumer_group, 
+                            it->partition_name.empty() ? "*" : it->partition_name);
+                
+                SidecarResponse resp;
+                resp.op_type = SidecarOpType::POP_WAIT;
+                resp.request_id = it->request_id;
+                resp.success = true;
+                resp.result_json = R"({"messages":[]})";
+                resp.query_time_us = 0;
+                deliver_response(std::move(resp));
+                it = waiting_requests_.erase(it);
+            } else if (now >= it->next_check) {
+                // Due for check - move to processing list
+                to_process.push_back(std::move(*it));
+                it = waiting_requests_.erase(it);
+            } else {
+                ++it;
+            }
+        }
+    }
+    
+    // Process each due request
+    for (auto& req : to_process) {
+        std::string group_key = make_group_key(req.queue_name, req.partition_name, req.consumer_group);
+        
+        // Check backoff via SharedStateManager
+        if (global_shared_state && !global_shared_state->should_check_group(group_key)) {
+            // Not due yet - re-queue with updated next_check
+            req.next_check = now + global_shared_state->get_group_interval(group_key);
+            std::lock_guard<std::mutex> lock(waiting_mutex_);
+            waiting_requests_.push_back(std::move(req));
+            continue;
+        }
+        
+        // Try to acquire group lock
+        if (global_shared_state && !global_shared_state->try_acquire_group(group_key)) {
+            // Another sidecar is querying - wait briefly
+            req.next_check = now + std::chrono::milliseconds(10);
+            std::lock_guard<std::mutex> lock(waiting_mutex_);
+            waiting_requests_.push_back(std::move(req));
+            continue;
+        }
+        
+        // Track this POP_WAIT for re-queuing after result
+        {
+            std::lock_guard<std::mutex> lock(tracker_mutex_);
+            PopWaitTracker tracker;
+            tracker.wait_deadline = req.wait_deadline;
+            tracker.queue_name = req.queue_name;
+            tracker.partition_name = req.partition_name;
+            tracker.consumer_group = req.consumer_group;
+            tracker.batch_size = req.batch_size;
+            tracker.subscription_mode = req.subscription_mode;
+            tracker.subscription_from = req.subscription_from;
+            pop_wait_trackers_[req.request_id] = std::move(tracker);
+        }
+        
+        // Convert POP_WAIT to POP for the actual query
+        req.op_type = SidecarOpType::POP;
+        
+        // Build SQL if not already set
+        if (req.sql.empty()) {
+            req.sql = "SELECT queen.pop_messages_v2($1, $2, $3, $4, $5, $6, $7)";
+            req.params = {
+                req.queue_name,
+                req.partition_name,
+                req.consumer_group,
+                std::to_string(req.batch_size),
+                "0",  // Use queue's configured lease_time
+                req.subscription_mode,
+                req.subscription_from
+            };
+        }
+        
+        // Log before moving (req will be empty after move)
+        spdlog::debug("[Worker {}] [Sidecar] POP_WAIT QUERY: {} [{}@{}]", 
+                    worker_id_, req.queue_name, req.consumer_group, 
+                    req.partition_name.empty() ? "*" : req.partition_name);
+        
+        // Move to pending queue for execution
+        {
+            std::lock_guard<std::mutex> lock(pending_mutex_);
+            pending_requests_.push_back(std::move(req));
+    }
     }
 }
 
@@ -137,6 +270,7 @@ static bool is_batchable_op(SidecarOpType op) {
             return true;
         case SidecarOpType::ACK:
         case SidecarOpType::POP:         // Each POP needs its own transaction for lease acquisition
+        case SidecarOpType::POP_WAIT:    // POP_WAIT is handled separately via waiting queue
         case SidecarOpType::TRANSACTION:
             return false;
     }
@@ -173,9 +307,13 @@ static std::pair<std::string, std::vector<const char*>> get_batched_sql(
             return {"SELECT queen.renew_lease_v2($1::jsonb)",
                     {param_storage[0].c_str()}};
             
-        default:
+        case SidecarOpType::ACK:
+        case SidecarOpType::TRANSACTION:
+        case SidecarOpType::POP_WAIT:
+            // These are not batchable, should not reach here
             return {"", {}};
     }
+    return {"", {}};
 }
 
 void SidecarDbPool::poller_loop() {
@@ -185,6 +323,12 @@ void SidecarDbPool::poller_loop() {
     constexpr int MAX_ITEMS_PER_TX = 100;   // Max items per batch
     
     while (running_) {
+        // ============================================================
+        // STEP 0: PROCESS WAITING QUEUE (POP_WAIT)
+        // Check for expired and due waiting requests
+        // ============================================================
+        process_waiting_queue();
+        
         // ============================================================
         // STEP 1: MICRO-BATCH COLLECTION & SEND
         // ============================================================
@@ -360,6 +504,7 @@ void SidecarDbPool::poller_loop() {
                     info.request_id = req.request_id;
                     info.start_index = current_index;
                     info.item_count = req.item_count;
+                    info.push_targets = req.push_targets;  // For PUSH notification
                     batch_info.push_back(info);
                     
                     // Append with comma separator
@@ -378,8 +523,19 @@ void SidecarDbPool::poller_loop() {
                     continue;
                 }
                 
-                spdlog::info("[SidecarDbPool] MICRO-BATCH: {} op, {} requests, {} items", 
-                            static_cast<int>(batch_op_type), batch_info.size(), current_index);
+                // Get readable operation type name
+                const char* op_name = "UNKNOWN";
+                switch (batch_op_type) {
+                    case SidecarOpType::PUSH: op_name = "PUSH"; break;
+                    case SidecarOpType::POP: op_name = "POP"; break;
+                    case SidecarOpType::POP_WAIT: op_name = "POP_WAIT"; break;
+                    case SidecarOpType::ACK: op_name = "ACK"; break;
+                    case SidecarOpType::ACK_BATCH: op_name = "ACK_BATCH"; break;
+                    case SidecarOpType::TRANSACTION: op_name = "TRANSACTION"; break;
+                    case SidecarOpType::RENEW_LEASE: op_name = "RENEW_LEASE"; break;
+                }
+                spdlog::info("[Worker {}] [Sidecar] BATCH: {} ({} requests, {} items)", 
+                            worker_id_, op_name, batch_info.size(), current_index);
                 
                 // Get SQL for this operation type
                 std::vector<std::string> param_storage;
@@ -618,6 +774,7 @@ void SidecarDbPool::poller_loop() {
                             resp.op_type = slot.op_type;
                             resp.request_id = info.request_id;
                             resp.query_time_us = query_time;
+                            resp.push_targets = info.push_targets;  // For PUSH notification
                             
                             if (db_success && all_results.is_array()) {
                                 // Filter by 'index' or 'idx' field
@@ -679,16 +836,116 @@ void SidecarDbPool::poller_loop() {
                         resp.error_message = "No result";
                     }
                     
-                    // Update per-op stats
-                    {
-                        std::lock_guard<std::mutex> stats_lock(stats_mutex_);
-                        auto& stats = op_stats_[slot.op_type];
-                        stats.count++;
-                        stats.total_time_us += query_time;
-                        stats.items_processed += slot.total_items;
+                    // Check if this POP was originally a POP_WAIT
+                    bool was_pop_wait = false;
+                    PopWaitTracker tracker;
+                    if (slot.op_type == SidecarOpType::POP) {
+                        std::lock_guard<std::mutex> lock(tracker_mutex_);
+                        auto it = pop_wait_trackers_.find(slot.request_id);
+                        if (it != pop_wait_trackers_.end()) {
+                            was_pop_wait = true;
+                            tracker = std::move(it->second);
+                            pop_wait_trackers_.erase(it);
+                        }
                     }
                     
-                    deliver_response(std::move(resp));
+                    if (was_pop_wait) {
+                        // Handle POP_WAIT result: check if we need to re-queue
+                        std::string group_key = make_group_key(
+                            tracker.queue_name, tracker.partition_name, tracker.consumer_group);
+                        
+                        // Check if we got messages
+                        bool has_messages = false;
+                        if (resp.success && !resp.result_json.empty()) {
+                            try {
+                                auto json = nlohmann::json::parse(resp.result_json);
+                                if (json.contains("messages") && json["messages"].is_array()) {
+                                    has_messages = !json["messages"].empty();
+                                }
+                            } catch (...) {
+                                // Parse error - treat as no messages
+                            }
+                        }
+                        
+                        // Release group lock and update backoff
+                        if (global_shared_state) {
+                            global_shared_state->release_group(group_key, has_messages);
+                        }
+                        
+                        auto now = std::chrono::steady_clock::now();
+                        
+                        if (has_messages || now >= tracker.wait_deadline || !resp.success) {
+                            // Done - deliver response (either has messages, expired, or error)
+                            resp.op_type = SidecarOpType::POP_WAIT;  // Restore original op type
+                            
+                            // Update per-op stats
+                            {
+                                std::lock_guard<std::mutex> stats_lock(stats_mutex_);
+                                auto& stats = op_stats_[SidecarOpType::POP_WAIT];
+                                stats.count++;
+                                stats.total_time_us += query_time;
+                            }
+                            
+                            deliver_response(std::move(resp));
+                            
+                            if (has_messages) {
+                                spdlog::info("[Worker {}] [Sidecar] POP_WAIT FOUND: {} [{}@{}] - messages delivered", 
+                                            worker_id_, tracker.queue_name, tracker.consumer_group,
+                                            tracker.partition_name.empty() ? "*" : tracker.partition_name);
+                            } else if (!resp.success) {
+                                spdlog::warn("[Worker {}] [Sidecar] POP_WAIT ERROR: {} [{}@{}] - {}", 
+                                            worker_id_, tracker.queue_name, tracker.consumer_group,
+                                            tracker.partition_name.empty() ? "*" : tracker.partition_name,
+                                            resp.error_message);
+                            }
+                            // Timeout is already logged in process_waiting_queue
+                        } else {
+                            // No messages, not expired - re-queue to waiting queue
+                            SidecarRequest new_req;
+                            new_req.op_type = SidecarOpType::POP_WAIT;
+                            new_req.request_id = slot.request_id;
+                            new_req.wait_deadline = tracker.wait_deadline;
+                            new_req.queue_name = tracker.queue_name;
+                            new_req.partition_name = tracker.partition_name;
+                            new_req.consumer_group = tracker.consumer_group;
+                            new_req.batch_size = tracker.batch_size;
+                            new_req.subscription_mode = tracker.subscription_mode;
+                            new_req.subscription_from = tracker.subscription_from;
+                            new_req.sql = tracker.sql;
+                            new_req.params = tracker.params;
+                            
+                            // Set next check based on backoff interval
+                            auto interval_ms = std::chrono::milliseconds(100);
+                            if (global_shared_state) {
+                                interval_ms = global_shared_state->get_group_interval(group_key);
+                                new_req.next_check = now + interval_ms;
+                            } else {
+                                new_req.next_check = now + interval_ms;
+                            }
+                            
+                            {
+                                std::lock_guard<std::mutex> lock(waiting_mutex_);
+                                waiting_requests_.push_back(std::move(new_req));
+                            }
+                            
+                            spdlog::debug("[Worker {}] [Sidecar] POP_WAIT EMPTY: {} [{}@{}] - re-queued (backoff {}ms)", 
+                                         worker_id_, tracker.queue_name, tracker.consumer_group,
+                                         tracker.partition_name.empty() ? "*" : tracker.partition_name,
+                                         interval_ms.count());
+                        }
+                    } else {
+                        // Normal (non-POP_WAIT) response handling
+                        // Update per-op stats
+                        {
+                            std::lock_guard<std::mutex> stats_lock(stats_mutex_);
+                            auto& stats = op_stats_[slot.op_type];
+                            stats.count++;
+                            stats.total_time_us += query_time;
+                            stats.items_processed += slot.total_items;
+                        }
+                        
+                        deliver_response(std::move(resp));
+                    }
                     
                     // Slot is now free
                     slot.busy = false;

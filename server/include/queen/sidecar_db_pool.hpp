@@ -24,6 +24,7 @@ namespace queen {
 enum class SidecarOpType {
     PUSH,           // Push messages (batchable)
     POP,            // Pop messages (NOT batchable - each needs own lease)
+    POP_WAIT,       // Long-poll pop (NOT batchable, managed by waiting queue)
     ACK,            // Single acknowledge
     ACK_BATCH,      // Batch acknowledge (batchable)
     TRANSACTION,    // Atomic transaction (NOT batchable)
@@ -40,6 +41,19 @@ struct SidecarRequest {
     std::vector<std::string> params;
     size_t item_count = 0;  // Number of items in this request (for micro-batching decisions)
     std::chrono::steady_clock::time_point queued_at;
+    
+    // For PUSH: queues to notify after success (queue -> partition list)
+    std::vector<std::pair<std::string, std::string>> push_targets;
+    
+    // For POP_WAIT only:
+    std::chrono::steady_clock::time_point wait_deadline;  // Absolute timeout
+    std::chrono::steady_clock::time_point next_check;     // When to check next
+    std::string queue_name;       // For notification matching
+    std::string partition_name;   // For grouping
+    std::string consumer_group;   // For grouping
+    int batch_size = 1;           // Client's requested batch size
+    std::string subscription_mode;
+    std::string subscription_from;
 };
 
 /**
@@ -52,6 +66,9 @@ struct SidecarResponse {
     std::string result_json;  // JSON string result from stored procedure
     std::string error_message;
     int64_t query_time_us;
+    
+    // For PUSH: targets to notify (copied from request)
+    std::vector<std::pair<std::string, std::string>> push_targets;
 };
 
 /**
@@ -85,12 +102,14 @@ public:
      * @param statement_timeout_ms Statement timeout in milliseconds
      * @param thread_pool ThreadPool to run the poller loop in
      * @param response_callback Callback for delivering responses (called from poller thread)
+     * @param worker_id Worker ID for logging
      */
     SidecarDbPool(const std::string& conn_str, 
                   int pool_size,
                   int statement_timeout_ms,
                   std::shared_ptr<astp::ThreadPool> thread_pool,
-                  SidecarResponseCallback response_callback);
+                  SidecarResponseCallback response_callback,
+                  int worker_id = -1);
     
     ~SidecarDbPool();
     
@@ -113,6 +132,13 @@ public:
      * Returns immediately - result delivered via callback
      */
     void submit(SidecarRequest request);
+    
+    /**
+     * Notify this sidecar that a queue has activity (new messages available)
+     * Called by SharedStateManager when push notification is received
+     * Sets next_check to now for all waiting requests for this queue
+     */
+    void notify_queue_activity(const std::string& queue_name);
     
     // Per-operation statistics
     struct OpStats {
@@ -140,6 +166,7 @@ private:
         std::string request_id;
         size_t start_index;  // First item index in the combined batch
         size_t item_count;   // Number of items from this request
+        std::vector<std::pair<std::string, std::string>> push_targets;  // For PUSH: queue/partition pairs to notify
     };
     
     // Connection slot
@@ -163,6 +190,7 @@ private:
     std::string conn_str_;
     int pool_size_;
     int statement_timeout_ms_;
+    int worker_id_;  // For logging
     
     // Response delivery callback
     SidecarResponseCallback response_callback_;
@@ -173,6 +201,26 @@ private:
     // Request queue (HTTP worker pushes here)
     std::deque<SidecarRequest> pending_requests_;
     mutable std::mutex pending_mutex_;
+    
+    // Waiting queue for POP_WAIT requests
+    std::deque<SidecarRequest> waiting_requests_;
+    mutable std::mutex waiting_mutex_;
+    
+    // Track POP_WAIT requests that are currently being executed as POPs
+    // Key: request_id, Value: original POP_WAIT request data for re-queuing
+    struct PopWaitTracker {
+        std::chrono::steady_clock::time_point wait_deadline;
+        std::string queue_name;
+        std::string partition_name;
+        std::string consumer_group;
+        int batch_size;
+        std::string subscription_mode;
+        std::string subscription_from;
+        std::string sql;
+        std::vector<std::string> params;
+    };
+    std::unordered_map<std::string, PopWaitTracker> pop_wait_trackers_;
+    mutable std::mutex tracker_mutex_;
     
     // Poller runs in threadpool
     std::shared_ptr<astp::ThreadPool> thread_pool_;
@@ -193,6 +241,14 @@ private:
     
     // Deliver response via callback
     void deliver_response(SidecarResponse response);
+    
+    // Process waiting queue for POP_WAIT requests
+    void process_waiting_queue();
+    
+    // Build group key for backoff coordination
+    static std::string make_group_key(const std::string& queue, 
+                                       const std::string& partition,
+                                       const std::string& consumer_group);
 };
 
 } // namespace queen

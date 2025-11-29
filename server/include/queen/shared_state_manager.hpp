@@ -15,12 +15,16 @@
 #include <optional>
 #include <thread>
 #include <atomic>
+#include <shared_mutex>
+#include <chrono>
+#include <unordered_map>
 
 namespace queen {
 
 // Forward declarations
 class AsyncDbPool;
 class PollIntentionRegistry;
+class SidecarDbPool;
 
 /**
  * SharedStateManager
@@ -194,17 +198,70 @@ public:
     std::vector<std::string> get_alive_servers();
     
     // ============================================================
+    // Tier 6: Local Sidecar Registry (for POP_WAIT notifications)
+    // ============================================================
+    
+    /**
+     * Register a local sidecar for notifications
+     * Called when each worker creates its sidecar
+     */
+    void register_sidecar(SidecarDbPool* sidecar);
+    
+    /**
+     * Unregister a local sidecar
+     * Called when worker shuts down
+     */
+    void unregister_sidecar(SidecarDbPool* sidecar);
+    
+    // ============================================================
+    // Tier 7: Group Backoff Coordination (local only, not synced via UDP)
+    // Used by sidecars to coordinate POP_WAIT polling
+    // ============================================================
+    
+    /**
+     * Check if a group should be checked now (respects backoff interval)
+     * @param group_key Format: "queue/partition/consumer_group"
+     */
+    bool should_check_group(const std::string& group_key);
+    
+    /**
+     * Try to acquire exclusive access for querying a group
+     * Prevents multiple sidecars from querying the same group simultaneously
+     * @return true if acquired, false if another sidecar is already querying
+     */
+    bool try_acquire_group(const std::string& group_key);
+    
+    /**
+     * Release group lock and update backoff based on result
+     * @param had_messages true if messages were found (resets backoff)
+     */
+    void release_group(const std::string& group_key, bool had_messages);
+    
+    /**
+     * Get current backoff interval for a group
+     */
+    std::chrono::milliseconds get_group_interval(const std::string& group_key);
+    
+    /**
+     * Reset backoff for all groups of a queue (called on push notification)
+     */
+    void reset_backoff_for_queue(const std::string& queue_name);
+    
+    // ============================================================
     // Notifications (for InterInstanceComms compatibility)
+    // Also notifies local sidecars for POP_WAIT
     // ============================================================
     
     /**
      * Send MESSAGE_AVAILABLE notification to servers with consumers
      * Falls back to broadcast if no presence info
+     * ALSO notifies local sidecars (for POP_WAIT)
      */
     void notify_message_available(const std::string& queue, const std::string& partition);
     
     /**
      * Send PARTITION_FREE notification
+     * ALSO notifies local sidecars (for POP_WAIT)
      */
     void notify_partition_free(const std::string& queue, 
                               const std::string& partition,
@@ -251,6 +308,33 @@ private:
     std::thread refresh_thread_;
     std::thread cleanup_thread_;
     std::thread dns_refresh_thread_;
+    
+    // ============================================================
+    // Tier 6: Local Sidecar Registry
+    // ============================================================
+    std::vector<SidecarDbPool*> local_sidecars_;
+    mutable std::shared_mutex sidecar_mutex_;
+    
+    // ============================================================
+    // Tier 7: Group Backoff State (local only)
+    // ============================================================
+    struct GroupBackoffState {
+        std::chrono::steady_clock::time_point last_checked;
+        int consecutive_empty = 0;
+        std::chrono::milliseconds current_interval{100};
+        bool in_flight = false;  // Protected by backoff_mutex_, not atomic
+    };
+    std::unordered_map<std::string, GroupBackoffState> group_backoff_;
+    mutable std::mutex backoff_mutex_;  // Regular mutex, not shared_mutex (simpler, no atomic in struct)
+    
+    // Backoff configuration (from config or defaults)
+    int backoff_threshold_ = 3;
+    double backoff_multiplier_ = 2.0;
+    int max_interval_ms_ = 1000;
+    int base_interval_ms_ = 100;
+    
+    // Internal: notify all local sidecars
+    void notify_local_sidecars(const std::string& queue_name);
     
     // ============================================================
     // Message Handlers

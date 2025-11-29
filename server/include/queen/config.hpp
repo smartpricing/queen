@@ -156,10 +156,17 @@ struct QueueConfig {
     int poll_db_interval = 100;          // 100ms - Initial DB query interval (aggressive first attempt, then backoff)
     
     // Long polling - Adaptive exponential backoff (ACTIVE)
+    // NOTE: These are used by old poll workers AND new POP_WAIT sidecar-based long-polling
     int backoff_threshold = 1;           // Number of consecutive empty pops before backoff starts (1 = immediate backoff)
     double backoff_multiplier = 2.0;     // Exponential backoff multiplier (interval *= multiplier each time)
     int max_poll_interval = 2000;        // 2000ms - Maximum poll interval after backoff
     int backoff_cleanup_inactive_threshold = 3600; // 3600s (1 hour) - Remove backoff state entries inactive for N seconds
+    
+    // POP_WAIT (sidecar-based long-polling) configuration
+    int pop_wait_base_interval_ms = 100;  // Base interval between DB checks
+    int pop_wait_max_interval_ms = 1000;  // Max interval after backoff
+    int pop_wait_backoff_threshold = 3;   // Consecutive empty checks before backoff starts
+    double pop_wait_backoff_multiplier = 2.0;  // Exponential backoff multiplier
     
     // Legacy long polling settings (reserved for future use)
     int poll_interval = 100;             // 100ms - Reserved
@@ -242,6 +249,12 @@ struct QueueConfig {
         config.backoff_multiplier = get_env_double("QUEUE_BACKOFF_MULTIPLIER", 2.0);
         config.max_poll_interval = get_env_int("QUEUE_MAX_POLL_INTERVAL", 2000);
         config.backoff_cleanup_inactive_threshold = get_env_int("QUEUE_BACKOFF_CLEANUP_THRESHOLD", 3600);
+        
+        // POP_WAIT (sidecar-based long-polling)
+        config.pop_wait_base_interval_ms = get_env_int("POP_WAIT_BASE_INTERVAL_MS", 100);
+        config.pop_wait_max_interval_ms = get_env_int("POP_WAIT_MAX_INTERVAL_MS", 1000);
+        config.pop_wait_backoff_threshold = get_env_int("POP_WAIT_BACKOFF_THRESHOLD", 3);
+        config.pop_wait_backoff_multiplier = get_env_double("POP_WAIT_BACKOFF_MULTIPLIER", 2.0);
         
         // Legacy long polling (reserved)
         config.poll_interval = get_env_int("QUEUE_POLL_INTERVAL", 100);

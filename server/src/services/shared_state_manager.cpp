@@ -1,7 +1,9 @@
 #include "queen/shared_state_manager.hpp"
 #include "queen/async_database.hpp"
+#include "queen/sidecar_db_pool.hpp"
 #include <spdlog/spdlog.h>
 #include <chrono>
+#include <algorithm>
 
 namespace queen {
 
@@ -283,8 +285,12 @@ std::vector<std::string> SharedStateManager::get_alive_servers() {
 // ============================================================
 
 void SharedStateManager::notify_message_available(const std::string& queue, const std::string& partition) {
-    if (!running_ || !transport_) return;
+    // ALWAYS: Notify local sidecars (works in single-node mode)
+    notify_local_sidecars(queue);
+    reset_backoff_for_queue(queue);
     
+    // CLUSTER: If UDP enabled, broadcast to other servers
+    if (running_ && transport_) {
     nlohmann::json payload = {
         {"queue", queue},
         {"partition", partition},
@@ -301,6 +307,7 @@ void SharedStateManager::notify_message_available(const std::string& queue, cons
         servers.erase(server_id_);
         if (!servers.empty()) {
             transport_->send_to(servers, UDPSyncMessageType::MESSAGE_AVAILABLE, payload);
+            }
         }
     }
 }
@@ -308,8 +315,12 @@ void SharedStateManager::notify_message_available(const std::string& queue, cons
 void SharedStateManager::notify_partition_free(const std::string& queue,
                                               const std::string& partition,
                                               const std::string& consumer_group) {
-    if (!running_ || !transport_) return;
+    // ALWAYS: Notify local sidecars (works in single-node mode)
+    notify_local_sidecars(queue);
+    reset_backoff_for_queue(queue);
     
+    // CLUSTER: If UDP enabled, broadcast to other servers
+    if (running_ && transport_) {
     nlohmann::json payload = {
         {"queue", queue},
         {"partition", partition},
@@ -325,6 +336,113 @@ void SharedStateManager::notify_partition_free(const std::string& queue,
         servers.erase(server_id_);
         if (!servers.empty()) {
             transport_->send_to(servers, UDPSyncMessageType::PARTITION_FREE, payload);
+            }
+        }
+    }
+}
+
+// ============================================================
+// Tier 6: Local Sidecar Registry
+// ============================================================
+
+void SharedStateManager::register_sidecar(SidecarDbPool* sidecar) {
+    std::unique_lock lock(sidecar_mutex_);
+    local_sidecars_.push_back(sidecar);
+    spdlog::debug("SharedState: Registered sidecar (total: {})", local_sidecars_.size());
+}
+
+void SharedStateManager::unregister_sidecar(SidecarDbPool* sidecar) {
+    std::unique_lock lock(sidecar_mutex_);
+    local_sidecars_.erase(
+        std::remove(local_sidecars_.begin(), local_sidecars_.end(), sidecar),
+        local_sidecars_.end()
+    );
+    spdlog::debug("SharedState: Unregistered sidecar (total: {})", local_sidecars_.size());
+}
+
+void SharedStateManager::notify_local_sidecars(const std::string& queue_name) {
+    std::shared_lock lock(sidecar_mutex_);
+    for (auto* sidecar : local_sidecars_) {
+        if (sidecar) {
+            sidecar->notify_queue_activity(queue_name);
+        }
+    }
+    if (!local_sidecars_.empty()) {
+        spdlog::debug("SharedState: Notified {} local sidecars for queue {}", 
+                     local_sidecars_.size(), queue_name);
+    }
+}
+
+// ============================================================
+// Tier 7: Group Backoff Coordination
+// ============================================================
+
+bool SharedStateManager::should_check_group(const std::string& group_key) {
+    std::lock_guard lock(backoff_mutex_);
+    auto it = group_backoff_.find(group_key);
+    if (it == group_backoff_.end()) {
+        return true;  // New group, check immediately
+    }
+    
+    auto now = std::chrono::steady_clock::now();
+    return (now - it->second.last_checked) >= it->second.current_interval;
+}
+
+bool SharedStateManager::try_acquire_group(const std::string& group_key) {
+    std::lock_guard lock(backoff_mutex_);
+    auto& state = group_backoff_[group_key];  // Creates if not exists
+    
+    if (state.in_flight) {
+        return false;  // Already being queried
+    }
+    state.in_flight = true;
+    return true;
+}
+
+void SharedStateManager::release_group(const std::string& group_key, bool had_messages) {
+    std::lock_guard lock(backoff_mutex_);
+    auto it = group_backoff_.find(group_key);
+    if (it == group_backoff_.end()) {
+        return;
+    }
+    
+    auto& state = it->second;
+    state.last_checked = std::chrono::steady_clock::now();
+    
+    if (had_messages) {
+        // Reset backoff
+        state.consecutive_empty = 0;
+        state.current_interval = std::chrono::milliseconds(base_interval_ms_);
+    } else {
+        // Increase backoff
+        state.consecutive_empty++;
+        if (state.consecutive_empty >= backoff_threshold_) {
+            int new_interval = static_cast<int>(state.current_interval.count() * backoff_multiplier_);
+            state.current_interval = std::chrono::milliseconds(std::min(new_interval, max_interval_ms_));
+        }
+    }
+    
+    state.in_flight = false;
+}
+
+std::chrono::milliseconds SharedStateManager::get_group_interval(const std::string& group_key) {
+    std::lock_guard lock(backoff_mutex_);
+    auto it = group_backoff_.find(group_key);
+    if (it == group_backoff_.end()) {
+        return std::chrono::milliseconds(base_interval_ms_);
+    }
+    return it->second.current_interval;
+}
+
+void SharedStateManager::reset_backoff_for_queue(const std::string& queue_name) {
+    std::lock_guard lock(backoff_mutex_);
+    std::string prefix = queue_name + "/";
+    for (auto& [key, state] : group_backoff_) {
+        // Check if key starts with "queue_name/"
+        if (key.size() >= prefix.size() && key.compare(0, prefix.size(), prefix) == 0) {
+            state.consecutive_empty = 0;
+            state.current_interval = std::chrono::milliseconds(base_interval_ms_);
+            // Note: Don't touch in_flight - let current query complete
         }
     }
 }
@@ -378,16 +496,28 @@ void SharedStateManager::setup_message_handlers() {
 }
 
 void SharedStateManager::handle_message_available(const std::string& sender, const nlohmann::json& payload) {
-    // This will be forwarded to PollIntentionRegistry by InterInstanceComms
-    // For now, just log
+    std::string queue = payload.value("queue", "");
     spdlog::debug("SharedState: MESSAGE_AVAILABLE from {} for {}:{}",
-                 sender, payload.value("queue", ""), payload.value("partition", ""));
+                 sender, queue, payload.value("partition", ""));
+    
+    // Forward to local sidecars (received from another server)
+    if (!queue.empty()) {
+        notify_local_sidecars(queue);
+        reset_backoff_for_queue(queue);
+    }
 }
 
 void SharedStateManager::handle_partition_free(const std::string& sender, const nlohmann::json& payload) {
+    std::string queue = payload.value("queue", "");
     spdlog::debug("SharedState: PARTITION_FREE from {} for {}:{}:{}",
-                 sender, payload.value("queue", ""), payload.value("partition", ""),
+                 sender, queue, payload.value("partition", ""),
                  payload.value("consumer_group", ""));
+    
+    // Forward to local sidecars (received from another server)
+    if (!queue.empty()) {
+        notify_local_sidecars(queue);
+        reset_backoff_for_queue(queue);
+    }
 }
 
 void SharedStateManager::handle_heartbeat(const std::string& sender, const nlohmann::json& payload) {
@@ -763,6 +893,28 @@ nlohmann::json SharedStateManager::get_stats() const {
         {"heartbeats_received", server_health_.heartbeats_received()},
         {"restarts_detected", server_health_.restarts_detected()}
     };
+    
+    // Tier 6: Local Sidecar Registry
+    {
+        std::shared_lock lock(sidecar_mutex_);
+        stats["local_sidecars"] = local_sidecars_.size();
+    }
+    
+    // Tier 7: Group Backoff State
+    {
+        std::lock_guard lock(backoff_mutex_);
+        int in_flight = 0;
+        int backed_off = 0;
+        for (const auto& [key, state] : group_backoff_) {
+            if (state.in_flight) in_flight++;
+            if (state.consecutive_empty >= backoff_threshold_) backed_off++;
+        }
+        stats["group_backoff"] = {
+            {"groups_tracked", group_backoff_.size()},
+            {"groups_in_flight", in_flight},
+            {"groups_backed_off", backed_off}
+        };
+    }
     
     return stats;
 }

@@ -5,7 +5,6 @@
 #include "queen/queue_types.hpp"
 #include "queen/file_buffer.hpp"
 #include "queen/inter_instance_comms.hpp"
-#include "queen/poll_intention_registry.hpp"
 #include "queen/response_queue.hpp"
 #include "queen/sidecar_db_pool.hpp"
 #include <spdlog/spdlog.h>
@@ -112,11 +111,33 @@ void setup_push_routes(uWS::App* app, const RouteContext& ctx) {
                     sidecar_req.params = {items_json.dump(), "true", "true"};
                     sidecar_req.item_count = items.size();
                         
+                    // Collect unique queue/partition pairs for notification and logging
+                    std::set<std::pair<std::string, std::string>> targets;
+                    for (const auto& item : items) {
+                        targets.insert({item.queue, item.partition});
+                    }
+                    
+                    // Store targets for notification after successful push
+                    for (const auto& [queue, partition] : targets) {
+                        sidecar_req.push_targets.push_back({queue, partition});
+                    }
+                    
+                    // Build queue list for logging
+                    std::set<std::string> queues;
+                    for (const auto& [queue, _] : targets) {
+                        queues.insert(queue);
+                    }
+                    std::string queues_str;
+                    for (const auto& q : queues) {
+                        if (!queues_str.empty()) queues_str += ", ";
+                        queues_str += q;
+                    }
+                    
                     // Submit to per-worker sidecar - RETURNS IMMEDIATELY!
                     ctx.sidecar->submit(std::move(sidecar_req));
                         
-                        spdlog::debug("[Worker {}] PUSH: Submitted {} items to sidecar (request_id={})", 
-                                     ctx.worker_id, item_count, request_id);
+                    spdlog::info("[Worker {}] PUSH: {} items to [{}]", 
+                                ctx.worker_id, item_count, queues_str);
                         
                     // Don't send response here - sidecar will deliver it via loop->defer()
                     

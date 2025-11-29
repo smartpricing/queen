@@ -9,7 +9,6 @@
 #include "queen/retention_service.hpp"
 #include "queen/eviction_service.hpp"
 #include "queen/poll_intention_registry.hpp"
-#include "queen/poll_worker.hpp"
 #include "queen/stream_poll_worker.hpp"
 #include "queen/stream_poll_intention_registry.hpp"
 #include "queen/stream_manager.hpp"
@@ -28,6 +27,7 @@
 #include <mutex>
 #include <condition_variable>
 #include <sstream>
+#include <set>
 #include <iomanip>
 #include <chrono>
 #include <optional>
@@ -279,29 +279,27 @@ static void worker_thread(const Config& config, int worker_id, int num_workers,
             // - Background services: use system_thread_pool for scheduling
             
             // DB ThreadPool Formula:
-            // = Regular poll workers (reserved)
-            // + Stream poll workers (reserved) 
+            // = Stream poll workers (reserved) 
             // + Stream concurrent checks (N × C)
-            // + Sidecar pollers (one per HTTP worker)
+            // + Sidecar pollers (one per HTTP worker) - handles POP_WAIT now
             // + Service threads (metrics, etc.)
-            int poll_workers = config.queue.poll_worker_count;
+            // NOTE: Regular poll workers removed - POP_WAIT handled by sidecar
             int stream_workers = config.queue.stream_poll_worker_count;
             int stream_concurrent = config.queue.stream_poll_worker_count * config.queue.stream_concurrent_checks;
             int sidecar_pollers = num_workers;  // Each HTTP worker has its own sidecar poller
             int service_threads = config.queue.db_thread_pool_service_threads;
-            int db_thread_pool_size = poll_workers + stream_workers + stream_concurrent + sidecar_pollers + service_threads;
+            int db_thread_pool_size = stream_workers + stream_concurrent + sidecar_pollers + service_threads;
             
             // System ThreadPool: Used by background services (metrics sampling, retention, eviction)
             int system_threads = 4; // MetricsCollector, RetentionService, EvictionService scheduling
             
             spdlog::info("Initializing GLOBAL shared resources (ASYNC-ONLY MODE):");
             spdlog::info("  - Total DB connections: {} (95% of {}) - ALL ASYNC", total_connections, config.database.pool_size);
-            spdlog::info("  - DB ThreadPool size: {} = {} poll + {} stream + {} stream concurrent + {} sidecar + {} service", 
-                        db_thread_pool_size, poll_workers, stream_workers, stream_concurrent, sidecar_pollers, service_threads);
-            spdlog::info("    * Regular poll workers: {} (reserved threads for long-polling)", poll_workers);
+            spdlog::info("  - DB ThreadPool size: {} = {} stream + {} stream concurrent + {} sidecar + {} service", 
+                        db_thread_pool_size, stream_workers, stream_concurrent, sidecar_pollers, service_threads);
             spdlog::info("    * Stream poll workers: {} (reserved threads)", stream_workers);
             spdlog::info("    * Stream concurrent checks: {} ({} per worker)", stream_concurrent, config.queue.stream_concurrent_checks);
-            spdlog::info("    * Sidecar pollers: {} (one per HTTP worker)", sidecar_pollers);
+            spdlog::info("    * Sidecar pollers: {} (one per HTTP worker, handles POP_WAIT)", sidecar_pollers);
             spdlog::info("    * Service DB threads: {} (metrics, retention, eviction)", service_threads);
             spdlog::info("  - System ThreadPool threads: {} (for background service scheduling)", system_threads);
             spdlog::info("  - Number of HTTP workers: {}", num_workers);
@@ -505,23 +503,9 @@ static void worker_thread(const Config& config, int worker_id, int num_workers,
             spdlog::warn("[Worker {}] Server will operate with file buffer until PostgreSQL becomes available", worker_id);
         }
         
-        // Initialize long-polling poll workers (Worker 0 only, regardless of DB status)
+        // Initialize stream long-polling poll workers (Worker 0 only, regardless of DB status)
+        // NOTE: Regular POP long-polling is now handled by sidecar POP_WAIT
         if (worker_id == 0) {
-            spdlog::info("[Worker 0] Starting long-polling poll workers...");
-            queen::init_long_polling(
-                global_db_thread_pool,
-                queen::global_poll_intention_registry,
-                async_queue_manager,
-                worker_response_queues,  // All worker queues (poll workers will route to correct one)
-                config.queue.poll_worker_count,  // Number of poll workers (configurable via POLL_WORKER_COUNT env var)
-                config.queue.poll_worker_interval,
-                config.queue.poll_db_interval,
-                config.queue.backoff_threshold,
-                config.queue.backoff_multiplier,
-                config.queue.max_poll_interval,
-                config.queue.backoff_cleanup_inactive_threshold
-            );
-            
             // Initialize stream long-polling poll workers
             spdlog::info("[Worker 0] Starting stream long-polling poll workers...");
             queen::init_stream_long_polling(
@@ -629,9 +613,20 @@ static void worker_thread(const Config& config, int worker_id, int num_workers,
                         switch (resp.op_type) {
                             case queen::SidecarOpType::PUSH:
                                 status_code = 201;
+                                
+                                // Notify SharedStateManager on successful push
+                                // This wakes up waiting consumers (POP_WAIT)
+                                if (queen::global_shared_state && !resp.push_targets.empty()) {
+                                    for (const auto& [queue, partition] : resp.push_targets) {
+                                        queen::global_shared_state->notify_message_available(queue, partition);
+                                    }
+                                    spdlog::info("[Worker {}] PUSH NOTIFY: {} queue(s)", 
+                                                worker_id, resp.push_targets.size());
+                                }
                                 break;
                             case queen::SidecarOpType::POP:
-                                // For POP, check if messages were returned
+                            case queen::SidecarOpType::POP_WAIT:
+                                // For POP/POP_WAIT, check if messages were returned
                                 if (json_response.is_array() && json_response.size() == 1 && 
                                     json_response[0].contains("result")) {
                                     json_response = json_response[0]["result"];
@@ -642,6 +637,24 @@ static void worker_thread(const Config& config, int worker_id, int num_workers,
                                 break;
                             case queen::SidecarOpType::ACK:
                             case queen::SidecarOpType::ACK_BATCH:
+                                status_code = 200;
+                                
+                                // Notify SharedStateManager on successful ACK
+                                // This wakes up waiting consumers (partition may now be free)
+                                if (queen::global_shared_state && json_response.is_array()) {
+                                    std::set<std::pair<std::string, std::string>> notified;
+                                    for (const auto& item : json_response) {
+                                        if (item.value("success", false)) {
+                                            std::string queue = item.value("queue", "");
+                                            std::string partition = item.value("partition", "");
+                                            if (!queue.empty() && notified.find({queue, partition}) == notified.end()) {
+                                                queen::global_shared_state->notify_partition_free(queue, partition, "");
+                                                notified.insert({queue, partition});
+                                            }
+                                        }
+                                    }
+                                }
+                                break;
                             case queen::SidecarOpType::TRANSACTION:
                             case queen::SidecarOpType::RENEW_LEASE:
                                 status_code = 200;
@@ -664,16 +677,52 @@ static void worker_thread(const Config& config, int worker_id, int num_workers,
                                 worker_id, resp.request_id, resp.error_message);
                 }
                 
+                // Get operation type name for logging
+                const char* op_name = "UNKNOWN";
+                switch (resp.op_type) {
+                    case queen::SidecarOpType::PUSH: op_name = "PUSH"; break;
+                    case queen::SidecarOpType::POP: op_name = "POP"; break;
+                    case queen::SidecarOpType::POP_WAIT: op_name = "POP_WAIT"; break;
+                    case queen::SidecarOpType::ACK: op_name = "ACK"; break;
+                    case queen::SidecarOpType::ACK_BATCH: op_name = "ACK_BATCH"; break;
+                    case queen::SidecarOpType::TRANSACTION: op_name = "TRANSACTION"; break;
+                    case queen::SidecarOpType::RENEW_LEASE: op_name = "RENEW_LEASE"; break;
+                }
+                
                 // Deliver directly via ResponseRegistry (safe - we're in the event loop)
                 bool sent = queen::global_response_registry->send_response(
                     resp.request_id, json_response, is_error, status_code);
                 
                 if (sent) {
-                    spdlog::info("[Worker {}] Sent sidecar response {} (status={})", 
-                                worker_id, resp.request_id, status_code);
+                    // Extract queue info for better logging
+                    std::string queue_info;
+                    if (json_response.is_object() && json_response.contains("messages") && 
+                        json_response["messages"].is_array() && !json_response["messages"].empty()) {
+                        // POP/POP_WAIT response with messages
+                        auto& first_msg = json_response["messages"][0];
+                        queue_info = first_msg.value("queue", "") + "/" + first_msg.value("partition", "");
+                    } else if (json_response.is_array() && !json_response.empty()) {
+                        // PUSH/ACK response
+                        auto& first = json_response[0];
+                        if (first.contains("queue")) {
+                            queue_info = first.value("queue", "") + "/" + first.value("partition", "");
+                        }
+                    }
+                    
+                    if (!queue_info.empty()) {
+                        spdlog::info("[Worker {}] {} RESPONSE: {} (status={})", 
+                                    worker_id, op_name, queue_info, status_code);
+                    } else if (status_code == 204) {
+                        // Empty POP/POP_WAIT response (no messages) - debug level to reduce noise
+                        spdlog::debug("[Worker {}] {} RESPONSE: (status=204, no messages)", 
+                                    worker_id, op_name);
+                    } else {
+                        spdlog::info("[Worker {}] {} RESPONSE: (status={})", 
+                                    worker_id, op_name, status_code);
+                    }
                 } else {
-                    spdlog::debug("[Worker {}] Sidecar response {} not sent (aborted or expired)", 
-                                worker_id, resp.request_id);
+                    spdlog::debug("[Worker {}] {} response not sent (aborted/expired)", 
+                                worker_id, op_name);
                 }
             });
         };
@@ -683,12 +732,18 @@ static void worker_thread(const Config& config, int worker_id, int num_workers,
             per_worker_connections,  // Split connections among workers
             config.database.statement_timeout,
             global_db_thread_pool,
-            sidecar_callback
+            sidecar_callback,
+            worker_id  // For logging
         );
         
         // Start sidecar immediately (connections established, poller thread started)
         worker_sidecar->start();
         spdlog::info("[Worker {}] Per-worker sidecar started with {} connections", worker_id, per_worker_connections);
+        
+        // Register sidecar with SharedStateManager for POP_WAIT notifications
+        if (queen::global_shared_state) {
+            queen::global_shared_state->register_sidecar(worker_sidecar.get());
+        }
         
         // Setup routes (pass raw pointer - sidecar lifetime managed by this thread)
         spdlog::info("[Worker {}] Setting up routes...", worker_id);
@@ -741,6 +796,12 @@ static void worker_thread(const Config& config, int worker_id, int num_workers,
         
         // Cleanup sidecar when event loop exits
         spdlog::info("[Worker {}] Stopping sidecar...", worker_id);
+        
+        // Unregister sidecar from SharedStateManager
+        if (queen::global_shared_state) {
+            queen::global_shared_state->unregister_sidecar(worker_sidecar.get());
+        }
+        
         worker_sidecar->stop();
         
         spdlog::info("[Worker {}] Event loop exited", worker_id);

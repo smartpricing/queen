@@ -2,7 +2,6 @@
 #include "queen/routes/route_context.hpp"
 #include "queen/routes/route_helpers.hpp"
 #include "queen/async_queue_manager.hpp"
-#include "queen/poll_intention_registry.hpp"
 #include "queen/response_queue.hpp"
 #include "queen/queue_types.hpp"
 #include "queen/shared_state_manager.hpp"
@@ -13,7 +12,6 @@
 // External globals (declared in acceptor_server.cpp)
 namespace queen {
 extern std::shared_ptr<ResponseRegistry> global_response_registry;
-extern std::shared_ptr<PollIntentionRegistry> global_poll_intention_registry;
 extern std::shared_ptr<SharedStateManager> global_shared_state;
 }
 
@@ -41,28 +39,6 @@ static void record_consumer_group_subscription_if_needed(
         consumer_group, queue_name, partition_name, "", "",
         mode_value, timestamp_sql
     );
-}
-
-// Helper: Build message JSON response (deduplicate lines 723-746, 980-1003, 1219-1242)
-static nlohmann::json build_message_json(const Message& msg, const std::string& consumer_group, const std::optional<std::string>& lease_id) {
-    std::string created_at_str = format_timestamp_iso8601(msg.created_at);
-    
-    nlohmann::json msg_json = {
-        {"id", msg.id},
-        {"transactionId", msg.transaction_id},
-        {"partitionId", msg.partition_id},
-        {"traceId", msg.trace_id.empty() ? nlohmann::json(nullptr) : nlohmann::json(msg.trace_id)},
-        {"queue", msg.queue_name},
-        {"partition", msg.partition_name},
-        {"data", msg.payload},
-        {"retryCount", msg.retry_count},
-        {"priority", msg.priority},
-        {"createdAt", created_at_str},
-        {"consumerGroup", consumer_group == "__QUEUE_MODE__" ? nlohmann::json(nullptr) : nlohmann::json(consumer_group)},
-        {"leaseId", lease_id.has_value() ? nlohmann::json(*lease_id) : nlohmann::json(nullptr)}
-    };
-    
-    return msg_json;
 }
 
 void setup_pop_routes(uWS::App* app, const RouteContext& ctx) {
@@ -104,39 +80,50 @@ void setup_pop_routes(uWS::App* app, const RouteContext& ctx) {
             );
             
             if (wait) {
-                // Register response with abort callback to clean up intention on disconnect
+                // Register response with abort callback to clean up waiting request on disconnect
                 std::string request_id = global_response_registry->register_response(res, ctx.worker_id,
                     [](const std::string& req_id) {
-                        // Remove intention from registry when connection aborts
-                        global_poll_intention_registry->remove_intention(req_id);
-                        spdlog::info("SPOP: Connection aborted, removed poll intention {}", req_id);
+                        // Log abort - sidecar will handle cleanup via timeout
+                        spdlog::info("SPOP: Connection aborted for {}", req_id);
                     });
             
-                // Use Poll Intention Registry for long-polling
-                queen::PollIntention intention{
-                    .request_id = request_id,
-                    .worker_id = ctx.worker_id,
-                    .queue_name = queue_name,
-                    .partition_name = partition_name,  // Specific partition
-                    .consumer_group = consumer_group,
-                    .batch_size = batch,
-                    .deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(timeout_ms),
-                    .created_at = std::chrono::steady_clock::now(),
-                    .subscription_mode = options.subscription_mode,
-                    .subscription_from = options.subscription_from
+                // Submit POP_WAIT to sidecar - it will manage waiting and backoff
+                SidecarRequest sidecar_req;
+                sidecar_req.op_type = SidecarOpType::POP_WAIT;
+                sidecar_req.request_id = request_id;
+                sidecar_req.queue_name = queue_name;
+                sidecar_req.partition_name = partition_name;
+                sidecar_req.consumer_group = consumer_group;
+                sidecar_req.batch_size = options.batch;
+                sidecar_req.subscription_mode = options.subscription_mode.value_or("all");
+                sidecar_req.subscription_from = options.subscription_from.value_or("");
+                sidecar_req.wait_deadline = std::chrono::steady_clock::now() + 
+                                            std::chrono::milliseconds(timeout_ms);
+                sidecar_req.next_check = std::chrono::steady_clock::now();  // Check immediately
+                
+                // Build SQL for pop_messages_v2
+                sidecar_req.sql = "SELECT queen.pop_messages_v2($1, $2, $3, $4, $5, $6, $7)";
+                sidecar_req.params = {
+                    queue_name,
+                    partition_name,
+                    consumer_group,
+                    std::to_string(options.batch),
+                    "0",  // Use queue's configured lease_time
+                    sidecar_req.subscription_mode,
+                    sidecar_req.subscription_from
                 };
                 
-                global_poll_intention_registry->register_intention(intention);
+                ctx.sidecar->submit(std::move(sidecar_req));
                 
                 // Register consumer presence for targeted notifications
                 if (global_shared_state && global_shared_state->is_enabled()) {
                     global_shared_state->register_consumer(queue_name);
                 }
                 
-                spdlog::info("[Worker {}] SPOP: Registered poll intention {} for queue {}/{} (wait=true)", 
-                            ctx.worker_id, request_id, queue_name, partition_name);
+                spdlog::info("[Worker {}] SPOP: Submitted POP_WAIT {} for queue {}/{} (timeout={}ms)", 
+                            ctx.worker_id, request_id, queue_name, partition_name, timeout_ms);
                 
-                // Return immediately - poll workers will handle it
+                // Return immediately - sidecar will handle it
                 return;
             }
             
@@ -211,39 +198,50 @@ void setup_pop_routes(uWS::App* app, const RouteContext& ctx) {
             );
             
             if (wait) {
-                // Register response with abort callback to clean up intention on disconnect
+                // Register response with abort callback to clean up waiting request on disconnect
                 std::string request_id = global_response_registry->register_response(res, ctx.worker_id,
                     [](const std::string& req_id) {
-                        // Remove intention from registry when connection aborts
-                        global_poll_intention_registry->remove_intention(req_id);
-                        spdlog::info("QPOP: Connection aborted, removed poll intention {}", req_id);
+                        // Log abort - sidecar will handle cleanup via timeout
+                        spdlog::info("QPOP: Connection aborted for {}", req_id);
                     });
             
-                // Use Poll Intention Registry for long-polling
-                queen::PollIntention intention{
-                    .request_id = request_id,
-                    .worker_id = ctx.worker_id,
-                    .queue_name = queue_name,
-                    .partition_name = std::nullopt,  // Any partition
-                    .consumer_group = consumer_group,
-                    .batch_size = batch,
-                    .deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(timeout_ms),
-                    .created_at = std::chrono::steady_clock::now(),
-                    .subscription_mode = options.subscription_mode,
-                    .subscription_from = options.subscription_from
+                // Submit POP_WAIT to sidecar - it will manage waiting and backoff
+                SidecarRequest sidecar_req;
+                sidecar_req.op_type = SidecarOpType::POP_WAIT;
+                sidecar_req.request_id = request_id;
+                sidecar_req.queue_name = queue_name;
+                sidecar_req.partition_name = "";  // Any partition
+                sidecar_req.consumer_group = consumer_group;
+                sidecar_req.batch_size = options.batch;
+                sidecar_req.subscription_mode = options.subscription_mode.value_or("all");
+                sidecar_req.subscription_from = options.subscription_from.value_or("");
+                sidecar_req.wait_deadline = std::chrono::steady_clock::now() + 
+                                            std::chrono::milliseconds(timeout_ms);
+                sidecar_req.next_check = std::chrono::steady_clock::now();  // Check immediately
+                
+                // Build SQL for pop_messages_v2 (empty partition = any partition)
+                sidecar_req.sql = "SELECT queen.pop_messages_v2($1, $2, $3, $4, $5, $6, $7)";
+                sidecar_req.params = {
+                    queue_name,
+                    "",  // Empty = any partition
+                    consumer_group,
+                    std::to_string(options.batch),
+                    "0",  // Use queue's configured lease_time
+                    sidecar_req.subscription_mode,
+                    sidecar_req.subscription_from
                 };
                 
-                global_poll_intention_registry->register_intention(intention);
+                ctx.sidecar->submit(std::move(sidecar_req));
                 
                 // Register consumer presence for targeted notifications
                 if (global_shared_state && global_shared_state->is_enabled()) {
                     global_shared_state->register_consumer(queue_name);
                 }
                 
-                spdlog::info("[Worker {}] QPOP: Registered poll intention {} for queue {} (wait=true)", 
-                            ctx.worker_id, request_id, queue_name);
+                spdlog::info("[Worker {}] QPOP: Submitted POP_WAIT {} for queue {} (timeout={}ms)", 
+                            ctx.worker_id, request_id, queue_name, timeout_ms);
                 
-                // Return immediately - poll workers will handle it
+                // Return immediately - sidecar will handle it
                 return;
             }
             
