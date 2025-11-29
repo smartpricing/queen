@@ -218,6 +218,9 @@ BEGIN
           -- Apply delayed_processing filter
           AND (v_delayed_processing IS NULL OR v_delayed_processing = 0
                OR m.created_at <= NOW() - (v_delayed_processing || ' seconds')::interval)
+          -- Apply window_buffer filter (messages must age before becoming available)
+          AND (v_window_buffer IS NULL OR v_window_buffer = 0
+               OR m.created_at <= NOW() - (v_window_buffer || ' seconds')::interval)
         ORDER BY m.created_at, m.id
         LIMIT p_batch_size * 2  -- Overfetch to handle locked rows
     ),
