@@ -744,13 +744,22 @@ static void worker_thread(const Config& config, int worker_id, int num_workers,
             });
         };
         
+        // Build sidecar tuning from config
+        queen::SidecarDbPool::SidecarTuning sidecar_tuning{
+            config.queue.sidecar_micro_batch_wait_ms,
+            config.queue.sidecar_max_items_per_tx,
+            config.queue.sidecar_max_batch_size,
+            config.queue.sidecar_max_pending_count
+        };
+        
         auto worker_sidecar = std::make_unique<queen::SidecarDbPool>(
             config.database.connection_string(),
             per_worker_connections,  // Split connections among workers
             config.database.statement_timeout,
             global_db_thread_pool,
             sidecar_callback,
-            worker_id  // For logging
+            worker_id,  // For logging
+            sidecar_tuning
         );
         
         // Start sidecar immediately (connections established, poller thread started)

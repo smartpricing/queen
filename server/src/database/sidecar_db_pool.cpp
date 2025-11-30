@@ -12,16 +12,20 @@ SidecarDbPool::SidecarDbPool(const std::string& conn_str,
                              int statement_timeout_ms,
                              std::shared_ptr<astp::ThreadPool> thread_pool,
                              SidecarResponseCallback response_callback,
-                             int worker_id)
+                             int worker_id,
+                             SidecarTuning tuning)
     : conn_str_(conn_str),
       pool_size_(pool_size),
       statement_timeout_ms_(statement_timeout_ms),
       worker_id_(worker_id),
+      tuning_(tuning),
       response_callback_(std::move(response_callback)),
       thread_pool_(thread_pool) {
     
     slots_.resize(pool_size_);
-    spdlog::info("[Worker {}] [Sidecar] Created with {} connections", worker_id_, pool_size_);
+    spdlog::info("[Worker {}] [Sidecar] Created with {} connections (batch_wait={}ms, max_items={}, max_batch={}, max_pending={})", 
+                 worker_id_, pool_size_, tuning_.micro_batch_wait_ms, tuning_.max_items_per_tx, 
+                 tuning_.max_batch_size, tuning_.max_pending_count);
 }
 
 SidecarDbPool::~SidecarDbPool() {
@@ -377,9 +381,11 @@ static std::pair<std::string, std::vector<const char*>> get_batched_sql(
 void SidecarDbPool::poller_loop() {
     spdlog::info("[SidecarDbPool] Poller loop started with callback-based delivery");
     
-    constexpr int MICRO_BATCH_WAIT_MS = 20;  // Target cycle time for micro-batching
-    constexpr int MAX_ITEMS_PER_TX = 1000;   // Max items per batch
-    constexpr int MAX_BATCH_SIZE = 1000;
+    // Use configured tuning values
+    const int MICRO_BATCH_WAIT_MS = tuning_.micro_batch_wait_ms;
+    const size_t MAX_ITEMS_PER_TX = static_cast<size_t>(tuning_.max_items_per_tx);
+    const size_t MAX_BATCH_SIZE = static_cast<size_t>(tuning_.max_batch_size);
+    const size_t MAX_PENDING_COUNT = static_cast<size_t>(tuning_.max_pending_count);
     
     auto loop_start = std::chrono::steady_clock::now();  // Track cycle timing
     
@@ -409,7 +415,7 @@ void SidecarDbPool::poller_loop() {
             }
             
             // Only sleep for remaining time to hit target interval
-            if (MICRO_BATCH_WAIT_MS > 0 && has_pending) {
+            if (MICRO_BATCH_WAIT_MS > 0 && has_pending && pending_count < MAX_PENDING_COUNT) {
                 auto remaining_ms = MICRO_BATCH_WAIT_MS - static_cast<int>(elapsed_ms);
                 if (remaining_ms > 0) {
                     std::this_thread::sleep_for(std::chrono::milliseconds(remaining_ms));

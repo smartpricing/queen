@@ -97,6 +97,24 @@ using SidecarResponseCallback = std::function<void(SidecarResponse)>;
 class SidecarDbPool {
 public:
     /**
+     * Sidecar tuning configuration
+     */
+    struct SidecarTuning {
+        int micro_batch_wait_ms;    // Target cycle time for micro-batching (ms)
+        int max_items_per_tx;       // Max items per database transaction
+        int max_batch_size;         // Max requests per micro-batch
+        int max_pending_count;      // Max pending requests before forcing immediate send
+        
+        // Default constructor with default values
+        SidecarTuning(int batch_wait = 5, int items_per_tx = 1000, 
+                      int batch_size = 1000, int pending_count = 50)
+            : micro_batch_wait_ms(batch_wait)
+            , max_items_per_tx(items_per_tx)
+            , max_batch_size(batch_size)
+            , max_pending_count(pending_count) {}
+    };
+    
+    /**
      * Create the sidecar pool
      * @param conn_str PostgreSQL connection string
      * @param pool_size Number of connections (= max concurrent queries)
@@ -104,13 +122,15 @@ public:
      * @param thread_pool ThreadPool to run the poller loop in
      * @param response_callback Callback for delivering responses (called from poller thread)
      * @param worker_id Worker ID for logging
+     * @param tuning Micro-batching tuning parameters
      */
     SidecarDbPool(const std::string& conn_str, 
                   int pool_size,
                   int statement_timeout_ms,
                   std::shared_ptr<astp::ThreadPool> thread_pool,
                   SidecarResponseCallback response_callback,
-                  int worker_id = -1);
+                  int worker_id = -1,
+                  SidecarTuning tuning = {});
     
     ~SidecarDbPool();
     
@@ -192,6 +212,7 @@ private:
     int pool_size_;
     int statement_timeout_ms_;
     int worker_id_;  // For logging
+    SidecarTuning tuning_;  // Micro-batching tuning
     
     // Response delivery callback
     SidecarResponseCallback response_callback_;

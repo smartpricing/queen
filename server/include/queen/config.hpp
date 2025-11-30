@@ -192,6 +192,12 @@ struct QueueConfig {
     bool batch_push_use_size_based = true; // Enable size-based batching (false = use legacy count-based)
     int sidecar_pool_size = 50;             // Number of connections in sidecar pool
     
+    // Sidecar micro-batching tuning
+    int sidecar_micro_batch_wait_ms = 5;    // Target cycle time for micro-batching (ms)
+    int sidecar_max_items_per_tx = 1000;    // Max items per database transaction
+    int sidecar_max_batch_size = 1000;      // Max requests per micro-batch
+    int sidecar_max_pending_count = 50;     // Max pending requests before forcing immediate send
+    
     // Queue defaults
     int default_lease_time = 300;        // 5 minutes
     int default_retry_limit = 3;
@@ -275,6 +281,12 @@ struct QueueConfig {
         config.batch_push_max_messages = get_env_int("BATCH_PUSH_MAX_MESSAGES", 10000);
         config.batch_push_use_size_based = get_env_bool("BATCH_PUSH_USE_SIZE_BASED", true);
         config.sidecar_pool_size = get_env_int("SIDECAR_POOL_SIZE", 50);
+        
+        // Sidecar micro-batching tuning
+        config.sidecar_micro_batch_wait_ms = get_env_int("SIDECAR_MICRO_BATCH_WAIT_MS", 5);
+        config.sidecar_max_items_per_tx = get_env_int("SIDECAR_MAX_ITEMS_PER_TX", 1000);
+        config.sidecar_max_batch_size = get_env_int("SIDECAR_MAX_BATCH_SIZE", 1000);
+        config.sidecar_max_pending_count = get_env_int("SIDECAR_MAX_PENDING_COUNT", 50);
         
         config.default_lease_time = get_env_int("DEFAULT_LEASE_TIME", 300);
         config.default_retry_limit = get_env_int("DEFAULT_RETRY_LIMIT", 3);
