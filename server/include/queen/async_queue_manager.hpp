@@ -105,6 +105,9 @@ public:
     
     // Schema initialization
     bool initialize_schema();
+
+    
+public:
     
     // INTERNAL ONLY: Push messages directly to database, bypassing maintenance mode
     // Used by: file buffer drain, internal operations, admin tools
