@@ -1,8 +1,7 @@
 -- ============================================================================
 -- ack_messages_v2: Batch ACK with deadlock prevention
 -- ============================================================================
-
-DROP FUNCTION IF EXISTS queen.ack_messages_v2(jsonb);
+-- NOTE: Using CREATE OR REPLACE (no DROP) for zero-downtime deployments
 
 CREATE OR REPLACE FUNCTION queen.ack_messages_v2(
     p_acknowledgments JSONB

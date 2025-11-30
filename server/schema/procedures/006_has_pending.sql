@@ -1,8 +1,7 @@
 -- ============================================================================
 -- has_pending_messages: Fast check for available messages
 -- ============================================================================
-
-DROP FUNCTION IF EXISTS queen.has_pending_messages(text, text, text);
+-- NOTE: Using CREATE OR REPLACE (no DROP) for zero-downtime deployments
 
 CREATE OR REPLACE FUNCTION queen.has_pending_messages(
     p_queue_name TEXT,

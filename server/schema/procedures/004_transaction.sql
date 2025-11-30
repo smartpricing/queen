@@ -1,8 +1,7 @@
 -- ============================================================================
 -- execute_transaction_v2: Atomic transaction execution
 -- ============================================================================
-
-DROP FUNCTION IF EXISTS queen.execute_transaction_v2(jsonb);
+-- NOTE: Using CREATE OR REPLACE (no DROP) for zero-downtime deployments
 
 CREATE OR REPLACE FUNCTION queen.execute_transaction_v2(
     p_operations JSONB

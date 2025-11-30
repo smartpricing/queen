@@ -1,8 +1,7 @@
 -- ============================================================================
 -- pop_messages_batch_v2: True batched POP with partition pre-allocation
 -- ============================================================================
-
-DROP FUNCTION IF EXISTS queen.pop_messages_batch_v2(jsonb);
+-- NOTE: Using CREATE OR REPLACE (no DROP) for zero-downtime deployments
 
 CREATE OR REPLACE FUNCTION queen.pop_messages_batch_v2(
     p_requests JSONB

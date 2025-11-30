@@ -1,8 +1,7 @@
 -- ============================================================================
 -- pop_messages_v2: Single partition POP with two-phase locking
 -- ============================================================================
-
-DROP FUNCTION IF EXISTS queen.pop_messages_v2(text, text, text, int, int, text, text);
+-- NOTE: Using CREATE OR REPLACE (no DROP) for zero-downtime deployments
 
 CREATE OR REPLACE FUNCTION queen.pop_messages_v2(
     p_queue_name TEXT,

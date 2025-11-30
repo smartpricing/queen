@@ -1,8 +1,7 @@
 -- ============================================================================
 -- push_messages_v2: High-performance batch push
 -- ============================================================================
-
-DROP FUNCTION IF EXISTS queen.push_messages_v2(jsonb, boolean, boolean);
+-- NOTE: Using CREATE OR REPLACE (no DROP) for zero-downtime deployments
 
 CREATE OR REPLACE FUNCTION queen.push_messages_v2(
     p_items jsonb,

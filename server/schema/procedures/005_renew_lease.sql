@@ -1,8 +1,7 @@
 -- ============================================================================
 -- renew_lease_v2: Batch lease renewal
 -- ============================================================================
-
-DROP FUNCTION IF EXISTS queen.renew_lease_v2(jsonb);
+-- NOTE: Using CREATE OR REPLACE (no DROP) for zero-downtime deployments
 
 CREATE OR REPLACE FUNCTION queen.renew_lease_v2(
     p_items JSONB
