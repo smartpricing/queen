@@ -377,10 +377,18 @@ static std::pair<std::string, std::vector<const char*>> get_batched_sql(
 void SidecarDbPool::poller_loop() {
     spdlog::info("[SidecarDbPool] Poller loop started with callback-based delivery");
     
-    constexpr int MICRO_BATCH_WAIT_MS = 5;  // Wait for micro-batching
-    constexpr int MAX_ITEMS_PER_TX = 100;   // Max items per batch
+    constexpr int MICRO_BATCH_WAIT_MS = 20;  // Target cycle time for micro-batching
+    constexpr int MAX_ITEMS_PER_TX = 1000;   // Max items per batch
+    constexpr int MAX_BATCH_SIZE = 1000;
+    
+    auto loop_start = std::chrono::steady_clock::now();  // Track cycle timing
     
     while (running_) {
+        // Calculate how long the last iteration took
+        auto now = std::chrono::steady_clock::now();
+        auto elapsed_ms = std::chrono::duration_cast<std::chrono::milliseconds>(now - loop_start).count();
+        loop_start = now;  // Reset for next iteration
+        
         // ============================================================
         // STEP 0: PROCESS WAITING QUEUE (POP_WAIT)
         // Check for expired and due waiting requests
@@ -400,9 +408,12 @@ void SidecarDbPool::poller_loop() {
                 pending_count = pending_requests_.size();
             }
             
-            // If we have pending requests, wait a bit to collect more (micro-batching)
-            if (MICRO_BATCH_WAIT_MS > 0 && has_pending && pending_count < 5) {
-                std::this_thread::sleep_for(std::chrono::milliseconds(MICRO_BATCH_WAIT_MS));
+            // Only sleep for remaining time to hit target interval
+            if (MICRO_BATCH_WAIT_MS > 0 && has_pending) {
+                auto remaining_ms = MICRO_BATCH_WAIT_MS - static_cast<int>(elapsed_ms);
+                if (remaining_ms > 0) {
+                    std::this_thread::sleep_for(std::chrono::milliseconds(remaining_ms));
+                }
             }
             
             // Now drain and batch all collected requests
@@ -488,7 +499,7 @@ void SidecarDbPool::poller_loop() {
                 std::vector<SidecarRequest> batch;
                 size_t total_items_in_batch = 0;
                 
-                while (!pending_requests_.empty() && batch.size() < 1000) {
+                while (!pending_requests_.empty() && batch.size() < MAX_BATCH_SIZE) {
                     auto& next_req = pending_requests_.front();
                     
                     // Only batch same operation type

@@ -363,6 +363,7 @@ END;
 $$ LANGUAGE plpgsql;
 
 -- Partition lookup trigger (statement-level, batch-efficient)
+-- NOTE: ORDER BY partition_id ensures consistent lock ordering to prevent deadlocks
 CREATE OR REPLACE FUNCTION queen.update_partition_lookup_trigger()
 RETURNS TRIGGER AS $$
 BEGIN
@@ -386,6 +387,7 @@ BEGIN
     FROM batch_max bm
     JOIN queen.partitions p ON p.id = bm.partition_id
     JOIN queen.queues q ON q.id = p.queue_id
+    ORDER BY bm.partition_id  -- Consistent lock ordering prevents deadlocks
     ON CONFLICT (queue_name, partition_id)
     DO UPDATE SET
         last_message_id = EXCLUDED.last_message_id,
