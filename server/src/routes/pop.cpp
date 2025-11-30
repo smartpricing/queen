@@ -128,6 +128,7 @@ void setup_pop_routes(uWS::App* app, const RouteContext& ctx) {
             }
             
             // Non-waiting mode: use sidecar for async pop
+            // Use POP_BATCH for ALL POPs - enables batching when multiple requests arrive
             spdlog::info("[Worker {}] SPOP: Executing immediate pop for {}/{} (wait=false)", ctx.worker_id, queue_name, partition_name);
                 
             // Register response for async delivery
@@ -135,25 +136,36 @@ void setup_pop_routes(uWS::App* app, const RouteContext& ctx) {
                 res, ctx.worker_id, nullptr
             );
             
-            // Build sidecar request with direct pop_messages_v2 call
-            // leaseTime=0 means "use queue's configured lease_time from database"
+            // Build sidecar request using POP_BATCH
+            // Different partitions can be batched together efficiently
+            // Same partition requests: only one wins lease, others return empty
             SidecarRequest sidecar_req;
-            sidecar_req.op_type = SidecarOpType::POP;
+            sidecar_req.op_type = SidecarOpType::POP_BATCH;
             sidecar_req.request_id = request_id;
-            sidecar_req.sql = "SELECT queen.pop_messages_v2($1, $2, $3, $4, $5, $6, $7)";
-            sidecar_req.params = {
-                queue_name,                                      // p_queue_name
-                partition_name,                                  // p_partition_name (specific partition)
-                consumer_group,                                  // p_consumer_group
-                std::to_string(options.batch),                   // p_batch_size
-                "0",                                             // p_lease_time_seconds (0 = use queue config)
-                options.subscription_mode.value_or("all"),       // p_subscription_mode
-                options.subscription_from.value_or("")           // p_subscription_from
-            };
+            sidecar_req.queue_name = queue_name;
+            sidecar_req.partition_name = partition_name;
+            sidecar_req.consumer_group = consumer_group;
+            sidecar_req.batch_size = options.batch;
+            
+            // Build JSON array for batch processing
+            nlohmann::json batch_item;
+            batch_item["idx"] = 0;
+            batch_item["queue"] = queue_name;
+            batch_item["partition"] = partition_name;  // Specific partition
+            batch_item["consumerGroup"] = consumer_group;
+            batch_item["batch"] = options.batch;
+            batch_item["leaseTime"] = 0;  // Use queue config
+            batch_item["subMode"] = options.subscription_mode.value_or("all");
+            batch_item["subFrom"] = options.subscription_from.value_or("");
+            
+            nlohmann::json batch_array = nlohmann::json::array();
+            batch_array.push_back(batch_item);
+            
+            sidecar_req.params = {batch_array.dump()};
             sidecar_req.item_count = 1;
             
             ctx.sidecar->submit(std::move(sidecar_req));
-            spdlog::debug("[Worker {}] SPOP: Submitted to sidecar (request_id={})", 
+            spdlog::debug("[Worker {}] SPOP: Submitted POP_BATCH to sidecar (request_id={})", 
                          ctx.worker_id, request_id);
             
         } catch (const std::exception& e) {
@@ -246,32 +258,42 @@ void setup_pop_routes(uWS::App* app, const RouteContext& ctx) {
             }
             
             // Non-waiting mode: use sidecar for async pop
+            // Use POP_BATCH for wildcard partition (any partition) - enables true batching
             spdlog::info("[Worker {}] QPOP: Executing immediate pop for {}/* (wait=false)", ctx.worker_id, queue_name);
                 
             std::string request_id = global_response_registry->register_response(
                 res, ctx.worker_id, nullptr
             );
             
-            // Build sidecar request with direct pop_messages_v2 call
-            // Pass empty string for partition to pop from any partition
-            // leaseTime=0 means "use queue's configured lease_time from database"
+            // Build sidecar request using POP_BATCH for wildcard partition
+            // This enables true batching via partition pre-allocation
             SidecarRequest sidecar_req;
-            sidecar_req.op_type = SidecarOpType::POP;
+            sidecar_req.op_type = SidecarOpType::POP_BATCH;  // Use batchable POP for wildcard
             sidecar_req.request_id = request_id;
-            sidecar_req.sql = "SELECT queen.pop_messages_v2($1, $2, $3, $4, $5, $6, $7)";
-            sidecar_req.params = {
-                queue_name,                                      // p_queue_name
-                "",                                              // p_partition_name (empty = any partition, will be NULL)
-                consumer_group,                                  // p_consumer_group
-                std::to_string(options.batch),                   // p_batch_size
-                "0",                                             // p_lease_time_seconds (0 = use queue config)
-                options.subscription_mode.value_or("all"),       // p_subscription_mode
-                options.subscription_from.value_or("")           // p_subscription_from
-            };
+            sidecar_req.queue_name = queue_name;
+            sidecar_req.partition_name = "";  // Wildcard
+            sidecar_req.consumer_group = consumer_group;
+            sidecar_req.batch_size = options.batch;
+            
+            // Build JSON array for batch processing (single request)
+            nlohmann::json batch_item;
+            batch_item["idx"] = 0;
+            batch_item["queue"] = queue_name;
+            batch_item["partition"] = "";  // Wildcard
+            batch_item["consumerGroup"] = consumer_group;
+            batch_item["batch"] = options.batch;
+            batch_item["leaseTime"] = 0;  // Use queue config
+            batch_item["subMode"] = options.subscription_mode.value_or("all");
+            batch_item["subFrom"] = options.subscription_from.value_or("");
+            
+            nlohmann::json batch_array = nlohmann::json::array();
+            batch_array.push_back(batch_item);
+            
+            sidecar_req.params = {batch_array.dump()};
             sidecar_req.item_count = 1;
             
             ctx.sidecar->submit(std::move(sidecar_req));
-            spdlog::debug("[Worker {}] QPOP: Submitted to sidecar (request_id={})", 
+            spdlog::debug("[Worker {}] QPOP: Submitted POP_BATCH to sidecar (request_id={})", 
                          ctx.worker_id, request_id);
             
         } catch (const std::exception& e) {

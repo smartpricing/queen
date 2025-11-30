@@ -59,7 +59,8 @@ export async function testLoad(client) {
 
     let messages = [];
     let k = 0
-    for (let i = 0; i < messagesToPush; i++) {
+    for (let k = 0; k < 10; k++) {
+    for (let i = 0; i < messagesToPush / 10; i++) {
         messages.push({ data: { id: i } })
         if (messages.length >= 100) {
             await client
@@ -67,10 +68,9 @@ export async function testLoad(client) {
             .partition(k.toString())
             .push(messages)
             messages = [];
-            k++;
         }
     }
-    await client.queue('test-queue-v2-load-partition').push(messages)    
+    }  
 
     let uniqueIds = new Set();
     let lastId = null;
@@ -83,8 +83,8 @@ export async function testLoad(client) {
     .wait(false)
     .limit(10000)
     .consume(async msgs => {
-        console.log(`Messages: ${msgs.length}`)
         for (const msg of msgs) {
+            console.log(`Message: ${msg}`)
             if (lastId === null) {
                 lastId = msg.data.id
             } else {

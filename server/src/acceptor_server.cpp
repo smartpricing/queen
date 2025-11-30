@@ -635,6 +635,22 @@ static void worker_thread(const Config& config, int worker_id, int num_workers,
                                     status_code = 204;  // No Content
                                 }
                                 break;
+                            case queen::SidecarOpType::POP_BATCH:
+                                // For POP_BATCH, result is array of {idx, result: {messages, leaseId}}
+                                // Extract the first result for this request
+                                if (json_response.is_array() && !json_response.empty()) {
+                                    // Find result by idx (for batched) or take first
+                                    for (const auto& item : json_response) {
+                                        if (item.contains("result")) {
+                                            json_response = item["result"];
+                                            break;
+                                        }
+                                    }
+                                }
+                                if (json_response.contains("messages") && json_response["messages"].empty()) {
+                                    status_code = 204;  // No Content
+                                }
+                                break;
                             case queen::SidecarOpType::ACK:
                             case queen::SidecarOpType::ACK_BATCH:
                                 status_code = 200;
@@ -682,6 +698,7 @@ static void worker_thread(const Config& config, int worker_id, int num_workers,
                 switch (resp.op_type) {
                     case queen::SidecarOpType::PUSH: op_name = "PUSH"; break;
                     case queen::SidecarOpType::POP: op_name = "POP"; break;
+                    case queen::SidecarOpType::POP_BATCH: op_name = "POP_BATCH"; break;
                     case queen::SidecarOpType::POP_WAIT: op_name = "POP_WAIT"; break;
                     case queen::SidecarOpType::ACK: op_name = "ACK"; break;
                     case queen::SidecarOpType::ACK_BATCH: op_name = "ACK_BATCH"; break;

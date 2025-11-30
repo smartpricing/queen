@@ -23,7 +23,8 @@ namespace queen {
  */
 enum class SidecarOpType {
     PUSH,           // Push messages (batchable)
-    POP,            // Pop messages (NOT batchable - each needs own lease)
+    POP,            // Pop messages - specific partition (NOT batchable)
+    POP_BATCH,      // Pop messages - wildcard partition (batchable via partition pre-allocation)
     POP_WAIT,       // Long-poll pop (NOT batchable, managed by waiting queue)
     ACK,            // Single acknowledge
     ACK_BATCH,      // Batch acknowledge (batchable)
@@ -249,6 +250,19 @@ private:
     static std::string make_group_key(const std::string& queue, 
                                        const std::string& partition,
                                        const std::string& consumer_group);
+    
+    /**
+     * Lightweight check if queue/partition has pending messages
+     * Used during fallback polling to avoid expensive full POP when no messages exist
+     * @return true if messages are available, false otherwise
+     */
+    bool check_has_pending(const std::string& queue_name,
+                           const std::string& partition_name,
+                           const std::string& consumer_group);
+    
+    // Connection dedicated for quick synchronous checks (has_pending)
+    PGconn* check_conn_ = nullptr;
+    std::mutex check_conn_mutex_;
 };
 
 } // namespace queen

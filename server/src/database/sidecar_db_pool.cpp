@@ -29,6 +29,11 @@ SidecarDbPool::~SidecarDbPool() {
     for (auto& slot : slots_) {
         disconnect_slot(slot);
     }
+    // Disconnect the check connection
+    if (check_conn_) {
+        PQfinish(check_conn_);
+        check_conn_ = nullptr;
+    }
     spdlog::info("[SidecarDbPool] Destroyed");
 }
 
@@ -48,6 +53,22 @@ void SidecarDbPool::start() {
     if (connected == 0) {
         spdlog::error("[SidecarDbPool] Failed to connect any database connections!");
         return;
+    }
+    
+    // Connect the dedicated check connection (for lightweight has_pending queries)
+    {
+        std::lock_guard<std::mutex> lock(check_conn_mutex_);
+        check_conn_ = PQconnectdb(conn_str_.c_str());
+        if (PQstatus(check_conn_) != CONNECTION_OK) {
+            spdlog::warn("[SidecarDbPool] Failed to connect check connection: {}", PQerrorMessage(check_conn_));
+            PQfinish(check_conn_);
+            check_conn_ = nullptr;
+        } else {
+            // Set short statement timeout for quick checks
+            PGresult* res = PQexec(check_conn_, "SET statement_timeout = 1000");  // 1 second
+            PQclear(res);
+            spdlog::debug("[SidecarDbPool] Connected dedicated check connection");
+        }
     }
     
     // Start poller in threadpool
@@ -186,12 +207,46 @@ void SidecarDbPool::process_waiting_queue() {
         std::string group_key = make_group_key(req.queue_name, req.partition_name, req.consumer_group);
         
         // Check backoff via SharedStateManager
-        if (global_shared_state && !global_shared_state->should_check_group(group_key)) {
-            // Not due yet - re-queue with updated next_check
-            req.next_check = now + global_shared_state->get_group_interval(group_key);
-            std::lock_guard<std::mutex> lock(waiting_mutex_);
-            waiting_requests_.push_back(std::move(req));
-            continue;
+        auto current_interval = std::chrono::milliseconds(100);
+        if (global_shared_state) {
+            current_interval = global_shared_state->get_group_interval(group_key);
+            
+            if (!global_shared_state->should_check_group(group_key)) {
+                // Not due yet - re-queue with updated next_check
+                req.next_check = now + current_interval;
+                std::lock_guard<std::mutex> lock(waiting_mutex_);
+                waiting_requests_.push_back(std::move(req));
+                continue;
+            }
+        }
+        
+        // OPTIMIZATION: For high backoff intervals (>= 500ms), do lightweight check first
+        // This avoids expensive full POP queries when queue is empty during fallback polling
+        if (current_interval >= std::chrono::milliseconds(500)) {
+            if (!check_has_pending(req.queue_name, req.partition_name, req.consumer_group)) {
+                // No messages - skip full query, increase backoff, re-queue
+                if (global_shared_state) {
+                    global_shared_state->release_group(group_key, false);  // false = no messages
+                }
+                
+                auto new_interval = global_shared_state 
+                    ? global_shared_state->get_group_interval(group_key)
+                    : std::chrono::milliseconds(1000);
+                req.next_check = now + new_interval;
+                
+                spdlog::debug("[Worker {}] [Sidecar] POP_WAIT SKIP (no pending): {} [{}@{}] - backoff {}ms", 
+                            worker_id_, req.queue_name, req.consumer_group,
+                            req.partition_name.empty() ? "*" : req.partition_name,
+                            new_interval.count());
+                
+                std::lock_guard<std::mutex> lock(waiting_mutex_);
+                waiting_requests_.push_back(std::move(req));
+                continue;
+            }
+            // Messages exist - proceed with full query
+            spdlog::debug("[Worker {}] [Sidecar] POP_WAIT HAS_PENDING: {} [{}@{}] - proceeding", 
+                        worker_id_, req.queue_name, req.consumer_group,
+                        req.partition_name.empty() ? "*" : req.partition_name);
         }
         
         // Try to acquire group lock
@@ -243,7 +298,7 @@ void SidecarDbPool::process_waiting_queue() {
         {
             std::lock_guard<std::mutex> lock(pending_mutex_);
             pending_requests_.push_back(std::move(req));
-    }
+        }
     }
 }
 
@@ -259,17 +314,18 @@ void SidecarDbPool::deliver_response(SidecarResponse response) {
 }
 
 // Helper: Check if an operation type supports micro-batching
-// NOTE: POP is NOT batchable because each POP needs its own transaction
-// to properly acquire a lease. Batching POPs causes only the first one
-// to succeed (it acquires the lease, making subsequent ones fail).
+// NOTE: POP (specific partition) is NOT batchable because multiple requests
+// to the same partition would conflict. However, POP_BATCH (wildcard partition)
+// IS batchable because the stored procedure pre-allocates unique partitions.
 static bool is_batchable_op(SidecarOpType op) {
     switch (op) {
         case SidecarOpType::PUSH:
         case SidecarOpType::ACK_BATCH:
         case SidecarOpType::RENEW_LEASE:
+        case SidecarOpType::POP_BATCH:   // Wildcard POP - uses partition pre-allocation
             return true;
         case SidecarOpType::ACK:
-        case SidecarOpType::POP:         // Each POP needs its own transaction for lease acquisition
+        case SidecarOpType::POP:         // Specific partition POP - each needs own transaction
         case SidecarOpType::POP_WAIT:    // POP_WAIT is handled separately via waiting queue
         case SidecarOpType::TRANSACTION:
             return false;
@@ -292,7 +348,8 @@ static std::pair<std::string, std::vector<const char*>> get_batched_sql(
             return {"SELECT queen.push_messages_v2($1::jsonb, $2::boolean, $3::boolean)", 
                     {param_storage[0].c_str(), param_storage[1].c_str(), param_storage[2].c_str()}};
             
-        case SidecarOpType::POP:
+        case SidecarOpType::POP_BATCH:
+            // Wildcard partition POP - uses true batched procedure with partition pre-allocation
             param_storage = {combined_json};
             return {"SELECT queen.pop_messages_batch_v2($1::jsonb)",
                     {param_storage[0].c_str()}};
@@ -307,6 +364,7 @@ static std::pair<std::string, std::vector<const char*>> get_batched_sql(
             return {"SELECT queen.renew_lease_v2($1::jsonb)",
                     {param_storage[0].c_str()}};
             
+        case SidecarOpType::POP:       // Specific partition - not batchable
         case SidecarOpType::ACK:
         case SidecarOpType::TRANSACTION:
         case SidecarOpType::POP_WAIT:
@@ -453,6 +511,7 @@ void SidecarDbPool::poller_loop() {
                 // ============================================================
                 // STRING SPLICING: Combine JSON arrays WITHOUT parsing
                 // Each req.params[0] is "[{...},{...}]" - we strip brackets and concatenate
+                // SPECIAL CASE: POP_BATCH needs idx rewriting for correct result routing
                 // ============================================================
                 std::string combined_json;
                 combined_json.reserve(2 * 1024 * 1024);  // 2MB reserve for large batches
@@ -462,6 +521,9 @@ void SidecarDbPool::poller_loop() {
                 size_t current_index = 0;
                 bool first_item = true;
                 
+                // For POP_BATCH, we need to parse and rewrite idx values
+                bool needs_idx_rewrite = (batch_op_type == SidecarOpType::POP_BATCH);
+                
                 for (const auto& req : batch) {
                     if (req.params.empty()) continue;
                     
@@ -470,51 +532,84 @@ void SidecarDbPool::poller_loop() {
                     // Minimum valid JSON array is "[]" (2 chars)
                     if (raw.size() < 2) continue;
                     
-                    // Strip outer brackets: "[{...}]" -> "{...}"
-                    size_t start = raw.find('[');
-                    size_t end = raw.rfind(']');
-                    
-                    if (start == std::string::npos || end == std::string::npos || end <= start) {
-                        spdlog::error("[SidecarDbPool] Invalid JSON array format for request {}", req.request_id);
-                        SidecarResponse error_resp;
-                        error_resp.op_type = req.op_type;
-                        error_resp.request_id = req.request_id;
-                        error_resp.success = false;
-                        error_resp.error_message = "Invalid JSON array format";
-                        deliver_response(std::move(error_resp));
-                        continue;
-                    }
-                    
-                    // Extract inner content (between [ and ])
-                    std::string_view inner(raw.data() + start + 1, end - start - 1);
-                    
-                    // Skip empty arrays
-                    bool has_content = false;
-                    for (char c : inner) {
-                        if (!std::isspace(static_cast<unsigned char>(c))) {
-                            has_content = true;
-                            break;
-                        }
-                    }
-                    
-                    if (!has_content) continue;
-                    
                     // Track this request's range in the combined batch
                     BatchedRequestInfo info;
                     info.request_id = req.request_id;
                     info.start_index = current_index;
                     info.item_count = req.item_count;
                     info.push_targets = req.push_targets;  // For PUSH notification
-                    batch_info.push_back(info);
                     
-                    // Append with comma separator
-                    if (!first_item) {
-                        combined_json += ",";
+                    if (needs_idx_rewrite) {
+                        // For POP_BATCH: Parse JSON, rewrite idx, serialize
+                        try {
+                            auto items = nlohmann::json::parse(raw);
+                            if (items.is_array()) {
+                                for (auto& item : items) {
+                                    // Rewrite idx to be globally unique within the batch
+                                    item["idx"] = static_cast<int>(current_index);
+                                    
+                                    if (!first_item) {
+                                        combined_json += ",";
+                                    }
+                                    combined_json += item.dump();
+                                    first_item = false;
+                                    current_index++;
+                                }
+                                info.item_count = items.size();
+                            }
+                        } catch (const std::exception& e) {
+                            spdlog::error("[SidecarDbPool] Failed to parse POP_BATCH JSON for {}: {}", 
+                                         req.request_id, e.what());
+                            SidecarResponse error_resp;
+                            error_resp.op_type = req.op_type;
+                            error_resp.request_id = req.request_id;
+                            error_resp.success = false;
+                            error_resp.error_message = "Invalid JSON format";
+                            deliver_response(std::move(error_resp));
+                            continue;
+                        }
+                    } else {
+                        // For other ops: Use fast string splicing (no parsing)
+                        // Strip outer brackets: "[{...}]" -> "{...}"
+                        size_t start = raw.find('[');
+                        size_t end = raw.rfind(']');
+                        
+                        if (start == std::string::npos || end == std::string::npos || end <= start) {
+                            spdlog::error("[SidecarDbPool] Invalid JSON array format for request {}", req.request_id);
+                            SidecarResponse error_resp;
+                            error_resp.op_type = req.op_type;
+                            error_resp.request_id = req.request_id;
+                            error_resp.success = false;
+                            error_resp.error_message = "Invalid JSON array format";
+                            deliver_response(std::move(error_resp));
+                            continue;
+                        }
+                        
+                        // Extract inner content (between [ and ])
+                        std::string_view inner(raw.data() + start + 1, end - start - 1);
+                        
+                        // Skip empty arrays
+                        bool has_content = false;
+                        for (char c : inner) {
+                            if (!std::isspace(static_cast<unsigned char>(c))) {
+                                has_content = true;
+                                break;
+                            }
+                        }
+                        
+                        if (!has_content) continue;
+                        
+                        // Append with comma separator
+                        if (!first_item) {
+                            combined_json += ",";
+                        }
+                        combined_json.append(inner.data(), inner.size());
+                        first_item = false;
+                        
+                        current_index += req.item_count;
                     }
-                    combined_json.append(inner.data(), inner.size());
-                    first_item = false;
                     
-                    current_index += req.item_count;
+                    batch_info.push_back(info);
                 }
                 
                 combined_json += "]";
@@ -528,6 +623,7 @@ void SidecarDbPool::poller_loop() {
                 switch (batch_op_type) {
                     case SidecarOpType::PUSH: op_name = "PUSH"; break;
                     case SidecarOpType::POP: op_name = "POP"; break;
+                    case SidecarOpType::POP_BATCH: op_name = "POP_BATCH"; break;
                     case SidecarOpType::POP_WAIT: op_name = "POP_WAIT"; break;
                     case SidecarOpType::ACK: op_name = "ACK"; break;
                     case SidecarOpType::ACK_BATCH: op_name = "ACK_BATCH"; break;
@@ -980,6 +1076,61 @@ SidecarDbPool::Stats SidecarDbPool::get_stats() const {
     stats.total_query_time_us = total_query_time_us_.load();
     
     return stats;
+}
+
+bool SidecarDbPool::check_has_pending(const std::string& queue_name,
+                                       const std::string& partition_name,
+                                       const std::string& consumer_group) {
+    std::lock_guard<std::mutex> lock(check_conn_mutex_);
+    
+    // If no check connection, assume messages exist (safe default)
+    if (!check_conn_) {
+        return true;
+    }
+    
+    // Check connection status and reconnect if needed
+    if (PQstatus(check_conn_) != CONNECTION_OK) {
+        PQreset(check_conn_);
+        if (PQstatus(check_conn_) != CONNECTION_OK) {
+            spdlog::warn("[SidecarDbPool] Check connection reset failed, assuming messages exist");
+            return true;
+        }
+    }
+    
+    // Build query - handle empty partition as NULL
+    const char* partition_param = partition_name.empty() ? nullptr : partition_name.c_str();
+    const char* params[3] = {
+        queue_name.c_str(),
+        partition_param,
+        consumer_group.c_str()
+    };
+    
+    // Execute synchronous query (this is called from poller thread)
+    PGresult* result = PQexecParams(
+        check_conn_,
+        "SELECT queen.has_pending_messages($1, $2, $3)",
+        3,
+        nullptr,
+        params,
+        nullptr,
+        nullptr,
+        0
+    );
+    
+    if (PQresultStatus(result) != PGRES_TUPLES_OK) {
+        spdlog::warn("[SidecarDbPool] has_pending_messages query failed: {}", PQresultErrorMessage(result));
+        PQclear(result);
+        return true;  // Assume messages exist on error
+    }
+    
+    bool has_messages = false;
+    if (PQntuples(result) > 0 && PQnfields(result) > 0) {
+        const char* val = PQgetvalue(result, 0, 0);
+        has_messages = (val && (val[0] == 't' || val[0] == 'T'));
+    }
+    
+    PQclear(result);
+    return has_messages;
 }
 
 } // namespace queen

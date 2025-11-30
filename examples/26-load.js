@@ -6,12 +6,10 @@ const QUEUE_NAME = 'test-queue';
 
 async function resetQueue() {
   try {
-    // Delete
     console.log('Deleting queue...');
     await axios.delete(`${SERVER_URL}/api/v1/resources/queues/${QUEUE_NAME}`);
     console.log('✅ Queue deleted');
     
-    // Create
     console.log('Creating queue...');
     await axios.post(`${SERVER_URL}/api/v1/configure`, {
       queue: QUEUE_NAME,
@@ -29,8 +27,7 @@ async function resetQueue() {
 
 await resetQueue();
 
-const maxPartition = 100;
-let partitionCounter = 0;
+const maxPartition = 500;
 
 // Pre-generate requests array with different partitions
 const requests = [];
@@ -54,24 +51,29 @@ for (let i = 0; i <= maxPartition; i++) {
   });
 }
 
+// NOTE: autocannon v8 has a bug where pipelining > 1 with requests array
+// doesn't track response stats. Use pipelining: 1 with more connections instead.
 const instance = autocannon({
   url: SERVER_URL,
-  connections: 64,
+  connections: 500,   // More connections for throughput
   duration: 5,
-  pipelining: 10,
-  requests: requests, // Autocannon will round-robin through these
-}, (err, result) => {
-  if (err) {
-    console.error(err);
-  } else {
-    console.log('\n=== Benchmark Results ===');
-    console.log(`Requests: ${result.requests.total}`);
-    console.log(`Duration: ${result.duration}s`);
-    console.log(`Throughput: ${result.requests.average} req/s`);
-    console.log(`Latency p50: ${result.latency.p50}ms`);
-    console.log(`Latency p99: ${result.latency.p99}ms`);
-    console.log(`Errors: ${result.errors}`);
-  }
+  pipelining: 1,     // Must be 1 for accurate stats with requests array
+  requests: requests,
+});
+
+instance.on('done', async (results) => {
+  console.log('\n=== Benchmark Results ===');
+  console.log(`Requests: ${results.requests.total}`);
+  console.log(`Duration: ${results.duration}s`);
+  console.log(`Throughput: ${results.requests.average} req/s`);
+  console.log(`Latency p50: ${results.latency.p50}ms`);
+  console.log(`Latency p99: ${results.latency.p99}ms`);
+  console.log(`Errors: ${results.errors}`);
+  console.log(`Non-2xx: ${results.non2xx}`);
+  
+  // Verify messages in queue
+  const queue = await axios.get(`${SERVER_URL}/api/v1/resources/queues/${QUEUE_NAME}`);
+  console.log(`\n✅ Queue total messages: ${queue.data.totals.total}`);
 });
 
 autocannon.track(instance, { renderProgressBar: true });
