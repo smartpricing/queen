@@ -79,6 +79,61 @@ void setup_push_routes(uWS::App* app, const RouteContext& ctx) {
                         return;
                     }
                     
+                    // MAINTENANCE MODE: Route to file buffer instead of sidecar
+                    // Must use get_maintenance_mode_fresh() to query DB - cached value is per-worker
+                    if (ctx.async_queue_manager->get_maintenance_mode_fresh() && ctx.file_buffer) {
+                        spdlog::debug("[Worker {}] PUSH: Maintenance mode active, buffering {} items", 
+                                     ctx.worker_id, items.size());
+                        
+                        nlohmann::json results = nlohmann::json::array();
+                        bool all_buffered = true;
+                        
+                        for (const auto& item : items) {
+                            nlohmann::json event = {
+                                {"queue", item.queue},
+                                {"partition", item.partition},
+                                {"payload", item.payload},
+                                {"failover", true}
+                            };
+                            
+                            if (item.transaction_id.has_value() && !item.transaction_id->empty()) {
+                                event["transactionId"] = *item.transaction_id;
+                            } else {
+                                event["transactionId"] = ctx.async_queue_manager->generate_uuid();
+                            }
+                            
+                            if (item.trace_id.has_value() && !item.trace_id->empty()) {
+                                event["traceId"] = *item.trace_id;
+                            }
+                            
+                            if (ctx.file_buffer->write_event(event)) {
+                                nlohmann::json result = {
+                                    {"status", "buffered"},
+                                    {"queue", item.queue},
+                                    {"partition", item.partition}
+                                };
+                                if (item.transaction_id.has_value()) {
+                                    result["transactionId"] = *item.transaction_id;
+                                }
+                                results.push_back(result);
+                            } else {
+                                all_buffered = false;
+                                results.push_back({
+                                    {"status", "failed"},
+                                    {"queue", item.queue},
+                                    {"partition", item.partition},
+                                    {"error", "File buffer write failed"}
+                                });
+                            }
+                        }
+                        
+                        spdlog::info("[Worker {}] PUSH: Buffered {} items during maintenance mode", 
+                                    ctx.worker_id, items.size());
+                        
+                        send_json_response(res, results, all_buffered ? 201 : 500);
+                        return;
+                    }
+                    
                         // Register response for async delivery
                         std::string request_id = global_response_registry->register_response(
                             res, ctx.worker_id, nullptr

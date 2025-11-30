@@ -206,11 +206,12 @@ BEGIN
     
     -- ============================================================
     -- STEP 5: Fetch messages for all acquired partitions
+    -- INCLUDES: Subscription mode handling for new consumers
     -- ============================================================
     
     CREATE TEMP TABLE batch_messages ON COMMIT DROP AS
-    WITH request_cursors AS (
-        -- Get cursor position for each successful request
+    WITH raw_cursors AS (
+        -- Get raw cursor position from partition_consumers
         SELECT 
             br.idx,
             br.allocated_partition_id,
@@ -221,14 +222,78 @@ BEGIN
             br.allocated_partition_name,
             br.queue_name,
             br.lease_id,
+            br.subscription_mode,
+            br.subscription_from,
             pc.last_consumed_id,
-            pc.last_consumed_created_at
+            pc.last_consumed_created_at,
+            -- Check if this is a new consumer (no cursor yet)
+            (pc.last_consumed_created_at IS NULL) AS is_new_consumer
         FROM batch_requests br
         JOIN queen.partition_consumers pc 
             ON pc.partition_id = br.allocated_partition_id
             AND pc.consumer_group = br.consumer_group
         WHERE br.lease_id IS NOT NULL
-          AND pc.worker_id = br.lease_id  -- Only for requests that got the lease
+          AND pc.worker_id = br.lease_id
+    ),
+    subscription_metadata AS (
+        -- Look up stored subscription settings for new consumers
+        SELECT DISTINCT ON (rc.idx)
+            rc.idx,
+            cgm.subscription_mode AS stored_mode,
+            cgm.subscription_timestamp AS stored_timestamp
+        FROM raw_cursors rc
+        JOIN queen.consumer_groups_metadata cgm
+            ON cgm.consumer_group = rc.consumer_group
+            AND cgm.queue_name = rc.queue_name
+            AND (cgm.partition_name = rc.allocated_partition_name OR cgm.partition_name = '')
+        WHERE rc.is_new_consumer
+          AND rc.consumer_group != '__QUEUE_MODE__'
+        ORDER BY rc.idx, 
+            CASE WHEN cgm.partition_name != '' THEN 1 ELSE 2 END
+    ),
+    request_cursors AS (
+        -- Apply subscription mode logic to compute effective cursor
+        SELECT 
+            rc.idx,
+            rc.allocated_partition_id,
+            rc.consumer_group,
+            rc.batch_size,
+            rc.window_buffer,
+            rc.delayed_processing,
+            rc.allocated_partition_name,
+            rc.queue_name,
+            rc.lease_id,
+            -- Compute effective cursor based on subscription mode
+            CASE 
+                -- Not a new consumer - use existing cursor
+                WHEN NOT rc.is_new_consumer THEN rc.last_consumed_id
+                -- New consumer with stored timestamp
+                WHEN sm.stored_timestamp IS NOT NULL THEN '00000000-0000-0000-0000-000000000000'::uuid
+                -- New consumer with stored 'new' mode
+                WHEN sm.stored_mode IN ('new', 'new-only') THEN '00000000-0000-0000-0000-000000000000'::uuid
+                -- Explicit subscriptionFrom='now'
+                WHEN rc.subscription_from = 'now' THEN '00000000-0000-0000-0000-000000000000'::uuid
+                -- Explicit subscriptionMode='new'
+                WHEN rc.subscription_mode = 'new' THEN '00000000-0000-0000-0000-000000000000'::uuid
+                -- Default: start from beginning (NULL cursor)
+                ELSE rc.last_consumed_id
+            END AS effective_cursor_id,
+            CASE 
+                -- Not a new consumer - use existing cursor
+                WHEN NOT rc.is_new_consumer THEN rc.last_consumed_created_at
+                -- New consumer with stored timestamp
+                WHEN sm.stored_timestamp IS NOT NULL THEN sm.stored_timestamp
+                -- New consumer with stored 'new' mode (no timestamp stored)
+                WHEN sm.stored_mode IN ('new', 'new-only') THEN v_now
+                -- Explicit subscriptionFrom='now'
+                WHEN rc.subscription_from = 'now' THEN v_now
+                -- Explicit subscriptionMode='new'
+                WHEN rc.subscription_mode = 'new' THEN v_now
+                -- Default: start from beginning (NULL cursor)
+                ELSE rc.last_consumed_created_at
+            END AS effective_cursor_ts
+        FROM raw_cursors rc
+        LEFT JOIN subscription_metadata sm ON sm.idx = rc.idx
     ),
     candidate_messages AS (
         -- Find candidate messages for each partition
@@ -253,10 +318,10 @@ BEGIN
         FROM request_cursors rc
         JOIN queen.messages m ON m.partition_id = rc.allocated_partition_id
         WHERE 
-            -- Messages after cursor position
-            (rc.last_consumed_created_at IS NULL 
-             OR m.created_at > rc.last_consumed_created_at 
-             OR (m.created_at = rc.last_consumed_created_at AND m.id > rc.last_consumed_id))
+            -- Messages after effective cursor position
+            (rc.effective_cursor_ts IS NULL 
+             OR m.created_at > rc.effective_cursor_ts 
+             OR (m.created_at = rc.effective_cursor_ts AND m.id > rc.effective_cursor_id))
             -- Apply delayed_processing filter
             AND (rc.delayed_processing IS NULL OR rc.delayed_processing = 0
                  OR m.created_at <= v_now - (rc.delayed_processing || ' seconds')::interval)

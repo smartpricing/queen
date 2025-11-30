@@ -1248,14 +1248,14 @@ std::vector<PushResult> AsyncQueueManager::push_messages_internal(const std::vec
                 }
                 
                 nlohmann::json msg_obj;
-                msg_obj["id"] = msg_id;
-                msg_obj["transaction_id"] = txn_id;
+                msg_obj["messageId"] = msg_id;
+                msg_obj["transactionId"] = txn_id;
                 msg_obj["queue"] = item.queue;
                 msg_obj["partition"] = item.partition;
                 msg_obj["payload"] = payload_str;
                 msg_obj["is_encrypted"] = is_encrypted;
                 if (item.trace_id.has_value() && !item.trace_id->empty()) {
-                    msg_obj["trace_id"] = *item.trace_id;
+                    msg_obj["traceId"] = *item.trace_id;
                 }
                 
                 messages_array.push_back(msg_obj);
