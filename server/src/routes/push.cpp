@@ -232,6 +232,12 @@ void setup_push_routes(uWS::App* app, const RouteContext& ctx) {
                         queues_str += q;
                     }
                     
+                    // Store items for failover before submitting to sidecar
+                    // If sidecar fails (DB down), callback will retrieve and write to file buffer
+                    if (ctx.push_failover_storage) {
+                        ctx.push_failover_storage->store(request_id, items_json.dump());
+                    }
+                    
                     // Submit to per-worker sidecar - RETURNS IMMEDIATELY!
                     ctx.sidecar->submit(std::move(sidecar_req));
                         

@@ -3,16 +3,6 @@
     <!-- Metric Toggles -->
     <div class="flex items-center gap-1.5 flex-wrap mb-2">
       <button
-        @click="selectedMetrics.pollIntention = !selectedMetrics.pollIntention"
-        :class="[
-          'metric-toggle',
-          selectedMetrics.pollIntention ? 'metric-toggle-active-blue' : 'metric-toggle-inactive'
-        ]"
-      >
-        <div :class="['metric-dot', selectedMetrics.pollIntention ? 'bg-orange-500' : 'bg-gray-400']"></div>
-        Poll Intentions
-      </button>
-      <button
         @click="selectedMetrics.streamPollIntention = !selectedMetrics.streamPollIntention"
         :class="[
           'metric-toggle',
@@ -83,7 +73,6 @@ const props = defineProps({
 });
 
 const selectedMetrics = ref({
-  pollIntention: true,
   streamPollIntention: true,
   response: true,
 });
@@ -94,9 +83,9 @@ function getNestedValue(obj, path) {
 
 // Colors for different replicas
 const replicaColors = [
-  { pollIntention: 'rgba(255, 107, 0, 1)', streamPollIntention: 'rgba(168, 85, 247, 1)', response: 'rgba(244, 63, 94, 1)' },
-  { pollIntention: 'rgba(147, 197, 253, 1)', streamPollIntention: 'rgba(216, 180, 254, 1)', response: 'rgba(251, 113, 133, 1)' },
-  { pollIntention: 'rgba(96, 165, 250, 1)', streamPollIntention: 'rgba(192, 132, 252, 1)', response: 'rgba(248, 113, 113, 1)' },
+  { streamPollIntention: 'rgba(168, 85, 247, 1)', response: 'rgba(244, 63, 94, 1)' },
+  { streamPollIntention: 'rgba(216, 180, 254, 1)', response: 'rgba(251, 113, 133, 1)' },
+  { streamPollIntention: 'rgba(192, 132, 252, 1)', response: 'rgba(248, 113, 113, 1)' },
 ];
 
 // Helper function to aggregate values across replicas
@@ -132,38 +121,9 @@ const chartData = computed(() => {
   if (props.viewMode === 'aggregate') {
     // Aggregate mode: combine all replicas into single lines per metric
     const aggregateColors = {
-      pollIntention: 'rgba(255, 107, 0, 1)',
       streamPollIntention: 'rgba(168, 85, 247, 1)',
       response: 'rgba(244, 63, 94, 1)',
     };
-
-    if (selectedMetrics.value.pollIntention) {
-      const aggregatedData = sortedTimestamps.map(ts => {
-        const values = [];
-        replicas.forEach(replica => {
-          const point = replica.timeSeries.find(p => p.timestamp === ts);
-          if (point) {
-            const value = getNestedValue(point.metrics, 'registries.poll_intention');
-            const rawValue = value?.[props.aggregation];
-            if (rawValue !== undefined && rawValue !== null) values.push(rawValue);
-          }
-        });
-        return aggregateValues(values, props.aggregation);
-      });
-
-      datasets.push({
-        label: `Poll Intentions (${props.aggregation})`,
-        data: aggregatedData,
-        borderColor: aggregateColors.pollIntention,
-        backgroundColor: 'rgba(255, 107, 0, 0.1)',
-        borderWidth: 2,
-        fill: true,
-        tension: 0.2,
-        pointRadius: 0,
-        pointHoverRadius: 5,
-        pointHoverBackgroundColor: aggregateColors.pollIntention,
-      });
-    }
 
     if (selectedMetrics.value.streamPollIntention) {
       const aggregatedData = sortedTimestamps.map(ts => {
@@ -225,27 +185,6 @@ const chartData = computed(() => {
     replicas.forEach((replica, replicaIndex) => {
       const colorScheme = replicaColors[replicaIndex % replicaColors.length];
       const replicaLabel = `${replica.hostname}`;
-
-      if (selectedMetrics.value.pollIntention) {
-        const dataMap = new Map();
-        replica.timeSeries.forEach(point => {
-          const value = getNestedValue(point.metrics, 'registries.poll_intention');
-          dataMap.set(point.timestamp, value?.[props.aggregation] ?? null);
-        });
-
-        datasets.push({
-          label: `${replicaLabel} - Poll Intentions`,
-          data: sortedTimestamps.map(ts => dataMap.get(ts) ?? null),
-          borderColor: colorScheme.pollIntention,
-          backgroundColor: 'transparent',
-          borderWidth: 2,
-          fill: false,
-          tension: 0,
-          pointRadius: 0,
-          pointHoverRadius: 5,
-          pointHoverBackgroundColor: colorScheme.pollIntention,
-        });
-      }
 
       if (selectedMetrics.value.streamPollIntention) {
         const dataMap = new Map();
@@ -431,12 +370,6 @@ const chartOptions = {
   cursor: pointer;
 }
 
-.metric-toggle-active-blue {
-  background: rgba(255, 107, 0, 0.1);
-  color: #FF6B00;
-  border: 1px solid rgba(255, 107, 0, 0.2);
-}
-
 .metric-toggle-active-purple {
   background: rgba(168, 85, 247, 0.1);
   color: #a855f7;
@@ -463,7 +396,6 @@ const chartOptions = {
   transform: translateY(-1px);
 }
 
-.metric-toggle-active-blue:hover,
 .metric-toggle-active-purple:hover,
 .metric-toggle-active-rose:hover {
   opacity: 0.9;

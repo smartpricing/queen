@@ -207,8 +207,8 @@ void SidecarDbPool::disconnect_slot(ConnectionSlot& slot) {
     // Stop polling before disconnecting
     if (slot.poll_initialized) {
         uv_poll_stop(&slot.poll_handle);
-        // Note: We don't close the handle here - it will be reused on reconnect
-        // Handle close is done in destructor
+        // Mark as needing reinitialization for reconnection
+        slot.poll_initialized = false;
     }
     
     if (slot.conn) {
@@ -639,11 +639,9 @@ void SidecarDbPool::handle_slot_error(ConnectionSlot& slot, const std::string& e
     slot.request_id.clear();
     slot.total_items = 0;
     
-    // Attempt reconnection
+    // Mark slot as dead - periodic reconnection will handle it
+    // Don't call blocking connect_slot here - it blocks the event loop!
     disconnect_slot(slot);
-    if (connect_slot(slot)) {
-        spdlog::info("[SidecarDbPool] Slot reconnected successfully");
-    }
 }
 
 // ============================================================================
@@ -725,7 +723,55 @@ void SidecarDbPool::drain_pending_to_slots() {
     const size_t MAX_ITEMS_PER_TX = static_cast<size_t>(tuning_.max_items_per_tx);
     const size_t MAX_BATCH_SIZE = static_cast<size_t>(tuning_.max_batch_size);
     
+    // Attempt to reconnect ONE dead slot per cycle (non-blocking approach)
+    // This spreads reconnection over time instead of blocking on all at once
+    static auto last_reconnect_attempt = std::chrono::steady_clock::now();
+    auto now = std::chrono::steady_clock::now();
+    if (std::chrono::duration_cast<std::chrono::milliseconds>(now - last_reconnect_attempt).count() > 1000) {
+        for (auto& slot : slots_) {
+            if (!slot.busy && !slot.conn) {
+                spdlog::info("[SidecarDbPool] Attempting to reconnect dead slot...");
+                if (connect_slot(slot)) {
+                    spdlog::info("[SidecarDbPool] Slot reconnected successfully");
+                } else {
+                    spdlog::warn("[SidecarDbPool] Slot reconnection failed, will retry later");
+                }
+                last_reconnect_attempt = now;
+                break;  // Only try ONE slot per cycle
+            }
+        }
+    }
+    
     std::lock_guard<std::mutex> lock(pending_mutex_);
+    
+    // Check if we have ANY working connections
+    bool has_working_connection = false;
+    for (auto& slot : slots_) {
+        if (slot.conn != nullptr) {
+            has_working_connection = true;
+            break;
+        }
+    }
+    
+    // If ALL connections are dead, fail over pending PUSH requests immediately
+    // This ensures no messages are lost while waiting for reconnection
+    if (!has_working_connection && !pending_requests_.empty()) {
+        spdlog::warn("[SidecarDbPool] All connections dead, failing over {} pending requests", 
+                    pending_requests_.size());
+        
+        while (!pending_requests_.empty()) {
+            auto req = std::move(pending_requests_.front());
+            pending_requests_.pop_front();
+            
+            SidecarResponse error_resp;
+            error_resp.op_type = req.op_type;
+            error_resp.request_id = req.request_id;
+            error_resp.success = false;
+            error_resp.error_message = "No database connections available";
+            deliver_response(std::move(error_resp));
+        }
+        return;  // Nothing more to do until connections recover
+    }
             
     while (!pending_requests_.empty()) {
                 // Find a free slot
@@ -738,7 +784,7 @@ void SidecarDbPool::drain_pending_to_slots() {
                 }
                 
                 if (!free_slot) {
-            break;  // All connections busy
+            break;  // All connections busy (but at least some are alive)
                 }
                 
                 SidecarOpType batch_op_type = pending_requests_.front().op_type;
@@ -773,12 +819,20 @@ void SidecarDbPool::drain_pending_to_slots() {
                 // Start watching for write (to flush) and read (for results)
                 start_watching_slot(*free_slot, UV_WRITABLE | UV_READABLE);
                     } else {
+                        spdlog::warn("[SidecarDbPool] Non-batch PQsendQuery failed: {}", PQerrorMessage(free_slot->conn));
                         SidecarResponse error_resp;
                         error_resp.op_type = req.op_type;
                         error_resp.request_id = req.request_id;
                         error_resp.success = false;
                         error_resp.error_message = "PQsendQuery failed";
                         deliver_response(std::move(error_resp));
+                        
+                        // Mark slot as needing reconnection (will be handled by next cycle)
+                        // Don't reconnect here to avoid blocking the event loop
+                        if (PQstatus(free_slot->conn) != CONNECTION_OK) {
+                            disconnect_slot(*free_slot);
+                            free_slot->conn = nullptr;  // Mark as needing reconnection
+                        }
                     }
                     continue;
                 }
@@ -937,13 +991,22 @@ void SidecarDbPool::drain_pending_to_slots() {
             start_watching_slot(*free_slot, UV_WRITABLE | UV_READABLE);
                 } else {
                     spdlog::error("[SidecarDbPool] PQsendQuery failed: {}", PQerrorMessage(free_slot->conn));
-            for (const auto& info : free_slot->batched_requests) {
+                    // IMPORTANT: Use batch_info here, NOT free_slot->batched_requests
+                    // because batched_requests is only set in the if(sent) branch above
+                    for (const auto& info : batch_info) {
                         SidecarResponse error_resp;
                         error_resp.op_type = batch_op_type;
                         error_resp.request_id = info.request_id;
                         error_resp.success = false;
                         error_resp.error_message = "PQsendQuery failed";
                         deliver_response(std::move(error_resp));
+                    }
+                    
+                    // Mark slot as needing reconnection (will be handled by next cycle)
+                    // Don't reconnect here to avoid blocking the event loop
+                    if (PQstatus(free_slot->conn) != CONNECTION_OK) {
+                        disconnect_slot(*free_slot);
+                        free_slot->conn = nullptr;  // Mark as needing reconnection
                     }
                 }
             }

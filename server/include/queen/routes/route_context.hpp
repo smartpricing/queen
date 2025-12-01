@@ -10,6 +10,7 @@ class AsyncQueueManager;
 class AnalyticsManager;
 class FileBufferManager;
 class SidecarDbPool;
+class PushFailoverStorage;
 struct Config;
 
 } // namespace queen
@@ -48,6 +49,9 @@ struct RouteContext {
     // Database thread pool
     std::shared_ptr<astp::ThreadPool> db_thread_pool;
     
+    // Storage for pending push items (for file buffer failover on sidecar failure)
+    std::shared_ptr<PushFailoverStorage> push_failover_storage;
+    
     RouteContext(
         std::shared_ptr<AsyncQueueManager> qm,
         std::shared_ptr<AnalyticsManager> am,
@@ -55,14 +59,16 @@ struct RouteContext {
         SidecarDbPool* sc,
         const Config& cfg,
         int wid,
-        std::shared_ptr<astp::ThreadPool> dbtp
+        std::shared_ptr<astp::ThreadPool> dbtp,
+        std::shared_ptr<PushFailoverStorage> pfs = nullptr
     ) : async_queue_manager(std::move(qm)),
         analytics_manager(std::move(am)),
         file_buffer(std::move(fb)),
         sidecar(sc),
         config(cfg),
         worker_id(wid),
-        db_thread_pool(std::move(dbtp))
+        db_thread_pool(std::move(dbtp)),
+        push_failover_storage(std::move(pfs))
     {}
 };
 

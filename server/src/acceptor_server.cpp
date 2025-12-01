@@ -109,7 +109,8 @@ static void setup_worker_routes(uWS::App* app,
                                 queen::SidecarDbPool* sidecar,
                                 const Config& config,
                                 int worker_id,
-                                std::shared_ptr<astp::ThreadPool> db_thread_pool) {
+                                std::shared_ptr<astp::ThreadPool> db_thread_pool,
+                                std::shared_ptr<PushFailoverStorage> push_failover_storage) {
     
     // Create route context with all dependencies
     queen::routes::RouteContext ctx(
@@ -119,7 +120,8 @@ static void setup_worker_routes(uWS::App* app,
         sidecar,
         config,
         worker_id,
-        db_thread_pool
+        db_thread_pool,
+        push_failover_storage
     );
     
     // Setup all routes in organized categories
@@ -546,6 +548,10 @@ static void worker_thread(const Config& config, int worker_id, int num_workers,
         // Get the event loop for this worker (needed for sidecar callback)
         uWS::Loop* worker_loop = uWS::Loop::get();
         
+        // Create per-worker push failover storage (for file buffer failover on sidecar failure)
+        auto push_failover_storage = std::make_shared<PushFailoverStorage>();
+        spdlog::debug("[Worker {}] Created push failover storage", worker_id);
+        
         // Calculate per-worker sidecar connections (divide total among workers)
         // Ensure at least 1 connection per worker
         int per_worker_connections = std::max(1, config.queue.sidecar_pool_size / num_workers);
@@ -595,9 +601,9 @@ static void worker_thread(const Config& config, int worker_id, int num_workers,
             }
         };
         
-        auto sidecar_callback = [worker_loop, worker_id, decrypt_messages](queen::SidecarResponse resp) {
+        auto sidecar_callback = [worker_loop, worker_id, decrypt_messages, push_failover_storage, file_buffer](queen::SidecarResponse resp) {
             // Capture response data by value, then defer to event loop for safe delivery
-            worker_loop->defer([resp = std::move(resp), worker_id, decrypt_messages]() {
+            worker_loop->defer([resp = std::move(resp), worker_id, decrypt_messages, push_failover_storage, file_buffer]() {
                 // Parse JSON and determine status code based on operation type
                 nlohmann::json json_response;
                 int status_code = 200;
@@ -620,6 +626,11 @@ static void worker_thread(const Config& config, int worker_id, int num_workers,
                                     }
                                     spdlog::info("[Worker {}] PUSH NOTIFY: {} queue(s)", 
                                                 worker_id, resp.push_targets.size());
+                                }
+                                
+                                // Cleanup: remove items from failover storage (push succeeded)
+                                if (push_failover_storage) {
+                                    push_failover_storage->remove(resp.request_id);
                                 }
                                 break;
                             case queen::SidecarOpType::POP:
@@ -688,11 +699,101 @@ static void worker_thread(const Config& config, int worker_id, int num_workers,
                                      worker_id, resp.request_id, e.what());
                     }
                 } else {
-                    json_response = {{"error", resp.error_message}};
-                    status_code = 500;
-                    is_error = true;
-                    spdlog::warn("[Worker {}] Sidecar error for {}: {}", 
-                                worker_id, resp.request_id, resp.error_message);
+                    // Sidecar operation failed
+                    
+                    // Special handling for PUSH failures: try file buffer failover
+                    if (resp.op_type == queen::SidecarOpType::PUSH && 
+                        push_failover_storage && file_buffer) {
+                        
+                        auto items_json_opt = push_failover_storage->retrieve_and_remove(resp.request_id);
+                        
+                        if (items_json_opt.has_value()) {
+                            spdlog::warn("[Worker {}] PUSH failed ({}), attempting file buffer failover...", 
+                                        worker_id, resp.error_message);
+                            
+                            try {
+                                auto items = nlohmann::json::parse(items_json_opt.value());
+                                nlohmann::json results = nlohmann::json::array();
+                                bool all_buffered = true;
+                                size_t buffered_count = 0;
+                                
+                                for (const auto& item : items) {
+                                    // Build event for file buffer (same format as maintenance mode)
+                                    nlohmann::json event = {
+                                        {"queue", item.value("queue", "")},
+                                        {"partition", item.value("partition", "Default")},
+                                        {"payload", item.value("payload", nlohmann::json{})},
+                                        {"failover", true}
+                                    };
+                                    
+                                    // Use transactionId if present, otherwise use messageId
+                                    if (item.contains("transactionId") && !item["transactionId"].get<std::string>().empty()) {
+                                        event["transactionId"] = item["transactionId"];
+                                    } else if (item.contains("messageId")) {
+                                        event["transactionId"] = item["messageId"];
+                                    }
+                                    
+                                    if (item.contains("traceId") && item["traceId"].is_string()) {
+                                        event["traceId"] = item["traceId"];
+                                    }
+                                    
+                                    if (file_buffer->write_event(event)) {
+                                        buffered_count++;
+                                        nlohmann::json result = {
+                                            {"status", "buffered"},
+                                            {"queue", item.value("queue", "")},
+                                            {"partition", item.value("partition", "Default")}
+                                        };
+                                        if (item.contains("transactionId")) {
+                                            result["transactionId"] = item["transactionId"];
+                                        } else if (item.contains("messageId")) {
+                                            result["transactionId"] = item["messageId"];
+                                        }
+                                        results.push_back(result);
+                                    } else {
+                                        all_buffered = false;
+                                        results.push_back({
+                                            {"status", "failed"},
+                                            {"queue", item.value("queue", "")},
+                                            {"partition", item.value("partition", "Default")},
+                                            {"error", "File buffer write failed"}
+                                        });
+                                    }
+                                }
+                                
+                                spdlog::info("[Worker {}] PUSH failover: {}/{} items buffered to disk", 
+                                            worker_id, buffered_count, items.size());
+                                
+                                // Mark DB as unhealthy for faster failover on subsequent requests
+                                file_buffer->mark_db_unhealthy();
+                                
+                                json_response = results;
+                                status_code = all_buffered ? 201 : 500;
+                                is_error = !all_buffered;
+                                
+                            } catch (const std::exception& e) {
+                                spdlog::error("[Worker {}] PUSH failover failed: {}", worker_id, e.what());
+                                json_response = {{"error", std::string("Database error: ") + resp.error_message + 
+                                                          "; Failover error: " + e.what()}};
+                                status_code = 500;
+                                is_error = true;
+                            }
+                        } else {
+                            // No items in storage (shouldn't happen, but handle gracefully)
+                            spdlog::error("[Worker {}] PUSH failed but no items in failover storage for {}", 
+                                         worker_id, resp.request_id);
+                            json_response = {{"error", resp.error_message}};
+                            status_code = 500;
+                            is_error = true;
+                        }
+                    } else {
+                        // Non-PUSH failure or no failover available
+                        json_response = {{"error", resp.error_message}};
+                        status_code = 500;
+                        is_error = true;
+                        spdlog::warn("[Worker {}] Sidecar error for {}: {}", 
+                                    worker_id, resp.request_id, resp.error_message);
+                    }
                 }
                 
                 // Get operation type name for logging
@@ -776,7 +877,8 @@ static void worker_thread(const Config& config, int worker_id, int num_workers,
         // Setup routes (pass raw pointer - sidecar lifetime managed by this thread)
         spdlog::info("[Worker {}] Setting up routes...", worker_id);
         setup_worker_routes(worker_app, async_queue_manager, analytics_manager, file_buffer, 
-                           worker_sidecar.get(), config, worker_id, db_thread_pool);
+                           worker_sidecar.get(), config, worker_id, db_thread_pool,
+                           push_failover_storage);
         spdlog::info("[Worker {}] Routes configured", worker_id);
         
         // Register this worker app with the acceptor (thread-safe)
