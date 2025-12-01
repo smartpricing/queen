@@ -31,7 +31,7 @@ RUN npm run build
 FROM ubuntu:24.04 as cpp-builder
 
 ENV DEBIAN_FRONTEND=noninteractive
-RUN apt-get update && apt-get install -y build-essential libpq-dev libssl-dev zlib1g-dev curl unzip ca-certificates
+RUN apt-get update && apt-get install -y build-essential libpq-dev libssl-dev zlib1g-dev curl unzip ca-certificates cmake
 COPY ./ /usr/build/ 
 
 WORKDIR /usr/build/server
@@ -40,7 +40,7 @@ WORKDIR /usr/build/server
 RUN make deps -j 8
 
 # Now build (wildcards will work because vendor/uSockets exists)
-RUN make build-only -j 8
+RUN make build-only -j 24
 
 # Verify
 RUN test -f bin/queen-server && echo "✅ Build successful"

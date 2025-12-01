@@ -26,12 +26,17 @@ ifeq ($(UNAME_S),Darwin)
     endif
     SSL_INCLUDES := $(BREW_PREFIX)/opt/openssl@3/include $(BREW_PREFIX)/include $(BREW_PREFIX)/opt/openssl/include
     SSL_LIBS := $(BREW_PREFIX)/opt/openssl@3/lib $(BREW_PREFIX)/lib $(BREW_PREFIX)/opt/openssl/lib
-    INCLUDES = -I./include -I./vendor -I./vendor/uSockets/src $(addprefix -I,$(PG_INCLUDES)) $(addprefix -I,$(SSL_INCLUDES))
-    LIBS = $(addprefix -L,$(PG_LIBS)) $(addprefix -L,$(SSL_LIBS)) -lpq -lssl -lcrypto -lz
+    # libuv from vendor (built from source) - use static library
+    UV_INCLUDES := ./vendor/libuv/include
+    UV_STATIC_LIB := ./vendor/libuv/build/libuv.a
+    INCLUDES = -I./include -I./vendor -I./vendor/uSockets/src $(addprefix -I,$(PG_INCLUDES)) $(addprefix -I,$(SSL_INCLUDES)) -I$(UV_INCLUDES)
+    LIBS = $(addprefix -L,$(PG_LIBS)) $(addprefix -L,$(SSL_LIBS)) -lpq -lssl -lcrypto -lz $(UV_STATIC_LIB)
 else
-    # Linux
-    INCLUDES = -I./include -I./vendor -I./vendor/uSockets/src -I/usr/include/postgresql -I/usr/local/include/postgresql
-    LIBS = -lpq -lssl -lcrypto -lz
+    # Linux - libuv from vendor (built from source) - use static library
+    UV_INCLUDES := ./vendor/libuv/include
+    UV_STATIC_LIB := ./vendor/libuv/build/libuv.a
+    INCLUDES = -I./include -I./vendor -I./vendor/uSockets/src -I/usr/include/postgresql -I/usr/local/include/postgresql -I$(UV_INCLUDES)
+    LIBS = -lpq -lssl -lcrypto -lz $(UV_STATIC_LIB)
 endif
 
 # Directories
@@ -72,6 +77,7 @@ USOCKETS_URL = https://github.com/uNetworking/uSockets/archive/refs/heads/master
 NLOHMANN_JSON_URL = https://github.com/nlohmann/json/releases/download/v3.11.3/json.hpp
 CPPHTTPLIB_URL = https://raw.githubusercontent.com/yhirose/cpp-httplib/master/httplib.h
 SPDLOG_URL = https://github.com/gabime/spdlog/archive/refs/heads/v1.x.zip
+LIBUV_URL = https://github.com/libuv/libuv/archive/refs/tags/v1.48.0.zip
 
 .PHONY: all clean deps setup test build-only debug-objects
 
@@ -89,7 +95,7 @@ setup:
 deps: $(VENDOR_DIR)/.deps_ready
 
 $(VENDOR_DIR)/.deps_ready: setup
-	@echo "Setting up header-only dependencies..."
+	@echo "Setting up dependencies..."
 	
 	# Download nlohmann/json (single header)
 	@curl -L $(NLOHMANN_JSON_URL) -o $(VENDOR_DIR)/json.hpp
@@ -120,6 +126,20 @@ $(VENDOR_DIR)/.deps_ready: setup
 		rm -rf spdlog && \
 		mv spdlog-1.x spdlog && \
 		rm spdlog.zip
+	
+	# Download and build libuv (static library)
+	@echo "Building libuv..."
+	@cd $(VENDOR_DIR) && \
+		curl -L $(LIBUV_URL) -o libuv.zip && \
+		unzip -q libuv.zip && \
+		rm -rf libuv && \
+		mv libuv-1.48.0 libuv && \
+		rm libuv.zip && \
+		cd libuv && \
+		mkdir -p build && \
+		cd build && \
+		cmake .. -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=OFF -DLIBUV_BUILD_SHARED=OFF && \
+		cmake --build . --target uv_a -j4
 	
 	@touch $(VENDOR_DIR)/.deps_ready
 	@echo "Dependencies ready!"
@@ -177,10 +197,10 @@ dev: $(TARGET)
 
 install-deps-ubuntu:
 	@sudo apt-get update
-	@sudo apt-get install -y build-essential libpq-dev libssl-dev zlib1g-dev curl unzip
+	@sudo apt-get install -y build-essential libpq-dev libssl-dev zlib1g-dev cmake curl unzip
 
 install-deps-macos:
-	@brew install postgresql openssl curl unzip
+	@brew install postgresql openssl cmake curl unzip
 	@echo "Note: You may need to set PKG_CONFIG_PATH for OpenSSL"
 
 debug-paths:
@@ -237,7 +257,7 @@ help:
 	@echo "                 - Works on macOS, Linux, Windows"
 	@echo "                 - 60/60 tests passing"
 	@echo "                 - 130k+ msg/s throughput"
-	@echo "                 - Async non-blocking polling"
+	@echo "                 - libuv-based async event loop"
 	@echo ""
 	@echo "Dependencies:"
 	@echo "  install-deps-ubuntu  - Install system dependencies on Ubuntu"

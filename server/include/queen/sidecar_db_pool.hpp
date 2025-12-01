@@ -1,5 +1,6 @@
 #pragma once
 
+#include <uv.h>
 #include <libpq-fe.h>
 #include <deque>
 #include <vector>
@@ -205,6 +206,11 @@ private:
         // Operation type for this slot
         SidecarOpType op_type = SidecarOpType::PUSH;
         size_t total_items = 0;  // Total items in this batch
+        
+        // libuv poll handle for this connection's socket
+        uv_poll_t poll_handle;
+        SidecarDbPool* pool = nullptr;  // Back-reference for callbacks
+        bool poll_initialized = false;  // Track if poll handle is initialized
     };
     
     // Configuration
@@ -248,6 +254,13 @@ private:
     std::shared_ptr<astp::ThreadPool> thread_pool_;
     std::atomic<bool> running_{false};
     
+    // libuv event loop and handles
+    uv_loop_t* loop_ = nullptr;
+    uv_timer_t batch_timer_;
+    uv_timer_t waiting_timer_;
+    uv_async_t submit_signal_;
+    bool loop_initialized_ = false;
+    
     // Statistics
     std::atomic<uint64_t> total_queries_{0};
     std::atomic<uint64_t> total_query_time_us_{0};
@@ -284,6 +297,28 @@ private:
     // Connection dedicated for quick synchronous checks (has_pending)
     PGconn* check_conn_ = nullptr;
     std::mutex check_conn_mutex_;
+    
+    // ========== libuv methods ==========
+    
+    // Drain pending requests to available slots
+    void drain_pending_to_slots();
+    
+    // Process result from a completed query
+    void process_slot_result(ConnectionSlot& slot);
+    
+    // Handle connection error on a slot
+    void handle_slot_error(ConnectionSlot& slot, const std::string& error_msg);
+    
+    // Start/stop watching a slot's socket
+    void start_watching_slot(ConnectionSlot& slot, int events);
+    void stop_watching_slot(ConnectionSlot& slot);
+    
+    // Static libuv callbacks (called from event loop)
+    static void on_batch_timer(uv_timer_t* handle);
+    static void on_waiting_timer(uv_timer_t* handle);
+    static void on_submit_signal(uv_async_t* handle);
+    static void on_socket_event(uv_poll_t* handle, int status, int events);
+    static void on_handle_close(uv_handle_t* handle);
 };
 
 } // namespace queen
