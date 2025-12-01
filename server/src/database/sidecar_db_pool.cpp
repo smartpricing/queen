@@ -665,6 +665,8 @@ void SidecarDbPool::on_waiting_timer(uv_timer_t* handle) {
 }
 
 void SidecarDbPool::on_submit_signal(uv_async_t* handle) {
+    (void)handle; 
+    /*
     auto* pool = static_cast<SidecarDbPool*>(handle->data);
     if (pool && pool->running_) {
         // Drain ALL pending requests (uv_async_send is coalescing!)
@@ -673,7 +675,7 @@ void SidecarDbPool::on_submit_signal(uv_async_t* handle) {
         // Reset the batch timer to prevent useless wakeup
         // This gives us MICRO_BATCH_WAIT_MS from NOW
         uv_timer_again(&pool->batch_timer_);
-    }
+    }*/
 }
 
 void SidecarDbPool::on_socket_event(uv_poll_t* handle, int status, int events) {
@@ -806,7 +808,7 @@ void SidecarDbPool::drain_pending_to_slots() {
                 
         // Combine JSON arrays
                 std::string combined_json;
-        combined_json.reserve(2 * 1024 * 1024);
+                combined_json.reserve(2 * 1024 * 1024);
                 combined_json += "[";
                 
                 std::vector<BatchedRequestInfo> batch_info;
@@ -824,7 +826,7 @@ void SidecarDbPool::drain_pending_to_slots() {
                     info.request_id = req.request_id;
                     info.start_index = current_index;
                     info.item_count = req.item_count;
-            info.push_targets = req.push_targets;
+                    info.push_targets = req.push_targets;
                     
                     if (needs_idx_rewrite) {
                         try {

@@ -44,7 +44,6 @@ int main(int argc, char* argv[]) {
         } else if (arg == "--host" && i + 1 < argc) {
             config.server.host = argv[++i];
         } else if (arg == "--dev") {
-            config.server.dev_mode = true;
             spdlog::set_level(spdlog::level::debug);
         }
     }

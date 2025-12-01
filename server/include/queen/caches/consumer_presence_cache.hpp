@@ -23,8 +23,8 @@ namespace caches {
  * - Fallback: If no presence info, return empty (caller should broadcast to all)
  * 
  * Data flow:
- * - Local: When PollIntentionRegistry gets first intention for a queue, register
- * - Local: When PollIntentionRegistry loses all intentions for a queue, deregister
+ * - Local: When SidecarDbPool starts consuming a queue, register
+ * - Local: When consumer disconnects, deregister
  * - Remote: Receive CONSUMER_REGISTERED/DEREGISTERED from peers
  */
 class ConsumerPresenceCache {

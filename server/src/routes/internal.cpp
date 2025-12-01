@@ -1,7 +1,6 @@
 #include "queen/routes/route_registry.hpp"
 #include "queen/routes/route_context.hpp"
 #include "queen/routes/route_helpers.hpp"
-#include "queen/inter_instance_comms.hpp"
 #include "queen/shared_state_manager.hpp"
 #include <spdlog/spdlog.h>
 
@@ -12,18 +11,34 @@ void setup_internal_routes(uWS::App* app, const RouteContext& ctx) {
     (void)ctx;  // Context not needed for these endpoints
     
     // ============================================================
-    // HTTP endpoint for peer-to-peer notifications
-    // Peers POST notifications here to trigger local poll worker wake-up
+    // HTTP endpoint for peer-to-peer notifications (backward compat)
+    // Notifications are now primarily sent via UDP through SharedStateManager,
+    // but this HTTP endpoint allows external systems to trigger notifications
     // ============================================================
     app->post("/internal/api/notify", [](auto* res, auto* req) {
         (void)req;
         read_json_body(res,
             [res](const nlohmann::json& body) {
                 try {
-                    auto notification = PeerNotification::from_json(body);
+                    std::string type = body.value("type", "");
+                    std::string queue = body.value("queue", "");
+                    std::string partition = body.value("partition", "");
+                    std::string consumer_group = body.value("consumer_group", "__QUEUE_MODE__");
                     
-                    if (global_inter_instance_comms) {
-                        global_inter_instance_comms->handle_peer_notification(notification);
+                    if (queue.empty()) {
+                        send_error_response(res, "queue is required", 400);
+                        return;
+                    }
+                    
+                    if (global_shared_state) {
+                        if (type == "message_available") {
+                            global_shared_state->notify_message_available(queue, partition);
+                        } else if (type == "partition_free") {
+                            global_shared_state->notify_partition_free(queue, partition, consumer_group);
+                        } else {
+                            // Default to message_available for backward compatibility
+                            global_shared_state->notify_message_available(queue, partition);
+                        }
                     }
                     
                     send_json_response(res, {{"status", "ok"}}, 200);
@@ -35,22 +50,6 @@ void setup_internal_routes(uWS::App* app, const RouteContext& ctx) {
                 send_error_response(res, error, 400);
             }
         );
-    });
-    
-    // ============================================================
-    // Stats endpoint for monitoring inter-instance communication
-    // ============================================================
-    app->get("/internal/api/inter-instance/stats", [](auto* res, auto* req) {
-        (void)req;
-        
-        nlohmann::json stats;
-        if (global_inter_instance_comms) {
-            stats = global_inter_instance_comms->get_stats();
-        } else {
-            stats = {{"enabled", false}, {"reason", "not_initialized"}};
-        }
-        
-        send_json_response(res, stats, 200);
     });
     
     // ============================================================
@@ -69,7 +68,21 @@ void setup_internal_routes(uWS::App* app, const RouteContext& ctx) {
         send_json_response(res, stats, 200);
     });
     
-    spdlog::debug("Internal routes configured (inter-instance HTTP endpoints, shared state stats)");
+    // Legacy alias for backward compatibility
+    app->get("/internal/api/inter-instance/stats", [](auto* res, auto* req) {
+        (void)req;
+        
+        nlohmann::json stats;
+        if (global_shared_state) {
+            stats = global_shared_state->get_stats();
+        } else {
+            stats = {{"enabled", false}, {"reason", "not_initialized"}};
+        }
+        
+        send_json_response(res, stats, 200);
+    });
+    
+    spdlog::debug("Internal routes configured (shared state endpoints)");
 }
 
 } // namespace routes

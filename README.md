@@ -8,6 +8,9 @@
 [![Node](https://img.shields.io/badge/node-%3E%3D22.0.0-brightgreen.svg)](https://nodejs.org/)
 [![Python](https://img.shields.io/badge/python-3.8%2B-blue.svg)](https://www.python.org/)
 [![C++](https://img.shields.io/badge/C%2B%2B-17-blue.svg)](https://en.cppreference.com/w/cpp/17)
+[![libuv](https://img.shields.io/badge/libuv-1.48.0-blue.svg)](https://libuv.org/)
+[![libpq](https://img.shields.io/badge/libpq-15.5-blue.svg)](https://www.postgresql.org/)
+[![uWebSockets](https://img.shields.io/badge/uWebSockets-22.0.0-blue.svg)](https://github.com/uNetworking/uWebSockets)
 
 📚 **[Complete Documentation](https://smartpricing.github.io/queen/)** • 🚀 **[Quick Start](https://smartpricing.github.io/queen/guide/quickstart)** • ⚖️ **[Comparison](https://smartpricing.github.io/queen/guide/comparison)**
 
@@ -19,7 +22,7 @@
 
 ---
 
-Queen MQ is a modern PostgreSQL-backed Message Queue, high-performance, feature-rich system with unlimited FIFO partitions, consumer groups, transactions, tracing and streaming capabilities with exact-once delivery guarantees.
+Queen MQ is a modern PostgreSQL-backed Message Queue, built with uWebSockets, libuv and libpq async API, feature-rich system with unlimited FIFO partitions, consumer groups, transactions, tracing and streaming capabilities with exact-once delivery guarantees.
 
 ## Why Queen?
 
@@ -134,6 +137,32 @@ asyncio.run(main())
 **[Complete Tutorial →](https://smartpricing.github.io/queen/guide/quickstart)**
 
 ---
+
+Some example logs:
+
+```bash
+[info] [Worker 0] PUSH: Queue 'smartchat.router.incoming' encryption_enabled=true (from cache)
+[info] [Worker 0] PUSH: enc_service=true, enabled=true
+[info] [Worker 0] PUSH: Encrypted payload for queue 'smartchat.router.incoming'
+[info] [Worker 0] PUSH: 1 items to [smartchat.router.incoming]
+[info] [Worker 0] [Sidecar] BATCH: PUSH (1 requests, 1 items)
+[info] [Worker 0] [Sidecar] NOTIFY: Queue 'smartchat.router.incoming' has activity, waking 1 waiting consumers
+[info] [Worker 0] PUSH NOTIFY: 1 queue(s)
+[info] [Worker 0] PUSH RESPONSE: (status=201)
+[info] [Worker 0] POP_WAIT RESPONSE: smartchat.router.incoming/agentsource:fed2f633-38fc-4f73-8f91-1c7e2a2c9851 (status=200)
+[info] [Worker 1] TRANSACTION: Executing transaction (2 operations)
+[info] [Worker 1] TRANSACTION: Encrypted payload for queue 'smartchat.translations'
+[info] [Worker 1] TRANSACTION RESPONSE: (status=200)
+[info] [Worker 0] QPOP: [smartchat.router.incoming/*@__QUEUE_MODE__] batch=1, wait=true | Pool: 9/9 conn (0 in use)
+[info] [Worker 0] QPOP: Submitted POP_WAIT 44b91fd6-0ae0-4a84-882c-93f278c3a2c4 for queue smartchat.router.incoming (timeout=30000ms)
+[info] [Worker 1] POP_WAIT RESPONSE: smartchat.translations/7f64ced6-8f37-49bb-901a-68cfc8bf58a6 (status=200)
+[info] [Worker 0] TRANSACTION: Executing transaction (2 operations)
+[info] [Worker 0] TRANSACTION: Encrypted payload for queue 'smartchat.router.history'
+[info] [Worker 0] TRANSACTION RESPONSE: (status=200)
+[info] [Worker 1] QPOP: [smartchat.translations/*@__QUEUE_MODE__] batch=1, wait=true | Pool: 9/9 conn (0 in use)
+[info] [Worker 1] QPOP: Submitted POP_WAIT eb951693-b14c-4071-970d-82919bc5e1ee for queue smartchat.translations (timeout=30000ms)
+[info] [Worker 1] POP_WAIT RESPONSE: smartchat.router.history/7f64ced6-8f37-49bb-901a-68cfc8bf58a6 (status=200)
+```
 
 ## Key Features
 

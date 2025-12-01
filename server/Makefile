@@ -106,7 +106,7 @@ $(VENDOR_DIR)/.deps_ready: setup
 	# Download uWebSockets
 	@cd $(VENDOR_DIR) && \
 		curl -L $(UWS_URL) -o uws.zip && \
-		unzip -q uws.zip && \
+		unzip -qo uws.zip && \
 		rm -rf uWebSockets && \
 		mv uWebSockets-master uWebSockets && \
 		rm uws.zip
@@ -114,7 +114,7 @@ $(VENDOR_DIR)/.deps_ready: setup
 	# Download uSockets (required by uWebSockets)
 	@cd $(VENDOR_DIR) && \
 		curl -L $(USOCKETS_URL) -o usockets.zip && \
-		unzip -q usockets.zip && \
+		unzip -qo usockets.zip && \
 		rm -rf uSockets && \
 		mv uSockets-master uSockets && \
 		rm usockets.zip
@@ -122,7 +122,7 @@ $(VENDOR_DIR)/.deps_ready: setup
 	# Download spdlog
 	@cd $(VENDOR_DIR) && \
 		curl -L $(SPDLOG_URL) -o spdlog.zip && \
-		unzip -q spdlog.zip && \
+		unzip -qo spdlog.zip && \
 		rm -rf spdlog && \
 		mv spdlog-1.x spdlog && \
 		rm spdlog.zip
@@ -131,7 +131,7 @@ $(VENDOR_DIR)/.deps_ready: setup
 	@echo "Building libuv..."
 	@cd $(VENDOR_DIR) && \
 		curl -L $(LIBUV_URL) -o libuv.zip && \
-		unzip -q libuv.zip && \
+		unzip -qo libuv.zip && \
 		rm -rf libuv && \
 		mv libuv-1.48.0 libuv && \
 		rm libuv.zip && \

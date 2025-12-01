@@ -2,7 +2,6 @@
 #include "queen/routes/route_context.hpp"
 #include "queen/routes/route_helpers.hpp"
 #include "queen/async_queue_manager.hpp"
-#include "queen/inter_instance_comms.hpp"
 #include "queen/shared_state_manager.hpp"
 #include "queen/sidecar_db_pool.hpp"
 #include "queen/response_queue.hpp"

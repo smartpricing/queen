@@ -1,5 +1,4 @@
 #include "queen/metrics_collector.hpp"
-#include "queen/poll_intention_registry.hpp"
 #include "queen/stream_poll_intention_registry.hpp"
 #include "queen/response_queue.hpp"
 #include "queen/shared_state_manager.hpp"
@@ -10,7 +9,6 @@ MetricsCollector::MetricsCollector(
     std::shared_ptr<AsyncDbPool> db_pool,
     std::shared_ptr<astp::ThreadPool> db_thread_pool,
     std::shared_ptr<astp::ThreadPool> system_thread_pool,
-    std::shared_ptr<PollIntentionRegistry> poll_intention_registry,
     std::shared_ptr<StreamPollIntentionRegistry> stream_poll_intention_registry,
     std::shared_ptr<ResponseRegistry> response_registry,
     std::shared_ptr<SharedStateManager> shared_state_manager,
@@ -22,7 +20,6 @@ MetricsCollector::MetricsCollector(
 ) : db_pool_(db_pool), 
     db_thread_pool_(db_thread_pool),
     system_thread_pool_(system_thread_pool),
-    poll_intention_registry_(poll_intention_registry),
     stream_poll_intention_registry_(stream_poll_intention_registry),
     response_registry_(response_registry),
     shared_state_manager_(shared_state_manager),
@@ -148,7 +145,6 @@ MetricsSample MetricsCollector::collect_sample() {
     sample.system_threadpool_queue_size = system_thread_pool_->queue_size();
     
     // Registry metrics
-    sample.poll_intention_registry_size = poll_intention_registry_->size();
     sample.stream_poll_intention_registry_size = stream_poll_intention_registry_->size();
     sample.response_registry_size = response_registry_->size();
     
@@ -159,59 +155,90 @@ MetricsSample MetricsCollector::collect_sample() {
     );
     sample.uptime_seconds = uptime.count();
     
-    // SharedState / UDPSYNC metrics
-    if (shared_state_manager_ && shared_state_manager_->is_enabled()) {
-        sample.shared_state_enabled = true;
-        
+    // SharedState metrics - always collect sidecar ops and backoff (local metrics)
+    // Cluster-specific metrics only when enabled
+    if (shared_state_manager_) {
         try {
             auto stats = shared_state_manager_->get_stats();
             
-            // Queue config cache
-            if (stats.contains("queue_config_cache")) {
-                auto& qc = stats["queue_config_cache"];
-                sample.qc_cache_size = qc.value("size", 0);
-                sample.qc_cache_hits = qc.value("hits", 0ULL);
-                sample.qc_cache_misses = qc.value("misses", 0ULL);
+            // Sidecar aggregated operations (always collected - local ops)
+            if (stats.contains("sidecar_ops")) {
+                auto& ops = stats["sidecar_ops"];
+                if (ops.contains("push")) {
+                    sample.sidecar_push_count = ops["push"].value("count", 0ULL);
+                    sample.sidecar_push_latency_us = ops["push"].value("avg_latency_us", 0ULL);
+                    sample.sidecar_push_items = ops["push"].value("items", 0ULL);
+                }
+                if (ops.contains("pop")) {
+                    sample.sidecar_pop_count = ops["pop"].value("count", 0ULL);
+                    sample.sidecar_pop_latency_us = ops["pop"].value("avg_latency_us", 0ULL);
+                    sample.sidecar_pop_items = ops["pop"].value("items", 0ULL);
+                }
+                if (ops.contains("ack")) {
+                    sample.sidecar_ack_count = ops["ack"].value("count", 0ULL);
+                    sample.sidecar_ack_latency_us = ops["ack"].value("avg_latency_us", 0ULL);
+                    sample.sidecar_ack_items = ops["ack"].value("items", 0ULL);
+                }
             }
             
-            // Partition ID cache
-            if (stats.contains("partition_id_cache")) {
-                auto& pid = stats["partition_id_cache"];
-                sample.pid_cache_size = pid.value("size", 0);
-                sample.pid_cache_hits = pid.value("hits", 0ULL);
-                sample.pid_cache_misses = pid.value("misses", 0ULL);
-                sample.pid_cache_evictions = pid.value("evictions", 0ULL);
+            // Queue backoff summary (always collected - local ops)
+            if (stats.contains("queue_backoff_summary") && stats["queue_backoff_summary"].is_array()) {
+                auto& summary = stats["queue_backoff_summary"];
+                int64_t total_interval = 0;
+                int total_groups = 0;
+                
+                // Store the raw per-queue summary for later
+                sample.queue_backoff_summary = summary;
+                
+                for (const auto& queue_stats : summary) {
+                    int backed_off = queue_stats.value("groups_backed_off", 0);
+                    if (backed_off > 0) {
+                        sample.queues_with_backoff++;
+                    }
+                    sample.total_backed_off_groups += backed_off;
+                    total_interval += queue_stats.value("avg_interval_ms", 0LL) * 
+                                     queue_stats.value("groups_tracked", 0);
+                    total_groups += queue_stats.value("groups_tracked", 0);
+                }
+                
+                sample.avg_backoff_interval_ms = total_groups > 0 
+                    ? total_interval / total_groups : 0;
             }
             
-            // Lease hints
-            if (stats.contains("lease_hints")) {
-                auto& lh = stats["lease_hints"];
-                sample.lease_hints_size = lh.value("size", 0);
-                sample.lease_hints_used = lh.value("hints_used", 0ULL);
-                sample.lease_hints_wrong = lh.value("hints_wrong", 0ULL);
-            }
-            
-            // Consumer presence
-            if (stats.contains("consumer_presence")) {
-                auto& cp = stats["consumer_presence"];
-                sample.consumer_queues_tracked = cp.value("queues_tracked", 0);
-                sample.consumer_servers_tracked = cp.value("servers_tracked", 0);
-                sample.consumer_total_registrations = cp.value("total_registrations", 0);
-            }
-            
-            // Server health
-            if (stats.contains("server_health")) {
-                auto& sh = stats["server_health"];
-                sample.servers_alive = sh.value("servers_alive", 0);
-                sample.servers_dead = sh.value("servers_dead", 0);
-            }
-            
-            // Transport
-            if (stats.contains("transport")) {
-                auto& tr = stats["transport"];
-                sample.transport_sent = tr.value("messages_sent", 0ULL);
-                sample.transport_received = tr.value("messages_received", 0ULL);
-                sample.transport_dropped = tr.value("messages_dropped", 0ULL);
+            // Cluster-specific metrics (only when cluster sync is enabled)
+            if (shared_state_manager_->is_enabled()) {
+                sample.shared_state_enabled = true;
+                
+                // Queue config cache
+                if (stats.contains("queue_config_cache")) {
+                    auto& qc = stats["queue_config_cache"];
+                    sample.qc_cache_size = qc.value("size", 0);
+                    sample.qc_cache_hits = qc.value("hits", 0ULL);
+                    sample.qc_cache_misses = qc.value("misses", 0ULL);
+                }
+                
+                // Consumer presence
+                if (stats.contains("consumer_presence")) {
+                    auto& cp = stats["consumer_presence"];
+                    sample.consumer_queues_tracked = cp.value("queues_tracked", 0);
+                    sample.consumer_servers_tracked = cp.value("servers_tracked", 0);
+                    sample.consumer_total_registrations = cp.value("total_registrations", 0);
+                }
+                
+                // Server health
+                if (stats.contains("server_health")) {
+                    auto& sh = stats["server_health"];
+                    sample.servers_alive = sh.value("servers_alive", 0);
+                    sample.servers_dead = sh.value("servers_dead", 0);
+                }
+                
+                // Transport
+                if (stats.contains("transport")) {
+                    auto& tr = stats["transport"];
+                    sample.transport_sent = tr.value("messages_sent", 0ULL);
+                    sample.transport_received = tr.value("messages_received", 0ULL);
+                    sample.transport_dropped = tr.value("messages_dropped", 0ULL);
+                }
             }
             
         } catch (const std::exception& e) {
@@ -402,11 +429,31 @@ AggregatedMetrics MetricsCollector::aggregate(const std::vector<MetricsSample>& 
     agg.db_threadpool_queue_size = aggregate_metric([](const auto& s) { return s.db_threadpool_queue_size; });
     agg.system_threadpool_size = aggregate_metric([](const auto& s) { return s.system_threadpool_size; });
     agg.system_threadpool_queue_size = aggregate_metric([](const auto& s) { return s.system_threadpool_queue_size; });
-    agg.poll_intention_registry_size = aggregate_metric([](const auto& s) { return s.poll_intention_registry_size; });
     agg.stream_poll_intention_registry_size = aggregate_metric([](const auto& s) { return s.stream_poll_intention_registry_size; });
     agg.response_registry_size = aggregate_metric([](const auto& s) { return s.response_registry_size; });
     
-    // SharedState / UDPSYNC metrics
+    // Sidecar aggregated operations (always tracked - local ops)
+    agg.sidecar_push_count = aggregate_metric([](const auto& s) { return s.sidecar_push_count; });
+    agg.sidecar_push_latency_us = aggregate_metric([](const auto& s) { return s.sidecar_push_latency_us; });
+    agg.sidecar_push_items = aggregate_metric([](const auto& s) { return s.sidecar_push_items; });
+    agg.sidecar_pop_count = aggregate_metric([](const auto& s) { return s.sidecar_pop_count; });
+    agg.sidecar_pop_latency_us = aggregate_metric([](const auto& s) { return s.sidecar_pop_latency_us; });
+    agg.sidecar_pop_items = aggregate_metric([](const auto& s) { return s.sidecar_pop_items; });
+    agg.sidecar_ack_count = aggregate_metric([](const auto& s) { return s.sidecar_ack_count; });
+    agg.sidecar_ack_latency_us = aggregate_metric([](const auto& s) { return s.sidecar_ack_latency_us; });
+    agg.sidecar_ack_items = aggregate_metric([](const auto& s) { return s.sidecar_ack_items; });
+    
+    // Queue backoff summary (always tracked - local ops)
+    agg.queues_with_backoff = aggregate_metric([](const auto& s) { return s.queues_with_backoff; });
+    agg.total_backed_off_groups = aggregate_metric([](const auto& s) { return s.total_backed_off_groups; });
+    agg.avg_backoff_interval_ms = aggregate_metric([](const auto& s) { return s.avg_backoff_interval_ms; });
+    
+    // Per-queue backoff summary - use the last sample's data
+    if (!samples.empty()) {
+        agg.queue_backoff_summary = samples.back().queue_backoff_summary;
+    }
+    
+    // SharedState / Cluster metrics
     // Check if any sample has shared_state enabled
     agg.shared_state_enabled = std::any_of(samples.begin(), samples.end(), 
         [](const MetricsSample& s) { return s.shared_state_enabled; });
@@ -415,15 +462,6 @@ AggregatedMetrics MetricsCollector::aggregate(const std::vector<MetricsSample>& 
         agg.qc_cache_size = aggregate_metric([](const auto& s) { return s.qc_cache_size; });
         agg.qc_cache_hits = aggregate_metric([](const auto& s) { return s.qc_cache_hits; });
         agg.qc_cache_misses = aggregate_metric([](const auto& s) { return s.qc_cache_misses; });
-        
-        agg.pid_cache_size = aggregate_metric([](const auto& s) { return s.pid_cache_size; });
-        agg.pid_cache_hits = aggregate_metric([](const auto& s) { return s.pid_cache_hits; });
-        agg.pid_cache_misses = aggregate_metric([](const auto& s) { return s.pid_cache_misses; });
-        agg.pid_cache_evictions = aggregate_metric([](const auto& s) { return s.pid_cache_evictions; });
-        
-        agg.lease_hints_size = aggregate_metric([](const auto& s) { return s.lease_hints_size; });
-        agg.lease_hints_used = aggregate_metric([](const auto& s) { return s.lease_hints_used; });
-        agg.lease_hints_wrong = aggregate_metric([](const auto& s) { return s.lease_hints_wrong; });
         
         agg.consumer_queues_tracked = aggregate_metric([](const auto& s) { return s.consumer_queues_tracked; });
         agg.consumer_servers_tracked = aggregate_metric([](const auto& s) { return s.consumer_servers_tracked; });

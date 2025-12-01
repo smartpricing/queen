@@ -12,14 +12,21 @@ std::shared_ptr<SharedStateManager> global_shared_state;
 
 SharedStateManager::SharedStateManager(const InterInstanceConfig& config,
                                        const std::string& server_id,
-                                       std::shared_ptr<AsyncDbPool> db_pool)
+                                       std::shared_ptr<AsyncDbPool> db_pool,
+                                       int backoff_cleanup_threshold_seconds,
+                                       int pop_wait_initial_interval_ms,
+                                       int pop_wait_backoff_threshold,
+                                       double pop_wait_backoff_multiplier,
+                                       int pop_wait_max_interval_ms)
     : config_(config)
     , server_id_(server_id)
     , db_pool_(db_pool)
-    , partition_ids_(config.shared_state.partition_cache_max,
-                     config.shared_state.partition_cache_ttl_ms,
-                     config.shared_state.cache_shards)
     , server_health_(config.shared_state.dead_threshold_ms)
+    , backoff_threshold_(pop_wait_backoff_threshold)
+    , backoff_multiplier_(pop_wait_backoff_multiplier)
+    , max_interval_ms_(pop_wait_max_interval_ms)
+    , base_interval_ms_(pop_wait_initial_interval_ms)
+    , backoff_cleanup_threshold_seconds_(backoff_cleanup_threshold_seconds)
 {
     // Enable if UDP peers are configured
     enabled_ = config.shared_state.enabled && config.has_udp_peers();
@@ -36,11 +43,6 @@ SharedStateManager::SharedStateManager(const InterInstanceConfig& config,
         for (const auto& peer : config.parse_udp_peers()) {
             transport_->add_peer(peer.host, peer.port);
         }
-        
-        // Set up lease hint server health checker
-        lease_hints_.set_server_health_checker([this](const std::string& sid) {
-            return server_health_.is_alive(sid);
-        });
         
         // Set up dead server callback
         server_health_.on_server_dead([this](const std::string& sid) {
@@ -93,7 +95,6 @@ void SharedStateManager::start() {
         refresh_thread_ = std::thread(&SharedStateManager::refresh_loop, this);
     }
     
-    cleanup_thread_ = std::thread(&SharedStateManager::cleanup_loop, this);
     dns_refresh_thread_ = std::thread(&SharedStateManager::dns_refresh_loop, this);
     
     spdlog::info("SharedStateManager: Started");
@@ -107,7 +108,6 @@ void SharedStateManager::stop() {
     
     if (heartbeat_thread_.joinable()) heartbeat_thread_.join();
     if (refresh_thread_.joinable()) refresh_thread_.join();
-    if (cleanup_thread_.joinable()) cleanup_thread_.join();
     if (dns_refresh_thread_.joinable()) dns_refresh_thread_.join();
     
     if (transport_) {
@@ -161,9 +161,6 @@ void SharedStateManager::set_queue_config(const std::string& queue, const caches
 void SharedStateManager::delete_queue_config(const std::string& queue) {
     queue_configs_.remove(queue);
     
-    // Also invalidate all partitions for this queue
-    partition_ids_.invalidate_queue(queue);
-    
     if (running_ && transport_) {
         nlohmann::json payload = {{"queue", queue}};
         transport_->broadcast(UDPSyncMessageType::QUEUE_CONFIG_DELETE, payload);
@@ -203,79 +200,7 @@ void SharedStateManager::deregister_consumer(const std::string& queue) {
 }
 
 // ============================================================
-// Partition ID (Tier 3)
-// ============================================================
-
-std::optional<std::string> SharedStateManager::get_partition_id(const std::string& queue,
-                                                                 const std::string& partition) {
-    return partition_ids_.get(queue, partition);
-}
-
-void SharedStateManager::cache_partition_id(const std::string& queue,
-                                           const std::string& partition,
-                                           const std::string& partition_id,
-                                           const std::string& queue_id) {
-    partition_ids_.put(queue, partition, partition_id, queue_id);
-}
-
-void SharedStateManager::invalidate_partition(const std::string& queue,
-                                              const std::string& partition,
-                                              bool broadcast) {
-    partition_ids_.invalidate(queue, partition);
-    
-    if (broadcast && running_ && transport_) {
-        nlohmann::json payload = {
-            {"queue", queue},
-            {"partition", partition}
-        };
-        transport_->broadcast(UDPSyncMessageType::PARTITION_DELETED, payload);
-    }
-}
-
-// ============================================================
-// Lease Hints (Tier 4)
-// ============================================================
-
-bool SharedStateManager::is_likely_leased_elsewhere(const std::string& partition_id,
-                                                    const std::string& consumer_group) {
-    return lease_hints_.is_likely_leased_elsewhere(partition_id, consumer_group, server_id_);
-}
-
-void SharedStateManager::hint_lease_acquired(const std::string& partition_id,
-                                            const std::string& consumer_group,
-                                            int lease_time_seconds) {
-    int64_t expires_at_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
-        std::chrono::system_clock::now().time_since_epoch()
-    ).count() + (lease_time_seconds * 1000);
-    
-    lease_hints_.hint_acquired(partition_id, consumer_group, server_id_, expires_at_ms);
-    
-    if (running_ && transport_) {
-        nlohmann::json payload = {
-            {"partition_id", partition_id},
-            {"consumer_group", consumer_group},
-            {"server_id", server_id_},
-            {"expires_at_ms", expires_at_ms}
-        };
-        transport_->broadcast(UDPSyncMessageType::LEASE_HINT_ACQUIRED, payload);
-    }
-}
-
-void SharedStateManager::hint_lease_released(const std::string& partition_id,
-                                            const std::string& consumer_group) {
-    lease_hints_.hint_released(partition_id, consumer_group);
-    
-    if (running_ && transport_) {
-        nlohmann::json payload = {
-            {"partition_id", partition_id},
-            {"consumer_group", consumer_group}
-        };
-        transport_->broadcast(UDPSyncMessageType::LEASE_HINT_RELEASED, payload);
-    }
-}
-
-// ============================================================
-// Server Health (Tier 5)
+// Server Health (Tier 3)
 // ============================================================
 
 bool SharedStateManager::is_server_alive(const std::string& server_id) {
@@ -302,22 +227,22 @@ void SharedStateManager::notify_message_available(const std::string& queue, cons
     
     // CLUSTER: If UDP enabled, broadcast to other servers
     if (running_ && transport_) {
-    nlohmann::json payload = {
-        {"queue", queue},
-        {"partition", partition},
-        {"ts", now_ms()}
-    };
-    
-    auto servers = get_servers_for_queue(queue);
-    
-    if (servers.empty()) {
-        // No presence info - broadcast to all
-        transport_->broadcast(UDPSyncMessageType::MESSAGE_AVAILABLE, payload);
-    } else {
-        // Remove ourselves
-        servers.erase(server_id_);
-        if (!servers.empty()) {
-            transport_->send_to(servers, UDPSyncMessageType::MESSAGE_AVAILABLE, payload);
+        nlohmann::json payload = {
+            {"queue", queue},
+            {"partition", partition},
+            {"ts", now_ms()}
+        };
+        
+        auto servers = get_servers_for_queue(queue);
+        
+        if (servers.empty()) {
+            // No presence info - broadcast to all
+            transport_->broadcast(UDPSyncMessageType::MESSAGE_AVAILABLE, payload);
+        } else {
+            // Remove ourselves
+            servers.erase(server_id_);
+            if (!servers.empty()) {
+                transport_->send_to(servers, UDPSyncMessageType::MESSAGE_AVAILABLE, payload);
             }
         }
     }
@@ -332,28 +257,28 @@ void SharedStateManager::notify_partition_free(const std::string& queue,
     
     // CLUSTER: If UDP enabled, broadcast to other servers
     if (running_ && transport_) {
-    nlohmann::json payload = {
-        {"queue", queue},
-        {"partition", partition},
-        {"consumer_group", consumer_group},
-        {"ts", now_ms()}
-    };
-    
-    auto servers = get_servers_for_queue(queue);
-    
-    if (servers.empty()) {
-        transport_->broadcast(UDPSyncMessageType::PARTITION_FREE, payload);
-    } else {
-        servers.erase(server_id_);
-        if (!servers.empty()) {
-            transport_->send_to(servers, UDPSyncMessageType::PARTITION_FREE, payload);
+        nlohmann::json payload = {
+            {"queue", queue},
+            {"partition", partition},
+            {"consumer_group", consumer_group},
+            {"ts", now_ms()}
+        };
+        
+        auto servers = get_servers_for_queue(queue);
+        
+        if (servers.empty()) {
+            transport_->broadcast(UDPSyncMessageType::PARTITION_FREE, payload);
+        } else {
+            servers.erase(server_id_);
+            if (!servers.empty()) {
+                transport_->send_to(servers, UDPSyncMessageType::PARTITION_FREE, payload);
             }
         }
     }
 }
 
 // ============================================================
-// Tier 6: Local Sidecar Registry
+// Tier 4: Local Sidecar Registry
 // ============================================================
 
 void SharedStateManager::register_sidecar(SidecarDbPool* sidecar) {
@@ -385,7 +310,7 @@ void SharedStateManager::notify_local_sidecars(const std::string& queue_name) {
 }
 
 // ============================================================
-// Tier 7: Group Backoff Coordination
+// Tier 5: Group Backoff Coordination
 // ============================================================
 
 bool SharedStateManager::should_check_group(const std::string& group_key) {
@@ -403,6 +328,9 @@ bool SharedStateManager::try_acquire_group(const std::string& group_key) {
     std::lock_guard lock(backoff_mutex_);
     auto& state = group_backoff_[group_key];  // Creates if not exists
     
+    // Update last_accessed for cleanup tracking
+    state.last_accessed = std::chrono::steady_clock::now();
+    
     if (state.in_flight) {
         return false;  // Already being queried
     }
@@ -418,7 +346,9 @@ void SharedStateManager::release_group(const std::string& group_key, bool had_me
     }
     
     auto& state = it->second;
-    state.last_checked = std::chrono::steady_clock::now();
+    auto now = std::chrono::steady_clock::now();
+    state.last_checked = now;
+    state.last_accessed = now;  // Update for cleanup tracking
     
     if (had_messages) {
         // Reset backoff
@@ -492,18 +422,6 @@ void SharedStateManager::setup_message_handlers() {
     transport_->on_message(Type::CONSUMER_DEREGISTERED, [this](Type, const std::string& sender, const nlohmann::json& p) {
         handle_consumer_deregistered(sender, p);
     });
-    
-    transport_->on_message(Type::PARTITION_DELETED, [this](Type, const std::string& sender, const nlohmann::json& p) {
-        handle_partition_deleted(sender, p);
-    });
-    
-    transport_->on_message(Type::LEASE_HINT_ACQUIRED, [this](Type, const std::string& sender, const nlohmann::json& p) {
-        handle_lease_hint_acquired(sender, p);
-    });
-    
-    transport_->on_message(Type::LEASE_HINT_RELEASED, [this](Type, const std::string& sender, const nlohmann::json& p) {
-        handle_lease_hint_released(sender, p);
-    });
 }
 
 void SharedStateManager::handle_message_available(const std::string& sender, const nlohmann::json& payload) {
@@ -576,7 +494,6 @@ void SharedStateManager::handle_queue_config_delete(const std::string& sender, c
     if (queue.empty()) return;
     
     queue_configs_.remove(queue);
-    partition_ids_.invalidate_queue(queue);
     
     spdlog::debug("SharedState: QUEUE_CONFIG_DELETE from {} for {}", sender, queue);
 }
@@ -601,48 +518,21 @@ void SharedStateManager::handle_consumer_deregistered(const std::string& sender,
     }
 }
 
-void SharedStateManager::handle_partition_deleted(const std::string& sender, const nlohmann::json& payload) {
-    std::string queue = payload.value("queue", "");
-    std::string partition = payload.value("partition", "");
-    
-    if (!queue.empty() && !partition.empty()) {
-        partition_ids_.invalidate(queue, partition);
-        spdlog::debug("SharedState: PARTITION_DELETED from {} for {}:{}", sender, queue, partition);
-    }
-}
-
-void SharedStateManager::handle_lease_hint_acquired(const std::string& sender, const nlohmann::json& payload) {
-    std::string partition_id = payload.value("partition_id", "");
-    std::string consumer_group = payload.value("consumer_group", "");
-    std::string sid = payload.value("server_id", sender);
-    int64_t expires_at_ms = payload.value("expires_at_ms", 0LL);
-    
-    if (!partition_id.empty() && !consumer_group.empty()) {
-        lease_hints_.hint_acquired(partition_id, consumer_group, sid, expires_at_ms);
-        spdlog::trace("SharedState: LEASE_HINT_ACQUIRED {} by {} (expires {})",
-                     partition_id, sid, expires_at_ms);
-    }
-}
-
-void SharedStateManager::handle_lease_hint_released(const std::string& sender, const nlohmann::json& payload) {
-    std::string partition_id = payload.value("partition_id", "");
-    std::string consumer_group = payload.value("consumer_group", "");
-    
-    if (!partition_id.empty() && !consumer_group.empty()) {
-        lease_hints_.hint_released(partition_id, consumer_group);
-        spdlog::trace("SharedState: LEASE_HINT_RELEASED {} by {}", partition_id, sender);
-    }
-}
-
 // ============================================================
 // Background Tasks
 // ============================================================
 
 void SharedStateManager::heartbeat_loop() {
-    spdlog::info("SharedStateManager: Heartbeat thread started (interval={}ms)",
-                 config_.shared_state.heartbeat_interval_ms);
+    spdlog::info("SharedStateManager: Heartbeat thread started (interval={}ms, backoff_cleanup_threshold={}s)",
+                 config_.shared_state.heartbeat_interval_ms, backoff_cleanup_threshold_seconds_);
+    
+    // Run cleanup every ~60 heartbeats (about once per minute at 1000ms interval)
+    constexpr int CLEANUP_INTERVAL_HEARTBEATS = 60;
+    int heartbeat_count = 0;
     
     while (running_) {
+        heartbeat_count++;
+        
         // Send heartbeat
         nlohmann::json payload = {
             {"session_id", transport_->session_id()},
@@ -654,6 +544,11 @@ void SharedStateManager::heartbeat_loop() {
         
         // Check for dead servers
         server_health_.check_dead_servers();
+        
+        // Periodic cleanup of stale backoff entries
+        if (heartbeat_count % CLEANUP_INTERVAL_HEARTBEATS == 0) {
+            cleanup_stale_backoff_entries();
+        }
         
         // Sleep
         std::this_thread::sleep_for(
@@ -686,28 +581,6 @@ void SharedStateManager::refresh_loop() {
     }
     
     spdlog::info("SharedStateManager: Refresh thread stopped");
-}
-
-void SharedStateManager::cleanup_loop() {
-    spdlog::info("SharedStateManager: Cleanup thread started");
-    
-    while (running_) {
-        // Cleanup expired partition cache entries
-        size_t partition_removed = partition_ids_.cleanup_expired();
-        
-        // Cleanup expired lease hints
-        size_t lease_removed = lease_hints_.cleanup_expired();
-        
-        if (partition_removed > 0 || lease_removed > 0) {
-            spdlog::debug("SharedStateManager: Cleanup removed {} partitions, {} lease hints",
-                         partition_removed, lease_removed);
-        }
-        
-        // Run every 30 seconds
-        std::this_thread::sleep_for(std::chrono::seconds(30));
-    }
-    
-    spdlog::info("SharedStateManager: Cleanup thread stopped");
 }
 
 void SharedStateManager::dns_refresh_loop() {
@@ -846,9 +719,44 @@ void SharedStateManager::on_server_dead(const std::string& server_id) {
     
     // Clear consumer presence for dead server
     consumer_presence_.clear_server(server_id);
+}
+
+// ============================================================
+// Cleanup
+// ============================================================
+
+size_t SharedStateManager::cleanup_stale_backoff_entries() {
+    std::lock_guard lock(backoff_mutex_);
     
-    // Clear lease hints for dead server
-    lease_hints_.clear_server_hints(server_id);
+    auto now = std::chrono::steady_clock::now();
+    size_t initial_size = group_backoff_.size();
+    
+    for (auto it = group_backoff_.begin(); it != group_backoff_.end();) {
+        // Skip entries that are currently in-flight
+        if (it->second.in_flight) {
+            ++it;
+            continue;
+        }
+        
+        auto age_seconds = std::chrono::duration_cast<std::chrono::seconds>(
+            now - it->second.last_accessed
+        ).count();
+        
+        if (age_seconds > backoff_cleanup_threshold_seconds_) {
+            it = group_backoff_.erase(it);
+        } else {
+            ++it;
+        }
+    }
+    
+    size_t removed = initial_size - group_backoff_.size();
+    
+    if (removed > 0) {
+        spdlog::info("SharedStateManager: Cleaned up {} stale backoff entries ({} -> {})",
+                    removed, initial_size, group_backoff_.size());
+    }
+    
+    return removed;
 }
 
 // ============================================================
@@ -881,22 +789,6 @@ nlohmann::json SharedStateManager::get_stats() const {
         {"deregistrations_received", consumer_presence_.deregistrations()}
     };
     
-    stats["partition_id_cache"] = {
-        {"size", partition_ids_.size()},
-        {"max_size", partition_ids_.max_size()},
-        {"hits", partition_ids_.hits()},
-        {"misses", partition_ids_.misses()},
-        {"evictions", partition_ids_.evictions()},
-        {"hit_rate", partition_ids_.hit_rate()}
-    };
-    
-    stats["lease_hints"] = {
-        {"size", lease_hints_.size()},
-        {"hints_used", lease_hints_.hints_used()},
-        {"hints_wrong", lease_hints_.hints_wrong()},
-        {"accuracy", lease_hints_.accuracy()}
-    };
-    
     stats["server_health"] = {
         {"servers_tracked", server_health_.server_count()},
         {"servers_alive", server_health_.get_alive_servers().size()},
@@ -905,13 +797,13 @@ nlohmann::json SharedStateManager::get_stats() const {
         {"restarts_detected", server_health_.restarts_detected()}
     };
     
-    // Tier 6: Local Sidecar Registry
+    // Tier 4: Local Sidecar Registry
     {
         std::shared_lock lock(sidecar_mutex_);
         stats["local_sidecars"] = local_sidecars_.size();
     }
     
-    // Tier 7: Group Backoff State
+    // Tier 5: Group Backoff State
     {
         std::lock_guard lock(backoff_mutex_);
         int in_flight = 0;
@@ -927,8 +819,153 @@ nlohmann::json SharedStateManager::get_stats() const {
         };
     }
     
+    // Add aggregated sidecar stats and queue backoff summary
+    stats["sidecar_ops"] = get_aggregated_sidecar_stats();
+    stats["queue_backoff_summary"] = get_queue_backoff_summary();
+    
     return stats;
 }
 
-} // namespace queen
+nlohmann::json SharedStateManager::get_aggregated_sidecar_stats() const {
+    nlohmann::json result = nlohmann::json::object();
+    
+    // Aggregated counters
+    uint64_t push_count = 0, pop_count = 0, ack_count = 0;
+    uint64_t ack_batch_count = 0, transaction_count = 0, renew_lease_count = 0;
+    uint64_t push_time_us = 0, pop_time_us = 0, ack_time_us = 0;
+    uint64_t push_items = 0, pop_items = 0, ack_items = 0;
+    
+    {
+        std::shared_lock lock(sidecar_mutex_);
+        
+        for (auto* sidecar : local_sidecars_) {
+            if (!sidecar) continue;
+            
+            auto stats = sidecar->get_stats();
+            
+            for (const auto& [op_type, op_stats] : stats.op_stats) {
+                switch (op_type) {
+                    case SidecarOpType::PUSH:
+                        push_count += op_stats.count;
+                        push_time_us += op_stats.total_time_us;
+                        push_items += op_stats.items_processed;
+                        break;
+                    case SidecarOpType::POP:
+                        pop_count += op_stats.count;
+                        pop_time_us += op_stats.total_time_us;
+                        pop_items += op_stats.items_processed;
+                        break;
+                    case SidecarOpType::ACK:
+                        ack_count += op_stats.count;
+                        ack_time_us += op_stats.total_time_us;
+                        ack_items += op_stats.items_processed;
+                        break;
+                    case SidecarOpType::ACK_BATCH:
+                        ack_batch_count += op_stats.count;
+                        break;
+                    case SidecarOpType::TRANSACTION:
+                        transaction_count += op_stats.count;
+                        break;
+                    case SidecarOpType::RENEW_LEASE:
+                        renew_lease_count += op_stats.count;
+                        break;
+                    case SidecarOpType::POP_BATCH:
+                    case SidecarOpType::POP_WAIT:
+                        // These are tracked under POP
+                        pop_count += op_stats.count;
+                        pop_time_us += op_stats.total_time_us;
+                        pop_items += op_stats.items_processed;
+                        break;
+                }
+            }
+        }
+    }
+    
+    result["push"] = {
+        {"count", push_count},
+        {"avg_latency_us", push_count > 0 ? push_time_us / push_count : 0},
+        {"items", push_items}
+    };
+    result["pop"] = {
+        {"count", pop_count},
+        {"avg_latency_us", pop_count > 0 ? pop_time_us / pop_count : 0},
+        {"items", pop_items}
+    };
+    result["ack"] = {
+        {"count", ack_count},
+        {"avg_latency_us", ack_count > 0 ? ack_time_us / ack_count : 0},
+        {"items", ack_items}
+    };
+    result["ack_batch"] = {{"count", ack_batch_count}};
+    result["transaction"] = {{"count", transaction_count}};
+    result["renew_lease"] = {{"count", renew_lease_count}};
+    
+    return result;
+}
 
+nlohmann::json SharedStateManager::get_queue_backoff_summary() const {
+    nlohmann::json result = nlohmann::json::array();
+    
+    // Aggregate by queue name
+    struct QueueSummary {
+        int groups_tracked = 0;
+        int groups_backed_off = 0;
+        int groups_in_flight = 0;
+        int64_t total_interval_ms = 0;
+        int max_consecutive_empty = 0;
+    };
+    std::unordered_map<std::string, QueueSummary> by_queue;
+    
+    {
+        std::lock_guard lock(backoff_mutex_);
+        
+        for (const auto& [group_key, state] : group_backoff_) {
+            // group_key format: "queue/partition/consumer_group"
+            size_t first_slash = group_key.find('/');
+            std::string queue = (first_slash != std::string::npos) 
+                ? group_key.substr(0, first_slash) 
+                : group_key;
+            
+            auto& summary = by_queue[queue];
+            summary.groups_tracked++;
+            if (state.consecutive_empty >= backoff_threshold_) {
+                summary.groups_backed_off++;
+            }
+            if (state.in_flight) {
+                summary.groups_in_flight++;
+            }
+            summary.total_interval_ms += state.current_interval.count();
+            summary.max_consecutive_empty = std::max(summary.max_consecutive_empty, 
+                                                      state.consecutive_empty);
+        }
+    }
+    
+    // Convert to JSON array (sorted by groups_tracked descending)
+    std::vector<std::pair<std::string, QueueSummary>> sorted_queues(
+        by_queue.begin(), by_queue.end()
+    );
+    std::sort(sorted_queues.begin(), sorted_queues.end(),
+              [](const auto& a, const auto& b) {
+                  return a.second.groups_tracked > b.second.groups_tracked;
+              });
+    
+    // Return top 20 queues
+    int count = 0;
+    for (const auto& [queue, summary] : sorted_queues) {
+        if (count++ >= 20) break;
+        
+        result.push_back({
+            {"queue", queue},
+            {"groups_tracked", summary.groups_tracked},
+            {"groups_backed_off", summary.groups_backed_off},
+            {"groups_in_flight", summary.groups_in_flight},
+            {"avg_interval_ms", summary.groups_tracked > 0 
+                ? summary.total_interval_ms / summary.groups_tracked : 0},
+            {"max_consecutive_empty", summary.max_consecutive_empty}
+        });
+    }
+    
+    return result;
+}
+
+} // namespace queen

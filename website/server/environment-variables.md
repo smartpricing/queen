@@ -1,29 +1,25 @@
 # Environment Variables Reference
 
-Complete configuration reference for Queen MQ server. These variables control all aspects of server behavior.
+Complete configuration reference for Queen MQ server.
 
 ## Quick Reference
 
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `PORT` | 6632 | HTTP server port |
-| `NUM_WORKERS` | 10 | Worker threads (max: CPU cores) |
+| `NUM_WORKERS` | 10 | Worker threads |
 | `DB_POOL_SIZE` | 150 | **CRITICAL** - Connection pool size |
 | `PG_HOST` | localhost | PostgreSQL host |
 | `LOG_LEVEL` | info | Log level (debug, info, warn, error) |
 
 ## Server Configuration
 
-### Basic Settings
-
 | Variable | Type | Default | Description |
 |----------|------|---------|-------------|
 | `PORT` | int | 6632 | HTTP server port |
 | `HOST` | string | 0.0.0.0 | HTTP server host |
 | `WORKER_ID` | string | cpp-worker-1 | Unique identifier for this worker |
-| `APP_NAME` | string | queen-mq | Application name |
-| `NUM_WORKERS` | int | 10 | Number of worker threads (capped at CPU core count) |
-| `WEBAPP_ROOT` | string | auto-detect | Path to webapp/dist directory for dashboard |
+| `NUM_WORKERS` | int | 10 | Number of worker threads |
 
 **Example:**
 ```bash
@@ -75,11 +71,8 @@ export PG_SSL_REJECT_UNAUTHORIZED=true
 | `DB_POOL_SIZE` | int | 150 | **CRITICAL** - Total connection pool size |
 | `DB_IDLE_TIMEOUT` | int | 30000 | Idle timeout in milliseconds |
 | `DB_CONNECTION_TIMEOUT` | int | 2000 | Connection timeout in milliseconds |
-| `DB_POOL_ACQUISITION_TIMEOUT` | int | 10000 | Pool acquisition timeout (wait for available connection) |
 | `DB_STATEMENT_TIMEOUT` | int | 30000 | Statement timeout in milliseconds |
-| `DB_QUERY_TIMEOUT` | int | 30000 | Query timeout in milliseconds |
 | `DB_LOCK_TIMEOUT` | int | 10000 | Lock timeout in milliseconds |
-| `DB_MAX_RETRIES` | int | 3 | Maximum connection retry attempts |
 
 ::: warning CRITICAL: DB_POOL_SIZE
 This is the **most important tuning parameter**. The pool is split:
@@ -102,10 +95,6 @@ export NUM_WORKERS=10
 # High load
 export DB_POOL_SIZE=300
 export NUM_WORKERS=20
-
-# Very high load
-export DB_POOL_SIZE=500
-export NUM_WORKERS=30
 ```
 
 ## Queue Processing
@@ -115,244 +104,86 @@ export NUM_WORKERS=30
 | Variable | Type | Default | Description |
 |----------|------|---------|-------------|
 | `DEFAULT_TIMEOUT` | int | 30000 | Default timeout for pop operations (ms) |
-| `MAX_TIMEOUT` | int | 60000 | Maximum allowed timeout (ms) |
 | `DEFAULT_BATCH_SIZE` | int | 1 | Default batch size for pop operations |
-| `BATCH_INSERT_SIZE` | int | 1000 | Batch size for bulk inserts |
 
-### Long Polling Configuration
+### Stream Long Polling
 
-The system uses managed ThreadPools for all long-polling operations to ensure proper resource management and visibility.
-
-#### Worker Configuration
+Stream processing uses dedicated poll workers optimized for windowed message consumption.
 
 | Variable | Type | Default | Description |
 |----------|------|---------|-------------|
-| `POLL_WORKER_COUNT` | int | 2 | Number of dedicated poll worker threads (reserved in DB ThreadPool) |
-| `STREAM_POLL_WORKER_COUNT` | int | 2 | Number of dedicated stream poll worker threads (reserved in DB ThreadPool) |
-| `STREAM_CONCURRENT_CHECKS` | int | 10 | Maximum concurrent window check jobs per stream worker |
-| `DB_THREAD_POOL_SERVICE_THREADS` | int | 5 | Threads for background service DB operations |
-
-**ThreadPool Architecture:**
-
-All worker threads run in the **DB ThreadPool** with the following allocation:
-
-```
-DB ThreadPool Size = P + S + (S × C) + T
-
-Where:
-  P = POLL_WORKER_COUNT (regular poll workers)
-  S = STREAM_POLL_WORKER_COUNT (stream poll workers)
-  C = STREAM_CONCURRENT_CHECKS (concurrent checks per stream worker)
-  T = DB_THREAD_POOL_SERVICE_THREADS (service DB operations)
-
-Default: 2 + 2 + (2 × 10) + 5 = 29 threads
-```
-
-**Scaling Guidelines:**
-- Low load (< 20 clients): 2-5 poll workers, 2 stream workers
-- Medium load (20-100 clients): 5-10 poll workers, 4 stream workers
-- High load (100-200 clients): 10-20 poll workers, 8 stream workers
-- Very high load (200+ clients): 20-50 poll workers, 12 stream workers
-
-Each poll worker can efficiently handle ~5-10 active consumer groups.
-
-#### Polling Intervals
-
-| Variable | Type | Default | Description |
-|----------|------|---------|-------------|
-| `POLL_WORKER_INTERVAL` | int | 50 | How often workers check for new client requests (ms) - in-memory operation |
-| `POLL_DB_INTERVAL` | int | 100 | Initial DB query interval (ms) - aggressive first attempt |
+| `STREAM_POLL_WORKER_COUNT` | int | 1 | Number of dedicated stream poll worker threads |
 | `STREAM_POLL_WORKER_INTERVAL` | int | 100 | How often stream workers check registry (ms) |
 | `STREAM_POLL_INTERVAL` | int | 1000 | Min time between stream checks per group (ms) |
+| `STREAM_BACKOFF_THRESHOLD` | int | 5 | Consecutive empty checks before backoff |
+| `STREAM_BACKOFF_MULTIPLIER` | double | 2.0 | Exponential backoff multiplier |
+| `STREAM_MAX_POLL_INTERVAL` | int | 5000 | Max poll interval after backoff (ms) |
+| `STREAM_CONCURRENT_CHECKS` | int | 2 | Max concurrent window check jobs per worker |
 
-**How it works:**
-1. Workers check registry every 50ms (cheap in-memory check)
-2. First DB query at 100ms (aggressive)
-3. If no messages, exponential backoff kicks in
+**Scaling Guidelines:**
+- Low load (< 10 stream consumers): 1 worker, 2 concurrent checks
+- Medium load (10-50 consumers): 2-4 workers, 4 concurrent checks
+- High load (50+ consumers): 4-8 workers, 8 concurrent checks
 
-#### Adaptive Exponential Backoff
-
-When queues are consistently empty, the system automatically backs off to reduce DB load:
-
-| Variable | Type | Default | Description |
-|----------|------|---------|-------------|
-| `QUEUE_BACKOFF_THRESHOLD` | int | 1 | Consecutive empty pops before backoff (1 = immediate) |
-| `QUEUE_BACKOFF_MULTIPLIER` | double | 2.0 | Exponential backoff multiplier |
-| `QUEUE_MAX_POLL_INTERVAL` | int | 2000 | Maximum poll interval after backoff (ms) |
-| `QUEUE_BACKOFF_CLEANUP_THRESHOLD` | int | 3600 | Cleanup inactive backoff state entries after N seconds |
-
-**Stream Backoff Configuration (separate from regular poll workers):**
+### ThreadPool Configuration
 
 | Variable | Type | Default | Description |
 |----------|------|---------|-------------|
-| `STREAM_BACKOFF_THRESHOLD` | int | 5 | Stream: Consecutive empty checks before backoff |
-| `STREAM_BACKOFF_MULTIPLIER` | double | 2.0 | Stream: Exponential backoff multiplier |
-| `STREAM_MAX_POLL_INTERVAL` | int | 5000 | Stream: Maximum poll interval after backoff (ms) |
+| `DB_THREAD_POOL_SERVICE_THREADS` | int | 5 | Threads for background service DB operations |
+| `QUEUE_BACKOFF_CLEANUP_THRESHOLD` | int | 3600 | Cleanup inactive backoff state entries (seconds) |
 
-**Example backoff sequence (regular poll workers, defaults):**
+### POP_WAIT Backoff (Sidecar Long-Polling)
+
+These settings control the backoff behavior for sidecar POP_WAIT (long-polling) requests.
+
+| Variable | Type | Default | Description |
+|----------|------|---------|-------------|
+| `POP_WAIT_INITIAL_INTERVAL_MS` | int | 100 | Initial poll interval for POP_WAIT (ms) |
+| `POP_WAIT_BACKOFF_THRESHOLD` | int | 3 | Consecutive empty checks before backoff starts |
+| `POP_WAIT_BACKOFF_MULTIPLIER` | double | 2.0 | Exponential backoff multiplier |
+| `POP_WAIT_MAX_INTERVAL_MS` | int | 1000 | Max poll interval after backoff (ms) |
+
+**Backoff sequence example** (with defaults):
 ```
-Query 1: 100ms  (aggressive first attempt)
-Empty 1: 200ms  (backoff starts)
-Empty 2: 400ms
-Empty 3: 800ms
-Empty 4: 1600ms
-Empty 5+: 2000ms (capped)
-Messages arrive: Reset to 100ms immediately
-```
+Check 1: 100ms (initial)
+Check 2: 100ms
+Check 3: 100ms (3rd empty → backoff starts)
+Check 4: 200ms
+Check 5: 400ms
+Check 6: 800ms
+Check 7+: 1000ms (capped at max)
 
-**Configuration Examples:**
-```bash
-# Low latency (higher CPU usage)
-export POLL_WORKER_INTERVAL=25
-export POLL_DB_INTERVAL=50
-export QUEUE_MAX_POLL_INTERVAL=1000
-
-# Balanced (default)
-export POLL_WORKER_INTERVAL=50
-export POLL_DB_INTERVAL=100
-export QUEUE_MAX_POLL_INTERVAL=2000
-
-# Conservative (lower CPU, higher latency)
-export POLL_WORKER_INTERVAL=100
-export POLL_DB_INTERVAL=200
-export QUEUE_MAX_POLL_INTERVAL=5000
+Message arrives → Reset to 100ms immediately
 ```
 
-### Partition Selection
-
-| Variable | Type | Default | Description |
-|----------|------|---------|-------------|
-| `MAX_PARTITION_CANDIDATES` | int | 100 | Candidate partitions for lease acquisition |
-
-**Tuning:**
-- Low partition count (<50): Keep at 100
-- High partition count (>200): Increase to 200-500
-- Very high (>1000): Increase to 1000
-
-### Batch Push - Size-Based Dynamic Batching
-
-Queen uses intelligent size-based batching that dynamically calculates row sizes and optimizes for PostgreSQL performance.
-
-| Variable | Type | Default | Description |
-|----------|------|---------|-------------|
-| `BATCH_PUSH_USE_SIZE_BASED` | bool | true | Enable size-based dynamic batching |
-| `BATCH_PUSH_TARGET_SIZE_MB` | int | 4 | Target batch size in MB (sweet spot: 4-6 MB) |
-| `BATCH_PUSH_MIN_SIZE_MB` | int | 2 | Minimum batch size in MB |
-| `BATCH_PUSH_MAX_SIZE_MB` | int | 8 | Maximum batch size in MB (hard limit) |
-| `BATCH_PUSH_MIN_MESSAGES` | int | 100 | Minimum messages per batch |
-| `BATCH_PUSH_MAX_MESSAGES` | int | 10000 | Maximum messages per batch |
-| `BATCH_PUSH_CHUNK_SIZE` | int | 1000 | **LEGACY**: Count-based chunk size (if size-based disabled) |
-
-**How it works:**
-- Estimates total row size for each message (payload + indexes + overhead)
-- Dynamically accumulates messages until reaching optimal batch size
-- Ensures batches stay within PostgreSQL's sweet spot of 2-8 MB
-- Falls back to legacy count-based batching if disabled
-
-**Recommended Settings by Workload:**
-
-| Workload | TARGET_SIZE_MB | MIN_SIZE_MB | MAX_SIZE_MB | MIN_MESSAGES | MAX_MESSAGES |
-|----------|----------------|-------------|-------------|--------------|--------------|
-| Small messages (<1KB) | 6 | 3 | 10 | 500 | 20000 |
-| Medium messages (1-10KB) | 4 | 2 | 8 | 100 | 10000 |
-| Large messages (>10KB) | 3 | 2 | 6 | 50 | 5000 |
-| Mixed workload | 4 | 2 | 8 | 100 | 10000 |
+::: tip Low Latency vs Resource Usage
+- Lower `POP_WAIT_INITIAL_INTERVAL_MS` and `POP_WAIT_MAX_INTERVAL_MS` = faster response, more DB queries
+- Higher values = slower response to messages, fewer DB queries when idle
+:::
 
 ### Response Queue
 
-Response processing uses an adaptive batching system that automatically scales up under load to prevent backlog buildup.
+Response processing uses an adaptive batching system that automatically scales up under load.
 
 | Variable | Type | Default | Description |
 |----------|------|---------|-------------|
 | `RESPONSE_TIMER_INTERVAL_MS` | int | 25 | Response queue polling interval (ms) |
-| `RESPONSE_BATCH_SIZE` | int | 100 | Base number of responses to process per timer tick |
-| `RESPONSE_BATCH_MAX` | int | 500 | Maximum responses per tick under heavy backlog |
+| `RESPONSE_BATCH_SIZE` | int | 100 | Base responses per timer tick |
+| `RESPONSE_BATCH_MAX` | int | 500 | Maximum responses per tick under heavy load |
 
-**How Adaptive Batching Works:**
-
-Under normal load, the system processes `RESPONSE_BATCH_SIZE` responses every timer tick. When backlog is detected, it automatically scales up:
-
-```
-Normal (< 100 items):     100 responses per tick
-Moderate (200 items):     200 responses per tick (2x)
-High (300 items):         300 responses per tick (3x)
-Heavy (500+ items):       500 responses per tick (capped at max)
-```
-
-The system logs warnings when backlog exceeds 2x the base batch size.
-
-**Throughput Calculations:**
-
-At default settings (25ms interval):
+**Throughput at default settings (25ms interval):**
 - Normal: 4,000 responses/sec per worker
 - Maximum: 20,000 responses/sec per worker
 
-**Configuration Examples:**
-
-```bash
-# Default balanced configuration
-export RESPONSE_TIMER_INTERVAL_MS=25
-export RESPONSE_BATCH_SIZE=100
-export RESPONSE_BATCH_MAX=500
-
-# Low latency (more responsive, higher CPU)
-export RESPONSE_TIMER_INTERVAL_MS=10
-export RESPONSE_BATCH_SIZE=50
-export RESPONSE_BATCH_MAX=200
-
-# High throughput (handles large backlogs)
-export RESPONSE_TIMER_INTERVAL_MS=25
-export RESPONSE_BATCH_SIZE=200
-export RESPONSE_BATCH_MAX=1000
-
-# Conservative (lower CPU, can backlog under load)
-export RESPONSE_TIMER_INTERVAL_MS=50
-export RESPONSE_BATCH_SIZE=50
-export RESPONSE_BATCH_MAX=200
-```
-
-::: tip Tuning Guidelines
-- Increase `RESPONSE_BATCH_SIZE` if you frequently see backlog warnings
-- Increase `RESPONSE_BATCH_MAX` for burst traffic handling
-- Lower `RESPONSE_TIMER_INTERVAL_MS` for lower latency (increases CPU)
-- The system automatically adapts between base and max based on queue depth
-:::
-
-## Queue Defaults
-
-### Basic Defaults
+### Sidecar Pool
 
 | Variable | Type | Default | Description |
 |----------|------|---------|-------------|
-| `DEFAULT_LEASE_TIME` | int | 300 | Default lease time in seconds (5 minutes) |
-| `DEFAULT_RETRY_LIMIT` | int | 3 | Default retry limit |
-| `DEFAULT_RETRY_DELAY` | int | 1000 | Default retry delay (ms) |
-| `DEFAULT_MAX_SIZE` | int | 10000 | Default maximum queue size |
-| `DEFAULT_TTL` | int | 3600 | Default message TTL in seconds |
-| `DEFAULT_PRIORITY` | int | 0 | Default message priority |
-| `DEFAULT_DELAYED_PROCESSING` | int | 0 | Default delayed processing time (seconds) |
-| `DEFAULT_WINDOW_BUFFER` | int | 0 | Default window buffer size (seconds) |
-
-### Dead Letter Queue
-
-| Variable | Type | Default | Description |
-|----------|------|---------|-------------|
-| `DEFAULT_DLQ_ENABLED` | bool | false | Enable DLQ by default |
-| `DEFAULT_DLQ_AFTER_MAX_RETRIES` | bool | false | Auto-move to DLQ after max retries |
-
-### Retention
-
-| Variable | Type | Default | Description |
-|----------|------|---------|-------------|
-| `DEFAULT_RETENTION_SECONDS` | int | 0 | Default retention period (0 = disabled) |
-| `DEFAULT_COMPLETED_RETENTION_SECONDS` | int | 0 | Retention for completed messages (0 = disabled) |
-| `DEFAULT_RETENTION_ENABLED` | bool | false | Enable retention by default |
-
-### Eviction
-
-| Variable | Type | Default | Description |
-|----------|------|---------|-------------|
-| `DEFAULT_MAX_WAIT_TIME_SECONDS` | int | 0 | Maximum wait time before eviction (0 = disabled) |
+| `SIDECAR_POOL_SIZE` | int | 50 | Number of connections in sidecar pool |
+| `SIDECAR_MICRO_BATCH_WAIT_MS` | int | 5 | Micro-batch cycle time (ms) |
+| `SIDECAR_MAX_ITEMS_PER_TX` | int | 1000 | Max items per database transaction |
+| `SIDECAR_MAX_BATCH_SIZE` | int | 1000 | Max requests per micro-batch |
+| `SIDECAR_MAX_PENDING_COUNT` | int | 50 | Max pending before immediate send |
 
 ### Consumer Group Subscription
 
@@ -380,11 +211,12 @@ Only applies when client doesn't explicitly specify `.subscriptionMode()`. Exist
 
 ## Background Services
 
-### Lease Reclamation
+### Metrics Collector
 
 | Variable | Type | Default | Description |
 |----------|------|---------|-------------|
-| `LEASE_RECLAIM_INTERVAL` | int | 5000 | Lease reclamation interval (ms) |
+| `METRICS_SAMPLE_INTERVAL_MS` | int | 1000 | How often to sample metrics (ms) |
+| `METRICS_AGGREGATE_INTERVAL_S` | int | 60 | How often to write to database (seconds) |
 
 ### Retention Service
 
@@ -392,7 +224,7 @@ Only applies when client doesn't explicitly specify `.subscriptionMode()`. Exist
 |----------|------|---------|-------------|
 | `RETENTION_INTERVAL` | int | 300000 | Retention service interval (ms) - 5 minutes |
 | `RETENTION_BATCH_SIZE` | int | 1000 | Retention batch size |
-| `PARTITION_CLEANUP_DAYS` | int | 7 | Days before partition cleanup |
+| `PARTITION_CLEANUP_DAYS` | int | 30 | Days before partition cleanup |
 | `METRICS_RETENTION_DAYS` | int | 90 | Days to keep metrics data |
 
 ### Eviction Service
@@ -401,13 +233,6 @@ Only applies when client doesn't explicitly specify `.subscriptionMode()`. Exist
 |----------|------|---------|-------------|
 | `EVICTION_INTERVAL` | int | 60000 | Eviction service interval (ms) - 1 minute |
 | `EVICTION_BATCH_SIZE` | int | 1000 | Eviction batch size |
-
-### WebSocket Updates
-
-| Variable | Type | Default | Description |
-|----------|------|---------|-------------|
-| `QUEUE_DEPTH_UPDATE_INTERVAL` | int | 5000 | Queue depth update interval (ms) |
-| `SYSTEM_STATS_UPDATE_INTERVAL` | int | 10000 | System stats update interval (ms) |
 
 ## File Buffer Configuration (QoS 0 & Failover)
 
@@ -474,58 +299,11 @@ export QUEEN_ENCRYPTION_KEY=0123456789abcdef0123456789abcdef0123456789abcdef0123
 - Keep key secure and never commit to version control
 :::
 
-## API Configuration
-
-### General
-
-| Variable | Type | Default | Description |
-|----------|------|---------|-------------|
-| `MAX_BODY_SIZE` | int | 104857600 | Maximum request body size (bytes, default 100MB) |
-
-### Pagination
-
-| Variable | Type | Default | Description |
-|----------|------|---------|-------------|
-| `API_DEFAULT_LIMIT` | int | 100 | Default pagination limit |
-| `API_MAX_LIMIT` | int | 1000 | Maximum pagination limit |
-| `API_DEFAULT_OFFSET` | int | 0 | Default pagination offset |
-
-### CORS
-
-| Variable | Type | Default | Description |
-|----------|------|---------|-------------|
-| `CORS_MAX_AGE` | int | 86400 | CORS preflight cache duration (seconds) |
-| `CORS_ALLOWED_ORIGINS` | string | * | Allowed CORS origins |
-| `CORS_ALLOWED_METHODS` | string | GET, POST, PUT, DELETE, OPTIONS | Allowed HTTP methods |
-| `CORS_ALLOWED_HEADERS` | string | Content-Type, Authorization | Allowed request headers |
-
-## Analytics Configuration
-
-| Variable | Type | Default | Description |
-|----------|------|---------|-------------|
-| `ANALYTICS_RECENT_HOURS` | int | 24 | Hours for recent completion calculations |
-| `ANALYTICS_MIN_COMPLETED` | int | 5 | Minimum completed messages for stats |
-| `RECENT_MESSAGE_WINDOW` | int | 60 | Recent message window (seconds) |
-| `RELATED_MESSAGE_WINDOW` | int | 3600 | Related message window (seconds) |
-| `MAX_RELATED_MESSAGES` | int | 10 | Maximum related messages to return |
-
-## Monitoring Configuration
-
-| Variable | Type | Default | Description |
-|----------|------|---------|-------------|
-| `ENABLE_REQUEST_COUNTING` | bool | true | Enable request counting |
-| `ENABLE_MESSAGE_COUNTING` | bool | true | Enable message counting |
-| `METRICS_ENDPOINT_ENABLED` | bool | true | Enable /metrics endpoint |
-| `HEALTH_CHECK_ENABLED` | bool | true | Enable /health endpoint |
-
 ## Logging Configuration
 
 | Variable | Type | Default | Description |
 |----------|------|---------|-------------|
-| `ENABLE_LOGGING` | bool | true | Enable logging |
 | `LOG_LEVEL` | string | info | Log level |
-| `LOG_FORMAT` | string | json | Log format (json, text) |
-| `LOG_TIMESTAMP` | bool | true | Include timestamps in logs |
 
 **Log Levels:**
 - `trace` - Extremely verbose (development only)
@@ -533,41 +311,26 @@ export QUEEN_ENCRYPTION_KEY=0123456789abcdef0123456789abcdef0123456789abcdef0123
 - `info` - General information (recommended for production)
 - `warn` - Warnings only
 - `error` - Errors only
-- `critical` - Critical errors only
-- `off` - Disable logging
 
 **Examples:**
 ```bash
 # Development
 export LOG_LEVEL=debug
-export LOG_FORMAT=text
 
 # Production
 export LOG_LEVEL=info
-export LOG_FORMAT=json
 ```
 
 ## Inter-Instance Communication (Clustered Deployments)
 
-In clustered deployments, Queen servers can notify each other when messages are pushed or acknowledged, allowing poll workers on all instances to respond immediately instead of waiting for their backoff timers.
-
-### Protocol Options
-
-| Protocol | Latency | Reliability | Use Case |
-|----------|---------|-------------|----------|
-| **UDP** | ~0.1-0.3ms | Fire-and-forget | Recommended for lowest latency |
-| **HTTP** | ~2-5ms | Guaranteed delivery | Fallback or when reliability is critical |
-
-You can use either protocol alone, or both simultaneously (UDP for speed, HTTP as backup).
+In clustered deployments, Queen servers can notify each other when messages are pushed or acknowledged, allowing poll workers on all instances to respond immediately.
 
 ### Configuration
 
 | Variable | Type | Default | Description |
 |----------|------|---------|-------------|
-| `QUEEN_PEERS` | string | "" | HTTP peers: comma-separated URLs (e.g., `http://queen2:6632,http://queen3:6632`) |
-| `PEER_NOTIFY_BATCH_MS` | int | 10 | Batch HTTP notifications for N ms before sending |
-| `QUEEN_UDP_PEERS` | string | "" | UDP peers: comma-separated `host:port` or hostnames (e.g., `queen2:6633,queen3:6633`) |
-| `QUEEN_UDP_NOTIFY_PORT` | int | 6633 | Default UDP port for notifications (separate from HTTP API port) |
+| `QUEEN_UDP_PEERS` | string | "" | UDP peers: comma-separated `host:port` (e.g., `queen2:6633,queen3:6633`) |
+| `QUEEN_UDP_NOTIFY_PORT` | int | 6633 | Default UDP port for notifications |
 
 ::: tip Self-Detection
 Each server automatically excludes itself from the peer list based on hostname matching, so you can use the same peer list on all instances in a StatefulSet.
@@ -581,19 +344,7 @@ Local poll worker notification is automatic - no configuration needed:
 ./bin/queen-server
 ```
 
-### Cluster with HTTP Only
-
-```bash
-# Server A
-export QUEEN_PEERS="http://queen-b:6632,http://queen-c:6632"
-./bin/queen-server
-
-# Server B
-export QUEEN_PEERS="http://queen-a:6632,http://queen-c:6632"
-./bin/queen-server
-```
-
-### Cluster with UDP Only (Lowest Latency)
+### Cluster with UDP
 
 ```bash
 # Server A
@@ -607,37 +358,49 @@ export QUEEN_UDP_NOTIFY_PORT=6633
 ./bin/queen-server
 ```
 
-### Kubernetes StatefulSet (Both Protocols)
+### Kubernetes StatefulSet
 
 ```yaml
 env:
-  # HTTP - guaranteed delivery, batched
-  - name: QUEEN_PEERS
-    value: "http://queen-mq-0.queen-mq-headless.ns.svc.cluster.local:6632,http://queen-mq-1.queen-mq-headless.ns.svc.cluster.local:6632,http://queen-mq-2.queen-mq-headless.ns.svc.cluster.local:6632"
-  # UDP - fire-and-forget, lowest latency
   - name: QUEEN_UDP_PEERS
     value: "queen-mq-0.queen-mq-headless.ns.svc.cluster.local:6633,queen-mq-1.queen-mq-headless.ns.svc.cluster.local:6633,queen-mq-2.queen-mq-headless.ns.svc.cluster.local:6633"
   - name: QUEEN_UDP_NOTIFY_PORT
     value: "6633"
 ```
 
-### Endpoints
+## Distributed Cache (UDPSYNC)
 
-| Endpoint | Description |
-|----------|-------------|
-| `POST /internal/api/notify` | HTTP endpoint for peer notifications |
-| `UDP port 6633` | UDP listener (when `QUEEN_UDP_PEERS` is set) |
-| `GET /internal/api/inter-instance/stats` | Peer notification statistics |
-
-Statistics are also included in the `/health` endpoint response.
-
-## System Events Configuration
+Queen includes a distributed cache layer that shares state between server instances.
 
 | Variable | Type | Default | Description |
 |----------|------|---------|-------------|
-| `QUEEN_SYSTEM_EVENTS_ENABLED` | bool | false | Enable system event propagation |
-| `QUEEN_SYSTEM_EVENTS_BATCH_MS` | int | 10 | Batching window for event publishing (ms) |
-| `QUEEN_SYSTEM_EVENTS_SYNC_TIMEOUT` | int | 30000 | Startup synchronization timeout (ms) |
+| `QUEEN_SYNC_ENABLED` | bool | true | Enable/disable distributed cache sync |
+| `QUEEN_SYNC_SECRET` | string | "" | HMAC-SHA256 secret for packet signing (64 hex chars) |
+| `QUEEN_CACHE_PARTITION_MAX` | int | 10000 | Maximum partition IDs to cache (LRU eviction) |
+| `QUEEN_CACHE_PARTITION_TTL_MS` | int | 300000 | Partition ID cache TTL (ms) - 5 minutes |
+| `QUEEN_CACHE_REFRESH_INTERVAL_MS` | int | 60000 | Queue config refresh from DB (ms) - 60 seconds |
+| `QUEEN_SYNC_HEARTBEAT_MS` | int | 1000 | Heartbeat interval (ms) |
+| `QUEEN_SYNC_DEAD_THRESHOLD_MS` | int | 5000 | Server dead threshold (ms) - 5 missed heartbeats |
+| `QUEEN_SYNC_RECV_BUFFER_MB` | int | 8 | UDP receive buffer size (MB) |
+
+### Security
+
+For production deployments, set `QUEEN_SYNC_SECRET` to a 64-character hex string:
+
+```bash
+# Generate a secure secret
+export QUEEN_SYNC_SECRET=$(openssl rand -hex 32)
+```
+
+Without a secret, packets are NOT signed (insecure mode - acceptable for development only).
+
+### Correctness Guarantees
+
+The cache is **always advisory**. Even with stale or missing cache data:
+- Messages are never lost
+- Duplicate deliveries never occur
+- Leases are always correct (database is authoritative)
+- The only impact is slightly increased DB queries
 
 ## Configuration Examples
 
@@ -653,7 +416,6 @@ export PG_DB=queen_dev
 export DB_POOL_SIZE=50
 export NUM_WORKERS=4
 export LOG_LEVEL=debug
-export LOG_FORMAT=text
 ```
 
 ### Production Environment
@@ -671,7 +433,6 @@ export PG_SSL_REJECT_UNAUTHORIZED=true
 export DB_POOL_SIZE=300
 export NUM_WORKERS=20
 export LOG_LEVEL=info
-export LOG_FORMAT=json
 export QUEEN_ENCRYPTION_KEY=your_64_char_hex_key_here
 export FILE_BUFFER_DIR=/var/lib/queen/buffers
 ```
@@ -681,17 +442,10 @@ export FILE_BUFFER_DIR=/var/lib/queen/buffers
 ```bash
 export DB_POOL_SIZE=500
 export NUM_WORKERS=30
-export BATCH_INSERT_SIZE=2000
-export BATCH_PUSH_TARGET_SIZE_MB=6
-export BATCH_PUSH_MAX_SIZE_MB=10
-export POLL_WORKER_INTERVAL=25
-export POLL_DB_INTERVAL=50
-export MAX_PARTITION_CANDIDATES=500
-export RESPONSE_TIMER_INTERVAL_MS=25
+export SIDECAR_POOL_SIZE=100
+export SIDECAR_MAX_ITEMS_PER_TX=2000
 export RESPONSE_BATCH_SIZE=200
 export RESPONSE_BATCH_MAX=1000
-export RETENTION_BATCH_SIZE=2000
-export EVICTION_BATCH_SIZE=2000
 export FILE_BUFFER_FLUSH_MS=50
 export FILE_BUFFER_MAX_BATCH=1000
 export FILE_BUFFER_EVENTS_PER_FILE=50000
@@ -718,9 +472,6 @@ export LOG_LEVEL=info
 ```bash
 export DB_POOL_SIZE=150
 export NUM_WORKERS=10
-export POLL_WORKER_INTERVAL=25
-export POLL_DB_INTERVAL=50
-export QUEUE_MAX_POLL_INTERVAL=1000
 export RESPONSE_TIMER_INTERVAL_MS=10
 export RESPONSE_BATCH_SIZE=50
 export RESPONSE_BATCH_MAX=200
@@ -754,7 +505,6 @@ All timeout values are in milliseconds unless specified as seconds.
 **Solution:**
 ```bash
 export DB_POOL_SIZE=300  # Increase pool
-export DB_POOL_ACQUISITION_TIMEOUT=20000  # More patience
 ```
 
 ### High CPU Usage
@@ -763,20 +513,25 @@ export DB_POOL_ACQUISITION_TIMEOUT=20000  # More patience
 
 **Solution:**
 ```bash
-export POLL_WORKER_INTERVAL=100  # Reduce registry checks
-export POLL_DB_INTERVAL=200  # Less aggressive polling
-export QUEUE_MAX_POLL_INTERVAL=5000  # Higher backoff ceiling
+export STREAM_POLL_WORKER_INTERVAL=200  # Less frequent checks
+export STREAM_MAX_POLL_INTERVAL=10000   # Higher backoff ceiling
 ```
 
 ### Slow Message Delivery
 
 **Symptom:** Messages take long to be consumed
 
-**Solution:**
+**Solution for regular POP (with wait):**
 ```bash
-export POLL_WORKER_INTERVAL=25  # More responsive
-export POLL_DB_INTERVAL=50  # Faster initial query
-export QUEUE_MAX_POLL_INTERVAL=1000  # Lower ceiling
+export POP_WAIT_INITIAL_INTERVAL_MS=50   # Faster initial query
+export POP_WAIT_MAX_INTERVAL_MS=500      # Lower backoff ceiling
+```
+
+**Solution for stream/consumer group polling:**
+```bash
+export STREAM_POLL_WORKER_INTERVAL=50   # More responsive
+export STREAM_POLL_INTERVAL=500         # Faster initial query
+export STREAM_MAX_POLL_INTERVAL=2000    # Lower ceiling
 ```
 
 ### Database Connection Issues
@@ -786,8 +541,7 @@ export QUEUE_MAX_POLL_INTERVAL=1000  # Lower ceiling
 **Solution:**
 ```bash
 export DB_CONNECTION_TIMEOUT=5000  # More time to connect
-export DB_STATEMENT_TIMEOUT=10000  # More time for queries
-export DB_MAX_RETRIES=5  # More retry attempts
+export DB_STATEMENT_TIMEOUT=60000  # More time for queries
 ```
 
 ### Response Queue Backlog
@@ -796,9 +550,9 @@ export DB_MAX_RETRIES=5  # More retry attempts
 
 **Solution:**
 ```bash
-export RESPONSE_BATCH_SIZE=200  # Process more per tick
-export RESPONSE_BATCH_MAX=1000  # Higher ceiling for bursts
-export RESPONSE_TIMER_INTERVAL_MS=10  # Check more frequently (higher CPU)
+export RESPONSE_BATCH_SIZE=200     # Process more per tick
+export RESPONSE_BATCH_MAX=1000     # Higher ceiling for bursts
+export RESPONSE_TIMER_INTERVAL_MS=10  # Check more frequently
 ```
 
 ## See Also
@@ -807,4 +561,3 @@ export RESPONSE_TIMER_INTERVAL_MS=10  # Check more frequently (higher CPU)
 - [Performance Tuning](/server/tuning) - Tuning for different workloads
 - [Deployment](/server/deployment) - Production deployment patterns
 - [Troubleshooting](/server/troubleshooting) - Common issues and solutions
-

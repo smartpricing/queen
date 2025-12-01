@@ -4,7 +4,6 @@
 #include "queen/async_queue_manager.hpp"
 #include "queen/queue_types.hpp"
 #include "queen/file_buffer.hpp"
-#include "queen/inter_instance_comms.hpp"
 #include "queen/response_queue.hpp"
 #include "queen/sidecar_db_pool.hpp"
 #include "queen/encryption.hpp"
@@ -156,8 +155,6 @@ void setup_push_routes(uWS::App* app, const RouteContext& ctx) {
                             auto cached_config = global_shared_state->get_queue_config(item.queue);
                             if (cached_config) {
                                 queue_encryption_enabled = cached_config->encryption_enabled;
-                                spdlog::info("[Worker {}] PUSH: Queue '{}' encryption_enabled={} (from cache)", 
-                                            ctx.worker_id, item.queue, queue_encryption_enabled);
                             } else {
                                 spdlog::warn("[Worker {}] PUSH: Queue '{}' config NOT in cache!", 
                                             ctx.worker_id, item.queue);
@@ -165,12 +162,6 @@ void setup_push_routes(uWS::App* app, const RouteContext& ctx) {
                         } else {
                             spdlog::warn("[Worker {}] PUSH: global_shared_state is NULL!", ctx.worker_id);
                         }
-                        
-                        // Log encryption service status
-                        spdlog::info("[Worker {}] PUSH: enc_service={}, enabled={}", 
-                                    ctx.worker_id, 
-                                    enc_service != nullptr,
-                                    enc_service ? enc_service->is_enabled() : false);
                         
                         // Encrypt payload if queue requires it
                         nlohmann::json payload_to_store = item.payload;
@@ -186,17 +177,13 @@ void setup_push_routes(uWS::App* app, const RouteContext& ctx) {
                                     {"authTag", encrypted->auth_tag}
                                 };
                                 is_encrypted = true;
-                                spdlog::info("[Worker {}] PUSH: Encrypted payload for queue '{}'", 
-                                            ctx.worker_id, item.queue);
                             } else {
                                 spdlog::warn("[Worker {}] PUSH: Encryption failed for queue '{}', storing plaintext", 
                                             ctx.worker_id, item.queue);
                             }
                         } else if (queue_encryption_enabled) {
-                            spdlog::warn("[Worker {}] PUSH: Queue '{}' requires encryption but service not available (enc_service={}, enabled={})", 
-                                        ctx.worker_id, item.queue, 
-                                        enc_service != nullptr, 
-                                        enc_service ? enc_service->is_enabled() : false);
+                            spdlog::warn("[Worker {}] PUSH: Queue '{}' requires encryption but service not available", 
+                                        ctx.worker_id, item.queue);
                         }
                         
                             nlohmann::json item_json = {

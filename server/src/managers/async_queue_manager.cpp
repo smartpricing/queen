@@ -1398,11 +1398,6 @@ bool AsyncQueueManager::configure_queue(const std::string& queue_name,
         // Ensure default partition exists
         ensure_partition_exists(conn.get(), queue_name, "Default");
         
-        // Invalidate partition cache since partition may have been recreated with new ID
-        if (global_shared_state && global_shared_state->is_enabled()) {
-            global_shared_state->invalidate_partition(queue_name, "Default");
-            spdlog::debug("Invalidated partition cache for {}:Default", queue_name);
-        }
         
         // Update queue config cache (needed for encryption, also broadcasts to peers if sync enabled)
         if (global_shared_state) {

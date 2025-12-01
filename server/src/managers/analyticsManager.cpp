@@ -2410,42 +2410,51 @@ nlohmann::json AnalyticsManager::get_system_metrics(const SystemMetricsFilters& 
                             'last', (array_agg((metrics->'registries'->'response'->>'last')::numeric ORDER BY timestamp DESC))[1]
                         )
                     ),
-                    'shared_state', CASE 
-                        WHEN bool_or((metrics->'shared_state'->>'enabled')::boolean) THEN jsonb_build_object(
-                            'enabled', true,
-                            'queue_config_cache', jsonb_build_object(
-                                'size', (array_agg((metrics->'shared_state'->'queue_config_cache'->'size'->>'last')::numeric ORDER BY timestamp DESC))[1],
-                                'hits', (array_agg((metrics->'shared_state'->'queue_config_cache'->'hits'->>'last')::numeric ORDER BY timestamp DESC))[1],
-                                'misses', (array_agg((metrics->'shared_state'->'queue_config_cache'->'misses'->>'last')::numeric ORDER BY timestamp DESC))[1]
+                    'shared_state', jsonb_build_object(
+                        'enabled', bool_or((metrics->'shared_state'->>'enabled')::boolean),
+                        'sidecar_ops', jsonb_build_object(
+                            'push', jsonb_build_object(
+                                'count', (array_agg((metrics->'shared_state'->'sidecar_ops'->'push'->'count'->>'last')::numeric ORDER BY timestamp DESC))[1],
+                                'latency_us', (array_agg((metrics->'shared_state'->'sidecar_ops'->'push'->'latency_us'->>'last')::numeric ORDER BY timestamp DESC))[1],
+                                'items', (array_agg((metrics->'shared_state'->'sidecar_ops'->'push'->'items'->>'last')::numeric ORDER BY timestamp DESC))[1]
                             ),
-                            'partition_id_cache', jsonb_build_object(
-                                'size', (array_agg((metrics->'shared_state'->'partition_id_cache'->'size'->>'last')::numeric ORDER BY timestamp DESC))[1],
-                                'hits', (array_agg((metrics->'shared_state'->'partition_id_cache'->'hits'->>'last')::numeric ORDER BY timestamp DESC))[1],
-                                'misses', (array_agg((metrics->'shared_state'->'partition_id_cache'->'misses'->>'last')::numeric ORDER BY timestamp DESC))[1],
-                                'evictions', (array_agg((metrics->'shared_state'->'partition_id_cache'->'evictions'->>'last')::numeric ORDER BY timestamp DESC))[1]
+                            'pop', jsonb_build_object(
+                                'count', (array_agg((metrics->'shared_state'->'sidecar_ops'->'pop'->'count'->>'last')::numeric ORDER BY timestamp DESC))[1],
+                                'latency_us', (array_agg((metrics->'shared_state'->'sidecar_ops'->'pop'->'latency_us'->>'last')::numeric ORDER BY timestamp DESC))[1],
+                                'items', (array_agg((metrics->'shared_state'->'sidecar_ops'->'pop'->'items'->>'last')::numeric ORDER BY timestamp DESC))[1]
                             ),
-                            'lease_hints', jsonb_build_object(
-                                'size', (array_agg((metrics->'shared_state'->'lease_hints'->'size'->>'last')::numeric ORDER BY timestamp DESC))[1],
-                                'used', (array_agg((metrics->'shared_state'->'lease_hints'->'used'->>'last')::numeric ORDER BY timestamp DESC))[1],
-                                'wrong', (array_agg((metrics->'shared_state'->'lease_hints'->'wrong'->>'last')::numeric ORDER BY timestamp DESC))[1]
-                            ),
-                            'consumer_presence', jsonb_build_object(
-                                'queues_tracked', (array_agg((metrics->'shared_state'->'consumer_presence'->'queues_tracked'->>'last')::numeric ORDER BY timestamp DESC))[1],
-                                'servers_tracked', (array_agg((metrics->'shared_state'->'consumer_presence'->'servers_tracked'->>'last')::numeric ORDER BY timestamp DESC))[1],
-                                'total_registrations', (array_agg((metrics->'shared_state'->'consumer_presence'->'total_registrations'->>'last')::numeric ORDER BY timestamp DESC))[1]
-                            ),
-                            'server_health', jsonb_build_object(
-                                'alive', (array_agg((metrics->'shared_state'->'server_health'->'alive'->>'last')::numeric ORDER BY timestamp DESC))[1],
-                                'dead', (array_agg((metrics->'shared_state'->'server_health'->'dead'->>'last')::numeric ORDER BY timestamp DESC))[1]
-                            ),
-                            'transport', jsonb_build_object(
-                                'sent', (array_agg((metrics->'shared_state'->'transport'->'sent'->>'last')::numeric ORDER BY timestamp DESC))[1],
-                                'received', (array_agg((metrics->'shared_state'->'transport'->'received'->>'last')::numeric ORDER BY timestamp DESC))[1],
-                                'dropped', (array_agg((metrics->'shared_state'->'transport'->'dropped'->>'last')::numeric ORDER BY timestamp DESC))[1]
+                            'ack', jsonb_build_object(
+                                'count', (array_agg((metrics->'shared_state'->'sidecar_ops'->'ack'->'count'->>'last')::numeric ORDER BY timestamp DESC))[1],
+                                'latency_us', (array_agg((metrics->'shared_state'->'sidecar_ops'->'ack'->'latency_us'->>'last')::numeric ORDER BY timestamp DESC))[1],
+                                'items', (array_agg((metrics->'shared_state'->'sidecar_ops'->'ack'->'items'->>'last')::numeric ORDER BY timestamp DESC))[1]
                             )
+                        ),
+                        'queue_backoff', jsonb_build_object(
+                            'queues_with_backoff', (array_agg((metrics->'shared_state'->'queue_backoff'->'queues_with_backoff'->>'last')::numeric ORDER BY timestamp DESC))[1],
+                            'total_backed_off_groups', (array_agg((metrics->'shared_state'->'queue_backoff'->'total_backed_off_groups'->>'last')::numeric ORDER BY timestamp DESC))[1],
+                            'avg_interval_ms', (array_agg((metrics->'shared_state'->'queue_backoff'->'avg_interval_ms'->>'last')::numeric ORDER BY timestamp DESC))[1]
+                        ),
+                        'queue_backoff_summary', (array_agg(metrics->'shared_state'->'queue_backoff_summary' ORDER BY timestamp DESC) FILTER (WHERE metrics->'shared_state'->'queue_backoff_summary' IS NOT NULL))[1],
+                        'queue_config_cache', jsonb_build_object(
+                            'size', (array_agg((metrics->'shared_state'->'queue_config_cache'->'size'->>'last')::numeric ORDER BY timestamp DESC))[1],
+                            'hits', (array_agg((metrics->'shared_state'->'queue_config_cache'->'hits'->>'last')::numeric ORDER BY timestamp DESC))[1],
+                            'misses', (array_agg((metrics->'shared_state'->'queue_config_cache'->'misses'->>'last')::numeric ORDER BY timestamp DESC))[1]
+                        ),
+                        'consumer_presence', jsonb_build_object(
+                            'queues_tracked', (array_agg((metrics->'shared_state'->'consumer_presence'->'queues_tracked'->>'last')::numeric ORDER BY timestamp DESC))[1],
+                            'servers_tracked', (array_agg((metrics->'shared_state'->'consumer_presence'->'servers_tracked'->>'last')::numeric ORDER BY timestamp DESC))[1],
+                            'total_registrations', (array_agg((metrics->'shared_state'->'consumer_presence'->'total_registrations'->>'last')::numeric ORDER BY timestamp DESC))[1]
+                        ),
+                        'server_health', jsonb_build_object(
+                            'alive', (array_agg((metrics->'shared_state'->'server_health'->'alive'->>'last')::numeric ORDER BY timestamp DESC))[1],
+                            'dead', (array_agg((metrics->'shared_state'->'server_health'->'dead'->>'last')::numeric ORDER BY timestamp DESC))[1]
+                        ),
+                        'transport', jsonb_build_object(
+                            'sent', (array_agg((metrics->'shared_state'->'transport'->'sent'->>'last')::numeric ORDER BY timestamp DESC))[1],
+                            'received', (array_agg((metrics->'shared_state'->'transport'->'received'->>'last')::numeric ORDER BY timestamp DESC))[1],
+                            'dropped', (array_agg((metrics->'shared_state'->'transport'->'dropped'->>'last')::numeric ORDER BY timestamp DESC))[1]
                         )
-                        ELSE jsonb_build_object('enabled', false)
-                    END
+                    )
                 ) as metrics
             FROM bucketed_data
             GROUP BY bucket_timestamp, hostname, port, worker_id

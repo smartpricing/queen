@@ -121,6 +121,7 @@ export default defineConfig({
           text: 'Server',
           items: [
             { text: 'Architecture', link: '/server/architecture' },
+            { text: 'How It Works', link: '/server/how-it-works' },
             { text: 'Installation', link: '/server/installation' },
             { text: 'Configuration', link: '/server/configuration' },
             { text: 'Environment Variables', link: '/server/environment-variables' },

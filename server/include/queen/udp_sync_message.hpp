@@ -21,7 +21,7 @@ namespace queen {
  * The protocol uses MessagePack for compact binary encoding.
  */
 enum class UDPSyncMessageType : uint8_t {
-    // === Existing (from InterInstanceComms) ===
+    // === Core notifications ===
     MESSAGE_AVAILABLE = 1,      // New message pushed
     PARTITION_FREE = 2,         // Partition acknowledged
     HEARTBEAT = 3,              // Server alive

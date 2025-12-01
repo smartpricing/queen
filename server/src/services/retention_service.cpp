@@ -201,14 +201,6 @@ int RetentionService::cleanup_inactive_partitions() {
             return 0;
         }
         
-        // Collect partition info for broadcasting
-        std::vector<std::pair<std::string, std::string>> partitions_to_invalidate;
-        for (int i = 0; i < num_to_delete; i++) {
-            std::string queue_name = PQgetvalue(select_result.get(), i, 0);
-            std::string partition_name = PQgetvalue(select_result.get(), i, 1);
-            partitions_to_invalidate.emplace_back(queue_name, partition_name);
-        }
-        
         // Delete partitions that:
         // 1. Have no activity for partition_cleanup_days
         // 2. Have no messages
@@ -224,14 +216,6 @@ int RetentionService::cleanup_inactive_partitions() {
         char* affected_str = PQcmdTuples(result.get());
         int deleted = (affected_str && *affected_str) ? std::stoi(affected_str) : 0;
         
-        // Phase 6: Broadcast PARTITION_DELETED to invalidate caches on peers
-        if (deleted > 0 && global_shared_state && global_shared_state->is_enabled()) {
-            for (const auto& [queue_name, partition_name] : partitions_to_invalidate) {
-                global_shared_state->invalidate_partition(queue_name, partition_name);
-            }
-            spdlog::debug("RetentionService: Broadcast PARTITION_DELETED for {} partitions", 
-                         partitions_to_invalidate.size());
-        }
         
         return deleted;
         

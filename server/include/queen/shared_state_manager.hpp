@@ -5,8 +5,6 @@
 #include "queen/udp_sync_message.hpp"
 #include "queen/caches/queue_config_cache.hpp"
 #include "queen/caches/consumer_presence_cache.hpp"
-#include "queen/caches/partition_id_cache.hpp"
-#include "queen/caches/lease_hint_cache.hpp"
 #include "queen/caches/server_health_tracker.hpp"
 #include <json.hpp>
 #include <memory>
@@ -23,7 +21,6 @@ namespace queen {
 
 // Forward declarations
 class AsyncDbPool;
-class PollIntentionRegistry;
 class SidecarDbPool;
 
 /**
@@ -36,11 +33,12 @@ class SidecarDbPool;
  * Stale or missing cache data must NEVER break correctness - only performance.
  * 
  * Cache Tiers:
- * 1. QueueConfigCache - Full sync, queue configurations
+ * 1. QueueConfigCache - Full sync, queue configurations (used for encryption checks)
  * 2. ConsumerPresenceCache - Which servers have consumers for which queues
- * 3. PartitionIdCache - Local LRU cache for partition UUIDs
- * 4. LeaseHintCache - Hints about lease ownership
- * 5. ServerHealthTracker - Heartbeat-based health monitoring
+ * 3. ServerHealthTracker - Heartbeat-based health monitoring
+ * 
+ * Note: PartitionIdCache and LeaseHintCache were removed as stored procedures
+ * now handle partition ID resolution and lease checks internally.
  */
 class SharedStateManager {
 public:
@@ -50,10 +48,20 @@ public:
      * @param config Inter-instance configuration (includes SharedStateConfig)
      * @param server_id This server's identifier (e.g., "queen-mq-0")
      * @param db_pool Database pool for background refresh
+     * @param backoff_cleanup_threshold_seconds Stale backoff entries older than this are cleaned up (default: 3600s = 1 hour)
+     * @param pop_wait_initial_interval_ms Initial poll interval for POP_WAIT (default: 100ms)
+     * @param pop_wait_backoff_threshold Consecutive empty checks before backoff (default: 3)
+     * @param pop_wait_backoff_multiplier Exponential backoff multiplier (default: 2.0)
+     * @param pop_wait_max_interval_ms Max poll interval after backoff (default: 1000ms)
      */
     SharedStateManager(const InterInstanceConfig& config,
                        const std::string& server_id,
-                       std::shared_ptr<AsyncDbPool> db_pool = nullptr);
+                       std::shared_ptr<AsyncDbPool> db_pool = nullptr,
+                       int backoff_cleanup_threshold_seconds = 3600,
+                       int pop_wait_initial_interval_ms = 100,
+                       int pop_wait_backoff_threshold = 3,
+                       double pop_wait_backoff_multiplier = 2.0,
+                       int pop_wait_max_interval_ms = 1000);
     
     ~SharedStateManager();
     
@@ -111,73 +119,7 @@ public:
     void deregister_consumer(const std::string& queue);
     
     // ============================================================
-    // Partition ID (Tier 3) - Local LRU cache
-    // ============================================================
-    
-    /**
-     * Get partition ID from cache
-     * @param queue Queue name
-     * @param partition Partition name
-     * @return Partition UUID if cached
-     */
-    std::optional<std::string> get_partition_id(const std::string& queue, 
-                                                 const std::string& partition);
-    
-    /**
-     * Cache a partition ID (local only, not broadcast)
-     * @param queue Queue name
-     * @param partition Partition name
-     * @param partition_id Partition UUID
-     * @param queue_id Optional queue UUID
-     */
-    void cache_partition_id(const std::string& queue, 
-                           const std::string& partition,
-                           const std::string& partition_id,
-                           const std::string& queue_id = "");
-    
-    /**
-     * Invalidate a partition from cache (e.g., after DB error or deletion)
-     * @param queue Queue name
-     * @param partition Partition name
-     * @param broadcast If true, broadcast PARTITION_DELETED to peers
-     */
-    void invalidate_partition(const std::string& queue, 
-                             const std::string& partition,
-                             bool broadcast = false);
-    
-    // ============================================================
-    // Lease Hints (Tier 4) - Advisory hints
-    // ============================================================
-    
-    /**
-     * Check if partition is likely leased elsewhere
-     * @param partition_id Partition UUID
-     * @param consumer_group Consumer group
-     * @return true if hint says another server has it
-     */
-    bool is_likely_leased_elsewhere(const std::string& partition_id,
-                                    const std::string& consumer_group);
-    
-    /**
-     * Record lease acquisition and broadcast hint
-     * @param partition_id Partition UUID
-     * @param consumer_group Consumer group
-     * @param lease_time_seconds Lease duration
-     */
-    void hint_lease_acquired(const std::string& partition_id,
-                            const std::string& consumer_group,
-                            int lease_time_seconds);
-    
-    /**
-     * Record lease release and broadcast hint
-     * @param partition_id Partition UUID
-     * @param consumer_group Consumer group
-     */
-    void hint_lease_released(const std::string& partition_id,
-                            const std::string& consumer_group);
-    
-    // ============================================================
-    // Server Health (Tier 5) - Heartbeat monitoring
+    // Server Health (Tier 3) - Heartbeat monitoring
     // ============================================================
     
     /**
@@ -198,7 +140,7 @@ public:
     std::vector<std::string> get_alive_servers();
     
     // ============================================================
-    // Tier 6: Local Sidecar Registry (for POP_WAIT notifications)
+    // Tier 4: Local Sidecar Registry (for POP_WAIT notifications)
     // ============================================================
     
     /**
@@ -214,7 +156,7 @@ public:
     void unregister_sidecar(SidecarDbPool* sidecar);
     
     // ============================================================
-    // Tier 7: Group Backoff Coordination (local only, not synced via UDP)
+    // Tier 5: Group Backoff Coordination (local only, not synced via UDP)
     // Used by sidecars to coordinate POP_WAIT polling
     // ============================================================
     
@@ -248,8 +190,7 @@ public:
     void reset_backoff_for_queue(const std::string& queue_name);
     
     // ============================================================
-    // Notifications (for InterInstanceComms compatibility)
-    // Also notifies local sidecars for POP_WAIT
+    // Notifications (local sidecars + cluster broadcast via UDP)
     // ============================================================
     
     /**
@@ -272,6 +213,18 @@ public:
     // ============================================================
     
     nlohmann::json get_stats() const;
+    
+    /**
+     * Get aggregated sidecar operation statistics
+     * Aggregates across all local sidecars (all workers)
+     */
+    nlohmann::json get_aggregated_sidecar_stats() const;
+    
+    /**
+     * Get per-queue backoff summary
+     * Returns array of queues with their backoff state
+     */
+    nlohmann::json get_queue_backoff_summary() const;
     
     /**
      * Get the underlying transport (for advanced use)
@@ -299,39 +252,42 @@ private:
     // Caches
     caches::QueueConfigCache queue_configs_;
     caches::ConsumerPresenceCache consumer_presence_;
-    caches::PartitionIdCache partition_ids_;
-    caches::LeaseHintCache lease_hints_;
     caches::ServerHealthTracker server_health_;
     
     // Background threads
     std::thread heartbeat_thread_;
     std::thread refresh_thread_;
-    std::thread cleanup_thread_;
     std::thread dns_refresh_thread_;
     
     // ============================================================
-    // Tier 6: Local Sidecar Registry
+    // Tier 4: Local Sidecar Registry
     // ============================================================
     std::vector<SidecarDbPool*> local_sidecars_;
     mutable std::shared_mutex sidecar_mutex_;
     
     // ============================================================
-    // Tier 7: Group Backoff State (local only)
+    // Tier 5: Group Backoff State (local only)
     // ============================================================
     struct GroupBackoffState {
         std::chrono::steady_clock::time_point last_checked;
+        std::chrono::steady_clock::time_point last_accessed;  // For cleanup - when was this entry last used
         int consecutive_empty = 0;
         std::chrono::milliseconds current_interval{100};
         bool in_flight = false;  // Protected by backoff_mutex_, not atomic
+        
+        GroupBackoffState() 
+            : last_checked(std::chrono::steady_clock::now())
+            , last_accessed(std::chrono::steady_clock::now()) {}
     };
     std::unordered_map<std::string, GroupBackoffState> group_backoff_;
     mutable std::mutex backoff_mutex_;  // Regular mutex, not shared_mutex (simpler, no atomic in struct)
     
-    // Backoff configuration (from config or defaults)
-    int backoff_threshold_ = 3;
-    double backoff_multiplier_ = 2.0;
-    int max_interval_ms_ = 1000;
-    int base_interval_ms_ = 100;
+    // POP_WAIT backoff configuration (from env vars or defaults)
+    int backoff_threshold_ = 3;           // POP_WAIT_BACKOFF_THRESHOLD
+    double backoff_multiplier_ = 2.0;     // POP_WAIT_BACKOFF_MULTIPLIER
+    int max_interval_ms_ = 1000;          // POP_WAIT_MAX_INTERVAL_MS
+    int base_interval_ms_ = 100;          // POP_WAIT_INITIAL_INTERVAL_MS
+    int backoff_cleanup_threshold_seconds_ = 3600;  // QUEUE_BACKOFF_CLEANUP_THRESHOLD
     
     // Internal: notify all local sidecars
     void notify_local_sidecars(const std::string& queue_name);
@@ -349,9 +305,6 @@ private:
     void handle_queue_config_delete(const std::string& sender, const nlohmann::json& payload);
     void handle_consumer_registered(const std::string& sender, const nlohmann::json& payload);
     void handle_consumer_deregistered(const std::string& sender, const nlohmann::json& payload);
-    void handle_partition_deleted(const std::string& sender, const nlohmann::json& payload);
-    void handle_lease_hint_acquired(const std::string& sender, const nlohmann::json& payload);
-    void handle_lease_hint_released(const std::string& sender, const nlohmann::json& payload);
     
     // ============================================================
     // Background Tasks
@@ -359,10 +312,16 @@ private:
     
     void heartbeat_loop();
     void refresh_loop();
-    void cleanup_loop();
     void dns_refresh_loop();
     
     void refresh_queue_configs_from_db();
+    
+    /**
+     * Cleanup stale backoff entries that haven't been accessed recently
+     * Called periodically from heartbeat_loop to prevent unbounded memory growth
+     * @return Number of entries removed
+     */
+    size_t cleanup_stale_backoff_entries();
     
     // ============================================================
     // Callbacks
@@ -375,4 +334,3 @@ private:
 extern std::shared_ptr<SharedStateManager> global_shared_state;
 
 } // namespace queen
-

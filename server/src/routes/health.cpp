@@ -2,7 +2,7 @@
 #include "queen/routes/route_context.hpp"
 #include "queen/routes/route_helpers.hpp"
 #include "queen/async_queue_manager.hpp"
-#include "queen/inter_instance_comms.hpp"
+#include "queen/shared_state_manager.hpp"
 #include "queen/sidecar_db_pool.hpp"
 #include <spdlog/spdlog.h>
 
@@ -31,11 +31,11 @@ void setup_health_routes(uWS::App* app, const RouteContext& ctx) {
                 {"version", "1.0.0"}
             };
             
-            // Add peer notification status
-            if (global_inter_instance_comms) {
-                response["peer_notify"] = global_inter_instance_comms->get_stats();
+            // Add shared state / cluster sync status
+            if (global_shared_state) {
+                response["shared_state"] = global_shared_state->get_stats();
             } else {
-                response["peer_notify"] = {{"enabled", false}};
+                response["shared_state"] = {{"enabled", false}};
             }
             
             // Add per-worker sidecar stats

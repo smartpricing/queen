@@ -8,11 +8,9 @@
 #include "queen/metrics_collector.hpp"
 #include "queen/retention_service.hpp"
 #include "queen/eviction_service.hpp"
-#include "queen/poll_intention_registry.hpp"
 #include "queen/stream_poll_worker.hpp"
 #include "queen/stream_poll_intention_registry.hpp"
 #include "queen/stream_manager.hpp"
-#include "queen/inter_instance_comms.hpp"
 #include "queen/shared_state_manager.hpp"
 #include "queen/sidecar_db_pool.hpp"
 #include "threadpool.hpp"
@@ -47,7 +45,6 @@ static std::shared_ptr<queen::EvictionService> global_eviction_service;
 // These globals need to be accessible from route files (non-static, in queen namespace)
 namespace queen {
 std::shared_ptr<ResponseRegistry> global_response_registry;
-std::shared_ptr<PollIntentionRegistry> global_poll_intention_registry;
 std::shared_ptr<StreamPollIntentionRegistry> global_stream_poll_registry;
 std::shared_ptr<StreamManager> global_stream_manager;
 }
@@ -336,12 +333,6 @@ static void worker_thread(const Config& config, int worker_id, int num_workers,
             // Create global response registry (shared across workers)
             queen::global_response_registry = std::make_shared<queen::ResponseRegistry>();
             
-            // Create global poll intention registry (shared by all workers)
-            queen::global_poll_intention_registry = std::make_shared<queen::PollIntentionRegistry>();
-            
-            // Set base poll interval for backoff tracking (for peer notification support)
-            queen::global_poll_intention_registry->set_base_poll_interval(config.queue.poll_db_interval);
-            
             // Create global stream poll registry (shared by all workers)
             queen::global_stream_poll_registry = std::make_shared<queen::StreamPollIntentionRegistry>();
             
@@ -365,7 +356,12 @@ static void worker_thread(const Config& config, int worker_id, int num_workers,
             queen::global_shared_state = std::make_shared<queen::SharedStateManager>(
                 config.inter_instance,
                 server_id,
-                global_async_db_pool
+                global_async_db_pool,
+                config.queue.backoff_cleanup_inactive_threshold,
+                config.queue.pop_wait_initial_interval_ms,
+                config.queue.pop_wait_backoff_threshold,
+                config.queue.pop_wait_backoff_multiplier,
+                config.queue.pop_wait_max_interval_ms
             );
             
             // Always call start() - it loads queue configs for encryption even when sync is disabled
@@ -385,41 +381,6 @@ static void worker_thread(const Config& config, int worker_id, int num_workers,
                 spdlog::info("Shared State Manager: Sync disabled, queue config cache active");
             }
             
-            // Initialize Inter-Instance Communication (peer notification)
-            // Always create the instance - it will only broadcast if peers are configured
-            queen::global_inter_instance_comms = std::make_shared<queen::InterInstanceComms>(
-                config.inter_instance,
-                queen::global_poll_intention_registry,
-                config.server.host,
-                config.server.port,
-                global_system_info.hostname  // For K8s self-detection
-            );
-            
-            if (config.inter_instance.has_any_peers()) {
-                spdlog::info("Inter-Instance Peer Notifications:");
-                if (config.inter_instance.has_peers()) {
-                    spdlog::info("  - HTTP Peers: {}", config.inter_instance.peers);
-                    spdlog::info("  - HTTP Batch interval: {}ms", config.inter_instance.batch_ms);
-                }
-                if (config.inter_instance.has_udp_peers()) {
-                    spdlog::info("  - UDP Peers: {}", config.inter_instance.udp_peers);
-                    spdlog::info("  - UDP Port: {}", config.inter_instance.udp_port);
-                }
-                queen::global_inter_instance_comms->start();
-                spdlog::info("Peer notifications started: {} HTTP peer(s), {} UDP peer(s)", 
-                            queen::global_inter_instance_comms->http_peer_count(),
-                            queen::global_inter_instance_comms->udp_peer_count());
-                
-                // Connect InterInstanceComms to SharedStateManager for targeted notifications
-                if (queen::global_shared_state && queen::global_shared_state->is_running()) {
-                    queen::global_inter_instance_comms->set_shared_state(queen::global_shared_state);
-                    spdlog::info("Inter-Instance Comms connected to SharedStateManager for targeted notifications");
-                }
-            } else {
-                spdlog::info("Peer notifications: Disabled (single server mode)");
-                spdlog::info("  - Set QUEEN_PEERS for HTTP notifications");
-                spdlog::info("  - Set QUEEN_UDP_PEERS for UDP notifications (lower latency)");
-            }
             
             spdlog::info("System info: hostname={}, port={}", 
                          global_system_info.hostname, 
@@ -463,7 +424,6 @@ static void worker_thread(const Config& config, int worker_id, int num_workers,
                     global_async_db_pool,
                     global_db_thread_pool,
                     global_system_thread_pool,
-                    queen::global_poll_intention_registry,
                     queen::global_stream_poll_registry,
                     queen::global_response_registry,
                     queen::global_shared_state,  // SharedState metrics
