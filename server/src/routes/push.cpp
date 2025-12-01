@@ -7,6 +7,8 @@
 #include "queen/inter_instance_comms.hpp"
 #include "queen/response_queue.hpp"
 #include "queen/sidecar_db_pool.hpp"
+#include "queen/encryption.hpp"
+#include "queen/shared_state_manager.hpp"
 #include <spdlog/spdlog.h>
 #include <chrono>
 #include <set>
@@ -15,6 +17,7 @@ namespace queen {
 
 // External globals (declared in acceptor_server.cpp)
 extern std::shared_ptr<ResponseRegistry> global_response_registry;
+extern std::shared_ptr<SharedStateManager> global_shared_state;
 
 namespace routes {
 
@@ -141,12 +144,66 @@ void setup_push_routes(uWS::App* app, const RouteContext& ctx) {
                         
                         // Build JSON array for stored procedure
                     // Generate UUIDv7 message IDs on C++ side
+                    // Get encryption service once for all items
+                    EncryptionService* enc_service = get_encryption_service();
+                    
                         nlohmann::json items_json = nlohmann::json::array();
                         for (const auto& item : items) {
+                        // Check if queue has encryption enabled
+                        // Note: SharedStateManager caches queue configs even when inter-instance sync is disabled
+                        bool queue_encryption_enabled = false;
+                        if (global_shared_state) {
+                            auto cached_config = global_shared_state->get_queue_config(item.queue);
+                            if (cached_config) {
+                                queue_encryption_enabled = cached_config->encryption_enabled;
+                                spdlog::info("[Worker {}] PUSH: Queue '{}' encryption_enabled={} (from cache)", 
+                                            ctx.worker_id, item.queue, queue_encryption_enabled);
+                            } else {
+                                spdlog::warn("[Worker {}] PUSH: Queue '{}' config NOT in cache!", 
+                                            ctx.worker_id, item.queue);
+                            }
+                        } else {
+                            spdlog::warn("[Worker {}] PUSH: global_shared_state is NULL!", ctx.worker_id);
+                        }
+                        
+                        // Log encryption service status
+                        spdlog::info("[Worker {}] PUSH: enc_service={}, enabled={}", 
+                                    ctx.worker_id, 
+                                    enc_service != nullptr,
+                                    enc_service ? enc_service->is_enabled() : false);
+                        
+                        // Encrypt payload if queue requires it
+                        nlohmann::json payload_to_store = item.payload;
+                        bool is_encrypted = false;
+                        
+                        if (queue_encryption_enabled && enc_service && enc_service->is_enabled()) {
+                            std::string payload_str = item.payload.dump();
+                            auto encrypted = enc_service->encrypt_payload(payload_str);
+                            if (encrypted.has_value()) {
+                                payload_to_store = {
+                                    {"encrypted", encrypted->encrypted},
+                                    {"iv", encrypted->iv},
+                                    {"authTag", encrypted->auth_tag}
+                                };
+                                is_encrypted = true;
+                                spdlog::info("[Worker {}] PUSH: Encrypted payload for queue '{}'", 
+                                            ctx.worker_id, item.queue);
+                            } else {
+                                spdlog::warn("[Worker {}] PUSH: Encryption failed for queue '{}', storing plaintext", 
+                                            ctx.worker_id, item.queue);
+                            }
+                        } else if (queue_encryption_enabled) {
+                            spdlog::warn("[Worker {}] PUSH: Queue '{}' requires encryption but service not available (enc_service={}, enabled={})", 
+                                        ctx.worker_id, item.queue, 
+                                        enc_service != nullptr, 
+                                        enc_service ? enc_service->is_enabled() : false);
+                        }
+                        
                             nlohmann::json item_json = {
                                 {"queue", item.queue},
                                 {"partition", item.partition},
-                                {"payload", item.payload},
+                                {"payload", payload_to_store},
+                            {"is_encrypted", is_encrypted},
                                 {"messageId", ctx.async_queue_manager->generate_uuid()}  // UUIDv7
                             };
                             if (item.transaction_id.has_value() && !item.transaction_id->empty()) {

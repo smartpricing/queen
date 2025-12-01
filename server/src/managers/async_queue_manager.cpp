@@ -446,10 +446,18 @@ bool AsyncQueueManager::initialize_schema() {
 // --- Maintenance Mode ---
 
 bool AsyncQueueManager::check_maintenance_mode_with_cache() {
-    // NO CACHE: Always check database for maintenance mode
-    // This ensures all workers see the current state immediately
-    // Performance impact is minimal since maintenance mode toggles are rare
+    // Check if cache is still valid (reduces DB churn from 10 queries/sec to 1 query/sec)
+    auto now_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::steady_clock::now().time_since_epoch()
+    ).count();
     
+    uint64_t last_check = last_maintenance_check_ms_.load();
+    if (last_check > 0 && (now_ms - last_check) < MAINTENANCE_CACHE_TTL_MS) {
+        // Cache is still valid, return cached value
+        return maintenance_mode_cached_.load();
+    }
+    
+    // Cache expired or first check - query database
     try {
         auto conn = async_db_pool_->acquire();
         
@@ -468,8 +476,9 @@ bool AsyncQueueManager::check_maintenance_mode_with_cache() {
             enabled = (val && std::string(val) == "true");
         }
         
-        // Update local cache for status endpoint
+        // Update cache
         maintenance_mode_cached_.store(enabled);
+        last_maintenance_check_ms_.store(now_ms);
         
         return enabled;
     } catch (const std::exception& e) {
@@ -1395,8 +1404,8 @@ bool AsyncQueueManager::configure_queue(const std::string& queue_name,
             spdlog::debug("Invalidated partition cache for {}:Default", queue_name);
         }
         
-        // Broadcast queue config to peers (Phase 2: Queue Config Cache)
-        if (global_shared_state && global_shared_state->is_enabled()) {
+        // Update queue config cache (needed for encryption, also broadcasts to peers if sync enabled)
+        if (global_shared_state) {
             caches::CachedQueueConfig cached_config;
             cached_config.name = queue_name;
             cached_config.namespace_name = namespace_name;
@@ -1415,7 +1424,7 @@ bool AsyncQueueManager::configure_queue(const std::string& queue_name,
             cached_config.completed_retention_seconds = options.completed_retention_seconds;
             cached_config.encryption_enabled = options.encryption_enabled;
             global_shared_state->set_queue_config(queue_name, cached_config);
-            spdlog::debug("Queue '{}' config broadcast to peers", queue_name);
+            spdlog::info("Queue '{}' config cached (encryption_enabled={})", queue_name, options.encryption_enabled);
         }
         
         spdlog::info("Queue '{}' fully configured with Default partition", queue_name);

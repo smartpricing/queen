@@ -67,8 +67,9 @@ BEGIN
                 ON CONFLICT (queue_id, name) DO UPDATE SET name = EXCLUDED.name
                 RETURNING id INTO v_partition_id;
                 
-                INSERT INTO queen.messages (id, transaction_id, partition_id, payload, trace_id)
-                VALUES (v_message_id, v_txn_id, v_partition_id, v_payload, v_trace_id);
+                INSERT INTO queen.messages (id, transaction_id, partition_id, payload, trace_id, is_encrypted)
+                VALUES (v_message_id, v_txn_id, v_partition_id, v_payload, v_trace_id, 
+                        COALESCE((v_op->>'is_encrypted')::boolean, false));
                 
                 INSERT INTO queen.partition_lookup (partition_id, queue_name, last_message_id, last_message_created_at)
                 VALUES (v_partition_id, v_queue_name, v_message_id, NOW())

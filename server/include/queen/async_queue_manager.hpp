@@ -71,7 +71,7 @@ private:
     // Maintenance mode (cached from database for multi-instance support)
     std::atomic<bool> maintenance_mode_cached_{false};
     std::atomic<uint64_t> last_maintenance_check_ms_{0};
-    static constexpr int MAINTENANCE_CACHE_TTL_MS = 100;  // 100ms cache TTL (was 5000ms)
+    static constexpr int MAINTENANCE_CACHE_TTL_MS = 1000;  // 1 second cache TTL (reduces DB churn)
     
     // Internal helper methods
     std::string generate_transaction_id();
@@ -163,8 +163,8 @@ public:
     
     // Maintenance mode (multi-instance support via database)
     void set_maintenance_mode(bool enabled);
-    bool get_maintenance_mode() const { return maintenance_mode_cached_.load(); }
-    bool get_maintenance_mode_fresh();  // Force fresh check from DB
+    bool get_maintenance_mode() { return check_maintenance_mode_with_cache(); }  // Uses TTL-based caching
+    bool get_maintenance_mode_fresh();  // Force fresh check from DB (bypasses cache)
     size_t get_buffer_pending_count() const;
     bool is_buffer_healthy() const;
     nlohmann::json get_buffer_stats() const;

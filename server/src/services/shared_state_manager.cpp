@@ -59,7 +59,18 @@ SharedStateManager::~SharedStateManager() {
 }
 
 void SharedStateManager::start() {
-    if (!enabled_ || running_) return;
+    // Always load queue configs on startup (needed for encryption even when sync disabled)
+    if (db_pool_) {
+        spdlog::info("SharedStateManager: Loading queue configs from database...");
+        refresh_queue_configs_from_db();
+    }
+    
+    if (!enabled_ || running_) {
+        if (!enabled_) {
+            spdlog::info("SharedStateManager: Sync disabled, but queue config cache is available");
+        }
+        return;
+    }
     
     // Resolve peer hostnames
     transport_->resolve_peers();

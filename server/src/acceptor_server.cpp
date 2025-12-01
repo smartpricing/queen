@@ -368,6 +368,9 @@ static void worker_thread(const Config& config, int worker_id, int num_workers,
                 global_async_db_pool
             );
             
+            // Always call start() - it loads queue configs for encryption even when sync is disabled
+            queen::global_shared_state->start();
+            
             if (config.inter_instance.has_udp_peers() && config.inter_instance.shared_state.enabled) {
                 spdlog::info("Shared State Manager (UDPSYNC):");
                 spdlog::info("  - UDP Peers: {}", config.inter_instance.udp_peers);
@@ -378,9 +381,8 @@ static void worker_thread(const Config& config, int worker_id, int num_workers,
                 spdlog::info("  - Heartbeat: {}ms interval, {}ms dead threshold",
                             config.inter_instance.shared_state.heartbeat_interval_ms,
                             config.inter_instance.shared_state.dead_threshold_ms);
-                queen::global_shared_state->start();
             } else {
-                spdlog::info("Shared State Manager: Disabled (no UDP peers or sync disabled)");
+                spdlog::info("Shared State Manager: Sync disabled, queue config cache active");
             }
             
             // Initialize Inter-Instance Communication (peer notification)
@@ -597,9 +599,45 @@ static void worker_thread(const Config& config, int worker_id, int num_workers,
         spdlog::info("[Worker {}] Creating per-worker sidecar ({} connections, total pool split across {} workers)...", 
                     worker_id, per_worker_connections, num_workers);
         
-        auto sidecar_callback = [worker_loop, worker_id](queen::SidecarResponse resp) {
+        // Helper lambda to decrypt messages in a response
+        auto decrypt_messages = [](nlohmann::json& response) {
+            if (!response.contains("messages") || !response["messages"].is_array()) {
+                return;
+            }
+            
+            queen::EncryptionService* enc_service = queen::get_encryption_service();
+            if (!enc_service || !enc_service->is_enabled()) {
+                return;
+            }
+            
+            for (auto& msg : response["messages"]) {
+                // Check if 'data' field contains encrypted payload
+                if (msg.contains("data") && msg["data"].is_object()) {
+                    auto& data = msg["data"];
+                    if (data.contains("encrypted") && data.contains("iv") && data.contains("authTag")) {
+                        try {
+                            queen::EncryptionService::EncryptedData encrypted_data{
+                                data["encrypted"].get<std::string>(),
+                                data["iv"].get<std::string>(),
+                                data["authTag"].get<std::string>()
+                            };
+                            auto decrypted = enc_service->decrypt_payload(encrypted_data);
+                            if (decrypted.has_value()) {
+                                msg["data"] = nlohmann::json::parse(decrypted.value());
+                                spdlog::debug("Decrypted message payload");
+                            }
+                        } catch (const std::exception& e) {
+                            spdlog::warn("Failed to decrypt message: {}", e.what());
+                            // Keep encrypted payload on failure
+                        }
+                    }
+                }
+            }
+        };
+        
+        auto sidecar_callback = [worker_loop, worker_id, decrypt_messages](queen::SidecarResponse resp) {
             // Capture response data by value, then defer to event loop for safe delivery
-            worker_loop->defer([resp = std::move(resp), worker_id]() {
+            worker_loop->defer([resp = std::move(resp), worker_id, decrypt_messages]() {
                 // Parse JSON and determine status code based on operation type
                 nlohmann::json json_response;
                 int status_code = 200;
@@ -631,6 +669,8 @@ static void worker_thread(const Config& config, int worker_id, int num_workers,
                                     json_response[0].contains("result")) {
                                     json_response = json_response[0]["result"];
                                 }
+                                // Decrypt any encrypted payloads
+                                decrypt_messages(json_response);
                                 if (json_response.contains("messages") && json_response["messages"].empty()) {
                                     status_code = 204;  // No Content
                                 }
@@ -647,6 +687,8 @@ static void worker_thread(const Config& config, int worker_id, int num_workers,
                                         }
                                     }
                                 }
+                                // Decrypt any encrypted payloads
+                                decrypt_messages(json_response);
                                 if (json_response.contains("messages") && json_response["messages"].empty()) {
                                     status_code = 204;  // No Content
                                 }

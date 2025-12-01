@@ -313,23 +313,23 @@ BEGIN
             bm.idx,
             bm.consumer_group,
             jsonb_agg(
-                jsonb_build_object(
-                    'id', bm.message_id::text,
-                    'transactionId', bm.transaction_id,
-                    'traceId', bm.trace_id::text,
-                    'data', bm.payload,
-                    'retryCount', 0,
-                    'priority', 0,
-                    'createdAt', to_char(bm.created_at, 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"'),
-                    'queue', bm.queue_name,
-                    'partition', bm.allocated_partition_name,
-                    'partitionId', bm.allocated_partition_id::text,
+                        jsonb_build_object(
+                            'id', bm.message_id::text,
+                            'transactionId', bm.transaction_id,
+                            'traceId', bm.trace_id::text,
+                            'data', bm.payload,
+                            'retryCount', 0,
+                            'priority', 0,
+                            'createdAt', to_char(bm.created_at, 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"'),
+                            'queue', bm.queue_name,
+                            'partition', bm.allocated_partition_name,
+                            'partitionId', bm.allocated_partition_id::text,
                     'consumerGroup', CASE WHEN bm.consumer_group = '__QUEUE_MODE__' THEN NULL ELSE bm.consumer_group END,
-                    'leaseId', bm.lease_id
-                )
-                ORDER BY bm.created_at, bm.message_id
+                            'leaseId', bm.lease_id
+                        )
+                        ORDER BY bm.created_at, bm.message_id
             ) AS messages
-        FROM batch_messages bm
+                    FROM batch_messages bm
         GROUP BY bm.idx, bm.consumer_group
     )
     SELECT COALESCE(jsonb_agg(

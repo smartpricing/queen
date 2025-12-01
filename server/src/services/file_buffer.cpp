@@ -422,19 +422,18 @@ void FileBufferManager::background_processor() {
         retry_counter++;
         
         try {
-            // CHECK: Maintenance mode - check DB as source of truth for multi-server sync
+            // CHECK: Maintenance mode - use cached value (refreshed every 1s by TTL)
+            // This avoids DB churn while still seeing maintenance mode changes within ~1 second
             bool db_maintenance = false;
             bool db_check_succeeded = false;
             try {
                 if (queue_manager_) {
-                    db_maintenance = queue_manager_->get_maintenance_mode_fresh();
+                    db_maintenance = queue_manager_->get_maintenance_mode();  // Uses cached value
                     db_check_succeeded = true;
                 }
             } catch (const std::exception& e) {
-                // DB check failed - DON'T skip processing!
-                // The drain itself will fail if DB is actually down, which is fine.
-                // We must NOT fall back to local flag because it might be stale.
-                spdlog::warn("Background processor: DB maintenance check failed ({}), proceeding with drain", e.what());
+                // Cache read failed (shouldn't happen) - proceed with drain
+                spdlog::warn("Background processor: Maintenance mode check failed ({}), proceeding with drain", e.what());
                 db_maintenance = false;  // Assume maintenance is OFF, let drain try
             }
             
