@@ -307,40 +307,44 @@ BEGIN
       AND br.lease_id IS NOT NULL
       AND NOT EXISTS (SELECT 1 FROM batch_messages bm WHERE bm.idx = br.idx);
     
-    -- STEP 7: Build result JSON
+    -- STEP 7: Build result JSON (pre-aggregate to avoid O(n²) correlated subquery)
+    WITH messages_by_idx AS (
+        SELECT 
+            bm.idx,
+            bm.consumer_group,
+            jsonb_agg(
+                jsonb_build_object(
+                    'id', bm.message_id::text,
+                    'transactionId', bm.transaction_id,
+                    'traceId', bm.trace_id::text,
+                    'data', bm.payload,
+                    'retryCount', 0,
+                    'priority', 0,
+                    'createdAt', to_char(bm.created_at, 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"'),
+                    'queue', bm.queue_name,
+                    'partition', bm.allocated_partition_name,
+                    'partitionId', bm.allocated_partition_id::text,
+                    'consumerGroup', CASE WHEN bm.consumer_group = '__QUEUE_MODE__' THEN NULL ELSE bm.consumer_group END,
+                    'leaseId', bm.lease_id
+                )
+                ORDER BY bm.created_at, bm.message_id
+            ) AS messages
+        FROM batch_messages bm
+        GROUP BY bm.idx, bm.consumer_group
+    )
     SELECT COALESCE(jsonb_agg(
         jsonb_build_object(
             'idx', br.idx,
             'result', jsonb_build_object(
-                'messages', COALESCE(
-                    (SELECT jsonb_agg(
-                        jsonb_build_object(
-                            'id', bm.message_id::text,
-                            'transactionId', bm.transaction_id,
-                            'traceId', bm.trace_id::text,
-                            'data', bm.payload,
-                            'retryCount', 0,
-                            'priority', 0,
-                            'createdAt', to_char(bm.created_at, 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"'),
-                            'queue', bm.queue_name,
-                            'partition', bm.allocated_partition_name,
-                            'partitionId', bm.allocated_partition_id::text,
-                            'consumerGroup', CASE WHEN br.consumer_group = '__QUEUE_MODE__' THEN NULL ELSE br.consumer_group END,
-                            'leaseId', bm.lease_id
-                        )
-                        ORDER BY bm.created_at, bm.message_id
-                    )
-                    FROM batch_messages bm
-                    WHERE bm.idx = br.idx
-                    ), '[]'::jsonb
-                ),
+                'messages', COALESCE(mbi.messages, '[]'::jsonb),
                 'leaseId', br.lease_id
             )
         )
         ORDER BY br.idx
     ), '[]'::jsonb)
     INTO v_results
-    FROM batch_requests br;
+    FROM batch_requests br
+    LEFT JOIN messages_by_idx mbi ON mbi.idx = br.idx;
     
     RETURN v_results;
 END;
