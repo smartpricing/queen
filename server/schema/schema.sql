@@ -1,6 +1,6 @@
 -- ============================================================================
 -- Queen Message Queue - Consolidated Database Schema
--- Version: 9 (includes all stored procedures up to pop_messages_batch_v2)
+-- Version: 0 (base schema)
 -- ============================================================================
 --
 -- This file contains the complete current schema for Queen MQ.
@@ -8,7 +8,7 @@
 --
 -- Usage:
 -- - Fresh install: Run this file once to create all objects
--- - Upgrades: Apply migrations from server/migrations/ with version > 9
+-- - Upgrades: Apply migrations from server/migrations/ with version > 0
 --
 -- ============================================================================
 
@@ -444,10 +444,10 @@ ON CONFLICT (key) DO NOTHING;
 -- ============================================================================
 -- Mark Schema Version
 -- ============================================================================
--- This is the base schema (version 9).
--- Future migrations go in server/migrations/ with version > 9.
+-- This is the base schema (version 0).
+-- Future migrations go in server/migrations/ with version > 0.
 -- The application will check this table and apply any missing migrations.
 
 INSERT INTO queen.schema_version (version, description)
-VALUES (9, 'Consolidated base schema with all stored procedures')
+VALUES (0, 'Base schema')
 ON CONFLICT (version) DO NOTHING;
