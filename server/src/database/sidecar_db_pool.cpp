@@ -799,6 +799,10 @@ void SidecarDbPool::drain_pending_to_slots() {
                         param_ptrs.push_back(p.c_str());
                     }
                     
+                    // Track queue wait time for POP operations
+                    auto queue_wait_us = std::chrono::duration_cast<std::chrono::microseconds>(
+                        std::chrono::steady_clock::now() - req.queued_at).count();
+                    
                     int sent = PQsendQueryParams(
                         free_slot->conn,
                         req.sql.c_str(),
@@ -814,6 +818,7 @@ void SidecarDbPool::drain_pending_to_slots() {
                         free_slot->op_type = req.op_type;
                         free_slot->total_items = req.item_count;
                         free_slot->query_start = std::chrono::steady_clock::now();
+                        free_slot->queue_wait_us = queue_wait_us;
                         total_queries_++;
                 
                 // Start watching for write (to flush) and read (for results)
@@ -979,12 +984,22 @@ void SidecarDbPool::drain_pending_to_slots() {
                 );
                 
                 if (sent) {
+                    // Track queue wait time for the batch (use first request's queued_at)
+                    auto now = std::chrono::steady_clock::now();
+                    int64_t max_queue_wait_us = 0;
+                    for (const auto& req : batch) {
+                        auto wait_us = std::chrono::duration_cast<std::chrono::microseconds>(
+                            now - req.queued_at).count();
+                        if (wait_us > max_queue_wait_us) max_queue_wait_us = wait_us;
+                    }
+                    
                     free_slot->busy = true;
                     free_slot->is_batched = true;
                     free_slot->batched_requests = std::move(batch_info);
                     free_slot->op_type = batch_op_type;
                     free_slot->total_items = current_index;
-                    free_slot->query_start = std::chrono::steady_clock::now();
+                    free_slot->query_start = now;
+                    free_slot->queue_wait_us = max_queue_wait_us;
                     total_queries_++;
             
             // Start watching for write (to flush) and read (for results)
@@ -1065,9 +1080,20 @@ void SidecarDbPool::process_slot_result(ConnectionSlot& slot) {
                             PQclear(last_result);
                         }
                         
-                        spdlog::debug("[SidecarDbPool] MICRO-BATCH complete: op={} {} requests, {} total items in {}ms",
-                                    static_cast<int>(slot.op_type), slot.batched_requests.size(), 
-                                    slot.total_items, query_time / 1000);
+                        const char* batch_op_name = "UNKNOWN";
+                        switch (slot.op_type) {
+                            case SidecarOpType::PUSH: batch_op_name = "PUSH"; break;
+                            case SidecarOpType::POP: batch_op_name = "POP"; break;
+                            case SidecarOpType::POP_BATCH: batch_op_name = "POP_BATCH"; break;
+                            case SidecarOpType::POP_WAIT: batch_op_name = "POP_WAIT"; break;
+                            case SidecarOpType::ACK: batch_op_name = "ACK"; break;
+                            case SidecarOpType::ACK_BATCH: batch_op_name = "ACK_BATCH"; break;
+                            case SidecarOpType::TRANSACTION: batch_op_name = "TRANSACTION"; break;
+                            case SidecarOpType::RENEW_LEASE: batch_op_name = "RENEW_LEASE"; break;
+                        }
+                        spdlog::info("[Worker {}] [Sidecar] {} TIMING: queue_wait={}us, db_exec={}us | {} requests, {} items",
+                                    worker_id_, batch_op_name, slot.queue_wait_us, query_time,
+                                    slot.batched_requests.size(), slot.total_items);
                         
                         // Update per-op stats
                         {
@@ -1152,6 +1178,23 @@ void SidecarDbPool::process_slot_result(ConnectionSlot& slot) {
                             tracker = std::move(it->second);
                             pop_wait_trackers_.erase(it);
                         }
+                    }
+                    
+                    // Log timing for single POP requests
+                    {
+                        const char* single_op_name = "UNKNOWN";
+                        switch (slot.op_type) {
+                            case SidecarOpType::PUSH: single_op_name = "PUSH"; break;
+                            case SidecarOpType::POP: single_op_name = "POP"; break;
+                            case SidecarOpType::POP_BATCH: single_op_name = "POP_BATCH"; break;
+                            case SidecarOpType::POP_WAIT: single_op_name = "POP_WAIT"; break;
+                            case SidecarOpType::ACK: single_op_name = "ACK"; break;
+                            case SidecarOpType::ACK_BATCH: single_op_name = "ACK_BATCH"; break;
+                            case SidecarOpType::TRANSACTION: single_op_name = "TRANSACTION"; break;
+                            case SidecarOpType::RENEW_LEASE: single_op_name = "RENEW_LEASE"; break;
+                        }
+                        spdlog::info("[Worker {}] [Sidecar] {} TIMING: queue_wait={}us, db_exec={}us | single request",
+                                    worker_id_, single_op_name, slot.queue_wait_us, query_time);
                     }
                     
                     if (was_pop_wait) {

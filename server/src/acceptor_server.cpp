@@ -602,8 +602,10 @@ static void worker_thread(const Config& config, int worker_id, int num_workers,
         };
         
         auto sidecar_callback = [worker_loop, worker_id, decrypt_messages, push_failover_storage, file_buffer](queen::SidecarResponse resp) {
+            auto callback_start = std::chrono::steady_clock::now();
             // Capture response data by value, then defer to event loop for safe delivery
-            worker_loop->defer([resp = std::move(resp), worker_id, decrypt_messages, push_failover_storage, file_buffer]() {
+            worker_loop->defer([resp = std::move(resp), worker_id, decrypt_messages, push_failover_storage, file_buffer, callback_start]() {
+                auto defer_start = std::chrono::steady_clock::now();
                 // Parse JSON and determine status code based on operation type
                 nlohmann::json json_response;
                 int status_code = 200;
@@ -813,6 +815,12 @@ static void worker_thread(const Config& config, int worker_id, int num_workers,
                 bool sent = queen::global_response_registry->send_response(
                     resp.request_id, json_response, is_error, status_code);
                 
+                auto send_end = std::chrono::steady_clock::now();
+                auto callback_wait_us = std::chrono::duration_cast<std::chrono::microseconds>(
+                    defer_start - callback_start).count();
+                auto json_parse_us = std::chrono::duration_cast<std::chrono::microseconds>(
+                    send_end - defer_start).count();
+                
                 if (sent) {
                     // Extract queue info for better logging
                     std::string queue_info;
@@ -829,14 +837,17 @@ static void worker_thread(const Config& config, int worker_id, int num_workers,
                         }
                     }
                     
-                    if (!queue_info.empty()) {
+                    // Log timing breakdown for POP operations (all types)
+                    if (resp.op_type == queen::SidecarOpType::POP || 
+                        resp.op_type == queen::SidecarOpType::POP_BATCH ||
+                        resp.op_type == queen::SidecarOpType::POP_WAIT) {
+                        spdlog::info("[Worker {}] {} TIMING: db_exec={}us, callback_wait={}us, json_parse_send={}us | {} (status={})",
+                                    worker_id, op_name, resp.query_time_us, callback_wait_us, json_parse_us,
+                                    queue_info.empty() ? "(no messages)" : queue_info, status_code);
+                    } else if (!queue_info.empty()) {
                         spdlog::info("[Worker {}] {} RESPONSE: {} (status={})", 
                                     worker_id, op_name, queue_info, status_code);
-                    } else if (status_code == 204) {
-                        // Empty POP/POP_WAIT response (no messages) - debug level to reduce noise
-                        spdlog::debug("[Worker {}] {} RESPONSE: (status=204, no messages)", 
-                                    worker_id, op_name);
-                    } else {
+                    } else if (status_code != 204) {
                         spdlog::info("[Worker {}] {} RESPONSE: (status={})", 
                                     worker_id, op_name, status_code);
                     }

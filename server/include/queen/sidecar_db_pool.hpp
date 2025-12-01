@@ -198,6 +198,7 @@ private:
         bool busy = false;
         std::string request_id;  // For single-request mode
         std::chrono::steady_clock::time_point query_start;
+        int64_t queue_wait_us = 0;  // Time spent waiting in queue before DB execution
         
         // Micro-batching: tracks multiple requests in one SP call
         std::vector<BatchedRequestInfo> batched_requests;
