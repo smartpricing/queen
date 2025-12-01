@@ -40,7 +40,7 @@ WORKDIR /usr/build/server
 RUN make deps -j 8
 
 # Now build (wildcards will work because vendor/uSockets exists)
-RUN make build-only -j 24
+RUN make build-only -j 8
 
 # Verify
 RUN test -f bin/queen-server && echo "✅ Build successful"
@@ -61,6 +61,10 @@ WORKDIR /app
 
 # Copy C++ server binary from builder
 COPY --from=cpp-builder /usr/build/server/bin/queen-server ./bin/queen-server
+
+# Copy schema and migrations for database initialization
+COPY --from=cpp-builder /usr/build/server/schema ./schema
+COPY --from=cpp-builder /usr/build/server/migrations ./migrations
 
 # Copy frontend build from builder
 COPY --from=frontend-builder /app/webapp/dist ./webapp/dist

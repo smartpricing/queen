@@ -384,21 +384,26 @@ bool AsyncQueueManager::initialize_schema() {
             }
             spdlog::info("Base schema applied successfully");
             
-            // Load stored procedures
-            std::string procedures_dir = schema_dir + "/procedures";
-            auto procedure_files = get_sql_files(procedures_dir);
-            for (const auto& proc_file : procedure_files) {
-                spdlog::info("Loading stored procedure: {}", proc_file);
-                std::string proc_sql = read_sql_file(proc_file);
-                if (!exec_sql(conn.get(), proc_sql, proc_file)) {
-                    spdlog::error("Failed to load procedure: {}", proc_file);
-                    return false;
-                }
-            }
-            
             current_version = query_int(conn.get(), 
                 "SELECT COALESCE(MAX(version), 0) FROM queen.schema_version", 0);
             spdlog::info("Schema initialized to version {}", current_version);
+        }
+        
+        // Always load/update stored procedures (they use CREATE OR REPLACE, so idempotent)
+        {
+            std::string procedures_dir = schema_dir + "/procedures";
+            auto procedure_files = get_sql_files(procedures_dir);
+            if (!procedure_files.empty()) {
+                spdlog::info("Loading {} stored procedure(s)...", procedure_files.size());
+                for (const auto& proc_file : procedure_files) {
+                    spdlog::debug("Loading stored procedure: {}", proc_file);
+                    std::string proc_sql = read_sql_file(proc_file);
+                    if (!exec_sql(conn.get(), proc_sql, proc_file)) {
+                        spdlog::error("Failed to load procedure: {}", proc_file);
+                        return false;
+                    }
+                }
+            }
         }
         
         // Apply any pending migrations (for future upgrades)
