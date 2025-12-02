@@ -79,7 +79,6 @@ export default defineConfig({
             { text: 'Consumer Groups', link: '/guide/consumer-groups' },
             { text: 'Transactions', link: '/guide/transactions' },
             { text: 'Long Polling', link: '/guide/long-polling' },
-            { text: 'Streaming', link: '/guide/streaming' },
             { text: 'Dead Letter Queue', link: '/guide/dlq' }
           ]
         },
@@ -110,8 +109,7 @@ export default defineConfig({
             { text: 'Python Examples', link: '/clients/examples/python' },
             { text: 'Batch Operations', link: '/clients/examples/batch' },
             { text: 'Transactions', link: '/clients/examples/transactions' },
-            { text: 'Consumer Groups', link: '/clients/examples/consumer-groups' },
-            { text: 'Streaming', link: '/clients/examples/streaming' }
+            { text: 'Consumer Groups', link: '/clients/examples/consumer-groups' }
           ]
         }
       ],

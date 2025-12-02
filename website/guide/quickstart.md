@@ -298,7 +298,6 @@ Now that you have Queen running, explore more advanced features:
 
 ### Explore Features
 - [Long Polling](/guide/long-polling) - Efficient message waiting
-- [Streaming](/guide/streaming) - Real-time message streams
 - [Dead Letter Queue](/guide/dlq) - Handle failed messages
 - [Message Tracing](/guide/tracing) - Debug workflows
 
@@ -312,7 +311,6 @@ Now that you have Queen running, explore more advanced features:
 - [Basic Usage](/clients/examples/basic) - Simple patterns
 - [Batch Operations](/clients/examples/batch) - High throughput
 - [Consumer Groups](/clients/examples/consumer-groups) - Scalable processing
-- [Streaming Examples](/clients/examples/streaming) - Real-time processing
 
 ## Common Next Steps
 

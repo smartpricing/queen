@@ -1142,82 +1142,6 @@ await consumer_task
 await queen.close()
 ```
 
-## Streaming (Windowed Processing)
-
-Process messages in time-based windows with aggregation.
-
-### Define a Stream
-
-```python
-# Define stream
-await (queen.stream('user-events', 'analytics')
-    .sources(['events', 'actions', 'clicks'])
-    .partitioned()
-    .tumbling_time(60)        # 60 second windows
-    .grace_period(30)         # 30 second late arrival grace
-    .lease_timeout(60)        # 60 second lease
-    .define())
-```
-
-### Consume Windows
-
-```python
-consumer = queen.consumer('user-events', 'my-group')
-
-async def process_window(window):
-    # Get all messages
-    print(f"Window has {window.size()} messages")
-    
-    # Filter messages
-    window.filter(lambda msg: msg['data']['value'] > 100)
-    
-    # Group by key
-    groups = window.group_by('data.userId')
-    print(f"Found {len(groups)} users")
-    
-    # Aggregate
-    stats = window.aggregate({
-        'count': True,
-        'sum': ['data.amount'],
-        'avg': ['data.duration'],
-        'min': ['data.price'],
-        'max': ['data.price']
-    })
-    
-    print('Stats:', stats)
-    # {'count': 42, 'sum': {'data.amount': 1234.56}, ...}
-
-await consumer.process(process_window)
-```
-
-### Window Methods
-
-```python
-# Filter
-window.filter(lambda msg: msg['data']['status'] == 'active')
-
-# Group by (supports dot notation)
-groups = window.group_by('data.userId')
-for user_id, messages in groups.items():
-    print(f"User {user_id}: {len(messages)} messages")
-
-# Aggregate
-stats = window.aggregate({
-    'count': True,
-    'sum': ['data.amount', 'data.quantity'],
-    'avg': ['data.price'],
-    'min': ['data.timestamp'],
-    'max': ['data.timestamp']
-})
-
-# Reset to original messages
-window.reset()
-
-# Get sizes
-original = window.original_size()
-current = window.size()
-```
-
 ## Concurrency Patterns
 
 ### Parallel Workers
@@ -1538,10 +1462,6 @@ queen.get_buffer_stats()
 # Consumer groups
 await queen.delete_consumer_group(group, delete_metadata)
 await queen.update_consumer_group_timestamp(group, timestamp)
-
-# Streaming
-queen.stream(name, namespace) -> StreamBuilder
-queen.consumer(stream_name, consumer_group) -> StreamConsumer
 
 # Shutdown
 await queen.close()

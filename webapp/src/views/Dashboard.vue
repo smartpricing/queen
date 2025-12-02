@@ -12,7 +12,7 @@
         <!-- System Status Banner -->
         <MaintenanceCard />
         
-        <!-- Main Metrics - 3 Column Layout -->
+        <!-- Main Metrics - 2 Column Layout -->
         <div class="main-metrics-grid">
           <!-- 1. System Status Card -->
           <div class="status-card">
@@ -204,100 +204,6 @@
             </div>
           </div>
 
-          <!-- 3. Streaming Metrics Card -->
-          <div class="status-card">
-            <div class="status-card-header">
-              <div class="flex items-center gap-2">
-                <div class="status-icon-wrapper">
-                  <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2.5">
-                    <path stroke-linecap="round" stroke-linejoin="round" d="M13 10V3L4 14h7v7l9-11h-7z" />
-                  </svg>
-                </div>
-                <h3 class="status-card-title">Streaming</h3>
-              </div>
-              <button 
-                @click="navigateToStreams"
-                class="view-all-button"
-              >
-                View All
-                <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2">
-                <path stroke-linecap="round" stroke-linejoin="round" d="M9 5l7 7-7 7" />
-              </svg>
-              </button>
-            </div>
-            <div class="status-card-body-improved">
-              <!-- Stream Overview -->
-              <div class="status-section-improved">
-                <div class="status-section-header">
-                  <svg class="w-4 h-4 text-gray-400 dark:text-gray-500" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2">
-                    <path stroke-linecap="round" stroke-linejoin="round" d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10" />
-                  </svg>
-                  <span class="status-section-title">Streams</span>
-                </div>
-                <div class="status-metrics-grid-improved">
-                  <div class="status-metric-box metric-card-clickable" @click="navigateToStreams">
-                    <div class="flex items-center justify-between mb-2">
-                      <span class="status-metric-label-improved">TOTAL</span>
-                    </div>
-                    <div class="status-metric-value-lg text-purple-600 dark:text-purple-400">
-                      {{ formatNumber(streamStats?.totalStreams || 0) }}
-                    </div>
-                    <div class="status-metric-detail">{{ formatNumber(streamStats?.partitionedStreams || 0) }} partitioned</div>
-                  </div>
-                  <div class="status-metric-box metric-card-clickable" @click="navigateToStreams">
-                    <div class="flex items-center justify-between mb-2">
-                      <span class="status-metric-label-improved">CONSUMER GROUPS</span>
-                    </div>
-                    <div class="status-metric-value-lg text-teal-600 dark:text-teal-400">
-                      {{ formatNumber(streamStats?.totalConsumerGroups || 0) }}
-                    </div>
-                    <div class="status-metric-detail">{{ formatNumber(streamStats?.activeConsumers || 0) }} active consumers</div>
-                  </div>
-                </div>
-          </div>
-
-              <!-- Window Processing -->
-              <div class="status-section-improved">
-                <div class="status-section-header">
-                  <svg class="w-4 h-4 text-gray-400 dark:text-gray-500" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2">
-                    <path stroke-linecap="round" stroke-linejoin="round" d="M9 17V7m0 10a2 2 0 01-2 2H5a2 2 0 01-2-2V7a2 2 0 012-2h2a2 2 0 012 2m0 10a2 2 0 002 2h2a2 2 0 002-2M9 7a2 2 0 012-2h2a2 2 0 012 2m0 10V7m0 10a2 2 0 002 2h2a2 2 0 002-2V7a2 2 0 00-2-2h-2a2 2 0 00-2 2" />
-                  </svg>
-                  <span class="status-section-title">Windows</span>
-                </div>
-                <div class="status-metrics-grid-improved">
-                  <div class="status-metric-box">
-                    <div class="flex items-center justify-between mb-2">
-                      <span class="status-metric-label-improved">PROCESSED</span>
-              <div class="text-green-500">
-                        <svg class="w-3.5 h-3.5" fill="currentColor" viewBox="0 0 20 20">
-                          <circle cx="10" cy="10" r="5"/>
-                </svg>
-              </div>
-            </div>
-                    <div class="status-metric-value-lg text-gray-900 dark:text-gray-100">
-                      {{ formatNumber(streamStats?.totalWindowsProcessed || 0) }}
-                    </div>
-                    <div class="status-metric-detail">{{ formatNumber(streamStats?.windowsLastHour || 0) }} last hour</div>
-          </div>
-                  <div class="status-metric-box">
-                    <div class="flex items-center justify-between mb-2">
-                      <span class="status-metric-label-improved">ACTIVE</span>
-              <div :class="streamStats?.activeLeases > 0 ? 'text-green-500' : 'text-gray-400 dark:text-gray-500'">
-                        <svg class="w-3.5 h-3.5" fill="currentColor" viewBox="0 0 20 20">
-                          <circle cx="10" cy="10" r="5"/>
-                </svg>
-                      </div>
-                    </div>
-                    <div class="status-metric-value-lg text-gray-900 dark:text-gray-100">
-                      {{ formatNumber(streamStats?.activeLeases || 0) }}
-                    </div>
-                    <div class="status-metric-detail">{{ formatNumber(streamStats?.avgLeaseTime || 0) }}s avg time</div>
-                  </div>
-                </div>
-              </div>
-
-            </div>
-          </div>
         </div>
 
         <!-- Charts Grid -->
@@ -356,7 +262,6 @@ import { resourcesApi } from '../api/resources';
 import { analyticsApi } from '../api/analytics';
 import { queuesApi } from '../api/queues';
 import { systemMetricsApi } from '../api/system-metrics';
-import { streamsApi } from '../api/streams';
 import { formatNumber } from '../utils/formatters';
 import { useAutoRefresh } from '../composables/useAutoRefresh';
 
@@ -374,7 +279,6 @@ const overview = ref(null);
 const status = ref(null);
 const systemMetrics = ref(null);
 const topQueues = ref([]);
-const streamStats = ref(null);
 
 // Get latest SharedState from system metrics
 const latestSharedState = computed(() => {
@@ -495,18 +399,16 @@ async function loadData() {
   error.value = null;
 
   try {
-    const [overviewRes, statusRes, queuesRes, systemMetricsRes, streamStatsRes] = await Promise.all([
+    const [overviewRes, statusRes, queuesRes, systemMetricsRes] = await Promise.all([
       resourcesApi.getOverview(),
       analyticsApi.getStatus(),
       queuesApi.getQueues(),
       systemMetricsApi.getSystemMetrics(), // Fetch last hour of system metrics
-      streamsApi.getStreamStats().catch(() => ({ data: { totalStreams: 0, activeLeases: 0 } })), // Gracefully handle if streams not supported
     ]);
 
     overview.value = overviewRes.data;
     status.value = statusRes.data;
     systemMetrics.value = systemMetricsRes.data;
-    streamStats.value = streamStatsRes.data;
     
     // Get top 5 queues by total messages
     topQueues.value = queuesRes.data.queues
@@ -565,10 +467,6 @@ function navigateToAnalytics() {
 function navigateToSystemMetrics() {
   router.push('/system-metrics');
 }
-
-function navigateToStreams() {
-  router.push('/streams');
-}
 </script>
 
 <style scoped>
@@ -606,9 +504,9 @@ function navigateToStreams() {
   @apply px-1;
 }
 
-/* Main Metrics - 3 Column Layout */
+/* Main Metrics - 2 Column Layout */
 .main-metrics-grid {
-  @apply grid grid-cols-1 lg:grid-cols-3 gap-5;
+  @apply grid grid-cols-1 lg:grid-cols-2 gap-5;
 }
 
 .dashboard-dense .main-metrics-grid {

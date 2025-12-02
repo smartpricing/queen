@@ -21,9 +21,6 @@ Kafka-style consumer groups allow multiple groups to process the same messages i
 ### 🔄 Transactions
 Atomic operations across queues with exactly-once delivery guarantees. Chain push and ack operations together to build reliable workflows that never lose or duplicate messages.
 
-### 📡 Streaming
-Real-time message streaming. Build aggregation pipelines and process messages as they arrive with partitioned streams and filtering capabilities.
-
 ### ⏱️ Long Polling
 Efficient server-side waiting for messages. No busy loops, no wasted resources. Messages are delivered instantly when they become available.
 
@@ -51,7 +48,7 @@ Build multi-step workflows with transactional guarantees:
 - Multi-stage approval processes
 
 ### Real-time Analytics
-Stream messages to multiple consumer groups for different purposes:
+Send messages to multiple consumer groups for different purposes:
 - Real-time metrics aggregation
 - Business intelligence dashboards
 - Log aggregation and analysis
@@ -95,7 +92,7 @@ graph TD
 1. **Developer First**: Simple, intuitive APIs that make complex workflows easy
 2. **Performance**: Built for speed with async I/O and minimal overhead
 3. **Reliability**: ACID guarantees, automatic failover, zero message loss
-4. **Flexibility**: Support multiple messaging patterns (queue, pub/sub, streaming)
+4. **Flexibility**: Support multiple messaging patterns (queue, pub/sub)
 5. **Observability**: Built-in tracing, metrics, and beautiful dashboard
 
 ## Comparison with Other Systems

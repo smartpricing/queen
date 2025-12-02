@@ -106,25 +106,6 @@ export NUM_WORKERS=20
 | `DEFAULT_TIMEOUT` | int | 30000 | Default timeout for pop operations (ms) |
 | `DEFAULT_BATCH_SIZE` | int | 1 | Default batch size for pop operations |
 
-### Stream Long Polling
-
-Stream processing uses dedicated poll workers optimized for windowed message consumption.
-
-| Variable | Type | Default | Description |
-|----------|------|---------|-------------|
-| `STREAM_POLL_WORKER_COUNT` | int | 1 | Number of dedicated stream poll worker threads |
-| `STREAM_POLL_WORKER_INTERVAL` | int | 100 | How often stream workers check registry (ms) |
-| `STREAM_POLL_INTERVAL` | int | 1000 | Min time between stream checks per group (ms) |
-| `STREAM_BACKOFF_THRESHOLD` | int | 5 | Consecutive empty checks before backoff |
-| `STREAM_BACKOFF_MULTIPLIER` | double | 2.0 | Exponential backoff multiplier |
-| `STREAM_MAX_POLL_INTERVAL` | int | 5000 | Max poll interval after backoff (ms) |
-| `STREAM_CONCURRENT_CHECKS` | int | 2 | Max concurrent window check jobs per worker |
-
-**Scaling Guidelines:**
-- Low load (< 10 stream consumers): 1 worker, 2 concurrent checks
-- Medium load (10-50 consumers): 2-4 workers, 4 concurrent checks
-- High load (50+ consumers): 4-8 workers, 8 concurrent checks
-
 ### ThreadPool Configuration
 
 | Variable | Type | Default | Description |
@@ -511,11 +492,7 @@ export DB_POOL_SIZE=300  # Increase pool
 
 **Symptom:** CPU constantly high
 
-**Solution:**
-```bash
-export STREAM_POLL_WORKER_INTERVAL=200  # Less frequent checks
-export STREAM_MAX_POLL_INTERVAL=10000   # Higher backoff ceiling
-```
+**Solution:** Reduce the number of workers or increase polling intervals for background services.
 
 ### Slow Message Delivery
 
@@ -525,13 +502,6 @@ export STREAM_MAX_POLL_INTERVAL=10000   # Higher backoff ceiling
 ```bash
 export POP_WAIT_INITIAL_INTERVAL_MS=50   # Faster initial query
 export POP_WAIT_MAX_INTERVAL_MS=500      # Lower backoff ceiling
-```
-
-**Solution for stream/consumer group polling:**
-```bash
-export STREAM_POLL_WORKER_INTERVAL=50   # More responsive
-export STREAM_POLL_INTERVAL=500         # Faster initial query
-export STREAM_MAX_POLL_INTERVAL=2000    # Lower ceiling
 ```
 
 ### Database Connection Issues

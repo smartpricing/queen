@@ -1,10 +1,19 @@
-import autocannon from 'autocannon';
+import { Pool } from 'undici';
 import axios from 'axios';
 
 const SERVER_URL = process.env.SERVER_URL || 'http://localhost:6632';
 const QUEUE_NAME = 'test-queue-pop';
 const MESSAGE_COUNT = 50000;  // Messages to pre-populate
 const MAX_PARTITION = 500;
+const CONCURRENT_WORKERS = 500;  // Number of concurrent POP+ACK workers
+const TEST_DURATION_MS = 30000;  // 30 seconds
+
+// Metrics tracking
+let totalPops = 0;
+let totalAcks = 0;
+let totalErrors = 0;
+let emptyPops = 0;
+const latencies = [];
 
 async function resetQueue() {
   try {
@@ -64,51 +73,123 @@ async function populateQueue() {
   console.log(`✅ Queue populated with ${queue.data.totals.total} messages\n`);
 }
 
-await resetQueue();
-await populateQueue();
-
-// Pre-generate requests array with different partitions
-// Each request pops from a specific partition with autoAck=true
-const requests = [];
-for (let i = 0; i < MAX_PARTITION; i++) {
-  requests.push({
-    method: 'GET',
-    path: `/api/v1/pop/queue/${QUEUE_NAME}/partition/${i}?batch=1&wait=false&autoAck=false`,
-    headers: {
-      'Content-Type': 'application/json'
+// Worker function: continuously POP + ACK until stopped
+async function worker(pool, workerId, stopSignal) {
+  const partition = workerId % MAX_PARTITION;
+  
+  while (!stopSignal.stopped) {
+    const start = Date.now();
+    
+    try {
+      // POP request
+      const popResponse = await pool.request({
+        method: 'GET',
+        path: `/api/v1/pop/queue/${QUEUE_NAME}/partition/${partition}?batch=1&wait=false`,
+        headers: { 'Content-Type': 'application/json' }
+      });
+      
+      const popBody = await popResponse.body.json();
+      
+      if (!popBody.items || popBody.items.length === 0) {
+        emptyPops++;
+        continue;
+      }
+      
+      totalPops++;
+      
+      // ACK request with the message ID
+      const messageId = popBody.items[0].id;
+      const ackResponse = await pool.request({
+        method: 'POST',
+        path: `/api/v1/ack`,
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ items: [{ id: messageId }] })
+      });
+      
+      await ackResponse.body.dump(); // Consume body
+      
+      totalAcks++;
+      latencies.push(Date.now() - start);
+      
+    } catch (error) {
+      totalErrors++;
     }
-  });
+  }
 }
 
-console.log('Starting POP benchmark with autoAck=true...\n');
+function calculatePercentile(arr, p) {
+  if (arr.length === 0) return 0;
+  const sorted = [...arr].sort((a, b) => a - b);
+  const idx = Math.ceil((p / 100) * sorted.length) - 1;
+  return sorted[Math.max(0, idx)];
+}
 
-// NOTE: autocannon v8 has a bug where pipelining > 1 with requests array
-// doesn't track response stats. Use pipelining: 1 with more connections instead.
-const instance = autocannon({
-  url: SERVER_URL,
-  connections: 500,   // More connections for throughput
-  duration: 30,
-  pipelining: 1,
-  requests: requests,
-});
-
-instance.on('done', async (results) => {
-  console.log('\n=== POP Benchmark Results (autoAck=true) ===');
-  console.log(`Requests: ${results.requests.total}`);
-  console.log(`Duration: ${results.duration}s`);
-  console.log(`Throughput: ${results.requests.average} req/s`);
-  console.log(`Latency p50: ${results.latency.p50}ms`);
-  console.log(`Latency p99: ${results.latency.p99}ms`);
-  console.log(`Errors: ${results.errors}`);
-  console.log(`Non-2xx: ${results.non2xx}`);
+async function runBenchmark() {
+  console.log(`Starting POP+ACK benchmark with ${CONCURRENT_WORKERS} concurrent workers...\n`);
+  console.log(`Duration: ${TEST_DURATION_MS / 1000}s\n`);
+  
+  // Create undici pool with many connections
+  const pool = new Pool(SERVER_URL, {
+    connections: CONCURRENT_WORKERS,
+    pipelining: 1,
+    keepAliveTimeout: 30000,
+    keepAliveMaxTimeout: 60000,
+  });
+  
+  const stopSignal = { stopped: false };
+  const startTime = Date.now();
+  
+  // Progress reporting
+  const progressInterval = setInterval(() => {
+    const elapsed = (Date.now() - startTime) / 1000;
+    const opsPerSec = Math.round(totalAcks / elapsed);
+    process.stdout.write(`\r  Progress: ${totalAcks} ops | ${opsPerSec} ops/s | Errors: ${totalErrors} | Empty: ${emptyPops}    `);
+  }, 500);
+  
+  // Start all workers
+  const workers = [];
+  for (let i = 0; i < CONCURRENT_WORKERS; i++) {
+    workers.push(worker(pool, i, stopSignal));
+  }
+  
+  // Wait for duration
+  await new Promise(resolve => setTimeout(resolve, TEST_DURATION_MS));
+  
+  // Stop workers
+  stopSignal.stopped = true;
+  clearInterval(progressInterval);
+  
+  // Wait for workers to finish current operations
+  await Promise.allSettled(workers);
+  
+  const duration = (Date.now() - startTime) / 1000;
+  
+  // Calculate results
+  console.log('\n\n=== POP+ACK Benchmark Results ===');
+  console.log(`Total POP+ACK cycles: ${totalAcks}`);
+  console.log(`Duration: ${duration.toFixed(2)}s`);
+  console.log(`Throughput: ${Math.round(totalAcks / duration)} ops/s`);
+  console.log(`Latency p50: ${calculatePercentile(latencies, 50)}ms`);
+  console.log(`Latency p95: ${calculatePercentile(latencies, 95)}ms`);
+  console.log(`Latency p99: ${calculatePercentile(latencies, 99)}ms`);
+  console.log(`Errors: ${totalErrors}`);
+  console.log(`Empty POPs: ${emptyPops}`);
   
   // Verify messages remaining in queue
-  const queue = await axios.get(`${SERVER_URL}/api/v1/resources/queues/${QUEUE_NAME}`);
-  console.log(`\n📊 Queue stats after benchmark:`);
-  console.log(`   Total remaining: ${queue.data.totals.total}`);
-  console.log(`   Pending: ${queue.data.totals.pending}`);
-  console.log(`   Consumed: ${queue.data.totals.consumed}`);
-});
+  try {
+    const queue = await axios.get(`${SERVER_URL}/api/v1/resources/queues/${QUEUE_NAME}`);
+    console.log(`\n📊 Queue stats after benchmark:`);
+    console.log(`   Total remaining: ${queue.data.totals.total}`);
+    console.log(`   Pending: ${queue.data.totals.pending}`);
+    console.log(`   Consumed: ${queue.data.totals.consumed}`);
+  } catch (e) {
+    console.log('Could not fetch queue stats');
+  }
+  
+  await pool.close();
+}
 
-autocannon.track(instance, { renderProgressBar: true });
-
+// Main
+await resetQueue();
+await populateQueue();
+await runBenchmark();

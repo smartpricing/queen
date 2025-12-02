@@ -4,7 +4,7 @@ layout: home
 hero:
   name: "Queen MQ"
   text: "Modern PostgreSQL-backed Message Queue"
-  tagline: High-performance, feature-rich message queue system with unlimited FIFO partitions, consumer groups, transactions, and streaming capabilities
+  tagline: High-performance, feature-rich message queue system with unlimited FIFO partitions, consumer groups, and transactions
   image:
     src: /queen_logo.png
     alt: Queen MQ Logo
@@ -35,10 +35,6 @@ features:
   - title: Transactions
     details: Atomic operations across queues with exactly-once delivery guarantees. Chain push and ack operations to build reliable workflows.
     link: /guide/transactions
-  
-  - title: Streaming
-    details: Real-time message streaming. Build aggregation pipelines and process messages as they arrive.
-    link: /guide/streaming
   
   - title: Long Polling
     details: Efficient server-side waiting for messages. No busy loops, no wasted resources. Messages delivered instantly when available.

@@ -451,7 +451,6 @@ See [Environment Variables](/server/environment-variables#inter-instance-communi
 
 ## Related Topics
 
-- [Streaming](/guide/streaming) - Window aggregation and processing
 - [Consumer Groups](/guide/consumer-groups) - Scaling consumption
 - [Performance Tuning](/server/tuning) - Optimize server settings
 
