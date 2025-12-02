@@ -183,13 +183,31 @@ int RetentionService::cleanup_inactive_partitions() {
     try {
         auto conn = db_pool_->acquire();
         
-        // First, get the partitions we're about to delete (for cache invalidation)
+        // Find inactive partitions by checking:
+        // 1. No messages exist in the partition
+        // 2. No recent activity from ANY consumer group (using partition_consumers)
+        // 3. Falls back to partition created_at if no consumers exist
+        //
+        // Uses MAX across all consumer groups to find most recent activity.
+        // Considers both last_consumed_at (successful ack) and pc.created_at 
+        // (consumer started but hasn't acked yet) to avoid deleting partitions
+        // with active consumers.
         std::string select_sql = R"(
-            SELECT q.name as queue_name, p.name as partition_name
+            SELECT p.id, q.name as queue_name, p.name as partition_name
             FROM queen.partitions p
             JOIN queen.queues q ON p.queue_id = q.id
-            WHERE p.last_activity < NOW() - ($1 || ' days')::INTERVAL
-              AND p.id NOT IN (SELECT DISTINCT partition_id FROM queen.messages WHERE partition_id IS NOT NULL)
+            LEFT JOIN queen.partition_consumers pc ON pc.partition_id = p.id
+            WHERE p.id NOT IN (
+                SELECT DISTINCT partition_id 
+                FROM queen.messages 
+                WHERE partition_id IS NOT NULL
+            )
+            GROUP BY p.id, q.name, p.name, p.created_at
+            HAVING GREATEST(
+                p.created_at,
+                COALESCE(MAX(pc.last_consumed_at), p.created_at),
+                COALESCE(MAX(pc.created_at), p.created_at)
+            ) < NOW() - ($1 || ' days')::INTERVAL
             LIMIT 1000
         )";
         
@@ -201,21 +219,32 @@ int RetentionService::cleanup_inactive_partitions() {
             return 0;
         }
         
-        // Delete partitions that:
-        // 1. Have no activity for partition_cleanup_days
-        // 2. Have no messages
-        std::string sql = R"(
-            DELETE FROM queen.partitions
-            WHERE last_activity < NOW() - ($1 || ' days')::INTERVAL
-              AND id NOT IN (SELECT DISTINCT partition_id FROM queen.messages WHERE partition_id IS NOT NULL)
-        )";
+        // Collect partition IDs for deletion
+        std::vector<std::string> partition_ids;
+        partition_ids.reserve(num_to_delete);
+        int id_col = PQfnumber(select_result.get(), "id");
+        for (int i = 0; i < num_to_delete; i++) {
+            partition_ids.push_back(PQgetvalue(select_result.get(), i, id_col));
+        }
         
-        sendQueryParamsAsync(conn.get(), sql, {std::to_string(partition_cleanup_days_)});
+        // Build parameterized IN clause for safe deletion
+        std::string placeholders;
+        std::vector<std::string> params;
+        params.reserve(partition_ids.size());
+        for (size_t i = 0; i < partition_ids.size(); i++) {
+            if (i > 0) placeholders += ",";
+            placeholders += "$" + std::to_string(i + 1) + "::uuid";
+            params.push_back(partition_ids[i]);
+        }
+        
+        // Delete only the partitions we identified (two-phase to ensure consistency)
+        std::string delete_sql = "DELETE FROM queen.partitions WHERE id IN (" + placeholders + ")";
+        
+        sendQueryParamsAsync(conn.get(), delete_sql, params);
         auto result = getCommandResultPtr(conn.get());
         
         char* affected_str = PQcmdTuples(result.get());
         int deleted = (affected_str && *affected_str) ? std::stoi(affected_str) : 0;
-        
         
         return deleted;
         
