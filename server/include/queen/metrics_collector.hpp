@@ -51,7 +51,6 @@ struct MetricsSample {
     int system_threadpool_queue_size = 0;
     
     // Registries
-    int stream_poll_intention_registry_size = 0;
     int response_registry_size = 0;
     
     // Uptime
@@ -131,7 +130,6 @@ struct AggregatedMetrics {
     AggregatedMetric db_threadpool_queue_size;
     AggregatedMetric system_threadpool_size;
     AggregatedMetric system_threadpool_queue_size;
-    AggregatedMetric stream_poll_intention_registry_size;
     AggregatedMetric response_registry_size;
     int uptime_seconds;
     
@@ -198,7 +196,6 @@ struct AggregatedMetrics {
                 }}
             }},
             {"registries", {
-                {"stream_poll_intention", stream_poll_intention_registry_size.to_json()},
                 {"response", response_registry_size.to_json()}
             }},
             {"uptime_seconds", uptime_seconds}
@@ -260,7 +257,6 @@ struct AggregatedMetrics {
 };
 
 // Forward declarations
-class StreamPollIntentionRegistry;
 class ResponseRegistry;
 
 class MetricsCollector {
@@ -268,8 +264,7 @@ private:
     std::shared_ptr<AsyncDbPool> db_pool_;
     std::shared_ptr<astp::ThreadPool> db_thread_pool_;
     std::shared_ptr<astp::ThreadPool> system_thread_pool_;
-    std::shared_ptr<StreamPollIntentionRegistry> stream_poll_intention_registry_;
-    std::shared_ptr<ResponseRegistry> response_registry_;
+    std::vector<std::shared_ptr<ResponseRegistry>> response_registries_;  // Per-worker registries
     std::shared_ptr<SharedStateManager> shared_state_manager_;
     
     std::atomic<bool> running_{false};
@@ -293,8 +288,7 @@ public:
         std::shared_ptr<AsyncDbPool> db_pool,
         std::shared_ptr<astp::ThreadPool> db_thread_pool,
         std::shared_ptr<astp::ThreadPool> system_thread_pool,
-        std::shared_ptr<StreamPollIntentionRegistry> stream_poll_intention_registry,
-        std::shared_ptr<ResponseRegistry> response_registry,
+        const std::vector<std::shared_ptr<ResponseRegistry>>& response_registries,  // Per-worker registries
         std::shared_ptr<SharedStateManager> shared_state_manager,
         const std::string& hostname,
         int port,

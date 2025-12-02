@@ -1,5 +1,4 @@
 #include "queen/metrics_collector.hpp"
-#include "queen/stream_poll_intention_registry.hpp"
 #include "queen/response_queue.hpp"
 #include "queen/shared_state_manager.hpp"
 
@@ -9,8 +8,7 @@ MetricsCollector::MetricsCollector(
     std::shared_ptr<AsyncDbPool> db_pool,
     std::shared_ptr<astp::ThreadPool> db_thread_pool,
     std::shared_ptr<astp::ThreadPool> system_thread_pool,
-    std::shared_ptr<StreamPollIntentionRegistry> stream_poll_intention_registry,
-    std::shared_ptr<ResponseRegistry> response_registry,
+    const std::vector<std::shared_ptr<ResponseRegistry>>& response_registries,
     std::shared_ptr<SharedStateManager> shared_state_manager,
     const std::string& hostname,
     int port,
@@ -20,8 +18,7 @@ MetricsCollector::MetricsCollector(
 ) : db_pool_(db_pool), 
     db_thread_pool_(db_thread_pool),
     system_thread_pool_(system_thread_pool),
-    stream_poll_intention_registry_(stream_poll_intention_registry),
-    response_registry_(response_registry),
+    response_registries_(response_registries),
     shared_state_manager_(shared_state_manager),
     start_time_(std::chrono::steady_clock::now()),
     hostname_(hostname),
@@ -145,8 +142,12 @@ MetricsSample MetricsCollector::collect_sample() {
     sample.system_threadpool_queue_size = system_thread_pool_->queue_size();
     
     // Registry metrics
-    sample.stream_poll_intention_registry_size = stream_poll_intention_registry_->size();
-    sample.response_registry_size = response_registry_->size();
+    // Sum sizes across all per-worker response registries
+    size_t total_response_registry_size = 0;
+    for (const auto& registry : response_registries_) {
+        total_response_registry_size += registry->size();
+    }
+    sample.response_registry_size = total_response_registry_size;
     
     // Uptime
     auto now = std::chrono::steady_clock::now();
@@ -429,7 +430,6 @@ AggregatedMetrics MetricsCollector::aggregate(const std::vector<MetricsSample>& 
     agg.db_threadpool_queue_size = aggregate_metric([](const auto& s) { return s.db_threadpool_queue_size; });
     agg.system_threadpool_size = aggregate_metric([](const auto& s) { return s.system_threadpool_size; });
     agg.system_threadpool_queue_size = aggregate_metric([](const auto& s) { return s.system_threadpool_queue_size; });
-    agg.stream_poll_intention_registry_size = aggregate_metric([](const auto& s) { return s.stream_poll_intention_registry_size; });
     agg.response_registry_size = aggregate_metric([](const auto& s) { return s.response_registry_size; });
     
     // Sidecar aggregated operations (always tracked - local ops)

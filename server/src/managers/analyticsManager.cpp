@@ -2391,18 +2391,6 @@ nlohmann::json AnalyticsManager::get_system_metrics(const SystemMetricsFilters& 
                         )
                     ),
                     'registries', jsonb_build_object(
-                        'poll_intention', jsonb_build_object(
-                            'avg', SUM((metrics->'registries'->'poll_intention'->>'avg')::numeric * sample_count) / NULLIF(SUM(sample_count), 0),
-                            'min', MIN((metrics->'registries'->'poll_intention'->>'min')::numeric),
-                            'max', MAX((metrics->'registries'->'poll_intention'->>'max')::numeric),
-                            'last', (array_agg((metrics->'registries'->'poll_intention'->>'last')::numeric ORDER BY timestamp DESC))[1]
-                        ),
-                        'stream_poll_intention', jsonb_build_object(
-                            'avg', SUM((metrics->'registries'->'stream_poll_intention'->>'avg')::numeric * sample_count) / NULLIF(SUM(sample_count), 0),
-                            'min', MIN((metrics->'registries'->'stream_poll_intention'->>'min')::numeric),
-                            'max', MAX((metrics->'registries'->'stream_poll_intention'->>'max')::numeric),
-                            'last', (array_agg((metrics->'registries'->'stream_poll_intention'->>'last')::numeric ORDER BY timestamp DESC))[1]
-                        ),
                         'response', jsonb_build_object(
                             'avg', SUM((metrics->'registries'->'response'->>'avg')::numeric * sample_count) / NULLIF(SUM(sample_count), 0),
                             'min', MIN((metrics->'registries'->'response'->>'min')::numeric),

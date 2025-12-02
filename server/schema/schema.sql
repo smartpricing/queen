@@ -13,6 +13,7 @@
 -- ============================================================================
 
 -- Create schema
+DROP SCHEMA IF EXISTS queen CASCADE; 
 CREATE SCHEMA IF NOT EXISTS queen;
 
 -- ============================================================================
@@ -184,63 +185,6 @@ CREATE TABLE IF NOT EXISTS queen.system_state (
     updated_at TIMESTAMPTZ DEFAULT NOW()
 );
 
--- ============================================================================
--- Streaming Tables
--- ============================================================================
-
-CREATE TABLE IF NOT EXISTS queen.streams (
-    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    name VARCHAR(255) UNIQUE NOT NULL,
-    namespace VARCHAR(255) NOT NULL,
-    partitioned BOOLEAN NOT NULL DEFAULT FALSE,
-    window_type VARCHAR(50) NOT NULL,
-    window_duration_ms BIGINT, 
-    window_size_count INT,
-    window_slide_ms BIGINT,
-    window_slide_count INT,
-    window_grace_period_ms BIGINT NOT NULL DEFAULT 30000,
-    window_lease_timeout_ms BIGINT NOT NULL DEFAULT 30000,
-    created_at TIMESTAMPTZ DEFAULT NOW(),
-    updated_at TIMESTAMPTZ DEFAULT NOW()
-);
-
-CREATE TABLE IF NOT EXISTS queen.stream_sources (
-    stream_id UUID NOT NULL REFERENCES queen.streams(id) ON DELETE CASCADE,
-    queue_id UUID NOT NULL REFERENCES queen.queues(id) ON DELETE CASCADE,
-    PRIMARY KEY (stream_id, queue_id)
-);
-
-CREATE TABLE IF NOT EXISTS queen.stream_consumer_offsets (
-    stream_id UUID REFERENCES queen.streams(id) ON DELETE CASCADE,
-    consumer_group VARCHAR(255) NOT NULL,
-    stream_key TEXT NOT NULL,
-    last_acked_window_end TIMESTAMPTZ,
-    last_acked_message_id UUID,
-    total_windows_consumed BIGINT DEFAULT 0,
-    last_consumed_at TIMESTAMPTZ,
-    PRIMARY KEY (stream_id, consumer_group, stream_key)
-);
-
-CREATE TABLE IF NOT EXISTS queen.stream_leases (
-    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    stream_id UUID REFERENCES queen.streams(id) ON DELETE CASCADE,
-    consumer_group VARCHAR(255) NOT NULL,
-    stream_key TEXT NOT NULL, 
-    window_start TIMESTAMPTZ NOT NULL,
-    window_end TIMESTAMPTZ NOT NULL,
-    lease_id UUID NOT NULL UNIQUE,
-    lease_consumer_id VARCHAR(255),
-    lease_expires_at TIMESTAMPTZ NOT NULL,
-    UNIQUE(stream_id, consumer_group, stream_key, window_start, window_end)
-);
-
-CREATE TABLE IF NOT EXISTS queen.queue_watermarks (
-    queue_id UUID PRIMARY KEY REFERENCES queen.queues(id) ON DELETE CASCADE,
-    queue_name VARCHAR(255) NOT NULL,
-    max_created_at TIMESTAMPTZ NOT NULL DEFAULT '-infinity'::timestamptz,
-    updated_at TIMESTAMPTZ DEFAULT NOW()
-);
-
 CREATE TABLE IF NOT EXISTS queen.partition_lookup (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     queue_name VARCHAR(255) NOT NULL REFERENCES queen.queues(name) ON DELETE CASCADE,
@@ -256,23 +200,10 @@ CREATE TABLE IF NOT EXISTS queen.partition_lookup (
 -- ============================================================================
 
 CREATE INDEX IF NOT EXISTS idx_queues_name ON queen.queues(name);
-CREATE INDEX IF NOT EXISTS idx_queues_priority ON queen.queues(priority DESC);
-CREATE INDEX IF NOT EXISTS idx_queues_namespace ON queen.queues(namespace) WHERE namespace IS NOT NULL;
-CREATE INDEX IF NOT EXISTS idx_queues_task ON queen.queues(task) WHERE task IS NOT NULL;
-CREATE INDEX IF NOT EXISTS idx_queues_namespace_task ON queen.queues(namespace, task) WHERE namespace IS NOT NULL AND task IS NOT NULL;
-CREATE INDEX IF NOT EXISTS idx_queues_retention_enabled ON queen.queues(retention_enabled) WHERE retention_enabled = true;
-CREATE INDEX IF NOT EXISTS idx_partitions_queue_name ON queen.partitions(queue_id, name);
-CREATE INDEX IF NOT EXISTS idx_partitions_last_activity ON queen.partitions(last_activity);
 CREATE INDEX IF NOT EXISTS idx_messages_partition_created_id ON queen.messages(partition_id, created_at, id);
 CREATE INDEX IF NOT EXISTS idx_messages_transaction_id ON queen.messages(transaction_id);
-CREATE INDEX IF NOT EXISTS idx_messages_trace_id ON queen.messages(trace_id);
-CREATE INDEX IF NOT EXISTS idx_messages_created_at ON queen.messages(created_at);
-CREATE INDEX IF NOT EXISTS idx_partition_consumers_lookup ON queen.partition_consumers(partition_id, consumer_group);
-CREATE INDEX IF NOT EXISTS idx_partition_consumers_active_leases ON queen.partition_consumers(partition_id, consumer_group, lease_expires_at) WHERE lease_expires_at IS NOT NULL;
-CREATE INDEX IF NOT EXISTS idx_partition_consumers_expired_leases ON queen.partition_consumers(lease_expires_at) WHERE lease_expires_at IS NOT NULL;
-CREATE INDEX IF NOT EXISTS idx_partition_consumers_progress ON queen.partition_consumers(last_consumed_at DESC);
-CREATE INDEX IF NOT EXISTS idx_partition_consumers_idle ON queen.partition_consumers(partition_id, consumer_group) WHERE lease_expires_at IS NULL;
-CREATE INDEX IF NOT EXISTS idx_partition_consumers_consumer_group ON queen.partition_consumers(consumer_group);
+
+
 CREATE INDEX IF NOT EXISTS idx_messages_consumed_acked_at ON queen.messages_consumed(acked_at DESC);
 CREATE INDEX IF NOT EXISTS idx_messages_consumed_partition_acked ON queen.messages_consumed(partition_id, acked_at DESC);
 CREATE INDEX IF NOT EXISTS idx_messages_consumed_consumer_acked ON queen.messages_consumed(consumer_group, acked_at DESC);
@@ -293,74 +224,15 @@ CREATE INDEX IF NOT EXISTS idx_message_traces_created_at ON queen.message_traces
 CREATE INDEX IF NOT EXISTS idx_message_trace_names_name ON queen.message_trace_names(trace_name);
 CREATE INDEX IF NOT EXISTS idx_message_trace_names_trace_id ON queen.message_trace_names(trace_id);
 CREATE INDEX IF NOT EXISTS idx_system_state_key ON queen.system_state(key);
-CREATE INDEX IF NOT EXISTS idx_partition_lookup_queue_name ON queen.partition_lookup(queue_name);
-CREATE INDEX IF NOT EXISTS idx_partition_lookup_partition_id ON queen.partition_lookup(partition_id);
-CREATE INDEX IF NOT EXISTS idx_partition_lookup_timestamp ON queen.partition_lookup(last_message_created_at DESC);
-CREATE INDEX IF NOT EXISTS idx_queue_watermarks_name ON queen.queue_watermarks(queue_name);
-CREATE INDEX IF NOT EXISTS idx_stream_leases_lookup ON queen.stream_leases(stream_id, consumer_group, stream_key, window_start);
-CREATE INDEX IF NOT EXISTS idx_stream_leases_expires ON queen.stream_leases(lease_expires_at);
-CREATE INDEX IF NOT EXISTS idx_stream_consumer_offsets_lookup ON queen.stream_consumer_offsets(stream_id, consumer_group, stream_key);
 
 -- Stored procedure indexes
 CREATE INDEX IF NOT EXISTS idx_messages_txn_partition ON queen.messages(transaction_id, partition_id);
 CREATE INDEX IF NOT EXISTS idx_messages_partition_created ON queen.messages (partition_id, created_at, id);
-CREATE INDEX IF NOT EXISTS idx_partition_consumers_worker ON queen.partition_consumers (worker_id) WHERE worker_id IS NOT NULL;
-CREATE INDEX IF NOT EXISTS idx_partition_consumers_worker_id ON queen.partition_consumers (worker_id) WHERE worker_id IS NOT NULL;
-CREATE INDEX IF NOT EXISTS idx_messages_transaction_partition ON queen.messages (transaction_id, partition_id);
 CREATE INDEX IF NOT EXISTS idx_partition_lookup_queue_message_ts ON queen.partition_lookup(queue_name, last_message_created_at DESC);
 
 -- ============================================================================
 -- Trigger Functions
 -- ============================================================================
-
--- Statement-level trigger for partition last_activity (batch-efficient)
-CREATE OR REPLACE FUNCTION update_partition_last_activity()
-RETURNS TRIGGER AS $$
-BEGIN
-    UPDATE queen.partitions 
-    SET last_activity = NOW() 
-    WHERE id IN (SELECT DISTINCT partition_id FROM new_messages);
-    RETURN NULL;
-END;
-$$ LANGUAGE plpgsql;
-
--- Statement-level trigger for pending estimate (batch-efficient)
-CREATE OR REPLACE FUNCTION update_pending_on_push()
-RETURNS TRIGGER AS $$
-BEGIN
-    UPDATE queen.partition_consumers pc
-    SET pending_estimate = pc.pending_estimate + msg_counts.count,
-        last_stats_update = NOW()
-    FROM (
-        SELECT partition_id, COUNT(*) as count
-        FROM new_messages
-        GROUP BY partition_id
-    ) msg_counts
-    WHERE pc.partition_id = msg_counts.partition_id;
-    RETURN NULL;
-END;
-$$ LANGUAGE plpgsql;
-
--- Streaming watermark trigger function (statement-level for batch efficiency)
-CREATE OR REPLACE FUNCTION update_queue_watermark()
-RETURNS TRIGGER AS $$
-BEGIN
-    INSERT INTO queen.queue_watermarks (queue_id, queue_name, max_created_at)
-    SELECT 
-        q.id,
-        q.name,
-        MAX(nm.created_at) as max_created_at
-    FROM new_messages nm
-    JOIN queen.partitions p ON p.id = nm.partition_id
-    JOIN queen.queues q ON p.queue_id = q.id
-    GROUP BY q.id, q.name
-    ON CONFLICT (queue_id)
-    DO UPDATE SET
-        max_created_at = GREATEST(queen.queue_watermarks.max_created_at, EXCLUDED.max_created_at),
-        updated_at = NOW();
-    RETURN NULL;
-END;
-$$ LANGUAGE plpgsql;
 
 -- Partition lookup trigger (statement-level, batch-efficient)
 -- NOTE: ORDER BY partition_id ensures consistent lock ordering to prevent deadlocks
@@ -405,33 +277,8 @@ $$ LANGUAGE plpgsql;
 -- Triggers
 -- ============================================================================
 
-DROP TRIGGER IF EXISTS trigger_update_partition_activity ON queen.messages;
-CREATE TRIGGER trigger_update_partition_activity
-AFTER INSERT ON queen.messages
-REFERENCING NEW TABLE AS new_messages
-FOR EACH STATEMENT
-EXECUTE FUNCTION update_partition_last_activity();
 
-DROP TRIGGER IF EXISTS trigger_update_pending_on_push ON queen.messages;
-CREATE TRIGGER trigger_update_pending_on_push
-AFTER INSERT ON queen.messages
-REFERENCING NEW TABLE AS new_messages
-FOR EACH STATEMENT
-EXECUTE FUNCTION update_pending_on_push();
 
-DROP TRIGGER IF EXISTS trigger_update_watermark ON queen.messages;
-CREATE TRIGGER trigger_update_watermark
-AFTER INSERT ON queen.messages
-REFERENCING NEW TABLE AS new_messages
-FOR EACH STATEMENT
-EXECUTE FUNCTION update_queue_watermark();
-
-DROP TRIGGER IF EXISTS trg_update_partition_lookup ON queen.messages;
-CREATE TRIGGER trg_update_partition_lookup
-AFTER INSERT ON queen.messages
-REFERENCING NEW TABLE AS new_messages
-FOR EACH STATEMENT
-EXECUTE FUNCTION queen.update_partition_lookup_trigger();
 
 -- ============================================================================
 -- System State Initialization

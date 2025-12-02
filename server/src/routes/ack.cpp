@@ -11,7 +11,7 @@
 // External globals
 namespace queen {
 extern std::shared_ptr<SharedStateManager> global_shared_state;
-extern std::shared_ptr<ResponseRegistry> global_response_registry;
+extern std::vector<std::shared_ptr<ResponseRegistry>> worker_response_registries;
 }
 
 namespace queen {
@@ -58,7 +58,7 @@ void setup_ack_routes(uWS::App* app, const RouteContext& ctx) {
                     
                     spdlog::info("[Worker {}] ACK BATCH: Executing batch ACK ({} items)", ctx.worker_id, ack_items.size());
                     
-                    std::string request_id = global_response_registry->register_response(
+                    std::string request_id = worker_response_registries[ctx.worker_id]->register_response(
                         res, ctx.worker_id, nullptr
                     );
                         
@@ -138,7 +138,7 @@ void setup_ack_routes(uWS::App* app, const RouteContext& ctx) {
                     
                     spdlog::info("[Worker {}] ACK: Executing ACK", ctx.worker_id);
                     
-                    std::string request_id = global_response_registry->register_response(
+                    std::string request_id = worker_response_registries[ctx.worker_id]->register_response(
                         res, ctx.worker_id, nullptr
                     );
                     

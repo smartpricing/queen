@@ -257,8 +257,6 @@ void SidecarDbPool::notify_queue_activity(const std::string& queue_name) {
         }
     }
     if (notified > 0) {
-        spdlog::info("[Worker {}] [Sidecar] NOTIFY: Queue '{}' has activity, waking {} waiting consumers", 
-                     worker_id_, queue_name, notified);
         // Wake up the event loop to process the waiting queue immediately
         if (loop_initialized_) {
             uv_async_send(&submit_signal_);
@@ -664,8 +662,8 @@ void SidecarDbPool::on_waiting_timer(uv_timer_t* handle) {
 
 void SidecarDbPool::on_submit_signal(uv_async_t* handle) {
     (void)handle; 
-    /*
-    auto* pool = static_cast<SidecarDbPool*>(handle->data);
+    
+    /*auto* pool = static_cast<SidecarDbPool*>(handle->data);
     if (pool && pool->running_) {
         // Drain ALL pending requests (uv_async_send is coalescing!)
         pool->drain_pending_to_slots();
@@ -962,8 +960,6 @@ void SidecarDbPool::drain_pending_to_slots() {
                     case SidecarOpType::TRANSACTION: op_name = "TRANSACTION"; break;
                     case SidecarOpType::RENEW_LEASE: op_name = "RENEW_LEASE"; break;
                 }
-                spdlog::info("[Worker {}] [Sidecar] BATCH: {} ({} requests, {} items)", 
-                            worker_id_, op_name, batch_info.size(), current_index);
                 
                 // Get SQL for this operation type
                 std::vector<std::string> param_storage;
@@ -1091,8 +1087,8 @@ void SidecarDbPool::process_slot_result(ConnectionSlot& slot) {
                             case SidecarOpType::TRANSACTION: batch_op_name = "TRANSACTION"; break;
                             case SidecarOpType::RENEW_LEASE: batch_op_name = "RENEW_LEASE"; break;
                         }
-                        spdlog::info("[Worker {}] [Sidecar] {} TIMING: queue_wait={}us, db_exec={}us | {} requests, {} items",
-                                    worker_id_, batch_op_name, slot.queue_wait_us, query_time,
+                        spdlog::info("[Worker {}] [Sidecar] {} TIMING: queue_wait={}ms, db_exec={}ms | {} requests, {} items",
+                                    worker_id_, batch_op_name, slot.queue_wait_us / 1000, query_time / 1000,
                                     slot.batched_requests.size(), slot.total_items);
                         
                         // Update per-op stats
@@ -1193,8 +1189,6 @@ void SidecarDbPool::process_slot_result(ConnectionSlot& slot) {
                             case SidecarOpType::TRANSACTION: single_op_name = "TRANSACTION"; break;
                             case SidecarOpType::RENEW_LEASE: single_op_name = "RENEW_LEASE"; break;
                         }
-                        spdlog::info("[Worker {}] [Sidecar] {} TIMING: queue_wait={}us, db_exec={}us | single request",
-                                    worker_id_, single_op_name, slot.queue_wait_us, query_time);
                     }
                     
                     if (was_pop_wait) {

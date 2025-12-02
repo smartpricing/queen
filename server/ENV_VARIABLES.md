@@ -45,20 +45,6 @@ This document lists all environment variables supported by the Queen C++ server.
 | `DEFAULT_TIMEOUT` | int | 30000 | Default timeout for pop operations (ms) |
 | `DEFAULT_BATCH_SIZE` | int | 1 | Default batch size for pop operations |
 
-### Stream Long Polling
-
-Stream processing uses dedicated poll workers optimized for windowed message consumption.
-
-| Variable | Type | Default | Description |
-|----------|------|---------|-------------|
-| `STREAM_POLL_WORKER_COUNT` | int | 1 | Number of dedicated stream poll worker threads |
-| `STREAM_POLL_WORKER_INTERVAL` | int | 100 | How often stream workers check registry (ms) |
-| `STREAM_POLL_INTERVAL` | int | 1000 | Min time between stream checks per group (ms) |
-| `STREAM_BACKOFF_THRESHOLD` | int | 5 | Consecutive empty checks before backoff |
-| `STREAM_BACKOFF_MULTIPLIER` | double | 2.0 | Exponential backoff multiplier |
-| `STREAM_MAX_POLL_INTERVAL` | int | 5000 | Max poll interval after backoff (ms) |
-| `STREAM_CONCURRENT_CHECKS` | int | 2 | Max concurrent window check jobs per worker |
-
 ### ThreadPool Configuration
 
 | Variable | Type | Default | Description |

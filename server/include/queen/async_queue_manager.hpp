@@ -203,13 +203,6 @@ public:
         int limit,
         int offset
     );
-    
-    // Stream management
-    nlohmann::json list_streams();
-    nlohmann::json get_stream_stats();
-    nlohmann::json get_stream_details(const std::string& stream_name);
-    nlohmann::json get_stream_consumers(const std::string& stream_name);
-    bool delete_stream(const std::string& stream_name);
 };
 
 } // namespace queen

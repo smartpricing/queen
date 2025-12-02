@@ -8,9 +8,6 @@
 #include "queen/metrics_collector.hpp"
 #include "queen/retention_service.hpp"
 #include "queen/eviction_service.hpp"
-#include "queen/stream_poll_worker.hpp"
-#include "queen/stream_poll_intention_registry.hpp"
-#include "queen/stream_manager.hpp"
 #include "queen/shared_state_manager.hpp"
 #include "queen/sidecar_db_pool.hpp"
 #include "threadpool.hpp"
@@ -44,9 +41,7 @@ static std::shared_ptr<queen::EvictionService> global_eviction_service;
 
 // These globals need to be accessible from route files (non-static, in queen namespace)
 namespace queen {
-std::shared_ptr<ResponseRegistry> global_response_registry;
-std::shared_ptr<StreamPollIntentionRegistry> global_stream_poll_registry;
-std::shared_ptr<StreamManager> global_stream_manager;
+std::vector<std::shared_ptr<ResponseRegistry>> worker_response_registries;  // Per-worker registries (no lock contention!)
 }
 
 static std::once_flag global_pool_init_flag;
@@ -167,9 +162,6 @@ static void setup_worker_routes(uWS::App* app,
     spdlog::debug("[Worker {}] Setting up trace routes...", worker_id);
     queen::routes::setup_trace_routes(app, ctx);
     
-    spdlog::debug("[Worker {}] Setting up stream routes...", worker_id);
-    queen::routes::setup_stream_routes(app, ctx);
-    
     spdlog::debug("[Worker {}] Setting up status routes...", worker_id);
     queen::routes::setup_status_routes(app, ctx);
     
@@ -193,6 +185,7 @@ struct ResponseTimerContext {
     queen::ResponseQueue* queue;
     int batch_size;
     int batch_max;
+    int worker_id;  // For accessing per-worker response registry
 };
 
 // Timer callback for processing response queue (poll worker responses only)
@@ -221,7 +214,7 @@ static void response_timer_callback(us_timer_t* timer) {
     
     // Process up to batch_limit responses per timer tick to avoid blocking event loop
     while (processed < batch_limit && ctx->queue->pop(item)) {
-        bool sent = queen::global_response_registry->send_response(
+        bool sent = queen::worker_response_registries[ctx->worker_id]->send_response(
             item.request_id, item.data, item.is_error, item.status_code);
         
         if (sent) {
@@ -247,7 +240,7 @@ static void response_timer_callback(us_timer_t* timer) {
     // Use 120s timeout to allow for long-polling requests up to 60s + buffer
     static int cleanup_counter = 0;
     if (++cleanup_counter >= 200) {
-        queen::global_response_registry->cleanup_expired(std::chrono::seconds(120));
+        queen::worker_response_registries[ctx->worker_id]->cleanup_expired(std::chrono::seconds(120));
         cleanup_counter = 0;
     }
 }
@@ -272,32 +265,23 @@ static void worker_thread(const Config& config, int worker_id, int num_workers,
             
             // Thread pool sizing calculations:
             // ALL workers use ThreadPool for proper resource management and visibility
-            // - Regular poll workers: reserve threads in db_thread_pool
-            // - Stream poll workers: reserve threads + submit concurrent window checks
             // - Sidecar pollers: one per HTTP worker (each runs a blocking poller loop)
             // - Background services: use system_thread_pool for scheduling
             
             // DB ThreadPool Formula:
-            // = Stream poll workers (reserved) 
-            // + Stream concurrent checks (N × C)
-            // + Sidecar pollers (one per HTTP worker) - handles POP_WAIT now
+            // = Sidecar pollers (one per HTTP worker) - handles POP_WAIT
             // + Service threads (metrics, etc.)
-            // NOTE: Regular poll workers removed - POP_WAIT handled by sidecar
-            int stream_workers = config.queue.stream_poll_worker_count;
-            int stream_concurrent = config.queue.stream_poll_worker_count * config.queue.stream_concurrent_checks;
             int sidecar_pollers = num_workers;  // Each HTTP worker has its own sidecar poller
             int service_threads = config.queue.db_thread_pool_service_threads;
-            int db_thread_pool_size = stream_workers + stream_concurrent + sidecar_pollers + service_threads;
+            int db_thread_pool_size = sidecar_pollers + service_threads;
             
             // System ThreadPool: Used by background services (metrics sampling, retention, eviction)
             int system_threads = 4; // MetricsCollector, RetentionService, EvictionService scheduling
             
             spdlog::info("Initializing GLOBAL shared resources (ASYNC-ONLY MODE):");
             spdlog::info("  - Total DB connections: {} (95% of {}) - ALL ASYNC", total_connections, config.database.pool_size);
-            spdlog::info("  - DB ThreadPool size: {} = {} stream + {} stream concurrent + {} sidecar + {} service", 
-                        db_thread_pool_size, stream_workers, stream_concurrent, sidecar_pollers, service_threads);
-            spdlog::info("    * Stream poll workers: {} (reserved threads)", stream_workers);
-            spdlog::info("    * Stream concurrent checks: {} ({} per worker)", stream_concurrent, config.queue.stream_concurrent_checks);
+            spdlog::info("  - DB ThreadPool size: {} = {} sidecar + {} service", 
+                        db_thread_pool_size, sidecar_pollers, service_threads);
             spdlog::info("    * Sidecar pollers: {} (one per HTTP worker, handles POP_WAIT)", sidecar_pollers);
             spdlog::info("    * Service DB threads: {} (metrics, retention, eviction)", service_threads);
             spdlog::info("  - System ThreadPool threads: {} (for background service scheduling)", system_threads);
@@ -332,20 +316,12 @@ static void worker_thread(const Config& config, int worker_id, int num_workers,
             // Each worker gets its own sidecar with callback-based delivery via loop->defer()
             spdlog::info("  - Per-worker sidecars will be created in each worker thread");
             
-            // Create global response registry (shared across workers)
-            queen::global_response_registry = std::make_shared<queen::ResponseRegistry>();
-            
-            // Create global stream poll registry (shared by all workers)
-            queen::global_stream_poll_registry = std::make_shared<queen::StreamPollIntentionRegistry>();
-            
-            // Create global stream manager (shared by all workers)
-            queen::global_stream_manager = std::make_shared<queen::StreamManager>(
-                global_async_db_pool,
-                global_db_thread_pool,
-                worker_response_queues,
-                queen::global_stream_poll_registry,
-                queen::global_response_registry
-            );
+            // Create per-worker response registries (NO lock contention between workers!)
+            queen::worker_response_registries.resize(num_workers);
+            for (int i = 0; i < num_workers; i++) {
+                queen::worker_response_registries[i] = std::make_shared<queen::ResponseRegistry>();
+                spdlog::info("  - Created response registry for worker {} (lock-free across workers)", i);
+            }
             
             // Get system info for metrics
             global_system_info = SystemInfo::get_current();
@@ -426,8 +402,7 @@ static void worker_thread(const Config& config, int worker_id, int num_workers,
                     global_async_db_pool,
                     global_db_thread_pool,
                     global_system_thread_pool,
-                    queen::global_stream_poll_registry,
-                    queen::global_response_registry,
+                    queen::worker_response_registries,  // Per-worker registries (sum for metrics)
                     queen::global_shared_state,  // SharedState metrics
                     global_system_info.hostname,
                     global_system_info.port,
@@ -465,26 +440,6 @@ static void worker_thread(const Config& config, int worker_id, int num_workers,
             spdlog::warn("[Worker {}] Database connection: UNAVAILABLE (Pool: 0/{}) - Will use file buffer for failover", 
                          worker_id, pool_stats.total);
             spdlog::warn("[Worker {}] Server will operate with file buffer until PostgreSQL becomes available", worker_id);
-        }
-        
-        // Initialize stream long-polling poll workers (Worker 0 only, regardless of DB status)
-        // NOTE: Regular POP long-polling is now handled by sidecar POP_WAIT
-        if (worker_id == 0) {
-            // Initialize stream long-polling poll workers
-            spdlog::info("[Worker 0] Starting stream long-polling poll workers...");
-            queen::init_stream_long_polling(
-                global_db_thread_pool,
-                queen::global_stream_poll_registry,
-                queen::global_stream_manager,
-                worker_response_queues,
-                config.queue.stream_poll_worker_count,
-                config.queue.stream_poll_worker_interval,
-                config.queue.stream_poll_interval,
-                config.queue.stream_backoff_threshold,
-                config.queue.stream_backoff_multiplier,
-                config.queue.stream_max_poll_interval,
-                config.queue.backoff_cleanup_inactive_threshold
-            );
         }
         
         // Create or wait for SHARED FileBufferManager
@@ -626,8 +581,6 @@ static void worker_thread(const Config& config, int worker_id, int num_workers,
                                     for (const auto& [queue, partition] : resp.push_targets) {
                                         queen::global_shared_state->notify_message_available(queue, partition);
                                     }
-                                    spdlog::info("[Worker {}] PUSH NOTIFY: {} queue(s)", 
-                                                worker_id, resp.push_targets.size());
                                 }
                                 
                                 // Cleanup: remove items from failover storage (push succeeded)
@@ -812,7 +765,8 @@ static void worker_thread(const Config& config, int worker_id, int num_workers,
                 }
                 
                 // Deliver directly via ResponseRegistry (safe - we're in the event loop)
-                bool sent = queen::global_response_registry->send_response(
+                // Use per-worker registry - no lock contention with other workers!
+                bool sent = queen::worker_response_registries[worker_id]->send_response(
                     resp.request_id, json_response, is_error, status_code);
                 
                 auto send_end = std::chrono::steady_clock::now();
@@ -844,12 +798,6 @@ static void worker_thread(const Config& config, int worker_id, int num_workers,
                         spdlog::info("[Worker {}] {} TIMING: db_exec={}us, callback_wait={}us, json_parse_send={}us | {} (status={})",
                                     worker_id, op_name, resp.query_time_us, callback_wait_us, json_parse_us,
                                     queue_info.empty() ? "(no messages)" : queue_info, status_code);
-                    } else if (!queue_info.empty()) {
-                        spdlog::info("[Worker {}] {} RESPONSE: {} (status={})", 
-                                    worker_id, op_name, queue_info, status_code);
-                    } else if (status_code != 204) {
-                        spdlog::info("[Worker {}] {} RESPONSE: (status={})", 
-                                    worker_id, op_name, status_code);
                     }
                 } else {
                     spdlog::debug("[Worker {}] {} response not sent (aborted/expired)", 
@@ -923,6 +871,7 @@ static void worker_thread(const Config& config, int worker_id, int num_workers,
         timer_ctx->queue = worker_response_queues[worker_id].get();
         timer_ctx->batch_size = config.queue.response_batch_size;
         timer_ctx->batch_max = config.queue.response_batch_max;
+        timer_ctx->worker_id = worker_id;  // For per-worker registry access
         
         // Poll using configured interval for good balance between latency and CPU usage
         int timer_interval = config.queue.response_timer_interval_ms;

@@ -11,7 +11,7 @@
 
 // External globals (declared in acceptor_server.cpp)
 namespace queen {
-extern std::shared_ptr<ResponseRegistry> global_response_registry;
+extern std::vector<std::shared_ptr<ResponseRegistry>> worker_response_registries;
 extern std::shared_ptr<SharedStateManager> global_shared_state;
 }
 
@@ -82,7 +82,7 @@ void setup_pop_routes(uWS::App* app, const RouteContext& ctx) {
             
             if (wait) {
                 // Register response with abort callback to clean up waiting request on disconnect
-                std::string request_id = global_response_registry->register_response(res, ctx.worker_id,
+                std::string request_id = worker_response_registries[ctx.worker_id]->register_response(res, ctx.worker_id,
                     [](const std::string& req_id) {
                         // Log abort - sidecar will handle cleanup via timeout
                         spdlog::info("SPOP: Connection aborted for {}", req_id);
@@ -135,7 +135,7 @@ void setup_pop_routes(uWS::App* app, const RouteContext& ctx) {
             spdlog::info("[Worker {}] SPOP: Executing immediate pop for {}/{} (wait=false)", ctx.worker_id, queue_name, partition_name);
                 
             // Register response for async delivery
-            std::string request_id = global_response_registry->register_response(
+            std::string request_id = worker_response_registries[ctx.worker_id]->register_response(
                 res, ctx.worker_id, nullptr
             );
             
@@ -217,7 +217,7 @@ void setup_pop_routes(uWS::App* app, const RouteContext& ctx) {
             
             if (wait) {
                 // Register response with abort callback to clean up waiting request on disconnect
-                std::string request_id = global_response_registry->register_response(res, ctx.worker_id,
+                std::string request_id = worker_response_registries[ctx.worker_id]->register_response(res, ctx.worker_id,
                     [](const std::string& req_id) {
                         // Log abort - sidecar will handle cleanup via timeout
                         spdlog::info("QPOP: Connection aborted for {}", req_id);
@@ -269,7 +269,7 @@ void setup_pop_routes(uWS::App* app, const RouteContext& ctx) {
             // Use POP_BATCH for wildcard partition (any partition) - enables true batching
             spdlog::info("[Worker {}] QPOP: Executing immediate pop for {}/* (wait=false)", ctx.worker_id, queue_name);
                 
-            std::string request_id = global_response_registry->register_response(
+            std::string request_id = worker_response_registries[ctx.worker_id]->register_response(
                 res, ctx.worker_id, nullptr
             );
             

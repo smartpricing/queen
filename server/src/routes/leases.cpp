@@ -8,7 +8,7 @@
 
 // External globals
 namespace queen {
-extern std::shared_ptr<ResponseRegistry> global_response_registry;
+extern std::vector<std::shared_ptr<ResponseRegistry>> worker_response_registries;
 }
 
 namespace queen {
@@ -25,7 +25,7 @@ void setup_lease_routes(uWS::App* app, const RouteContext& ctx) {
                     
                     spdlog::debug("[Worker {}] Extending lease: {}, seconds: {}", ctx.worker_id, lease_id, seconds);
                     
-                    std::string request_id = global_response_registry->register_response(
+                    std::string request_id = worker_response_registries[ctx.worker_id]->register_response(
                         res, ctx.worker_id, nullptr
                     );
                     

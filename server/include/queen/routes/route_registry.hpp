@@ -114,22 +114,6 @@ void setup_dlq_routes(uWS::App* app, const RouteContext& ctx);
 void setup_trace_routes(uWS::App* app, const RouteContext& ctx);
 
 /**
- * Setup streaming endpoints
- * Routes:
- *   POST /api/v1/stream/define
- *   POST /api/v1/stream/poll
- *   POST /api/v1/stream/ack
- *   POST /api/v1/stream/renew-lease
- *   POST /api/v1/stream/seek
- *   GET /api/v1/resources/streams
- *   GET /api/v1/resources/streams/stats
- *   GET /api/v1/resources/streams/:streamName
- *   GET /api/v1/resources/streams/:streamName/consumers
- *   DELETE /api/v1/resources/streams/:streamName
- */
-void setup_stream_routes(uWS::App* app, const RouteContext& ctx);
-
-/**
  * Setup status and analytics endpoints
  * Routes:
  *   GET /api/v1/status

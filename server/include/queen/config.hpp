@@ -121,15 +121,6 @@ struct QueueConfig {
     int default_timeout = 30000;         // 30 seconds
     int default_batch_size = 1;
     
-    // Stream long polling - Worker configuration
-    int stream_poll_worker_count = 1;    // Number of dedicated stream poll worker threads
-    int stream_poll_worker_interval = 100; // How often stream workers check registry (ms)
-    int stream_poll_interval = 1000;     // Min time between stream checks per group (ms)
-    int stream_backoff_threshold = 5;    // Consecutive empty checks before backoff
-    double stream_backoff_multiplier = 2.0; // Exponential backoff multiplier
-    int stream_max_poll_interval = 5000; // Max poll interval after backoff (ms)
-    int stream_concurrent_checks = 1;   // Max concurrent window check jobs per worker
-    
     // ThreadPool sizing
     int db_thread_pool_service_threads = 5; // Threads for background service DB operations
     
@@ -164,15 +155,6 @@ struct QueueConfig {
         
         config.default_timeout = get_env_int("DEFAULT_TIMEOUT", 30000);
         config.default_batch_size = get_env_int("DEFAULT_BATCH_SIZE", 1);
-        
-        // Stream long polling - Worker configuration
-        config.stream_poll_worker_count = get_env_int("STREAM_POLL_WORKER_COUNT", 1);
-        config.stream_poll_worker_interval = get_env_int("STREAM_POLL_WORKER_INTERVAL", 100);
-        config.stream_poll_interval = get_env_int("STREAM_POLL_INTERVAL", 1000);
-        config.stream_backoff_threshold = get_env_int("STREAM_BACKOFF_THRESHOLD", 5);
-        config.stream_backoff_multiplier = get_env_double("STREAM_BACKOFF_MULTIPLIER", 2.0);
-        config.stream_max_poll_interval = get_env_int("STREAM_MAX_POLL_INTERVAL", 5000);
-        config.stream_concurrent_checks = get_env_int("STREAM_CONCURRENT_CHECKS", 2);
         
         // ThreadPool sizing
         config.db_thread_pool_service_threads = get_env_int("DB_THREAD_POOL_SERVICE_THREADS", 5);

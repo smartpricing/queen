@@ -15,7 +15,7 @@
 namespace queen {
 
 // External globals (declared in acceptor_server.cpp)
-extern std::shared_ptr<ResponseRegistry> global_response_registry;
+extern std::vector<std::shared_ptr<ResponseRegistry>> worker_response_registries;
 extern std::shared_ptr<SharedStateManager> global_shared_state;
 
 namespace routes {
@@ -83,7 +83,7 @@ void setup_push_routes(uWS::App* app, const RouteContext& ctx) {
                     
                     // MAINTENANCE MODE: Route to file buffer instead of sidecar
                     // Must use get_maintenance_mode_fresh() to query DB - cached value is per-worker
-                    if (ctx.async_queue_manager->get_maintenance_mode_fresh() && ctx.file_buffer) {
+                    /*if (ctx.async_queue_manager->get_maintenance_mode_fresh() && ctx.file_buffer) {
                         spdlog::debug("[Worker {}] PUSH: Maintenance mode active, buffering {} items", 
                                      ctx.worker_id, items.size());
                         
@@ -134,20 +134,20 @@ void setup_push_routes(uWS::App* app, const RouteContext& ctx) {
                         
                         send_json_response(res, results, all_buffered ? 201 : 500);
                         return;
-                    }
+                    }*/
                     
-                        // Register response for async delivery
-                        std::string request_id = global_response_registry->register_response(
-                            res, ctx.worker_id, nullptr
-                        );
+                    // Register response for async delivery (per-worker registry - no contention!)
+                    std::string request_id = worker_response_registries[ctx.worker_id]->register_response(
+                        res, ctx.worker_id, nullptr
+                    );
                         
-                        // Build JSON array for stored procedure
+                    // Build JSON array for stored procedure
                     // Generate UUIDv7 message IDs on C++ side
                     // Get encryption service once for all items
                     EncryptionService* enc_service = get_encryption_service();
                     
-                        nlohmann::json items_json = nlohmann::json::array();
-                        for (const auto& item : items) {
+                    nlohmann::json items_json = nlohmann::json::array();
+                    for (const auto& item : items) {
                         // Check if queue has encryption enabled
                         // Note: SharedStateManager caches queue configs even when inter-instance sync is disabled
                         bool queue_encryption_enabled = false;
@@ -221,17 +221,6 @@ void setup_push_routes(uWS::App* app, const RouteContext& ctx) {
                         sidecar_req.push_targets.push_back({queue, partition});
                     }
                     
-                    // Build queue list for logging
-                    std::set<std::string> queues;
-                    for (const auto& [queue, _] : targets) {
-                        queues.insert(queue);
-                    }
-                    std::string queues_str;
-                    for (const auto& q : queues) {
-                        if (!queues_str.empty()) queues_str += ", ";
-                        queues_str += q;
-                    }
-                    
                     // Store items for failover before submitting to sidecar
                     // If sidecar fails (DB down), callback will retrieve and write to file buffer
                     if (ctx.push_failover_storage) {
@@ -241,10 +230,11 @@ void setup_push_routes(uWS::App* app, const RouteContext& ctx) {
                     // Submit to per-worker sidecar - RETURNS IMMEDIATELY!
                     ctx.sidecar->submit(std::move(sidecar_req));
                         
-                    spdlog::info("[Worker {}] PUSH: {} items to [{}]", 
-                                ctx.worker_id, item_count, queues_str);
-                        
                     // Don't send response here - sidecar will deliver it via loop->defer()
+                    
+                    // TESTING: Send immediate 200 response
+                    //send_json_response(res, nlohmann::json::array(), 200);
+                    //return;
                     
                 } catch (const std::exception& e) {
                     spdlog::error("[Worker {}] PUSH: Error: {}", ctx.worker_id, e.what());
