@@ -16,15 +16,6 @@
 CREATE SCHEMA IF NOT EXISTS queen;
 
 -- ============================================================================
--- Schema Version Tracking
--- ============================================================================
-CREATE TABLE IF NOT EXISTS queen.schema_version (
-    version INT PRIMARY KEY,
-    description TEXT NOT NULL,
-    applied_at TIMESTAMPTZ DEFAULT NOW()
-);
-
--- ============================================================================
 -- Core Tables
 -- ============================================================================
 
@@ -272,16 +263,6 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql;
 
--- Statement-level trigger for partition last_activity (batch-efficient)
-CREATE OR REPLACE FUNCTION update_partition_last_activity()
-RETURNS TRIGGER AS $$
-BEGIN
-    UPDATE queen.partitions 
-    SET last_activity = NOW() 
-    WHERE id IN (SELECT DISTINCT partition_id FROM new_messages);
-    RETURN NULL;
-END;
-$$ LANGUAGE plpgsql;
 
 -- ============================================================================
 -- Triggers
@@ -289,8 +270,8 @@ $$ LANGUAGE plpgsql;
 
 -- Statement-level trigger to update partition_lookup when messages are inserted
 -- Uses REFERENCING NEW TABLE to batch all inserts into a single trigger call
-DROP TRIGGER IF EXISTS trigger_update_partition_lookup ON queen.messages;
-CREATE TRIGGER trigger_update_partition_lookup
+-- NOTE: Using CREATE OR REPLACE for idempotent deployments (PostgreSQL 14+)
+CREATE OR REPLACE TRIGGER trg_update_partition_lookup
     AFTER INSERT ON queen.messages
     REFERENCING NEW TABLE AS new_messages
     FOR EACH STATEMENT
