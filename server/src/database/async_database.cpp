@@ -600,10 +600,10 @@ bool AsyncDbPool::ensureConnectionHealthy(PGconn* conn) {
         FD_ZERO(&fds);
         FD_SET(sock_fd, &fds);
         
-        // 100ms timeout for health check (fail fast when DB is down)
+        // 2s timeout for health check - generous to avoid false positives under high load
         struct timeval tv;
-        tv.tv_sec = 0;
-        tv.tv_usec = 100000;  // 100ms
+        tv.tv_sec = 2;
+        tv.tv_usec = 0;
         
         int ret = select(sock_fd + 1, &fds, nullptr, nullptr, &tv);
             

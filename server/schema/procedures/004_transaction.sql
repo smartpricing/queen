@@ -231,4 +231,3 @@ END;
 $$;
 
 GRANT EXECUTE ON FUNCTION queen.execute_transaction_v2(jsonb) TO PUBLIC;
-

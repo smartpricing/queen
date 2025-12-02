@@ -73,7 +73,7 @@ const requests = [];
 for (let i = 0; i < MAX_PARTITION; i++) {
   requests.push({
     method: 'GET',
-    path: `/api/v1/pop/queue/${QUEUE_NAME}/partition/${i}?batch=1&wait=false&autoAck=true`,
+    path: `/api/v1/pop/queue/${QUEUE_NAME}/partition/${i}?batch=1&wait=false&autoAck=false`,
     headers: {
       'Content-Type': 'application/json'
     }

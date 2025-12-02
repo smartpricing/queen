@@ -273,28 +273,27 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql;
 
+-- Statement-level trigger for partition last_activity (batch-efficient)
+CREATE OR REPLACE FUNCTION update_partition_last_activity()
+RETURNS TRIGGER AS $$
+BEGIN
+    UPDATE queen.partitions 
+    SET last_activity = NOW() 
+    WHERE id IN (SELECT DISTINCT partition_id FROM new_messages);
+    RETURN NULL;
+END;
+$$ LANGUAGE plpgsql;
+
 -- ============================================================================
 -- Triggers
 -- ============================================================================
 
+-- Statement-level trigger to update partition_lookup when messages are inserted
+-- Uses REFERENCING NEW TABLE to batch all inserts into a single trigger call
+DROP TRIGGER IF EXISTS trigger_update_partition_lookup ON queen.messages;
+CREATE TRIGGER trigger_update_partition_lookup
+    AFTER INSERT ON queen.messages
+    REFERENCING NEW TABLE AS new_messages
+    FOR EACH STATEMENT
+    EXECUTE FUNCTION queen.update_partition_lookup_trigger();
 
-
-
--- ============================================================================
--- System State Initialization
--- ============================================================================
-
-INSERT INTO queen.system_state (key, value, updated_at)
-VALUES ('maintenance_mode', '{"enabled": false}'::jsonb, NOW())
-ON CONFLICT (key) DO NOTHING;
-
--- ============================================================================
--- Mark Schema Version
--- ============================================================================
--- This is the base schema (version 0).
--- Future migrations go in server/migrations/ with version > 0.
--- The application will check this table and apply any missing migrations.
-
-INSERT INTO queen.schema_version (version, description)
-VALUES (0, 'Base schema')
-ON CONFLICT (version) DO NOTHING;

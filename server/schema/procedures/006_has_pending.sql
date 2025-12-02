@@ -51,4 +51,3 @@ END;
 $$;
 
 GRANT EXECUTE ON FUNCTION queen.has_pending_messages(text, text, text) TO PUBLIC;
-

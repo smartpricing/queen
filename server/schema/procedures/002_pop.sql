@@ -234,4 +234,3 @@ END;
 $$;
 
 GRANT EXECUTE ON FUNCTION queen.pop_messages_v2(text, text, text, int, int, text, text) TO PUBLIC;
-

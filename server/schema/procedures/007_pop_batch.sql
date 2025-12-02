@@ -11,37 +11,7 @@ AS $$
 DECLARE
     v_results JSONB := '[]'::jsonb;
     v_now TIMESTAMPTZ := NOW();
-    v_request_count INT;
 BEGIN
-    -- Check request count for optimization
-    v_request_count := jsonb_array_length(p_requests);
-    
-    -- FAST PATH: Single request - delegate to simpler procedure (avoids temp table overhead)
-    IF v_request_count = 1 THEN
-        DECLARE
-            v_req JSONB := p_requests->0;
-            v_single_result JSONB;
-        BEGIN
-            SELECT queen.pop_messages_v2(
-                v_req->>'queue',
-                NULLIF(v_req->>'partition', ''),
-                COALESCE(v_req->>'consumerGroup', '__QUEUE_MODE__'),
-                COALESCE((v_req->>'batch')::INT, 10),
-                COALESCE((v_req->>'leaseTime')::INT, 0),
-                COALESCE(v_req->>'subMode', 'all'),
-                NULLIF(v_req->>'subFrom', '')
-            ) INTO v_single_result;
-            
-            RETURN jsonb_build_array(
-                jsonb_build_object(
-                    'idx', (v_req->>'idx')::INT,
-                    'result', v_single_result
-                )
-            );
-        END;
-    END IF;
-    
-    -- BATCH PATH: Multiple requests - use temp tables for efficiency
     -- STEP 0: Create temporary tables
     CREATE TEMP TABLE batch_requests ON COMMIT DROP AS
     SELECT 
@@ -63,11 +33,8 @@ BEGIN
         NULL::INT AS delayed_processing
     FROM jsonb_array_elements(p_requests) r;
     
-    -- Only create indexes for larger batches (overhead not worth it for small batches)
-    IF v_request_count > 5 THEN
-        CREATE INDEX ON batch_requests(queue_name, consumer_group);
-        CREATE INDEX ON batch_requests(idx);
-    END IF;
+    CREATE INDEX ON batch_requests(queue_name, consumer_group);
+    CREATE INDEX ON batch_requests(idx);
     
     -- STEP 1: Handle specific partition requests
     UPDATE batch_requests br
@@ -384,4 +351,3 @@ END;
 $$;
 
 GRANT EXECUTE ON FUNCTION queen.pop_messages_batch_v2(jsonb) TO PUBLIC;
-

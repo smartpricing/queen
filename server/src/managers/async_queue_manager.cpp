@@ -308,86 +308,25 @@ bool AsyncQueueManager::initialize_schema() {
             spdlog::error("Failed to create queen schema");
             return false;
         }
-        
-        // Check current schema version
-        int current_version = -1;
-        bool has_version_table = false;
-        bool has_existing_tables = false;
-        
-        {
-            // Check if schema_version table exists
-            std::string check_version = R"(
-                SELECT EXISTS (
-                    SELECT 1 FROM information_schema.tables 
-                    WHERE table_schema = 'queen' AND table_name = 'schema_version'
-                )
-            )";
-            PGresult* res = PQexec(conn.get(), check_version.c_str());
-            if (res && PQresultStatus(res) == PGRES_TUPLES_OK && PQntuples(res) > 0) {
-                has_version_table = (PQgetvalue(res, 0, 0)[0] == 't');
-            }
-            if (res) PQclear(res);
-            
-            // Check if queen.queues exists (indicates existing schema)
-            std::string check_queues = R"(
-                SELECT EXISTS (
-                    SELECT 1 FROM information_schema.tables 
-                    WHERE table_schema = 'queen' AND table_name = 'queues'
-                )
-            )";
-            res = PQexec(conn.get(), check_queues.c_str());
-            if (res && PQresultStatus(res) == PGRES_TUPLES_OK && PQntuples(res) > 0) {
-                has_existing_tables = (PQgetvalue(res, 0, 0)[0] == 't');
-            }
-            if (res) PQclear(res);
-            
-            if (has_version_table) {
-                current_version = query_int(conn.get(), 
-                    "SELECT COALESCE(MAX(version), 0) FROM queen.schema_version", 0);
-                spdlog::info("Current schema version: {}", current_version);
-            } else if (has_existing_tables) {
-                // Legacy system - has tables but no version tracking
-                // Create version table and mark as version 0
-                spdlog::info("Legacy system detected - adding version tracking");
-                exec_sql(conn.get(), R"(
-                    CREATE TABLE IF NOT EXISTS queen.schema_version (
-                        version INT PRIMARY KEY,
-                        description TEXT NOT NULL,
-                        applied_at TIMESTAMPTZ DEFAULT NOW()
-                    );
-                    INSERT INTO queen.schema_version (version, description)
-                    VALUES (0, 'Pre-existing legacy schema')
-                    ON CONFLICT (version) DO NOTHING;
-                )", "create version table");
-                current_version = 0;
-            } else {
-                spdlog::info("No existing schema found - fresh install");
-            }
-        }
-        
+
         // If no schema version, this is a fresh install - run base schema
-        if (current_version < 0) {
-            spdlog::info("Running base schema initialization...");
+        spdlog::info("Running base schema initialization...");
             
-            std::string schema_file = schema_dir + "/schema.sql";
-            if (!std::filesystem::exists(schema_file)) {
-                spdlog::error("Base schema file not found: {}", schema_file);
-                // Fall back to legacy embedded schema
-                throw std::runtime_error("Base schema file not found: " + schema_file);
-            }
-            
-            // Load and execute base schema
-            std::string schema_sql = read_sql_file(schema_file);
-            if (!exec_sql(conn.get(), schema_sql, "base schema")) {
-                spdlog::error("Failed to apply base schema");
-                return false;
-            }
-            spdlog::info("Base schema applied successfully");
-            
-            current_version = query_int(conn.get(), 
-                "SELECT COALESCE(MAX(version), 0) FROM queen.schema_version", 0);
-            spdlog::info("Schema initialized to version {}", current_version);
+        std::string schema_file = schema_dir + "/schema.sql";
+        if (!std::filesystem::exists(schema_file)) {
+            spdlog::error("Base schema file not found: {}", schema_file);
+            // Fall back to legacy embedded schema
+            throw std::runtime_error("Base schema file not found: " + schema_file);
         }
+            
+        // Load and execute base schema
+        std::string schema_sql = read_sql_file(schema_file);
+        if (!exec_sql(conn.get(), schema_sql, "base schema")) {
+            spdlog::error("Failed to apply base schema");
+            return false;
+        }
+        spdlog::info("Base schema applied successfully");
+
         
         // Always load/update stored procedures (they use CREATE OR REPLACE, so idempotent)
         {
@@ -405,41 +344,7 @@ bool AsyncQueueManager::initialize_schema() {
                 }
             }
         }
-        
-        // Apply any pending migrations (for future upgrades)
-        // Migrations are numbered 010_xxx.sql, 011_xxx.sql, etc.
-        auto migration_files = get_sql_files(migrations_dir);
-        for (const auto& mig_file : migration_files) {
-            // Extract version from filename (e.g., "010_feature.sql" -> 10)
-            std::string filename = std::filesystem::path(mig_file).filename().string();
-            if (filename.length() < 3) continue;
-            
-            int mig_version = 0;
-            try {
-                mig_version = std::stoi(filename.substr(0, 3));
-            } catch (...) {
-                continue;  // Skip files without version prefix
-            }
-            
-            if (mig_version > current_version) {
-                spdlog::info("Applying migration {} (version {})", filename, mig_version);
-                std::string mig_sql = read_sql_file(mig_file);
-                if (!exec_sql(conn.get(), mig_sql, filename)) {
-                    spdlog::error("Failed to apply migration: {}", filename);
-                    return false;
-                }
-                
-                // Record migration
-                std::string record = "INSERT INTO queen.schema_version (version, description) "
-                                   "VALUES (" + std::to_string(mig_version) + ", '" + filename + "') "
-                                   "ON CONFLICT (version) DO NOTHING";
-                exec_sql(conn.get(), record, "record migration");
-                
-                current_version = mig_version;
-            }
-        }
-        
-        spdlog::info("Database schema ready (version {})", current_version);
+
         return true;
         
     } catch (const std::exception& e) {

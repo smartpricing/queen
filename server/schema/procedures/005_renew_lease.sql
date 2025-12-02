@@ -75,4 +75,3 @@ END;
 $$;
 
 GRANT EXECUTE ON FUNCTION queen.renew_lease_v2(jsonb) TO PUBLIC;
-

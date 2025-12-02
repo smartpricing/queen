@@ -42,7 +42,7 @@ static void record_consumer_group_subscription_if_needed(
 }
 
 void setup_pop_routes(uWS::App* app, const RouteContext& ctx) {
-    // SPECIFIC POP from queue/partition - NEW RESPONSE QUEUE ARCHITECTURE WITH POLL INTENTION REGISTRY
+    // SPECIFIC POP from queue/partition
     app->get("/api/v1/pop/queue/:queue/partition/:partition", [ctx](auto* res, auto* req) {
         auto request_start = std::chrono::steady_clock::now();
         try {
@@ -55,9 +55,9 @@ void setup_pop_routes(uWS::App* app, const RouteContext& ctx) {
             int batch = get_query_param_int(req, "batch", ctx.config.queue.default_batch_size);
             
             auto pool_stats = ctx.async_queue_manager->get_pool_stats();
-            spdlog::info("[Worker {}] SPOP: [{}/{}@{}] batch={}, wait={} | Pool: {}/{} conn ({} in use)", 
+            /*spdlog::info("[Worker {}] SPOP: [{}/{}@{}] batch={}, wait={} | Pool: {}/{} conn ({} in use)", 
                         ctx.worker_id, queue_name, partition_name, consumer_group, batch, wait,
-                        pool_stats.available, pool_stats.total, pool_stats.in_use);
+                        pool_stats.available, pool_stats.total, pool_stats.in_use);*/
             
             PopOptions options;
             options.wait = false;  // Always false - registry handles waiting
@@ -123,8 +123,7 @@ void setup_pop_routes(uWS::App* app, const RouteContext& ctx) {
                     global_shared_state->register_consumer(queue_name);
                 }
                 
-                spdlog::info("[Worker {}] SPOP TIMING: route_setup={}us | Submitted POP_WAIT {} for queue {}/{} (timeout={}ms)", 
-                            ctx.worker_id, route_time_us, request_id, queue_name, partition_name, timeout_ms);
+                //spdlog::info("[Worker {}] SPOP TIMING: route_setup={}us | Submitted POP_WAIT {} for queue {}/{} (timeout={}ms)", ctx.worker_id, route_time_us, request_id, queue_name, partition_name, timeout_ms);
                 
                 // Return immediately - sidecar will handle it
                 return;
@@ -132,7 +131,7 @@ void setup_pop_routes(uWS::App* app, const RouteContext& ctx) {
             
             // Non-waiting mode: use sidecar for async pop
             // Use POP_BATCH for ALL POPs - enables batching when multiple requests arrive
-            spdlog::info("[Worker {}] SPOP: Executing immediate pop for {}/{} (wait=false)", ctx.worker_id, queue_name, partition_name);
+            //spdlog::info("[Worker {}] SPOP: Executing immediate pop for {}/{} (wait=false)", ctx.worker_id, queue_name, partition_name);
                 
             // Register response for async delivery
             std::string request_id = worker_response_registries[ctx.worker_id]->register_response(
@@ -169,16 +168,17 @@ void setup_pop_routes(uWS::App* app, const RouteContext& ctx) {
             
             auto route_time_us = std::chrono::duration_cast<std::chrono::microseconds>(
                 std::chrono::steady_clock::now() - request_start).count();
-            ctx.sidecar->submit(std::move(sidecar_req));
-            spdlog::info("[Worker {}] SPOP TIMING: route_setup={}us | Submitted POP_BATCH (request_id={})", 
-                         ctx.worker_id, route_time_us, request_id);
+            
+                ctx.sidecar->submit(std::move(sidecar_req));
+            /*spdlog::info("[Worker {}] SPOP TIMING: route_setup={}us | Submitted POP_BATCH (request_id={})", 
+                         ctx.worker_id, route_time_us, request_id);*/
             
         } catch (const std::exception& e) {
             send_error_response(res, e.what(), 500);
         }
     });
     
-    // POP from queue (any partition) - NEW RESPONSE QUEUE ARCHITECTURE WITH POLL INTENTION REGISTRY
+    // POP from queue (any partition)
     app->get("/api/v1/pop/queue/:queue", [ctx](auto* res, auto* req) {
         auto request_start = std::chrono::steady_clock::now();
         try {
@@ -258,8 +258,8 @@ void setup_pop_routes(uWS::App* app, const RouteContext& ctx) {
                     global_shared_state->register_consumer(queue_name);
                 }
                 
-                spdlog::info("[Worker {}] QPOP TIMING: route_setup={}us | Submitted POP_WAIT {} for queue {} (timeout={}ms)", 
-                            ctx.worker_id, route_time_us, request_id, queue_name, timeout_ms);
+                /*spdlog::info("[Worker {}] QPOP TIMING: route_setup={}us | Submitted POP_WAIT {} for queue {} (timeout={}ms)", 
+                            ctx.worker_id, route_time_us, request_id, queue_name, timeout_ms);*/
                 
                 // Return immediately - sidecar will handle it
                 return;
@@ -303,8 +303,8 @@ void setup_pop_routes(uWS::App* app, const RouteContext& ctx) {
             auto route_time_us = std::chrono::duration_cast<std::chrono::microseconds>(
                 std::chrono::steady_clock::now() - request_start).count();
             ctx.sidecar->submit(std::move(sidecar_req));
-            spdlog::info("[Worker {}] QPOP TIMING: route_setup={}us | Submitted POP_BATCH (request_id={})", 
-                         ctx.worker_id, route_time_us, request_id);
+            /*spdlog::info("[Worker {}] QPOP TIMING: route_setup={}us | Submitted POP_BATCH (request_id={})", 
+                         ctx.worker_id, route_time_us, request_id);*/
             
         } catch (const std::exception& e) {
             send_error_response(res, e.what(), 500);
