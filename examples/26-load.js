@@ -56,7 +56,7 @@ for (let i = 0; i <= maxPartition; i++) {
 const instance = autocannon({
   url: SERVER_URL,
   connections: 500,   // More connections for throughput
-  duration: 30,
+  duration: 10,
   pipelining: 1,
   requests: requests,
 });
