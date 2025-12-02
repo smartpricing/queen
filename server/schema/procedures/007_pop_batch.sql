@@ -28,27 +28,27 @@ DECLARE
 BEGIN
     -- Process each request individually to minimize lock duration
     FOR v_request IN 
-        SELECT 
-            (r.value->>'idx')::INT AS idx,
-            (r.value->>'queue')::TEXT AS queue_name,
-            NULLIF(r.value->>'partition', '') AS partition_name,
-            COALESCE(r.value->>'consumerGroup', '__QUEUE_MODE__') AS consumer_group,
-            COALESCE((r.value->>'batch')::INT, 10) AS batch_size,
-            COALESCE((r.value->>'leaseTime')::INT, 0) AS lease_time_seconds,
-            COALESCE(r.value->>'subMode', 'all') AS subscription_mode,
+    SELECT 
+        (r.value->>'idx')::INT AS idx,
+        (r.value->>'queue')::TEXT AS queue_name,
+        NULLIF(r.value->>'partition', '') AS partition_name,
+        COALESCE(r.value->>'consumerGroup', '__QUEUE_MODE__') AS consumer_group,
+        COALESCE((r.value->>'batch')::INT, 10) AS batch_size,
+        COALESCE((r.value->>'leaseTime')::INT, 0) AS lease_time_seconds,
+        COALESCE(r.value->>'subMode', 'all') AS subscription_mode,
             NULLIF(r.value->>'subFrom', '') AS subscription_from
         FROM jsonb_array_elements(p_requests) r
     LOOP
         v_lease_acquired := FALSE;
         v_messages := '[]'::jsonb;
         v_lease_id := NULL;
-        
+    
         -- Handle specific partition request
         IF v_request.partition_name IS NOT NULL THEN
             SELECT p.id, q.id, p.name, q.lease_time, q.window_buffer, q.delayed_processing
             INTO v_partition_id, v_queue_id, v_partition_name, v_queue_lease_time, v_window_buffer, v_delayed_processing
-            FROM queen.partitions p
-            JOIN queen.queues q ON p.queue_id = q.id
+    FROM queen.partitions p
+    JOIN queen.queues q ON p.queue_id = q.id
             WHERE q.name = v_request.queue_name
               AND p.name = v_request.partition_name;
         ELSE
@@ -56,17 +56,17 @@ BEGIN
             SELECT pl.partition_id, q.id, p.name, q.lease_time, q.window_buffer, q.delayed_processing
             INTO v_partition_id, v_queue_id, v_partition_name, v_queue_lease_time, v_window_buffer, v_delayed_processing
             FROM queen.partition_lookup pl
-            JOIN queen.partitions p ON p.id = pl.partition_id
-            JOIN queen.queues q ON q.id = p.queue_id
-            LEFT JOIN queen.partition_consumers pc 
-                ON pc.partition_id = pl.partition_id
+        JOIN queen.partitions p ON p.id = pl.partition_id
+        JOIN queen.queues q ON q.id = p.queue_id
+        LEFT JOIN queen.partition_consumers pc 
+            ON pc.partition_id = pl.partition_id
                 AND pc.consumer_group = v_request.consumer_group
             WHERE pl.queue_name = v_request.queue_name
               AND (pc.lease_expires_at IS NULL OR pc.lease_expires_at <= v_now)
-              AND (pc.last_consumed_created_at IS NULL 
-                   OR pl.last_message_created_at > pc.last_consumed_created_at
-                   OR (pl.last_message_created_at = pc.last_consumed_created_at 
-                       AND pl.last_message_id > pc.last_consumed_id))
+            AND (pc.last_consumed_created_at IS NULL 
+                 OR pl.last_message_created_at > pc.last_consumed_created_at
+                 OR (pl.last_message_created_at = pc.last_consumed_created_at 
+                     AND pl.last_message_id > pc.last_consumed_id))
             ORDER BY pc.last_consumed_at ASC NULLS FIRST, pl.last_message_created_at DESC
             LIMIT 1;
         END IF;
@@ -80,30 +80,30 @@ BEGIN
             v_results := v_results || v_result;
             CONTINUE;
         END IF;
-        
+    
         -- Generate lease ID
         v_lease_id := gen_random_uuid()::TEXT;
-        
+    
         -- Try to acquire lease with SKIP LOCKED to avoid blocking
-        INSERT INTO queen.partition_consumers (partition_id, consumer_group)
+    INSERT INTO queen.partition_consumers (partition_id, consumer_group)
         VALUES (v_partition_id, v_request.consumer_group)
-        ON CONFLICT (partition_id, consumer_group) DO NOTHING;
-        
+    ON CONFLICT (partition_id, consumer_group) DO NOTHING;
+    
         -- Update lease - use FOR UPDATE SKIP LOCKED pattern
-        UPDATE queen.partition_consumers pc
-        SET 
-            lease_acquired_at = v_now,
-            lease_expires_at = v_now + (
-                COALESCE(
+    UPDATE queen.partition_consumers pc
+    SET 
+        lease_acquired_at = v_now,
+        lease_expires_at = v_now + (
+            COALESCE(
                     NULLIF(v_queue_lease_time, 0),
                     NULLIF(v_request.lease_time_seconds, 0),
-                    300
-                ) * INTERVAL '1 second'
-            ),
+                300
+            ) * INTERVAL '1 second'
+        ),
             worker_id = v_lease_id,
             batch_size = v_request.batch_size,
-            acked_count = 0,
-            batch_retry_count = COALESCE(pc.batch_retry_count, 0)
+        acked_count = 0,
+        batch_retry_count = COALESCE(pc.batch_retry_count, 0)
         WHERE pc.partition_id = v_partition_id
           AND pc.consumer_group = v_request.consumer_group
           AND (pc.lease_expires_at IS NULL OR pc.lease_expires_at <= v_now)
@@ -112,8 +112,8 @@ BEGIN
               WHERE pc2.partition_id = v_partition_id
                 AND pc2.consumer_group = v_request.consumer_group
               FOR UPDATE SKIP LOCKED
-          );
-        
+      );
+    
         -- Check if lease was acquired
         IF NOT FOUND THEN
             -- Lease already taken by another transaction
@@ -172,7 +172,7 @@ BEGIN
                 'consumerGroup', CASE WHEN v_request.consumer_group = '__QUEUE_MODE__' THEN NULL ELSE v_request.consumer_group END,
                 'leaseId', v_lease_id
             )
-            ORDER BY m.created_at, m.id
+                ORDER BY m.created_at, m.id
         ), '[]'::jsonb)
         INTO v_messages
         FROM (
@@ -187,27 +187,27 @@ BEGIN
             ORDER BY msg.created_at, msg.id
             LIMIT v_request.batch_size
         ) m;
-        
+    
         -- Update batch size based on actual messages fetched
         IF jsonb_array_length(v_messages) > 0 THEN
             UPDATE queen.partition_consumers
             SET batch_size = jsonb_array_length(v_messages),
-                acked_count = 0
+        acked_count = 0
             WHERE partition_id = v_partition_id
               AND consumer_group = v_request.consumer_group
               AND worker_id = v_lease_id;
         ELSE
             -- No messages found - release lease
             UPDATE queen.partition_consumers
-            SET lease_expires_at = NULL,
-                lease_acquired_at = NULL,
-                worker_id = NULL
+    SET lease_expires_at = NULL,
+        lease_acquired_at = NULL,
+        worker_id = NULL
             WHERE partition_id = v_partition_id
               AND consumer_group = v_request.consumer_group
               AND worker_id = v_lease_id;
             v_lease_id := NULL;
         END IF;
-        
+    
         -- Build result
         v_result := jsonb_build_object(
             'idx', v_request.idx,

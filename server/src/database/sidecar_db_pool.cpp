@@ -373,27 +373,21 @@ void SidecarDbPool::process_waiting_queue() {
             pop_wait_trackers_[req.request_id] = std::move(tracker);
         }
         
-        // Convert POP_WAIT to POP_BATCH for the actual query
-        // This uses the optimized batched procedure with no temp tables
-        req.op_type = SidecarOpType::POP_BATCH;
+        // Convert POP_WAIT to POP for the actual query
+        req.op_type = SidecarOpType::POP;
         
-        // Build JSON params for pop_messages_batch_v2
+        // Build SQL if not already set
         if (req.sql.empty()) {
-            nlohmann::json batch_item;
-            batch_item["idx"] = 0;
-            batch_item["queue"] = req.queue_name;
-            batch_item["partition"] = req.partition_name;
-            batch_item["consumerGroup"] = req.consumer_group;
-            batch_item["batch"] = req.batch_size;
-            batch_item["leaseTime"] = 0;  // Use queue's configured lease_time
-            batch_item["subMode"] = req.subscription_mode.empty() ? "all" : req.subscription_mode;
-            batch_item["subFrom"] = req.subscription_from;
-            
-            nlohmann::json batch_array = nlohmann::json::array();
-            batch_array.push_back(batch_item);
-            
-            req.params = {batch_array.dump()};
-            req.item_count = 1;
+            req.sql = "SELECT queen.pop_messages_v2($1, $2, $3, $4, $5, $6, $7)";
+            req.params = {
+                req.queue_name,
+                req.partition_name,
+                req.consumer_group,
+                std::to_string(req.batch_size),
+                "0",  // Use queue's configured lease_time
+                req.subscription_mode,
+                req.subscription_from
+            };
         }
         
         // Log before moving (req will be empty after move)
@@ -1178,10 +1172,10 @@ void SidecarDbPool::process_slot_result(ConnectionSlot& slot) {
                         resp.error_message = "No result";
                     }
                     
-                    // Check if this POP/POP_BATCH was originally a POP_WAIT
+                    // Check if this POP was originally a POP_WAIT
                     bool was_pop_wait = false;
                     PopWaitTracker tracker;
-                    if (slot.op_type == SidecarOpType::POP || slot.op_type == SidecarOpType::POP_BATCH) {
+                    if (slot.op_type == SidecarOpType::POP) {
                         std::lock_guard<std::mutex> lock(tracker_mutex_);
                         auto it = pop_wait_trackers_.find(slot.request_id);
                         if (it != pop_wait_trackers_.end()) {
@@ -1192,7 +1186,7 @@ void SidecarDbPool::process_slot_result(ConnectionSlot& slot) {
                     }
                     
                     // Log timing for single POP requests
-                    if (slot.op_type == SidecarOpType::POP && !was_pop_wait) {
+                    if (slot.op_type == SidecarOpType::POP) {
                         // Count free/busy connections
                         int busy_count = 0;
                         int total_count = static_cast<int>(slots_.size());
@@ -1221,20 +1215,10 @@ void SidecarDbPool::process_slot_result(ConnectionSlot& slot) {
                         if (resp.success && !resp.result_json.empty()) {
                             try {
                                 auto json = nlohmann::json::parse(resp.result_json);
-                                // Handle both old format {"messages": [...]} and new POP_BATCH format [{"idx": 0, "result": {"messages": [...]}}]
-                                if (json.is_array() && !json.empty()) {
-                                    // POP_BATCH format: extract first result
-                                    auto& first_result = json[0];
-                                    if (first_result.contains("result") && first_result["result"].contains("messages")) {
-                                        has_messages = !first_result["result"]["messages"].empty();
-                                        // Transform response to match expected format for POP_WAIT
-                                        resp.result_json = first_result["result"].dump();
-                                    }
-                                } else if (json.contains("messages") && json["messages"].is_array()) {
-                                    // Old format
+                                if (json.contains("messages") && json["messages"].is_array()) {
                                     has_messages = !json["messages"].empty();
                                 }
-                            } catch (...) {}
+            } catch (...) {}
                         }
                         
                         if (global_shared_state) {
