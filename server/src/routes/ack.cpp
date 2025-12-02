@@ -56,7 +56,7 @@ void setup_ack_routes(uWS::App* app, const RouteContext& ctx) {
                         ack_items.push_back(ack_item);
                     }
                     
-                    spdlog::info("[Worker {}] ACK BATCH: Executing batch ACK ({} items)", ctx.worker_id, ack_items.size());
+                    //spdlog::info("[Worker {}] ACK BATCH: Executing batch ACK ({} items)", ctx.worker_id, ack_items.size());
                     
                     std::string request_id = worker_response_registries[ctx.worker_id]->register_response(
                         res, ctx.worker_id, nullptr
@@ -135,8 +135,6 @@ void setup_ack_routes(uWS::App* app, const RouteContext& ctx) {
                         send_error_response(res, "partitionId is required to ensure message uniqueness", 400);
                         return;
                     }
-                    
-                    spdlog::info("[Worker {}] ACK: Executing ACK", ctx.worker_id);
                     
                     std::string request_id = worker_response_registries[ctx.worker_id]->register_response(
                         res, ctx.worker_id, nullptr

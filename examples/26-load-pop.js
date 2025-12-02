@@ -3,17 +3,20 @@ import axios from 'axios';
 
 const SERVER_URL = process.env.SERVER_URL || 'http://localhost:6632';
 const QUEUE_NAME = 'test-queue-pop';
-const MESSAGE_COUNT = 50000;  // Messages to pre-populate
+const MESSAGE_COUNT = 50000;       // Messages to pre-populate
 const MAX_PARTITION = 500;
-const CONCURRENT_WORKERS = 500;  // Number of concurrent POP+ACK workers
-const TEST_DURATION_MS = 30000;  // 30 seconds
+const CONCURRENT_WORKERS = 500;   // Number of concurrent POP+ACK workers
+const IDLE_TIMEOUT_MS = 3000;     // Exit after 3s of no messages
 
 // Metrics tracking
 let totalPops = 0;
 let totalAcks = 0;
 let totalErrors = 0;
 let emptyPops = 0;
-const latencies = [];
+let lastPopTime = Date.now();
+const popLatencies = [];
+const ackLatencies = [];
+const totalLatencies = [];
 
 async function resetQueue() {
   try {
@@ -42,7 +45,7 @@ async function resetQueue() {
 async function populateQueue() {
   console.log(`\nPopulating queue with ${MESSAGE_COUNT} messages across ${MAX_PARTITION} partitions...`);
   
-  const batchSize = 100;  // Messages per request
+  const batchSize = 1000;  // Messages per request
   const batches = Math.ceil(MESSAGE_COUNT / batchSize);
   
   for (let b = 0; b < batches; b++) {
@@ -63,7 +66,7 @@ async function populateQueue() {
     
     await axios.post(`${SERVER_URL}/api/v1/push`, { items });
     
-    if ((b + 1) % 100 === 0) {
+    if ((b + 1) % 1000 === 0) {
       console.log(`  Pushed ${(b + 1) * batchSize} messages...`);
     }
   }
@@ -74,14 +77,16 @@ async function populateQueue() {
 }
 
 // Worker function: continuously POP + ACK until stopped
+let totalMessagesPopped = 0
 async function worker(pool, workerId, stopSignal) {
   const partition = workerId % MAX_PARTITION;
   
   while (!stopSignal.stopped) {
-    const start = Date.now();
+    const cycleStart = Date.now();
     
     try {
       // POP request
+      const popStart = Date.now();
       const popResponse = await pool.request({
         method: 'GET',
         path: `/api/v1/pop/queue/${QUEUE_NAME}/partition/${partition}?batch=1&wait=false`,
@@ -89,27 +94,40 @@ async function worker(pool, workerId, stopSignal) {
       });
       
       const popBody = await popResponse.body.json();
+      const popTime = Date.now() - popStart;
       
-      if (!popBody.items || popBody.items.length === 0) {
+      if (!popBody.messages || popBody.messages.length === 0) {
         emptyPops++;
         continue;
       }
+
+      const messageCount = popBody.messages.length;
+      totalMessagesPopped += messageCount;
       
       totalPops++;
+      lastPopTime = Date.now();
+      popLatencies.push(popTime);
       
-      // ACK request with the message ID
-      const messageId = popBody.items[0].id;
+      // Batch ACK all messages at once
+      const acknowledgments = popBody.messages.map(msg => ({
+        transactionId: msg.transactionId,
+        partitionId: msg.partitionId
+      }));
+      
+      const ackStart = Date.now();
       const ackResponse = await pool.request({
         method: 'POST',
-        path: `/api/v1/ack`,
+        path: `/api/v1/ack/batch`,
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ items: [{ id: messageId }] })
+        body: JSON.stringify({ acknowledgments })
       });
       
       await ackResponse.body.dump(); // Consume body
+      const ackTime = Date.now() - ackStart;
       
-      totalAcks++;
-      latencies.push(Date.now() - start);
+      totalAcks += messageCount;  // Count actual messages ACKed
+      ackLatencies.push(ackTime);
+      totalLatencies.push(Date.now() - cycleStart);
       
     } catch (error) {
       totalErrors++;
@@ -126,7 +144,7 @@ function calculatePercentile(arr, p) {
 
 async function runBenchmark() {
   console.log(`Starting POP+ACK benchmark with ${CONCURRENT_WORKERS} concurrent workers...\n`);
-  console.log(`Duration: ${TEST_DURATION_MS / 1000}s\n`);
+  console.log(`Will exit ${IDLE_TIMEOUT_MS / 1000}s after last message received\n`);
   
   // Create undici pool with many connections
   const pool = new Pool(SERVER_URL, {
@@ -138,12 +156,14 @@ async function runBenchmark() {
   
   const stopSignal = { stopped: false };
   const startTime = Date.now();
+  lastPopTime = Date.now();
   
   // Progress reporting
   const progressInterval = setInterval(() => {
     const elapsed = (Date.now() - startTime) / 1000;
     const opsPerSec = Math.round(totalAcks / elapsed);
-    process.stdout.write(`\r  Progress: ${totalAcks} ops | ${opsPerSec} ops/s | Errors: ${totalErrors} | Empty: ${emptyPops}    `);
+    const idleTime = ((Date.now() - lastPopTime) / 1000).toFixed(1);
+    process.stdout.write(`\r  Progress: ${totalAcks} ops | ${opsPerSec} ops/s | Errors: ${totalErrors} | Idle: ${idleTime}s    `);
   }, 500);
   
   // Start all workers
@@ -152,28 +172,51 @@ async function runBenchmark() {
     workers.push(worker(pool, i, stopSignal));
   }
   
-  // Wait for duration
-  await new Promise(resolve => setTimeout(resolve, TEST_DURATION_MS));
+  // Wait until idle timeout (no messages for IDLE_TIMEOUT_MS)
+  await new Promise(resolve => {
+    const checkIdle = setInterval(() => {
+      if (Date.now() - lastPopTime >= IDLE_TIMEOUT_MS) {
+        clearInterval(checkIdle);
+        resolve();
+      }
+    }, 100);
+  });
   
   // Stop workers
   stopSignal.stopped = true;
   clearInterval(progressInterval);
   
-  // Wait for workers to finish current operations
-  await Promise.allSettled(workers);
-  
   const duration = (Date.now() - startTime) / 1000;
+  
+  // Close pool to abort any stuck wait=true requests
+  await pool.close();
   
   // Calculate results
   console.log('\n\n=== POP+ACK Benchmark Results ===');
   console.log(`Total POP+ACK cycles: ${totalAcks}`);
+  console.log(`Total POP+ACK messages: ${totalMessagesPopped}`);
   console.log(`Duration: ${duration.toFixed(2)}s`);
   console.log(`Throughput: ${Math.round(totalAcks / duration)} ops/s`);
-  console.log(`Latency p50: ${calculatePercentile(latencies, 50)}ms`);
-  console.log(`Latency p95: ${calculatePercentile(latencies, 95)}ms`);
-  console.log(`Latency p99: ${calculatePercentile(latencies, 99)}ms`);
   console.log(`Errors: ${totalErrors}`);
   console.log(`Empty POPs: ${emptyPops}`);
+  
+  console.log('\n--- POP Latency ---');
+  console.log(`  p50: ${calculatePercentile(popLatencies, 50)}ms`);
+  console.log(`  p95: ${calculatePercentile(popLatencies, 95)}ms`);
+  console.log(`  p99: ${calculatePercentile(popLatencies, 99)}ms`);
+  console.log(`  avg: ${popLatencies.length ? Math.round(popLatencies.reduce((a, b) => a + b, 0) / popLatencies.length) : 0}ms`);
+  
+  console.log('\n--- ACK Latency ---');
+  console.log(`  p50: ${calculatePercentile(ackLatencies, 50)}ms`);
+  console.log(`  p95: ${calculatePercentile(ackLatencies, 95)}ms`);
+  console.log(`  p99: ${calculatePercentile(ackLatencies, 99)}ms`);
+  console.log(`  avg: ${ackLatencies.length ? Math.round(ackLatencies.reduce((a, b) => a + b, 0) / ackLatencies.length) : 0}ms`);
+  
+  console.log('\n--- Total (POP+ACK) Latency ---');
+  console.log(`  p50: ${calculatePercentile(totalLatencies, 50)}ms`);
+  console.log(`  p95: ${calculatePercentile(totalLatencies, 95)}ms`);
+  console.log(`  p99: ${calculatePercentile(totalLatencies, 99)}ms`);
+  console.log(`  avg: ${totalLatencies.length ? Math.round(totalLatencies.reduce((a, b) => a + b, 0) / totalLatencies.length) : 0}ms`);
   
   // Verify messages remaining in queue
   try {
@@ -185,8 +228,6 @@ async function runBenchmark() {
   } catch (e) {
     console.log('Could not fetch queue stats');
   }
-  
-  await pool.close();
 }
 
 // Main

@@ -766,43 +766,9 @@ static void worker_thread(const Config& config, int worker_id, int num_workers,
                 
                 // Deliver directly via ResponseRegistry (safe - we're in the event loop)
                 // Use per-worker registry - no lock contention with other workers!
-                bool sent = queen::worker_response_registries[worker_id]->send_response(
+                queen::worker_response_registries[worker_id]->send_response(
                     resp.request_id, json_response, is_error, status_code);
-                
-                auto send_end = std::chrono::steady_clock::now();
-                auto callback_wait_us = std::chrono::duration_cast<std::chrono::microseconds>(
-                    defer_start - callback_start).count();
-                auto json_parse_us = std::chrono::duration_cast<std::chrono::microseconds>(
-                    send_end - defer_start).count();
-                
-                if (sent) {
-                    // Extract queue info for better logging
-                    std::string queue_info;
-                    if (json_response.is_object() && json_response.contains("messages") && 
-                        json_response["messages"].is_array() && !json_response["messages"].empty()) {
-                        // POP/POP_WAIT response with messages
-                        auto& first_msg = json_response["messages"][0];
-                        queue_info = first_msg.value("queue", "") + "/" + first_msg.value("partition", "");
-                    } else if (json_response.is_array() && !json_response.empty()) {
-                        // PUSH/ACK response
-                        auto& first = json_response[0];
-                        if (first.contains("queue")) {
-                            queue_info = first.value("queue", "") + "/" + first.value("partition", "");
-                        }
-                    }
-                    
-                    // Log timing breakdown for POP operations (all types)
-                    if (resp.op_type == queen::SidecarOpType::POP || 
-                        resp.op_type == queen::SidecarOpType::POP_BATCH ||
-                        resp.op_type == queen::SidecarOpType::POP_WAIT) {
-                        spdlog::info("[Worker {}] {} TIMING: db_exec={}us, callback_wait={}us, json_parse_send={}us | {} (status={})",
-                                    worker_id, op_name, resp.query_time_us, callback_wait_us, json_parse_us,
-                                    queue_info.empty() ? "(no messages)" : queue_info, status_code);
-                    }
-                } else {
-                    spdlog::debug("[Worker {}] {} response not sent (aborted/expired)", 
-                                worker_id, op_name);
-                }
+
             });
         };
         

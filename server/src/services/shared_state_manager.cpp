@@ -351,13 +351,17 @@ void SharedStateManager::release_group(const std::string& group_key, bool had_me
     state.last_accessed = now;  // Update for cleanup tracking
     
     if (had_messages) {
-        // Reset backoff
+        // Reset backoff - set to 0ms for immediate recheck when messages exist
         state.consecutive_empty = 0;
-        state.current_interval = std::chrono::milliseconds(base_interval_ms_);
+        state.current_interval = std::chrono::milliseconds(0);
     } else {
-        // Increase backoff
+        // Increase backoff - use base_interval_ms_ as starting point
         state.consecutive_empty++;
-        if (state.consecutive_empty >= backoff_threshold_) {
+        if (state.consecutive_empty == 1) {
+            // First empty result - start with base interval
+            state.current_interval = std::chrono::milliseconds(base_interval_ms_);
+        } else if (state.consecutive_empty >= backoff_threshold_) {
+            // Multiple empty results - exponential backoff
             int new_interval = static_cast<int>(state.current_interval.count() * backoff_multiplier_);
             state.current_interval = std::chrono::milliseconds(std::min(new_interval, max_interval_ms_));
         }
@@ -370,7 +374,7 @@ std::chrono::milliseconds SharedStateManager::get_group_interval(const std::stri
     std::lock_guard lock(backoff_mutex_);
     auto it = group_backoff_.find(group_key);
     if (it == group_backoff_.end()) {
-        return std::chrono::milliseconds(base_interval_ms_);
+        return std::chrono::milliseconds(0);  // New group = immediate check
     }
     return it->second.current_interval;
 }

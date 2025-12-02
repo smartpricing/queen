@@ -308,7 +308,7 @@ void SidecarDbPool::process_waiting_queue() {
         std::string group_key = make_group_key(req.queue_name, req.partition_name, req.consumer_group);
         
         // Check backoff via SharedStateManager
-        auto current_interval = std::chrono::milliseconds(100);
+        auto current_interval = std::chrono::milliseconds(0);  // Default to immediate check
         if (global_shared_state) {
             current_interval = global_shared_state->get_group_interval(group_key);
             
@@ -373,21 +373,27 @@ void SidecarDbPool::process_waiting_queue() {
             pop_wait_trackers_[req.request_id] = std::move(tracker);
         }
         
-        // Convert POP_WAIT to POP for the actual query
-        req.op_type = SidecarOpType::POP;
+        // Convert POP_WAIT to POP_BATCH for the actual query
+        // This uses the optimized batched procedure with no temp tables
+        req.op_type = SidecarOpType::POP_BATCH;
         
-        // Build SQL if not already set
+        // Build JSON params for pop_messages_batch_v2
         if (req.sql.empty()) {
-            req.sql = "SELECT queen.pop_messages_v2($1, $2, $3, $4, $5, $6, $7)";
-            req.params = {
-                req.queue_name,
-                req.partition_name,
-                req.consumer_group,
-                std::to_string(req.batch_size),
-                "0",  // Use queue's configured lease_time
-                req.subscription_mode,
-                req.subscription_from
-            };
+            nlohmann::json batch_item;
+            batch_item["idx"] = 0;
+            batch_item["queue"] = req.queue_name;
+            batch_item["partition"] = req.partition_name;
+            batch_item["consumerGroup"] = req.consumer_group;
+            batch_item["batch"] = req.batch_size;
+            batch_item["leaseTime"] = 0;  // Use queue's configured lease_time
+            batch_item["subMode"] = req.subscription_mode.empty() ? "all" : req.subscription_mode;
+            batch_item["subFrom"] = req.subscription_from;
+            
+            nlohmann::json batch_array = nlohmann::json::array();
+            batch_array.push_back(batch_item);
+            
+            req.params = {batch_array.dump()};
+            req.item_count = 1;
         }
         
         // Log before moving (req will be empty after move)
@@ -1087,9 +1093,18 @@ void SidecarDbPool::process_slot_result(ConnectionSlot& slot) {
                             case SidecarOpType::TRANSACTION: batch_op_name = "TRANSACTION"; break;
                             case SidecarOpType::RENEW_LEASE: batch_op_name = "RENEW_LEASE"; break;
                         }
-                        spdlog::info("[Worker {}] [Sidecar] {} TIMING: queue_wait={}ms, db_exec={}ms | {} requests, {} items",
+                        // Count free/busy connections
+                        int batch_busy_count = 0;
+                        int batch_total_count = static_cast<int>(slots_.size());
+                        for (const auto& s : slots_) {
+                            if (s.busy) batch_busy_count++;
+                        }
+                        int batch_free_count = batch_total_count - batch_busy_count;
+                        
+                        spdlog::info("[Worker {}] [Sidecar] {} TIMING: queue_wait={}ms, db_exec={}ms | {} requests, {} items | conn {}/{} free",
                                     worker_id_, batch_op_name, slot.queue_wait_us / 1000, query_time / 1000,
-                                    slot.batched_requests.size(), slot.total_items);
+                                    slot.batched_requests.size(), slot.total_items,
+                                    batch_free_count, batch_total_count);
                         
                         // Update per-op stats
                         {
@@ -1163,10 +1178,10 @@ void SidecarDbPool::process_slot_result(ConnectionSlot& slot) {
                         resp.error_message = "No result";
                     }
                     
-                    // Check if this POP was originally a POP_WAIT
+                    // Check if this POP/POP_BATCH was originally a POP_WAIT
                     bool was_pop_wait = false;
                     PopWaitTracker tracker;
-                    if (slot.op_type == SidecarOpType::POP) {
+                    if (slot.op_type == SidecarOpType::POP || slot.op_type == SidecarOpType::POP_BATCH) {
                         std::lock_guard<std::mutex> lock(tracker_mutex_);
                         auto it = pop_wait_trackers_.find(slot.request_id);
                         if (it != pop_wait_trackers_.end()) {
@@ -1177,17 +1192,24 @@ void SidecarDbPool::process_slot_result(ConnectionSlot& slot) {
                     }
                     
                     // Log timing for single POP requests
-                    {
-                        const char* single_op_name = "UNKNOWN";
-                        switch (slot.op_type) {
-                            case SidecarOpType::PUSH: single_op_name = "PUSH"; break;
-                            case SidecarOpType::POP: single_op_name = "POP"; break;
-                            case SidecarOpType::POP_BATCH: single_op_name = "POP_BATCH"; break;
-                            case SidecarOpType::POP_WAIT: single_op_name = "POP_WAIT"; break;
-                            case SidecarOpType::ACK: single_op_name = "ACK"; break;
-                            case SidecarOpType::ACK_BATCH: single_op_name = "ACK_BATCH"; break;
-                            case SidecarOpType::TRANSACTION: single_op_name = "TRANSACTION"; break;
-                            case SidecarOpType::RENEW_LEASE: single_op_name = "RENEW_LEASE"; break;
+                    if (slot.op_type == SidecarOpType::POP && !was_pop_wait) {
+                        // Count free/busy connections
+                        int busy_count = 0;
+                        int total_count = static_cast<int>(slots_.size());
+                        for (const auto& s : slots_) {
+                            if (s.busy) busy_count++;
+                        }
+                        int free_count = total_count - busy_count;
+                        
+                        if (was_pop_wait) {
+                            spdlog::info("[Worker {}] [Sidecar] POP_WAIT TIMING: queue_wait={}ms, db_exec={}ms | {}/{} | conn {}/{} free",
+                                        worker_id_, slot.queue_wait_us / 1000, query_time / 1000,
+                                        tracker.queue_name, tracker.partition_name.empty() ? "*" : tracker.partition_name,
+                                        free_count, total_count);
+                        } else {
+                            spdlog::info("[Worker {}] [Sidecar] POP TIMING: queue_wait={}ms, db_exec={}ms | conn {}/{} free",
+                                        worker_id_, slot.queue_wait_us / 1000, query_time / 1000,
+                                        free_count, total_count);
                         }
                     }
                     
@@ -1199,10 +1221,20 @@ void SidecarDbPool::process_slot_result(ConnectionSlot& slot) {
                         if (resp.success && !resp.result_json.empty()) {
                             try {
                                 auto json = nlohmann::json::parse(resp.result_json);
-                                if (json.contains("messages") && json["messages"].is_array()) {
+                                // Handle both old format {"messages": [...]} and new POP_BATCH format [{"idx": 0, "result": {"messages": [...]}}]
+                                if (json.is_array() && !json.empty()) {
+                                    // POP_BATCH format: extract first result
+                                    auto& first_result = json[0];
+                                    if (first_result.contains("result") && first_result["result"].contains("messages")) {
+                                        has_messages = !first_result["result"]["messages"].empty();
+                                        // Transform response to match expected format for POP_WAIT
+                                        resp.result_json = first_result["result"].dump();
+                                    }
+                                } else if (json.contains("messages") && json["messages"].is_array()) {
+                                    // Old format
                                     has_messages = !json["messages"].empty();
                                 }
-            } catch (...) {}
+                            } catch (...) {}
                         }
                         
                         if (global_shared_state) {
@@ -1234,6 +1266,7 @@ void SidecarDbPool::process_slot_result(ConnectionSlot& slot) {
                             new_req.subscription_from = tracker.subscription_from;
                             new_req.sql = tracker.sql;
                             new_req.params = tracker.params;
+                            new_req.queued_at = std::chrono::steady_clock::now();  // Fix: set queued_at for accurate timing
                             
                             auto interval_ms = std::chrono::milliseconds(100);
                             if (global_shared_state) {
