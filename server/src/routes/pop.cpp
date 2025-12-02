@@ -102,17 +102,7 @@ void setup_pop_routes(uWS::App* app, const RouteContext& ctx) {
                                             std::chrono::milliseconds(timeout_ms);
                 sidecar_req.next_check = std::chrono::steady_clock::now();  // Check immediately
                 
-                // Build SQL for pop_messages_v2
-                sidecar_req.sql = "SELECT queen.pop_messages_v2($1, $2, $3, $4, $5, $6, $7)";
-                sidecar_req.params = {
-                    queue_name,
-                    partition_name,
-                    consumer_group,
-                    std::to_string(options.batch),
-                    "0",  // Use queue's configured lease_time
-                    sidecar_req.subscription_mode,
-                    sidecar_req.subscription_from
-                };
+                // SQL is built by sidecar using pop_messages_batch_v2
                 
                 auto route_time_us = std::chrono::duration_cast<std::chrono::microseconds>(
                 std::chrono::steady_clock::now() - request_start).count();
@@ -237,17 +227,7 @@ void setup_pop_routes(uWS::App* app, const RouteContext& ctx) {
                                             std::chrono::milliseconds(timeout_ms);
                 sidecar_req.next_check = std::chrono::steady_clock::now();  // Check immediately
                 
-                // Build SQL for pop_messages_v2 (empty partition = any partition)
-                sidecar_req.sql = "SELECT queen.pop_messages_v2($1, $2, $3, $4, $5, $6, $7)";
-                sidecar_req.params = {
-                    queue_name,
-                    "",  // Empty = any partition
-                    consumer_group,
-                    std::to_string(options.batch),
-                    "0",  // Use queue's configured lease_time
-                    sidecar_req.subscription_mode,
-                    sidecar_req.subscription_from
-                };
+                // SQL is built by sidecar using pop_messages_batch_v2
                 
                 auto route_time_us = std::chrono::duration_cast<std::chrono::microseconds>(
                     std::chrono::steady_clock::now() - request_start).count();

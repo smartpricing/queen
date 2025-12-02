@@ -373,22 +373,26 @@ void SidecarDbPool::process_waiting_queue() {
             pop_wait_trackers_[req.request_id] = std::move(tracker);
         }
         
-        // Convert POP_WAIT to POP for the actual query
-        req.op_type = SidecarOpType::POP;
+        // Convert POP_WAIT to POP_BATCH for micro-batching support
+        // Multiple POP_WAIT requests can now be batched into a single SQL call
+        req.op_type = SidecarOpType::POP_BATCH;
         
-        // Build SQL if not already set
-        if (req.sql.empty()) {
-            req.sql = "SELECT queen.pop_messages_v2($1, $2, $3, $4, $5, $6, $7)";
-            req.params = {
-                req.queue_name,
-                req.partition_name,
-                req.consumer_group,
-                std::to_string(req.batch_size),
-                "0",  // Use queue's configured lease_time
-                req.subscription_mode,
-                req.subscription_from
-            };
-        }
+        // Build single-item JSON for this request (will be combined with others in drain_pending_to_slots)
+        nlohmann::json batch_item;
+        batch_item["idx"] = 0;  // Will be rewritten during batching
+        batch_item["queue"] = req.queue_name;
+        batch_item["partition"] = req.partition_name;
+        batch_item["consumerGroup"] = req.consumer_group;
+        batch_item["batch"] = req.batch_size;
+        batch_item["leaseTime"] = 0;  // Use queue's configured lease_time
+        batch_item["subMode"] = req.subscription_mode;
+        batch_item["subFrom"] = req.subscription_from;
+        
+        nlohmann::json batch_array = nlohmann::json::array();
+        batch_array.push_back(batch_item);
+        
+        req.params = { batch_array.dump() };
+        req.item_count = 1;  // For proper batching accounting
         
         // Log before moving (req will be empty after move)
         spdlog::debug("[Worker {}] [Sidecar] POP_WAIT QUERY: {} [{}@{}]", 
@@ -1115,16 +1119,16 @@ void SidecarDbPool::process_slot_result(ConnectionSlot& slot) {
                             resp.op_type = slot.op_type;
                             resp.request_id = info.request_id;
                             resp.query_time_us = query_time;
-            resp.push_targets = info.push_targets;
+                            resp.push_targets = info.push_targets;
                             
                             if (db_success && all_results.is_array()) {
                                 nlohmann::json request_results = nlohmann::json::array();
                                 
-                for (const auto& res : all_results) {
-                    int idx = res.value("index", res.value("idx", -1));
+                                for (const auto& res : all_results) {
+                                    int idx = res.value("index", res.value("idx", -1));
                                     if (idx >= static_cast<int>(info.start_index) && 
                                         idx < static_cast<int>(info.start_index + info.item_count)) {
-                        request_results.push_back(res);
+                                        request_results.push_back(res);
                                     }
                                 }
                                 resp.success = true;
@@ -1134,7 +1138,75 @@ void SidecarDbPool::process_slot_result(ConnectionSlot& slot) {
                                 resp.error_message = error_msg.empty() ? "Unknown error" : error_msg;
                             }
                             
-                            deliver_response(std::move(resp));
+                            // Check if this was a POP_WAIT request (needs re-queue handling)
+                            bool was_pop_wait = false;
+                            PopWaitTracker tracker;
+                            {
+                                std::lock_guard<std::mutex> lock(tracker_mutex_);
+                                auto it = pop_wait_trackers_.find(info.request_id);
+                                if (it != pop_wait_trackers_.end()) {
+                                    was_pop_wait = true;
+                                    tracker = std::move(it->second);
+                                    pop_wait_trackers_.erase(it);
+                                }
+                            }
+                            
+                            if (was_pop_wait) {
+                                // Handle POP_WAIT re-queue logic
+                                std::string group_key = make_group_key(
+                                    tracker.queue_name, tracker.partition_name, tracker.consumer_group);
+                                
+                                bool has_messages = false;
+                                if (resp.success && !resp.result_json.empty()) {
+                                    try {
+                                        auto json = nlohmann::json::parse(resp.result_json);
+                                        // Unwrap batch format if present
+                                        if (json.is_array() && !json.empty() && json[0].contains("result")) {
+                                            auto& inner = json[0]["result"];
+                                            if (inner.contains("messages") && inner["messages"].is_array()) {
+                                                has_messages = !inner["messages"].empty();
+                                            }
+                                        }
+                                    } catch (...) {}
+                                }
+                                
+                                if (global_shared_state) {
+                                    global_shared_state->release_group(group_key, has_messages);
+                                }
+                                
+                                auto now = std::chrono::steady_clock::now();
+                                
+                                if (has_messages || now >= tracker.wait_deadline || !resp.success) {
+                                    // Deliver response (has messages, timed out, or error)
+                                    resp.op_type = SidecarOpType::POP_WAIT;
+                                    deliver_response(std::move(resp));
+                                } else {
+                                    // Re-queue for later check (no messages, not timed out)
+                                    SidecarRequest new_req;
+                                    new_req.op_type = SidecarOpType::POP_WAIT;
+                                    new_req.request_id = info.request_id;
+                                    new_req.wait_deadline = tracker.wait_deadline;
+                                    new_req.queue_name = tracker.queue_name;
+                                    new_req.partition_name = tracker.partition_name;
+                                    new_req.consumer_group = tracker.consumer_group;
+                                    new_req.batch_size = tracker.batch_size;
+                                    new_req.subscription_mode = tracker.subscription_mode;
+                                    new_req.subscription_from = tracker.subscription_from;
+                                    new_req.queued_at = std::chrono::steady_clock::now();
+                                    
+                                    auto interval_ms = std::chrono::milliseconds(100);
+                                    if (global_shared_state) {
+                                        interval_ms = global_shared_state->get_group_interval(group_key);
+                                    }
+                                    new_req.next_check = now + interval_ms;
+                                    
+                                    std::lock_guard<std::mutex> lock(waiting_mutex_);
+                                    waiting_requests_.push_back(std::move(new_req));
+                                }
+                            } else {
+                                // Normal batched request - deliver immediately
+                                deliver_response(std::move(resp));
+                            }
                         }
                         
                         slot.busy = false;
@@ -1196,12 +1268,12 @@ void SidecarDbPool::process_slot_result(ConnectionSlot& slot) {
                         int free_count = total_count - busy_count;
                         
                         if (was_pop_wait) {
-                            spdlog::info("[Worker {}] [Sidecar] POP_WAIT TIMING: queue_wait={}ms, db_exec={}ms | {}/{} | conn {}/{} free",
+                            spdlog::info("[Worker {}] [Sidecar] POP_WAIT TIMING: queue_wait={}ms, db_exec={}ms | {}/{} | 1 req, 1 items | conn {}/{} free",
                                         worker_id_, slot.queue_wait_us / 1000, query_time / 1000,
                                         tracker.queue_name, tracker.partition_name.empty() ? "*" : tracker.partition_name,
                                         free_count, total_count);
                         } else {
-                            spdlog::info("[Worker {}] [Sidecar] POP TIMING: queue_wait={}ms, db_exec={}ms | conn {}/{} free",
+                            spdlog::info("[Worker {}] [Sidecar] POP TIMING: queue_wait={}ms, db_exec={}ms | 1 req, 1 items | conn {}/{} free",
                                         worker_id_, slot.queue_wait_us / 1000, query_time / 1000,
                                         free_count, total_count);
                         }
@@ -1215,10 +1287,14 @@ void SidecarDbPool::process_slot_result(ConnectionSlot& slot) {
                         if (resp.success && !resp.result_json.empty()) {
                             try {
                                 auto json = nlohmann::json::parse(resp.result_json);
+                                // Unwrap batch format: [{idx, result: {messages, leaseId}}] -> {messages, leaseId}
+                                if (json.is_array() && !json.empty() && json[0].contains("result")) {
+                                    json = json[0]["result"];
+                                }
                                 if (json.contains("messages") && json["messages"].is_array()) {
                                     has_messages = !json["messages"].empty();
                                 }
-            } catch (...) {}
+                            } catch (...) {}
                         }
                         
                         if (global_shared_state) {

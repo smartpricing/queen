@@ -982,17 +982,23 @@ PopResult AsyncQueueManager::pop_messages_sp(
     try {
         auto conn = async_db_pool_->acquire();
         
-        // Call the stored procedure
-        std::string sql = "SELECT queen.pop_messages_v2($1, $2, $3, $4, $5, $6, $7)";
-        std::vector<std::string> params = {
-            queue_name,
-            partition_name,  // Empty string will be treated as NULL by SP
-            consumer_group,
-            std::to_string(options.batch),
-            "0",  // lease_time_seconds = 0 means use queue config
-            options.subscription_mode.value_or("all"),
-            options.subscription_from.value_or("")
-        };
+        // Build batch JSON format for pop_messages_batch_v2
+        // This avoids the expensive global lease cleanup in the older pop_messages_v2
+        nlohmann::json batch_item;
+        batch_item["idx"] = 0;
+        batch_item["queue"] = queue_name;
+        batch_item["partition"] = partition_name;
+        batch_item["consumerGroup"] = consumer_group;
+        batch_item["batch"] = options.batch;
+        batch_item["leaseTime"] = 0;  // Use queue's configured lease_time
+        batch_item["subMode"] = options.subscription_mode.value_or("all");
+        batch_item["subFrom"] = options.subscription_from.value_or("");
+        
+        nlohmann::json batch_array = nlohmann::json::array();
+        batch_array.push_back(batch_item);
+        
+        std::string sql = "SELECT queen.pop_messages_batch_v2($1::jsonb)";
+        std::vector<std::string> params = { batch_array.dump() };
         
         sendQueryParamsAsync(conn.get(), sql, params);
         auto query_result = getTuplesResult(conn.get());
@@ -1008,6 +1014,11 @@ PopResult AsyncQueueManager::pop_messages_sp(
         }
         
         auto json_result = nlohmann::json::parse(json_str);
+        
+        // Unwrap batch format: [{idx, result: {messages, leaseId}}] -> {messages, leaseId}
+        if (json_result.is_array() && !json_result.empty() && json_result[0].contains("result")) {
+            json_result = json_result[0]["result"];
+        }
         
         // Extract lease ID
         if (json_result.contains("leaseId") && !json_result["leaseId"].is_null()) {

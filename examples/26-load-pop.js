@@ -89,7 +89,7 @@ async function worker(pool, workerId, stopSignal) {
       const popStart = Date.now();
       const popResponse = await pool.request({
         method: 'GET',
-        path: `/api/v1/pop/queue/${QUEUE_NAME}/partition/${partition}?batch=1&wait=true`,
+        path: `/api/v1/pop/queue/${QUEUE_NAME}/partition/${partition}?batch=1&wait=false`,
         headers: { 'Content-Type': 'application/json' }
       });
       
