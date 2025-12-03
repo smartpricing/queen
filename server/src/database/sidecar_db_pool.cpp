@@ -1,15 +1,11 @@
 #include "queen/sidecar_db_pool.hpp"
 #include "queen/pop_state_machine.hpp"
 #include "queen/shared_state_manager.hpp"
-#include "queen/response_queue.hpp"
 #include <spdlog/spdlog.h>
 #include <algorithm>
 #include <cstring>
 
 namespace queen {
-
-// External: per-worker response registries for checking if requests are still valid
-extern std::vector<std::shared_ptr<ResponseRegistry>> worker_response_registries;
 
 SidecarDbPool::SidecarDbPool(const std::string& conn_str, 
                              int pool_size,
@@ -238,9 +234,6 @@ void SidecarDbPool::submit(SidecarRequest request) {
         return;
     }
     
-    // PUSH ops should buffer without immediate wakeup - rely on batch timer
-    bool is_push = (request.op_type == SidecarOpType::PUSH);
-    
     {
         std::lock_guard<std::mutex> lock(pending_mutex_);
         pending_requests_.push_back(std::move(request));
@@ -248,8 +241,7 @@ void SidecarDbPool::submit(SidecarRequest request) {
     
     // Wake up the event loop to drain pending requests
     // Note: uv_async_send is thread-safe and coalescing (multiple calls = one callback)
-    // PUSH ops skip the signal - they batch better by waiting for the timer
-    if (loop_initialized_ && !is_push) {
+    if (loop_initialized_) {
         uv_async_send(&submit_signal_);
     }
 }
@@ -288,19 +280,6 @@ void SidecarDbPool::process_waiting_queue() {
         std::lock_guard<std::mutex> lock(waiting_mutex_);
         auto it = waiting_requests_.begin();
         while (it != waiting_requests_.end()) {
-            // Check if the client has disconnected (request aborted)
-            if (worker_id_ >= 0 && 
-                static_cast<size_t>(worker_id_) < worker_response_registries.size() &&
-                worker_response_registries[worker_id_] &&
-                !worker_response_registries[worker_id_]->is_valid(it->request_id)) {
-                // Client disconnected - remove from queue silently
-                spdlog::info("[Worker {}] [Sidecar] POP_WAIT ABORTED (client disconnected): {} [{}@{}]", 
-                            worker_id_, it->queue_name, it->consumer_group, 
-                            it->partition_name.empty() ? "*" : it->partition_name);
-                it = waiting_requests_.erase(it);
-                continue;
-            }
-            
             if (now >= it->wait_deadline) {
                 // Expired - send empty response immediately
                 spdlog::debug("[Worker {}] [Sidecar] POP_WAIT TIMEOUT: {} [{}@{}]", 
@@ -343,28 +322,18 @@ void SidecarDbPool::process_waiting_queue() {
             }
         }
         
-        // Log retry after backoff (only when interval >= base interval, meaning we were in backoff)
-        int base_interval = global_shared_state ? global_shared_state->get_base_interval_ms() : 100;
-        int max_interval = global_shared_state ? global_shared_state->get_max_interval_ms() : 1000;
-        bool in_backoff = current_interval >= (std::chrono::milliseconds(base_interval) * 2);
-        
-        if (in_backoff) {
-            spdlog::info("[Worker {}] [Backoff] {} retrying after {}ms backoff", 
-                        worker_id_, group_key, current_interval.count());
-        }
-        
-        // OPTIMIZATION: When in backoff, do lightweight check first
+        // OPTIMIZATION: For high backoff intervals (>= 500ms), do lightweight check first
         // This avoids expensive full POP queries when queue is empty during fallback polling
-        if (in_backoff) {
+        if (current_interval >= std::chrono::milliseconds(500)) {
             if (!check_has_pending(req.queue_name, req.partition_name, req.consumer_group)) {
                 // No messages - skip full query, increase backoff, re-queue
                 if (global_shared_state) {
-                    global_shared_state->release_group(group_key, false, worker_id_);  // false = no messages
+                    global_shared_state->release_group(group_key, false);  // false = no messages
                 }
                 
                 auto new_interval = global_shared_state 
                     ? global_shared_state->get_group_interval(group_key)
-                    : std::chrono::milliseconds(max_interval);
+                    : std::chrono::milliseconds(1000);
                 req.next_check = now + new_interval;
                 
                 spdlog::debug("[Worker {}] [Sidecar] POP_WAIT SKIP (no pending): {} [{}@{}] - backoff {}ms", 
@@ -746,8 +715,7 @@ void SidecarDbPool::on_socket_event(uv_poll_t* handle, int status, int events) {
 // drain_pending_to_slots - Send pending requests to available DB connections
 // ============================================================================
 void SidecarDbPool::drain_pending_to_slots() {
-    // Clean up completed state machines (deferred from completion callbacks)
-    cleanup_completed_state_machines();
+    // First, try to assign connections to any active state machines
     assign_connections_to_state_machines();
     
     const size_t MAX_ITEMS_PER_TX = static_cast<size_t>(tuning_.max_items_per_tx);
@@ -1040,10 +1008,6 @@ void SidecarDbPool::drain_pending_to_slots() {
                     }
                 }
             }
-    
-            // After processing pending requests, assign remaining connections to state machines
-            // This ensures fair sharing: batched ops (ACK, PUSH) get connections first, then POPs
-            //assign_connections_to_state_machines();
         }
         
 // ============================================================================
@@ -1190,7 +1154,7 @@ void SidecarDbPool::process_slot_result(ConnectionSlot& slot) {
                                 }
                                 
                                 if (global_shared_state) {
-                                    global_shared_state->release_group(group_key, has_messages, worker_id_);
+                                    global_shared_state->release_group(group_key, has_messages);
                                 }
                                 
                                 auto now = std::chrono::steady_clock::now();
@@ -1317,7 +1281,7 @@ void SidecarDbPool::process_slot_result(ConnectionSlot& slot) {
                         }
                         
                         if (global_shared_state) {
-                            global_shared_state->release_group(group_key, has_messages, worker_id_);
+                            global_shared_state->release_group(group_key, has_messages);
                         }
                         
                         auto now = std::chrono::steady_clock::now();
@@ -1430,7 +1394,7 @@ void SidecarDbPool::submit_pop_batch_sm(std::vector<SidecarRequest> requests) {
                         tracker.queue_name, tracker.partition_name, tracker.consumer_group);
                     
                     if (global_shared_state) {
-                        global_shared_state->release_group(group_key, has_messages, worker_id_);
+                        global_shared_state->release_group(group_key, has_messages);
                     }
                     
                     if (has_messages || now >= tracker.wait_deadline || req.state == PopState::FAILED) {
@@ -1527,8 +1491,8 @@ void SidecarDbPool::submit_pop_batch_sm(std::vector<SidecarRequest> requests) {
                 }
             }
             
-            // Note: Don't cleanup here - it causes use-after-free
-            // cleanup_completed_state_machines() is called in drain_pending_to_slots
+            // Clean up completed state machines
+            cleanup_completed_state_machines();
         },
         worker_id_
     );
@@ -1596,26 +1560,6 @@ void SidecarDbPool::process_state_machine_result(ConnectionSlot& slot) {
         return;
     }
     
-    // Keep state machine alive during this function by holding shared_ptr
-    std::shared_ptr<PopBatchStateMachine> sm_holder;
-    {
-        std::lock_guard<std::mutex> lock(state_machines_mutex_);
-        for (auto& sm : active_state_machines_) {
-            if (sm.get() == slot.state_machine) {
-                sm_holder = sm;
-                break;
-            }
-        }
-    }
-    
-    if (!sm_holder) {
-        spdlog::warn("[Worker {}] [Sidecar] State machine not found in active list", worker_id_);
-        slot.busy = false;
-        slot.state_machine = nullptr;
-        slot.state_machine_request = nullptr;
-        return;
-    }
-    
     auto query_end = std::chrono::steady_clock::now();
     auto query_time = std::chrono::duration_cast<std::chrono::microseconds>(
         query_end - slot.query_start).count();
@@ -1636,8 +1580,8 @@ void SidecarDbPool::process_state_machine_result(ConnectionSlot& slot) {
         last_result = result;
     }
     
-    // Notify state machine of completion (sm_holder keeps it alive)
-    PopBatchStateMachine* sm = sm_holder.get();
+    // Notify state machine of completion
+    PopBatchStateMachine* sm = slot.state_machine;
     
     if (last_result) {
         sm->on_query_complete(&slot, last_result);

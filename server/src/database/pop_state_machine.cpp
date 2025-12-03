@@ -7,31 +7,6 @@
 
 namespace queen {
 
-// Helper: Flush any pending results on a connection to ensure clean state
-static void flush_pending_results(PGconn* conn, int worker_id) {
-    if (!conn) return;
-    
-    // Consume input first
-    PQconsumeInput(conn);
-    
-    // If connection is busy, wait for it to finish
-    while (PQisBusy(conn)) {
-        PQconsumeInput(conn);
-    }
-    
-    // Drain all pending results
-    PGresult* result;
-    int flushed = 0;
-    while ((result = PQgetResult(conn)) != nullptr) {
-        flushed++;
-        PQclear(result);
-    }
-    
-    if (flushed > 0) {
-        spdlog::warn("[Worker {}] Flushed {} stale results from connection", worker_id, flushed);
-    }
-}
-
 // ============================================================================
 // UUID Generation (UUIDv7 format for time-ordering)
 // ============================================================================
@@ -106,9 +81,8 @@ PopBatchStateMachine::PopBatchStateMachine(
     , worker_id_(worker_id)
     , created_at_(std::chrono::steady_clock::now()) {
     
-    // Generate unique ID for this state machine (use last 8 chars - random portion)
-    std::string uuid = generate_uuid();
-    id_ = uuid.substr(uuid.length() - 8);  // Last 8 chars are random
+    // Generate unique ID for this state machine
+    id_ = generate_uuid().substr(0, 8);  // Short ID for logging
     
     // Initialize all requests
     for (auto& req : requests_) {
@@ -306,7 +280,6 @@ bool PopBatchStateMachine::advance_state(PopRequestState& req) {
             
         case PopState::FETCHING:
             // After fetch, we're done
-            // Note: pop_sm_fetch now updates batch_size internally to actual count
             if (req.messages.empty() || req.messages.size() == 0) {
                 // No messages - release the lease
                 req.state = PopState::RELEASING;
@@ -341,9 +314,6 @@ void PopBatchStateMachine::submit_resolve_query(PopRequestState& req) {
         return;
     }
     
-    // Ensure connection is clean before sending new query
-    flush_pending_results(req.assigned_slot->conn, worker_id_);
-    
     spdlog::debug("[Worker {}] [SM {}] Submitting RESOLVE query for request {} (queue={})", 
                   worker_id_, id_, req.idx, req.queue_name);
     
@@ -373,9 +343,6 @@ void PopBatchStateMachine::submit_lease_query(PopRequestState& req) {
         mark_complete(req, PopState::FAILED);
         return;
     }
-    
-    // Ensure connection is clean before sending new query
-    flush_pending_results(req.assigned_slot->conn, worker_id_);
     
     spdlog::debug("[Worker {}] [SM {}] Submitting LEASE query for request {} (queue={}, partition={})", 
                   worker_id_, id_, req.idx, req.queue_name, req.partition_name);
@@ -416,14 +383,10 @@ void PopBatchStateMachine::submit_fetch_query(PopRequestState& req) {
         return;
     }
     
-    // Ensure connection is clean before sending new query
-    flush_pending_results(req.assigned_slot->conn, worker_id_);
-    
     spdlog::debug("[Worker {}] [SM {}] Submitting FETCH query for request {} (partition_id={})", 
                   worker_id_, id_, req.idx, req.partition_id);
     
-    // Pass consumer_group and worker_id so FETCH can update batch_size to actual count
-    const char* sql = "SELECT queen.pop_sm_fetch($1::uuid, $2::timestamptz, $3::uuid, $4, $5, $6, $7, $8)";
+    const char* sql = "SELECT queen.pop_sm_fetch($1::uuid, $2::timestamptz, $3::uuid, $4, $5, $6)";
     
     std::string batch_size_str = std::to_string(req.batch_size);
     std::string window_buffer_str = std::to_string(req.window_buffer);
@@ -439,12 +402,10 @@ void PopBatchStateMachine::submit_fetch_query(PopRequestState& req) {
         cursor_id_ptr,
         batch_size_str.c_str(),
         window_buffer_str.c_str(),
-        delayed_processing_str.c_str(),
-        req.consumer_group.c_str(),
-        req.lease_id.c_str()
+        delayed_processing_str.c_str()
     };
     
-    int sent = PQsendQueryParams(req.assigned_slot->conn, sql, 8, 
+    int sent = PQsendQueryParams(req.assigned_slot->conn, sql, 6, 
                                   nullptr, params, nullptr, nullptr, 0);
     if (!sent) {
         req.error_message = PQerrorMessage(req.assigned_slot->conn);
@@ -461,9 +422,6 @@ void PopBatchStateMachine::submit_release_query(PopRequestState& req) {
         mark_complete(req, PopState::FAILED);
         return;
     }
-    
-    // Ensure connection is clean before sending new query
-    flush_pending_results(req.assigned_slot->conn, worker_id_);
     
     spdlog::debug("[Worker {}] [SM {}] Submitting RELEASE query for request {} (partition_id={})", 
                   worker_id_, id_, req.idx, req.partition_id);
@@ -599,27 +557,8 @@ void PopBatchStateMachine::check_completion() {
     auto total_duration_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
         std::chrono::steady_clock::now() - created_at_).count();
     
-    // Build context string from requests and count total messages
-    std::string context;
-    size_t total_messages = 0;
-    if (!requests_.empty()) {
-        const auto& req = requests_[0];
-        context = req.queue_name;
-        if (!req.partition_name.empty()) {
-            context += "/" + req.partition_name;
-        }
-        if (req.consumer_group != "__QUEUE_MODE__" && !req.consumer_group.empty()) {
-            context += "/" + req.consumer_group;
-        }
-        
-        // Count total messages across all requests
-        for (const auto& r : requests_) {
-            total_messages += r.messages.size();
-        }
-    }
-    
-    spdlog::info("[Worker {}] [SM {}] All {} requests completed in {}ms | {} | {} msgs", 
-                 worker_id_, id_, requests_.size(), total_duration_ms, context, total_messages);
+    spdlog::info("[Worker {}] [SM {}] All {} requests completed in {}ms", 
+                 worker_id_, id_, requests_.size(), total_duration_ms);
     
     if (on_complete_) {
         on_complete_(requests_);

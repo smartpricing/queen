@@ -22,7 +22,7 @@ enum class PopState {
     PENDING,      // Waiting for DB connection
     RESOLVING,    // Wildcard: finding partition
     LEASING,      // Acquiring lease on partition
-    FETCHING,     // Reading messages (also updates batch_size to actual count)
+    FETCHING,     // Reading messages
     RELEASING,    // Releasing empty lease (optional)
     COMPLETED,    // Done with messages
     EMPTY,        // Done without messages
