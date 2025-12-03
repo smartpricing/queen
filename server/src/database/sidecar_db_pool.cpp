@@ -667,7 +667,7 @@ void SidecarDbPool::on_waiting_timer(uv_timer_t* handle) {
 void SidecarDbPool::on_submit_signal(uv_async_t* handle) {
     (void)handle; 
     
-    /*auto* pool = static_cast<SidecarDbPool*>(handle->data);
+    auto* pool = static_cast<SidecarDbPool*>(handle->data);
     if (pool && pool->running_) {
         // Drain ALL pending requests (uv_async_send is coalescing!)
         pool->drain_pending_to_slots();
@@ -675,7 +675,7 @@ void SidecarDbPool::on_submit_signal(uv_async_t* handle) {
         // Reset the batch timer to prevent useless wakeup
         // This gives us MICRO_BATCH_WAIT_MS from NOW
         uv_timer_again(&pool->batch_timer_);
-    }*/
+    }
 }
 
 void SidecarDbPool::on_socket_event(uv_poll_t* handle, int status, int events) {
@@ -786,12 +786,12 @@ void SidecarDbPool::drain_pending_to_slots() {
                 }
                 
                 if (!free_slot) {
-            break;  // All connections busy (but at least some are alive)
+                    break;  // All connections busy (but at least some are alive)
                 }
                 
                 SidecarOpType batch_op_type = pending_requests_.front().op_type;
                 
-        // For non-batchable operations, send one at a time
+                // For non-batchable operations, send one at a time
                 if (!is_batchable_op(batch_op_type)) {
                     auto req = std::move(pending_requests_.front());
                     pending_requests_.pop_front();
@@ -823,8 +823,8 @@ void SidecarDbPool::drain_pending_to_slots() {
                         free_slot->queue_wait_us = queue_wait_us;
                         total_queries_++;
                 
-                // Start watching for write (to flush) and read (for results)
-                start_watching_slot(*free_slot, UV_WRITABLE | UV_READABLE);
+                        // Start watching for write (to flush) and read (for results)
+                        start_watching_slot(*free_slot, UV_WRITABLE | UV_READABLE);
                     } else {
                         spdlog::warn("[SidecarDbPool] Non-batch PQsendQuery failed: {}", PQerrorMessage(free_slot->conn));
                         SidecarResponse error_resp;
@@ -1119,16 +1119,16 @@ void SidecarDbPool::process_slot_result(ConnectionSlot& slot) {
                             resp.op_type = slot.op_type;
                             resp.request_id = info.request_id;
                             resp.query_time_us = query_time;
-                            resp.push_targets = info.push_targets;
+            resp.push_targets = info.push_targets;
                             
                             if (db_success && all_results.is_array()) {
                                 nlohmann::json request_results = nlohmann::json::array();
                                 
-                                for (const auto& res : all_results) {
-                                    int idx = res.value("index", res.value("idx", -1));
+                for (const auto& res : all_results) {
+                    int idx = res.value("index", res.value("idx", -1));
                                     if (idx >= static_cast<int>(info.start_index) && 
                                         idx < static_cast<int>(info.start_index + info.item_count)) {
-                                        request_results.push_back(res);
+                        request_results.push_back(res);
                                     }
                                 }
                                 resp.success = true;
@@ -1179,7 +1179,7 @@ void SidecarDbPool::process_slot_result(ConnectionSlot& slot) {
                                 if (has_messages || now >= tracker.wait_deadline || !resp.success) {
                                     // Deliver response (has messages, timed out, or error)
                                     resp.op_type = SidecarOpType::POP_WAIT;
-                                    deliver_response(std::move(resp));
+                            deliver_response(std::move(resp));
                                 } else {
                                     // Re-queue for later check (no messages, not timed out)
                                     SidecarRequest new_req;
@@ -1294,7 +1294,7 @@ void SidecarDbPool::process_slot_result(ConnectionSlot& slot) {
                                 if (json.contains("messages") && json["messages"].is_array()) {
                                     has_messages = !json["messages"].empty();
                                 }
-                            } catch (...) {}
+            } catch (...) {}
                         }
                         
                         if (global_shared_state) {

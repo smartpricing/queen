@@ -106,12 +106,13 @@ void setup_pop_routes(uWS::App* app, const RouteContext& ctx) {
                 
                 auto route_time_us = std::chrono::duration_cast<std::chrono::microseconds>(
                 std::chrono::steady_clock::now() - request_start).count();
-            ctx.sidecar->submit(std::move(sidecar_req));
                 
                 // Register consumer presence for targeted notifications
                 if (global_shared_state && global_shared_state->is_enabled()) {
                     global_shared_state->register_consumer(queue_name);
                 }
+
+                ctx.sidecar->submit(std::move(sidecar_req));
                 
                 //spdlog::info("[Worker {}] SPOP TIMING: route_setup={}us | Submitted POP_WAIT {} for queue {}/{} (timeout={}ms)", ctx.worker_id, route_time_us, request_id, queue_name, partition_name, timeout_ms);
                 

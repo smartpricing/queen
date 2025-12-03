@@ -65,11 +65,19 @@ BEGIN
             LEFT JOIN queen.queues q ON q.id = p.queue_id
         )
         SELECT * FROM enriched
-        ORDER BY partition_id, txn_id
+        ORDER BY partition_id, consumer_group, txn_id
     LOOP
         v_success := false;
         v_error := v_ack.validation_error;
         v_lease_released := false;
+        
+        -- Acquire advisory lock to prevent cross-transaction deadlocks
+        -- This serializes access to each (partition_id, consumer_group) across all concurrent batches
+        IF v_ack.partition_id IS NOT NULL THEN
+            PERFORM pg_advisory_xact_lock(
+                ('x' || substr(md5(v_ack.partition_id::text || v_ack.consumer_group), 1, 16))::bit(64)::bigint
+            );
+        END IF;
         
         IF v_error IS NULL THEN
             IF v_ack.status IN ('completed', 'success') THEN
