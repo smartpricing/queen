@@ -39,6 +39,32 @@ Perfect for:
 
 ---
 
+## Performance
+
+### Push
+
+On Linux machines on DO. Ulimit extended and Postgres 16 tuned with 300 connections, high memory buffer and wal and
+12 workers.
+
+──────────────────────────────────────────────────
+Server Core        16    
+NUM_WORKERS        8
+SIDECAR_MICRO_BATCH_WAIT_MS 25
+──────────────────────────────────────────────────
+Loader Core        32
+Workers:           32
+Connections:       3200
+Duration:          30s
+──────────────────────────────────────────────────
+Total Requests:    1,350,438
+Throughput:        45,015 req/s
+Data transferred:  631.51 MB
+──────────────────────────────────────────────────
+Latency avg:       72.71ms
+Latency p50:       69.41ms
+Latency p90:       96.28ms
+Latency p99:       119.41ms
+
 ## Quick Start
 
 Run PostgreSQL and Queen server in Docker:
@@ -141,27 +167,7 @@ asyncio.run(main())
 Some example logs:
 
 ```bash
-[info] [Worker 0] PUSH: Queue 'smartchat.router.incoming' encryption_enabled=true (from cache)
-[info] [Worker 0] PUSH: enc_service=true, enabled=true
-[info] [Worker 0] PUSH: Encrypted payload for queue 'smartchat.router.incoming'
-[info] [Worker 0] PUSH: 1 items to [smartchat.router.incoming]
-[info] [Worker 0] [Sidecar] BATCH: PUSH (1 requests, 1 items)
-[info] [Worker 0] [Sidecar] NOTIFY: Queue 'smartchat.router.incoming' has activity, waking 1 waiting consumers
-[info] [Worker 0] PUSH NOTIFY: 1 queue(s)
-[info] [Worker 0] PUSH RESPONSE: (status=201)
-[info] [Worker 0] POP_WAIT RESPONSE: smartchat.router.incoming/agentsource:fed2f633-38fc-4f73-8f91-1c7e2a2c9851 (status=200)
-[info] [Worker 1] TRANSACTION: Executing transaction (2 operations)
-[info] [Worker 1] TRANSACTION: Encrypted payload for queue 'smartchat.translations'
-[info] [Worker 1] TRANSACTION RESPONSE: (status=200)
-[info] [Worker 0] QPOP: [smartchat.router.incoming/*@__QUEUE_MODE__] batch=1, wait=true | Pool: 9/9 conn (0 in use)
-[info] [Worker 0] QPOP: Submitted POP_WAIT 44b91fd6-0ae0-4a84-882c-93f278c3a2c4 for queue smartchat.router.incoming (timeout=30000ms)
-[info] [Worker 1] POP_WAIT RESPONSE: smartchat.translations/7f64ced6-8f37-49bb-901a-68cfc8bf58a6 (status=200)
-[info] [Worker 0] TRANSACTION: Executing transaction (2 operations)
-[info] [Worker 0] TRANSACTION: Encrypted payload for queue 'smartchat.router.history'
-[info] [Worker 0] TRANSACTION RESPONSE: (status=200)
-[info] [Worker 1] QPOP: [smartchat.translations/*@__QUEUE_MODE__] batch=1, wait=true | Pool: 9/9 conn (0 in use)
-[info] [Worker 1] QPOP: Submitted POP_WAIT eb951693-b14c-4071-970d-82919bc5e1ee for queue smartchat.translations (timeout=30000ms)
-[info] [Worker 1] POP_WAIT RESPONSE: smartchat.router.history/7f64ced6-8f37-49bb-901a-68cfc8bf58a6 (status=200)
+
 ```
 
 ## Key Features

@@ -61,10 +61,11 @@ SharedStateManager::~SharedStateManager() {
 }
 
 void SharedStateManager::start() {
-    // Always load queue configs on startup (needed for encryption even when sync disabled)
+    // Always load queue configs and maintenance mode on startup (needed even when sync disabled)
     if (db_pool_) {
-        spdlog::info("SharedStateManager: Loading queue configs from database...");
+        spdlog::info("SharedStateManager: Loading queue configs and maintenance mode from database...");
         refresh_queue_configs_from_db();
+        refresh_maintenance_mode_from_db();
     }
     
     if (!enabled_ || running_) {
@@ -440,6 +441,10 @@ void SharedStateManager::setup_message_handlers() {
     transport_->on_message(Type::CONSUMER_DEREGISTERED, [this](Type, const std::string& sender, const nlohmann::json& p) {
         handle_consumer_deregistered(sender, p);
     });
+    
+    transport_->on_message(Type::MAINTENANCE_MODE_SET, [this](Type, const std::string& sender, const nlohmann::json& p) {
+        handle_maintenance_mode_set(sender, p);
+    });
 }
 
 void SharedStateManager::handle_message_available(const std::string& sender, const nlohmann::json& payload) {
@@ -536,6 +541,17 @@ void SharedStateManager::handle_consumer_deregistered(const std::string& sender,
     }
 }
 
+void SharedStateManager::handle_maintenance_mode_set(const std::string& sender, const nlohmann::json& payload) {
+    bool enabled = payload.value("enabled", false);
+    
+    // Update local cache
+    bool prev = maintenance_mode_.exchange(enabled);
+    if (prev != enabled) {
+        spdlog::info("SharedState: MAINTENANCE_MODE_SET from {} -> {} (from peer {})", 
+                    prev ? "ON" : "OFF", enabled ? "ON" : "OFF", sender);
+    }
+}
+
 // ============================================================
 // Background Tasks
 // ============================================================
@@ -591,6 +607,12 @@ void SharedStateManager::refresh_loop() {
             refresh_queue_configs_from_db();
         } catch (const std::exception& e) {
             spdlog::warn("SharedStateManager: Failed to refresh queue configs: {}", e.what());
+        }
+        
+        try {
+            refresh_maintenance_mode_from_db();
+        } catch (const std::exception& e) {
+            spdlog::warn("SharedStateManager: Failed to refresh maintenance mode: {}", e.what());
         }
         
         std::this_thread::sleep_for(
@@ -725,6 +747,94 @@ void SharedStateManager::refresh_queue_configs_from_db() {
         
     } catch (const std::exception& e) {
         spdlog::warn("SharedStateManager: Failed to refresh queue configs from DB: {}", e.what());
+    }
+}
+
+void SharedStateManager::refresh_maintenance_mode_from_db() {
+    if (!db_pool_) {
+        return;
+    }
+    
+    try {
+        auto conn = db_pool_->acquire();
+        if (!conn) {
+            spdlog::warn("SharedStateManager: Failed to acquire DB connection for maintenance mode refresh");
+            return;
+        }
+        
+        std::string sql = R"(
+            SELECT value->>'enabled' as enabled
+            FROM queen.system_state
+            WHERE key = 'maintenance_mode'
+        )";
+        
+        sendAndWait(conn.get(), sql.c_str());
+        auto result = getTuplesResult(conn.get());
+        
+        bool enabled = false;
+        if (PQntuples(result.get()) > 0) {
+            const char* val = PQgetvalue(result.get(), 0, 0);
+            enabled = (val && std::string(val) == "true");
+        }
+        
+        // Only log if state changed
+        bool prev = maintenance_mode_.exchange(enabled);
+        if (prev != enabled) {
+            spdlog::info("SharedStateManager: Maintenance mode changed {} -> {} (from DB refresh)", 
+                        prev ? "ON" : "OFF", enabled ? "ON" : "OFF");
+        }
+        
+    } catch (const std::exception& e) {
+        spdlog::warn("SharedStateManager: Failed to refresh maintenance mode from DB: {}", e.what());
+    }
+}
+
+// ============================================================
+// Maintenance Mode
+// ============================================================
+
+void SharedStateManager::set_maintenance_mode(bool enabled) {
+    // Update local cache immediately
+    bool prev = maintenance_mode_.exchange(enabled);
+    
+    if (prev != enabled) {
+        spdlog::info("SharedStateManager: Maintenance mode set {} -> {} (local)", 
+                    prev ? "ON" : "OFF", enabled ? "ON" : "OFF");
+    }
+    
+    // Persist to database (authoritative source)
+    if (db_pool_) {
+        try {
+            auto conn = db_pool_->acquire();
+            if (conn) {
+                std::string sql = R"(
+                    INSERT INTO queen.system_state (key, value, updated_at)
+                    VALUES ('maintenance_mode', $1::jsonb, NOW())
+                    ON CONFLICT (key) DO UPDATE SET 
+                        value = EXCLUDED.value,
+                        updated_at = NOW()
+                )";
+                
+                std::string value_json = enabled ? R"({"enabled": true})" : R"({"enabled": false})";
+                
+                sendQueryParamsAsync(conn.get(), sql, {value_json});
+                getCommandResult(conn.get());
+                
+                spdlog::debug("SharedStateManager: Maintenance mode persisted to DB");
+            }
+        } catch (const std::exception& e) {
+            spdlog::warn("SharedStateManager: Failed to persist maintenance mode to DB: {}", e.what());
+        }
+    }
+    
+    // Broadcast to other instances via UDP
+    if (running_ && transport_) {
+        nlohmann::json payload = {
+            {"enabled", enabled},
+            {"ts", now_ms()}
+        };
+        transport_->broadcast(UDPSyncMessageType::MAINTENANCE_MODE_SET, payload);
+        spdlog::debug("SharedStateManager: Broadcast MAINTENANCE_MODE_SET enabled={}", enabled);
     }
 }
 

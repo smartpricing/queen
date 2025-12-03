@@ -15,6 +15,7 @@
 DROP FUNCTION IF EXISTS queen.pop_sm_resolve(TEXT, TEXT);
 DROP FUNCTION IF EXISTS queen.pop_sm_lease(TEXT, TEXT, TEXT, INT, TEXT, INT, TEXT, TEXT);
 DROP FUNCTION IF EXISTS queen.pop_sm_fetch(UUID, TIMESTAMPTZ, UUID, INT, INT, INT);
+DROP FUNCTION IF EXISTS queen.pop_sm_fetch(UUID, TIMESTAMPTZ, UUID, INT, INT, INT, TEXT, TEXT);
 DROP FUNCTION IF EXISTS queen.pop_sm_release(UUID, TEXT, TEXT);
 DROP FUNCTION IF EXISTS queen.pop_sm_update_cursor(UUID, TEXT, TEXT, UUID, TIMESTAMPTZ, INT);
 
@@ -122,8 +123,6 @@ DECLARE
     v_cursor_id UUID;
     v_cursor_ts TIMESTAMPTZ;
     v_lease_acquired BOOLEAN := FALSE;
-    v_available_count INT;
-    v_effective_batch_size INT;
 BEGIN
     -- Resolve partition and queue info
     SELECT p.id, q.id, q.lease_time, q.window_buffer, q.delayed_processing
@@ -145,36 +144,14 @@ BEGIN
     VALUES (v_partition_id, p_consumer_group)
     ON CONFLICT (partition_id, consumer_group) DO NOTHING;
     
-    -- Get current cursor position to count available messages
-    SELECT pc.last_consumed_id, pc.last_consumed_created_at
-    INTO v_cursor_id, v_cursor_ts
-    FROM queen.partition_consumers pc
-    WHERE pc.partition_id = v_partition_id
-      AND pc.consumer_group = p_consumer_group;
-    
-    -- Count available messages (limited by requested batch_size for efficiency)
-    SELECT COUNT(*)::INT INTO v_available_count
-    FROM (
-        SELECT 1 FROM queen.messages m
-        WHERE m.partition_id = v_partition_id
-          AND (v_cursor_ts IS NULL OR (m.created_at, m.id) > (v_cursor_ts, COALESCE(v_cursor_id, '00000000-0000-0000-0000-000000000000'::uuid)))
-          AND (v_window_buffer IS NULL OR v_window_buffer = 0 
-               OR m.created_at <= v_now - (v_window_buffer || ' seconds')::interval)
-          AND (v_delayed_processing IS NULL OR v_delayed_processing = 0 
-               OR m.created_at <= v_now - (v_delayed_processing || ' seconds')::interval)
-        LIMIT p_batch_size
-    ) sub;
-    
-    -- Use minimum of requested batch_size and available messages
-    v_effective_batch_size := LEAST(p_batch_size, GREATEST(v_available_count, 1));
-    
     -- Try to acquire lease (atomic check-and-update)
+    -- Note: batch_size is set to requested size here; pop_sm_fetch will update it to actual count
     UPDATE queen.partition_consumers pc
     SET 
         lease_acquired_at = v_now,
         lease_expires_at = v_now + (v_effective_lease * INTERVAL '1 second'),
         worker_id = p_worker_id,
-        batch_size = v_effective_batch_size,
+        batch_size = p_batch_size,
         acked_count = 0,
         batch_retry_count = COALESCE(pc.batch_retry_count, 0)
     WHERE pc.partition_id = v_partition_id
@@ -244,43 +221,55 @@ CREATE OR REPLACE FUNCTION queen.pop_sm_fetch(
     p_cursor_id UUID,
     p_batch_size INT,
     p_window_buffer INT DEFAULT 0,
-    p_delayed_processing INT DEFAULT 0
+    p_delayed_processing INT DEFAULT 0,
+    p_consumer_group TEXT DEFAULT '__QUEUE_MODE__',
+    p_worker_id TEXT DEFAULT NULL
 ) RETURNS JSONB LANGUAGE plpgsql AS $$
 DECLARE
     v_messages JSONB;
+    v_actual_count INT;
     v_now TIMESTAMPTZ := NOW();
     v_effective_cursor_id UUID;
 BEGIN
     -- Handle NULL cursor_id (use zero UUID for comparison)
     v_effective_cursor_id := COALESCE(p_cursor_id, '00000000-0000-0000-0000-000000000000'::uuid);
     
-    -- NOTE: LIMIT must be inside the subquery, not after the aggregate!
-    -- If LIMIT is after jsonb_agg(), it limits output rows (always 1), not input rows.
-    SELECT COALESCE(jsonb_agg(
-        jsonb_build_object(
-            'id', sub.id::text,
-            'transactionId', sub.transaction_id,
-            'traceId', sub.trace_id::text,
-            'data', sub.payload,
-            'createdAt', to_char(sub.created_at, 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"')
-        ) ORDER BY sub.created_at, sub.id
-    ), '[]'::jsonb)
-    INTO v_messages
-    FROM (
+    -- Fetch messages and count in single query using CTE
+    WITH fetched AS (
         SELECT m.id, m.transaction_id, m.trace_id, m.payload, m.created_at
         FROM queen.messages m
         WHERE m.partition_id = p_partition_id
-          -- After cursor position
           AND (p_cursor_ts IS NULL OR (m.created_at, m.id) > (p_cursor_ts, v_effective_cursor_id))
-          -- Respect window_buffer
           AND (p_window_buffer IS NULL OR p_window_buffer = 0 
                OR m.created_at <= v_now - (p_window_buffer || ' seconds')::interval)
-          -- Respect delayed_processing
           AND (p_delayed_processing IS NULL OR p_delayed_processing = 0 
                OR m.created_at <= v_now - (p_delayed_processing || ' seconds')::interval)
         ORDER BY m.created_at, m.id
         LIMIT p_batch_size
-    ) sub;
+    )
+    SELECT 
+        COALESCE(jsonb_agg(
+            jsonb_build_object(
+                'id', f.id::text,
+                'transactionId', f.transaction_id,
+                'traceId', f.trace_id::text,
+                'data', f.payload,
+                'createdAt', to_char(f.created_at, 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"')
+            ) ORDER BY f.created_at, f.id
+        ), '[]'::jsonb),
+        COUNT(*)::INT
+    INTO v_messages, v_actual_count
+    FROM fetched f;
+    
+    -- Update batch_size to actual count so ACK releases lease correctly
+    -- Only update if we got messages AND have a valid worker_id
+    IF v_actual_count > 0 AND p_worker_id IS NOT NULL AND v_actual_count < p_batch_size THEN
+        UPDATE queen.partition_consumers
+        SET batch_size = v_actual_count
+        WHERE partition_id = p_partition_id
+          AND consumer_group = p_consumer_group
+          AND worker_id = p_worker_id;
+    END IF;
     
     RETURN v_messages;
 END;
@@ -361,7 +350,7 @@ $$;
 -- ============================================================================
 GRANT EXECUTE ON FUNCTION queen.pop_sm_resolve(TEXT, TEXT) TO PUBLIC;
 GRANT EXECUTE ON FUNCTION queen.pop_sm_lease(TEXT, TEXT, TEXT, INT, TEXT, INT, TEXT, TEXT) TO PUBLIC;
-GRANT EXECUTE ON FUNCTION queen.pop_sm_fetch(UUID, TIMESTAMPTZ, UUID, INT, INT, INT) TO PUBLIC;
+GRANT EXECUTE ON FUNCTION queen.pop_sm_fetch(UUID, TIMESTAMPTZ, UUID, INT, INT, INT, TEXT, TEXT) TO PUBLIC;
 GRANT EXECUTE ON FUNCTION queen.pop_sm_release(UUID, TEXT, TEXT) TO PUBLIC;
 GRANT EXECUTE ON FUNCTION queen.pop_sm_update_cursor(UUID, TEXT, TEXT, UUID, TIMESTAMPTZ, INT) TO PUBLIC;
 

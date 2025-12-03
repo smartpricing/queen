@@ -749,6 +749,9 @@ void SidecarDbPool::drain_pending_to_slots() {
     // Clean up completed state machines (deferred from completion callbacks)
     cleanup_completed_state_machines();
     
+    // State machines get connections FIRST (for POP throughput)
+    assign_connections_to_state_machines();
+    
     const size_t MAX_ITEMS_PER_TX = static_cast<size_t>(tuning_.max_items_per_tx);
     const size_t MAX_BATCH_SIZE = static_cast<size_t>(tuning_.max_batch_size);
     
@@ -1039,11 +1042,7 @@ void SidecarDbPool::drain_pending_to_slots() {
                     }
                 }
             }
-    
-    // After processing pending requests, assign remaining connections to state machines
-    // This ensures fair sharing: batched ops (ACK, PUSH) get connections first, then POPs
-    assign_connections_to_state_machines();
-        }
+}
         
 // ============================================================================
 // process_slot_result - Handle completed PostgreSQL query

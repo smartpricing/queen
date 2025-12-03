@@ -82,8 +82,9 @@ void setup_push_routes(uWS::App* app, const RouteContext& ctx) {
                     }
                     
                     // MAINTENANCE MODE: Route to file buffer instead of sidecar
-                    // Must use get_maintenance_mode_fresh() to query DB - cached value is per-worker
-                    /*if (ctx.async_queue_manager->get_maintenance_mode_fresh() && ctx.file_buffer) {
+                    // Uses global_shared_state for zero-cost cached check (atomic bool read)
+                    // Cache is refreshed periodically by SharedStateManager background thread
+                    if (global_shared_state && global_shared_state->get_maintenance_mode() && ctx.file_buffer) {
                         spdlog::debug("[Worker {}] PUSH: Maintenance mode active, buffering {} items", 
                                      ctx.worker_id, items.size());
                         
@@ -134,7 +135,7 @@ void setup_push_routes(uWS::App* app, const RouteContext& ctx) {
                         
                         send_json_response(res, results, all_buffered ? 201 : 500);
                         return;
-                    }*/
+                    }
                     
                     // Register response for async delivery (per-worker registry - no contention!)
                     std::string request_id = worker_response_registries[ctx.worker_id]->register_response(

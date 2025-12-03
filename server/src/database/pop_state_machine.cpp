@@ -422,7 +422,8 @@ void PopBatchStateMachine::submit_fetch_query(PopRequestState& req) {
     spdlog::debug("[Worker {}] [SM {}] Submitting FETCH query for request {} (partition_id={})", 
                   worker_id_, id_, req.idx, req.partition_id);
     
-    const char* sql = "SELECT queen.pop_sm_fetch($1::uuid, $2::timestamptz, $3::uuid, $4, $5, $6)";
+    // Pass consumer_group and worker_id so FETCH can update batch_size to actual count
+    const char* sql = "SELECT queen.pop_sm_fetch($1::uuid, $2::timestamptz, $3::uuid, $4, $5, $6, $7, $8)";
     
     std::string batch_size_str = std::to_string(req.batch_size);
     std::string window_buffer_str = std::to_string(req.window_buffer);
@@ -438,10 +439,12 @@ void PopBatchStateMachine::submit_fetch_query(PopRequestState& req) {
         cursor_id_ptr,
         batch_size_str.c_str(),
         window_buffer_str.c_str(),
-        delayed_processing_str.c_str()
+        delayed_processing_str.c_str(),
+        req.consumer_group.c_str(),
+        req.lease_id.c_str()
     };
     
-    int sent = PQsendQueryParams(req.assigned_slot->conn, sql, 6, 
+    int sent = PQsendQueryParams(req.assigned_slot->conn, sql, 8, 
                                   nullptr, params, nullptr, nullptr, 0);
     if (!sent) {
         req.error_message = PQerrorMessage(req.assigned_slot->conn);

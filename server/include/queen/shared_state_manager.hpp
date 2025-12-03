@@ -96,6 +96,25 @@ public:
     void delete_queue_config(const std::string& queue);
     
     // ============================================================
+    // Maintenance Mode (Global cached, refreshed from DB periodically)
+    // Zero DB hits on hot path - all workers share this atomic cache
+    // ============================================================
+    
+    /**
+     * Get maintenance mode status (cached, never hits DB)
+     * Safe to call on every push - returns atomic bool
+     * @return true if maintenance mode is enabled
+     */
+    bool get_maintenance_mode() const { return maintenance_mode_.load(); }
+    
+    /**
+     * Set maintenance mode and persist to DB
+     * Also broadcasts to other instances via UDP
+     * @param enabled New maintenance mode status
+     */
+    void set_maintenance_mode(bool enabled);
+    
+    // ============================================================
     // Consumer Presence (Tier 2) - Queue-level tracking
     // ============================================================
     
@@ -261,6 +280,9 @@ private:
     caches::ConsumerPresenceCache consumer_presence_;
     caches::ServerHealthTracker server_health_;
     
+    // Maintenance mode (global atomic cache - zero DB hits on hot path)
+    std::atomic<bool> maintenance_mode_{false};
+    
     // Background threads
     std::thread heartbeat_thread_;
     std::thread refresh_thread_;
@@ -312,6 +334,7 @@ private:
     void handle_queue_config_delete(const std::string& sender, const nlohmann::json& payload);
     void handle_consumer_registered(const std::string& sender, const nlohmann::json& payload);
     void handle_consumer_deregistered(const std::string& sender, const nlohmann::json& payload);
+    void handle_maintenance_mode_set(const std::string& sender, const nlohmann::json& payload);
     
     // ============================================================
     // Background Tasks
@@ -322,6 +345,7 @@ private:
     void dns_refresh_loop();
     
     void refresh_queue_configs_from_db();
+    void refresh_maintenance_mode_from_db();
     
     /**
      * Cleanup stale backoff entries that haven't been accessed recently

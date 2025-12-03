@@ -253,7 +253,7 @@ await queen.queue('orders')
 Build reliable multi-step workflows with transactions and exactly-once delivery. Perfect for financial systems, order processing, and data pipelines.
 
 ### 📊 Real-time Analytics
-Stream messages to multiple consumer groups for different analytics purposes. Replay historical data from any timestamp.
+Send messages to multiple consumer groups for different analytics purposes. Replay historical data from any timestamp.
 
 ### 🔄 Event-Driven Architecture
 Decouple microservices with guaranteed message delivery. Built-in tracing helps debug distributed systems.

@@ -33,6 +33,7 @@ void setup_maintenance_routes(uWS::App* app, const RouteContext& ctx) {
     });
     
     // POST toggle maintenance mode
+    // Uses SharedStateManager for cluster-wide propagation via UDP broadcast
     app->post("/api/v1/system/maintenance", [ctx](auto* res, auto* req) {
         (void)req;
         read_json_body(res,
@@ -44,7 +45,15 @@ void setup_maintenance_routes(uWS::App* app, const RouteContext& ctx) {
                     }
                     
                     bool enable = body["enabled"];
-                    ctx.async_queue_manager->set_maintenance_mode(enable);
+                    
+                    // Use SharedStateManager for cluster-wide propagation
+                    // This will: 1) update local atomic cache, 2) persist to DB, 3) broadcast to peers
+                    if (global_shared_state) {
+                        global_shared_state->set_maintenance_mode(enable);
+                    } else {
+                        // Fallback to AsyncQueueManager if SharedStateManager not available
+                        ctx.async_queue_manager->set_maintenance_mode(enable);
+                    }
                     
                     nlohmann::json response = {
                         {"maintenanceMode", enable},
