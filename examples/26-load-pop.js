@@ -3,7 +3,7 @@ import axios from 'axios';
 
 const SERVER_URL = process.env.SERVER_URL || 'http://localhost:6632';
 const QUEUE_NAME = 'test-queue-pop';
-const MESSAGE_COUNT = 500000;       // Messages to pre-populate
+const MESSAGE_COUNT = 50000;       // Messages to pre-populate
 const MAX_PARTITION = 500;
 const CONCURRENT_WORKERS = 500;   // Number of concurrent POP+ACK workers
 const IDLE_TIMEOUT_MS = 3000;     // Exit after 3s of no messages
