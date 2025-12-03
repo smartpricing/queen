@@ -259,6 +259,15 @@ bool ResponseRegistry::send_response(const std::string& request_id, const nlohma
     }
 }
 
+bool ResponseRegistry::is_valid(const std::string& request_id) const {
+    std::lock_guard<std::mutex> lock(registry_mutex_);
+    auto it = responses_.find(request_id);
+    if (it == responses_.end()) {
+        return false;  // Not found = aborted or expired
+    }
+    return it->second->valid.load();
+}
+
 void ResponseRegistry::cleanup_expired(std::chrono::milliseconds max_age) {
     auto now = std::chrono::steady_clock::now();
     std::lock_guard<std::mutex> lock(registry_mutex_);

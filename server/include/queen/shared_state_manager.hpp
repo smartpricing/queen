@@ -177,12 +177,19 @@ public:
      * Release group lock and update backoff based on result
      * @param had_messages true if messages were found (resets backoff)
      */
-    void release_group(const std::string& group_key, bool had_messages);
+    void release_group(const std::string& group_key, bool had_messages, int worker_id = -1);
     
     /**
      * Get current backoff interval for a group
      */
     std::chrono::milliseconds get_group_interval(const std::string& group_key);
+    
+    /**
+     * Get backoff configuration values
+     */
+    int get_base_interval_ms() const { return base_interval_ms_; }
+    int get_max_interval_ms() const { return max_interval_ms_; }
+    int get_backoff_threshold() const { return backoff_threshold_; }
     
     /**
      * Reset backoff for all groups of a queue (called on push notification)

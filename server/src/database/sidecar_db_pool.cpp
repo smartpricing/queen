@@ -1,10 +1,15 @@
 #include "queen/sidecar_db_pool.hpp"
+#include "queen/pop_state_machine.hpp"
 #include "queen/shared_state_manager.hpp"
+#include "queen/response_queue.hpp"
 #include <spdlog/spdlog.h>
 #include <algorithm>
 #include <cstring>
 
 namespace queen {
+
+// External: per-worker response registries for checking if requests are still valid
+extern std::vector<std::shared_ptr<ResponseRegistry>> worker_response_registries;
 
 SidecarDbPool::SidecarDbPool(const std::string& conn_str, 
                              int pool_size,
@@ -279,6 +284,19 @@ void SidecarDbPool::process_waiting_queue() {
         std::lock_guard<std::mutex> lock(waiting_mutex_);
         auto it = waiting_requests_.begin();
         while (it != waiting_requests_.end()) {
+            // Check if the client has disconnected (request aborted)
+            if (worker_id_ >= 0 && 
+                static_cast<size_t>(worker_id_) < worker_response_registries.size() &&
+                worker_response_registries[worker_id_] &&
+                !worker_response_registries[worker_id_]->is_valid(it->request_id)) {
+                // Client disconnected - remove from queue silently
+                spdlog::info("[Worker {}] [Sidecar] POP_WAIT ABORTED (client disconnected): {} [{}@{}]", 
+                            worker_id_, it->queue_name, it->consumer_group, 
+                            it->partition_name.empty() ? "*" : it->partition_name);
+                it = waiting_requests_.erase(it);
+                continue;
+            }
+            
             if (now >= it->wait_deadline) {
                 // Expired - send empty response immediately
                 spdlog::debug("[Worker {}] [Sidecar] POP_WAIT TIMEOUT: {} [{}@{}]", 
@@ -321,18 +339,28 @@ void SidecarDbPool::process_waiting_queue() {
             }
         }
         
-        // OPTIMIZATION: For high backoff intervals (>= 500ms), do lightweight check first
+        // Log retry after backoff (only when interval >= base interval, meaning we were in backoff)
+        int base_interval = global_shared_state ? global_shared_state->get_base_interval_ms() : 100;
+        int max_interval = global_shared_state ? global_shared_state->get_max_interval_ms() : 1000;
+        bool in_backoff = current_interval >= (std::chrono::milliseconds(base_interval) * 2);
+        
+        if (in_backoff) {
+            spdlog::info("[Worker {}] [Backoff] {} retrying after {}ms backoff", 
+                        worker_id_, group_key, current_interval.count());
+        }
+        
+        // OPTIMIZATION: When in backoff, do lightweight check first
         // This avoids expensive full POP queries when queue is empty during fallback polling
-        if (current_interval >= std::chrono::milliseconds(500)) {
+        if (in_backoff) {
             if (!check_has_pending(req.queue_name, req.partition_name, req.consumer_group)) {
                 // No messages - skip full query, increase backoff, re-queue
                 if (global_shared_state) {
-                    global_shared_state->release_group(group_key, false);  // false = no messages
+                    global_shared_state->release_group(group_key, false, worker_id_);  // false = no messages
                 }
                 
                 auto new_interval = global_shared_state 
                     ? global_shared_state->get_group_interval(group_key)
-                    : std::chrono::milliseconds(1000);
+                    : std::chrono::milliseconds(max_interval);
                 req.next_check = now + new_interval;
                 
                 spdlog::debug("[Worker {}] [Sidecar] POP_WAIT SKIP (no pending): {} [{}@{}] - backoff {}ms", 
@@ -373,37 +401,24 @@ void SidecarDbPool::process_waiting_queue() {
             pop_wait_trackers_[req.request_id] = std::move(tracker);
         }
         
-        // Convert POP_WAIT to POP_BATCH for micro-batching support
-        // Multiple POP_WAIT requests can now be batched into a single SQL call
-        req.op_type = SidecarOpType::POP_BATCH;
-        
-        // Build single-item JSON for this request (will be combined with others in drain_pending_to_slots)
-        nlohmann::json batch_item;
-        batch_item["idx"] = 0;  // Will be rewritten during batching
-        batch_item["queue"] = req.queue_name;
-        batch_item["partition"] = req.partition_name;
-        batch_item["consumerGroup"] = req.consumer_group;
-        batch_item["batch"] = req.batch_size;
-        batch_item["leaseTime"] = 0;  // Use queue's configured lease_time
-        batch_item["subMode"] = req.subscription_mode;
-        batch_item["subFrom"] = req.subscription_from;
-        
-        nlohmann::json batch_array = nlohmann::json::array();
-        batch_array.push_back(batch_item);
-        
-        req.params = { batch_array.dump() };
-        req.item_count = 1;  // For proper batching accounting
-        
-        // Log before moving (req will be empty after move)
-        spdlog::debug("[Worker {}] [Sidecar] POP_WAIT QUERY: {} [{}@{}]", 
+        // Log before submitting
+        spdlog::debug("[Worker {}] [Sidecar] POP_WAIT QUERY (SM): {} [{}@{}]", 
                     worker_id_, req.queue_name, req.consumer_group, 
                     req.partition_name.empty() ? "*" : req.partition_name);
         
-        // Move to pending queue for execution
-        {
-            std::lock_guard<std::mutex> lock(pending_mutex_);
-            pending_requests_.push_back(std::move(req));
-        }
+        // Use state machine for parallel processing
+        // The completion callback will handle POP_WAIT re-queue logic
+        SidecarRequest sm_req;
+        sm_req.op_type = SidecarOpType::POP_BATCH;
+        sm_req.request_id = req.request_id;
+        sm_req.queue_name = req.queue_name;
+        sm_req.partition_name = req.partition_name;
+        sm_req.consumer_group = req.consumer_group;
+        sm_req.batch_size = req.batch_size;
+        sm_req.subscription_mode = req.subscription_mode;
+        sm_req.subscription_from = req.subscription_from;
+        
+        submit_pop_batch_sm({std::move(sm_req)});
     }
 }
 
@@ -712,7 +727,12 @@ void SidecarDbPool::on_socket_event(uv_poll_t* handle, int status, int events) {
         
         // Check if query is complete
         if (PQisBusy(slot->conn) == 0) {
+            // Route to state machine or normal processing
+            if (slot->state_machine) {
+                pool->process_state_machine_result(*slot);
+            } else {
             pool->process_slot_result(*slot);
+            }
         }
         // If still busy, keep waiting for more data
     }
@@ -722,6 +742,9 @@ void SidecarDbPool::on_socket_event(uv_poll_t* handle, int status, int events) {
 // drain_pending_to_slots - Send pending requests to available DB connections
 // ============================================================================
 void SidecarDbPool::drain_pending_to_slots() {
+    // Clean up completed state machines (deferred from completion callbacks)
+    cleanup_completed_state_machines();
+    
     const size_t MAX_ITEMS_PER_TX = static_cast<size_t>(tuning_.max_items_per_tx);
     const size_t MAX_BATCH_SIZE = static_cast<size_t>(tuning_.max_batch_size);
     
@@ -952,19 +975,6 @@ void SidecarDbPool::drain_pending_to_slots() {
                     continue;
                 }
                 
-        // Log batch
-                const char* op_name = "UNKNOWN";
-                switch (batch_op_type) {
-                    case SidecarOpType::PUSH: op_name = "PUSH"; break;
-                    case SidecarOpType::POP: op_name = "POP"; break;
-                    case SidecarOpType::POP_BATCH: op_name = "POP_BATCH"; break;
-                    case SidecarOpType::POP_WAIT: op_name = "POP_WAIT"; break;
-                    case SidecarOpType::ACK: op_name = "ACK"; break;
-                    case SidecarOpType::ACK_BATCH: op_name = "ACK_BATCH"; break;
-                    case SidecarOpType::TRANSACTION: op_name = "TRANSACTION"; break;
-                    case SidecarOpType::RENEW_LEASE: op_name = "RENEW_LEASE"; break;
-                }
-                
                 // Get SQL for this operation type
                 std::vector<std::string> param_storage;
                 auto [sql, param_ptrs_vec] = get_batched_sql(batch_op_type, combined_json, param_storage);
@@ -1025,6 +1035,10 @@ void SidecarDbPool::drain_pending_to_slots() {
                     }
                 }
             }
+    
+    // After processing pending requests, assign remaining connections to state machines
+    // This ensures fair sharing: batched ops (ACK, PUSH) get connections first, then POPs
+    assign_connections_to_state_machines();
         }
         
 // ============================================================================
@@ -1171,7 +1185,7 @@ void SidecarDbPool::process_slot_result(ConnectionSlot& slot) {
                                 }
                                 
                                 if (global_shared_state) {
-                                    global_shared_state->release_group(group_key, has_messages);
+                                    global_shared_state->release_group(group_key, has_messages, worker_id_);
                                 }
                                 
                                 auto now = std::chrono::steady_clock::now();
@@ -1298,7 +1312,7 @@ void SidecarDbPool::process_slot_result(ConnectionSlot& slot) {
                         }
                         
                         if (global_shared_state) {
-                            global_shared_state->release_group(group_key, has_messages);
+                            global_shared_state->release_group(group_key, has_messages, worker_id_);
                         }
                         
                         auto now = std::chrono::steady_clock::now();
@@ -1351,6 +1365,321 @@ void SidecarDbPool::process_slot_result(ConnectionSlot& slot) {
                     slot.busy = false;
                     slot.request_id.clear();
                     slot.total_items = 0;
+}
+
+// ============================================================================
+// State Machine Support for Parallel POP Processing
+// ============================================================================
+
+void SidecarDbPool::submit_pop_batch_sm(std::vector<SidecarRequest> requests) {
+    if (requests.empty()) {
+        return;
+    }
+    
+    spdlog::debug("[Worker {}] [Sidecar] submit_pop_batch_sm: {} requests", 
+                  worker_id_, requests.size());
+    
+    // Convert SidecarRequests to PopRequestStates
+    std::vector<PopRequestState> pop_requests;
+    pop_requests.reserve(requests.size());
+    
+    for (size_t i = 0; i < requests.size(); ++i) {
+        const auto& req = requests[i];
+        PopRequestState pr;
+        pr.request_id = req.request_id;
+        pr.idx = static_cast<int>(i);
+        pr.queue_name = req.queue_name;
+        pr.partition_name = req.partition_name;
+        pr.consumer_group = req.consumer_group;
+        pr.batch_size = req.batch_size;
+        pr.subscription_mode = req.subscription_mode;
+        pr.subscription_from = req.subscription_from;
+        pop_requests.push_back(std::move(pr));
+    }
+    
+    // Create state machine with completion callback
+    auto sm = std::make_shared<PopBatchStateMachine>(
+        std::move(pop_requests),
+        [this](std::vector<PopRequestState>& results) {
+            // Deliver responses for all completed requests
+            for (auto& req : results) {
+                // Check if this was a POP_WAIT request (needs re-queue handling)
+                bool was_pop_wait = false;
+                PopWaitTracker tracker;
+                {
+                    std::lock_guard<std::mutex> lock(tracker_mutex_);
+                    auto it = pop_wait_trackers_.find(req.request_id);
+                    if (it != pop_wait_trackers_.end()) {
+                        was_pop_wait = true;
+                        tracker = std::move(it->second);
+                        pop_wait_trackers_.erase(it);
+                    }
+                }
+                
+                bool has_messages = !req.messages.empty();
+                auto now = std::chrono::steady_clock::now();
+                
+                if (was_pop_wait) {
+                    // Handle POP_WAIT re-queue logic
+                    std::string group_key = make_group_key(
+                        tracker.queue_name, tracker.partition_name, tracker.consumer_group);
+                    
+                    if (global_shared_state) {
+                        global_shared_state->release_group(group_key, has_messages, worker_id_);
+                    }
+                    
+                    if (has_messages || now >= tracker.wait_deadline || req.state == PopState::FAILED) {
+                        // Deliver response (has messages, timed out, or error)
+                        SidecarResponse resp;
+                        resp.op_type = SidecarOpType::POP_WAIT;
+                        resp.request_id = req.request_id;
+                        resp.success = (req.state != PopState::FAILED);
+                        
+                        if (req.state == PopState::FAILED) {
+                            resp.error_message = req.error_message;
+                            resp.result_json = R"({"messages":[]})";
+                        } else {
+                            // Build result JSON matching pop_messages_batch_v2 format
+                            nlohmann::json result_item;
+                            result_item["idx"] = req.idx;
+                            
+                            nlohmann::json inner_result;
+                            inner_result["messages"] = req.messages;
+                            inner_result["leaseId"] = req.messages.empty() ? nullptr : nlohmann::json(req.lease_id);
+                            
+                            result_item["result"] = inner_result;
+                            
+                            nlohmann::json result_array = nlohmann::json::array();
+                            result_array.push_back(result_item);
+                            
+                            resp.result_json = result_array.dump();
+                        }
+                        
+                        resp.query_time_us = std::chrono::duration_cast<std::chrono::microseconds>(
+                            req.completed_at - req.started_at).count();
+                        
+                        deliver_response(std::move(resp));
+                    } else {
+                        // Re-queue for later check (no messages, not timed out)
+                        SidecarRequest new_req;
+                        new_req.op_type = SidecarOpType::POP_WAIT;
+                        new_req.request_id = req.request_id;
+                        new_req.wait_deadline = tracker.wait_deadline;
+                        new_req.queue_name = tracker.queue_name;
+                        new_req.partition_name = tracker.partition_name;
+                        new_req.consumer_group = tracker.consumer_group;
+                        new_req.batch_size = tracker.batch_size;
+                        new_req.subscription_mode = tracker.subscription_mode;
+                        new_req.subscription_from = tracker.subscription_from;
+                        new_req.queued_at = std::chrono::steady_clock::now();
+                        
+                        auto interval_ms = std::chrono::milliseconds(100);
+                        if (global_shared_state) {
+                            interval_ms = global_shared_state->get_group_interval(group_key);
+                        }
+                        new_req.next_check = now + interval_ms;
+                        
+                        spdlog::debug("[Worker {}] [Sidecar] POP_WAIT re-queue (SM): {} [{}@{}] - backoff {}ms",
+                                    worker_id_, tracker.queue_name, tracker.consumer_group,
+                                    tracker.partition_name.empty() ? "*" : tracker.partition_name,
+                                    interval_ms.count());
+                        
+                        std::lock_guard<std::mutex> lock(waiting_mutex_);
+                        waiting_requests_.push_back(std::move(new_req));
+                    }
+                } else {
+                    // Normal POP_BATCH response - deliver immediately
+                    SidecarResponse resp;
+                    resp.op_type = SidecarOpType::POP_BATCH;
+                    resp.request_id = req.request_id;
+                    resp.success = (req.state != PopState::FAILED);
+                    
+                    if (req.state == PopState::FAILED) {
+                        resp.error_message = req.error_message;
+                        resp.result_json = "[]";
+                    } else {
+                        // Build result JSON matching pop_messages_batch_v2 format
+                        nlohmann::json result_item;
+                        result_item["idx"] = req.idx;
+                        
+                        nlohmann::json inner_result;
+                        inner_result["messages"] = req.messages;
+                        inner_result["leaseId"] = req.messages.empty() ? nullptr : nlohmann::json(req.lease_id);
+                        
+                        result_item["result"] = inner_result;
+                        
+                        nlohmann::json result_array = nlohmann::json::array();
+                        result_array.push_back(result_item);
+                        
+                        resp.result_json = result_array.dump();
+                    }
+                    
+                    // Calculate timing
+                    resp.query_time_us = std::chrono::duration_cast<std::chrono::microseconds>(
+                        req.completed_at - req.started_at).count();
+                    
+                    deliver_response(std::move(resp));
+                }
+            }
+            
+            // Note: Don't cleanup here - it causes use-after-free
+            // cleanup_completed_state_machines() is called in drain_pending_to_slots
+        },
+        worker_id_
+    );
+    
+    // Store state machine
+    {
+        std::lock_guard<std::mutex> lock(state_machines_mutex_);
+        active_state_machines_.push_back(sm);
+    }
+    
+    // Assign available connections to state machine
+    assign_connections_to_state_machines();
+    
+    // Wake up event loop if needed
+    if (loop_initialized_) {
+        uv_async_send(&submit_signal_);
+    }
+}
+
+void SidecarDbPool::assign_connections_to_state_machines() {
+    std::lock_guard<std::mutex> lock(state_machines_mutex_);
+    
+    for (auto& sm : active_state_machines_) {
+        if (!sm || sm->is_complete()) {
+            continue;
+        }
+        
+        // Try to assign free slots to this state machine
+        while (sm->pending_count() > 0) {
+            ConnectionSlot* free_slot = nullptr;
+            for (auto& slot : slots_) {
+                if (!slot.busy && slot.conn && !slot.state_machine) {
+                    free_slot = &slot;
+                    break;
+                }
+            }
+            
+            if (!free_slot) {
+                break;  // No more free connections
+            }
+            
+            // Assign slot to state machine
+            free_slot->busy = true;
+            free_slot->state_machine = sm.get();
+            free_slot->query_start = std::chrono::steady_clock::now();
+            
+            if (!sm->assign_connection(free_slot)) {
+                // State machine didn't need the connection
+                free_slot->busy = false;
+                free_slot->state_machine = nullptr;
+                break;
+            }
+            
+            // Start watching for socket events
+            start_watching_slot(*free_slot, UV_WRITABLE | UV_READABLE);
+            total_queries_++;
+        }
+    }
+}
+
+void SidecarDbPool::process_state_machine_result(ConnectionSlot& slot) {
+    if (!slot.state_machine) {
+        spdlog::warn("[Worker {}] [Sidecar] process_state_machine_result called but no state machine", 
+                     worker_id_);
+        return;
+    }
+    
+    // Keep state machine alive during this function by holding shared_ptr
+    std::shared_ptr<PopBatchStateMachine> sm_holder;
+    {
+        std::lock_guard<std::mutex> lock(state_machines_mutex_);
+        for (auto& sm : active_state_machines_) {
+            if (sm.get() == slot.state_machine) {
+                sm_holder = sm;
+                break;
+            }
+        }
+    }
+    
+    if (!sm_holder) {
+        spdlog::warn("[Worker {}] [Sidecar] State machine not found in active list", worker_id_);
+        slot.busy = false;
+        slot.state_machine = nullptr;
+        slot.state_machine_request = nullptr;
+        return;
+    }
+    
+    auto query_end = std::chrono::steady_clock::now();
+    auto query_time = std::chrono::duration_cast<std::chrono::microseconds>(
+        query_end - slot.query_start).count();
+    
+    total_query_time_us_ += query_time;
+    
+    // Stop watching this slot
+    stop_watching_slot(slot);
+    
+    // Get ALL results (loop until null)
+    PGresult* result = nullptr;
+    PGresult* last_result = nullptr;
+    
+    while ((result = PQgetResult(slot.conn)) != nullptr) {
+        if (last_result) {
+            PQclear(last_result);
+        }
+        last_result = result;
+    }
+    
+    // Notify state machine of completion (sm_holder keeps it alive)
+    PopBatchStateMachine* sm = sm_holder.get();
+    
+    if (last_result) {
+        sm->on_query_complete(&slot, last_result);
+        PQclear(last_result);
+    } else {
+        sm->on_query_error(&slot, "No result from query");
+    }
+    
+    // If request is terminal, release the slot
+    PopRequestState* req = static_cast<PopRequestState*>(slot.state_machine_request);
+    if (!req || req->is_terminal()) {
+        slot.busy = false;
+        slot.state_machine = nullptr;
+        slot.state_machine_request = nullptr;
+        
+        // Try to assign connection to other pending requests
+        if (!sm->is_complete() && sm->pending_count() > 0) {
+            slot.busy = true;
+            slot.state_machine = sm;
+            slot.query_start = std::chrono::steady_clock::now();
+            
+            if (sm->assign_connection(&slot)) {
+                start_watching_slot(slot, UV_WRITABLE | UV_READABLE);
+                total_queries_++;
+            } else {
+                slot.busy = false;
+                slot.state_machine = nullptr;
+            }
+        }
+    } else {
+        // Request not terminal - state machine already started next query
+        slot.query_start = std::chrono::steady_clock::now();
+        start_watching_slot(slot, UV_WRITABLE | UV_READABLE);
+        total_queries_++;
+    }
+}
+
+void SidecarDbPool::cleanup_completed_state_machines() {
+    std::lock_guard<std::mutex> lock(state_machines_mutex_);
+    
+    active_state_machines_.erase(
+        std::remove_if(active_state_machines_.begin(), active_state_machines_.end(),
+            [](const std::shared_ptr<PopBatchStateMachine>& sm) {
+                return !sm || sm->is_complete();
+            }),
+        active_state_machines_.end()
+    );
 }
 
 } // namespace queen

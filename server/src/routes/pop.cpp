@@ -54,10 +54,7 @@ void setup_pop_routes(uWS::App* app, const RouteContext& ctx) {
             int timeout_ms = get_query_param_int(req, "timeout", ctx.config.queue.default_timeout);
             int batch = get_query_param_int(req, "batch", ctx.config.queue.default_batch_size);
             
-            auto pool_stats = ctx.async_queue_manager->get_pool_stats();
-            /*spdlog::info("[Worker {}] SPOP: [{}/{}@{}] batch={}, wait={} | Pool: {}/{} conn ({} in use)", 
-                        ctx.worker_id, queue_name, partition_name, consumer_group, batch, wait,
-                        pool_stats.available, pool_stats.total, pool_stats.in_use);*/
+            // Pool stats available via ctx.async_queue_manager->get_pool_stats() if needed for debugging
             
             PopOptions options;
             options.wait = false;  // Always false - registry handles waiting
@@ -104,9 +101,6 @@ void setup_pop_routes(uWS::App* app, const RouteContext& ctx) {
                 
                 // SQL is built by sidecar using pop_messages_batch_v2
                 
-                auto route_time_us = std::chrono::duration_cast<std::chrono::microseconds>(
-                std::chrono::steady_clock::now() - request_start).count();
-                
                 // Register consumer presence for targeted notifications
                 if (global_shared_state && global_shared_state->is_enabled()) {
                     global_shared_state->register_consumer(queue_name);
@@ -120,18 +114,17 @@ void setup_pop_routes(uWS::App* app, const RouteContext& ctx) {
                 return;
             }
             
-            // Non-waiting mode: use sidecar for async pop
-            // Use POP_BATCH for ALL POPs - enables batching when multiple requests arrive
-            //spdlog::info("[Worker {}] SPOP: Executing immediate pop for {}/{} (wait=false)", ctx.worker_id, queue_name, partition_name);
+            // Non-waiting mode: use state machine for async parallel pop
+            // State machine enables true parallel processing across DB connections
+            // Each specific-partition POP is processed independently
                 
             // Register response for async delivery
             std::string request_id = worker_response_registries[ctx.worker_id]->register_response(
                 res, ctx.worker_id, nullptr
             );
             
-            // Build sidecar request using POP_BATCH
-            // Different partitions can be batched together efficiently
-            // Same partition requests: only one wins lease, others return empty
+            // Build sidecar request for state machine processing
+            // State machine processes requests in parallel on multiple DB connections
             SidecarRequest sidecar_req;
             sidecar_req.op_type = SidecarOpType::POP_BATCH;
             sidecar_req.request_id = request_id;
@@ -139,29 +132,18 @@ void setup_pop_routes(uWS::App* app, const RouteContext& ctx) {
             sidecar_req.partition_name = partition_name;
             sidecar_req.consumer_group = consumer_group;
             sidecar_req.batch_size = options.batch;
-            
-            // Build JSON array for batch processing
-            nlohmann::json batch_item;
-            batch_item["idx"] = 0;
-            batch_item["queue"] = queue_name;
-            batch_item["partition"] = partition_name;  // Specific partition
-            batch_item["consumerGroup"] = consumer_group;
-            batch_item["batch"] = options.batch;
-            batch_item["leaseTime"] = 0;  // Use queue config
-            batch_item["subMode"] = options.subscription_mode.value_or("all");
-            batch_item["subFrom"] = options.subscription_from.value_or("");
-            
-            nlohmann::json batch_array = nlohmann::json::array();
-            batch_array.push_back(batch_item);
-            
-            sidecar_req.params = {batch_array.dump()};
-            sidecar_req.item_count = 1;
+            sidecar_req.subscription_mode = options.subscription_mode.value_or("all");
+            sidecar_req.subscription_from = options.subscription_from.value_or("");
             
             auto route_time_us = std::chrono::duration_cast<std::chrono::microseconds>(
                 std::chrono::steady_clock::now() - request_start).count();
+            (void)route_time_us;  // Silence unused variable warning in release builds
             
-                ctx.sidecar->submit(std::move(sidecar_req));
-            /*spdlog::info("[Worker {}] SPOP TIMING: route_setup={}us | Submitted POP_BATCH (request_id={})", 
+            // Use state machine for specific-partition POPs
+            // This enables parallel processing across multiple DB connections
+            ctx.sidecar->submit_pop_batch_sm({std::move(sidecar_req)});
+            
+            /*spdlog::info("[Worker {}] SPOP TIMING: route_setup={}us | Submitted POP_SM (request_id={})", 
                          ctx.worker_id, route_time_us, request_id);*/
             
         } catch (const std::exception& e) {
@@ -171,7 +153,6 @@ void setup_pop_routes(uWS::App* app, const RouteContext& ctx) {
     
     // POP from queue (any partition)
     app->get("/api/v1/pop/queue/:queue", [ctx](auto* res, auto* req) {
-        auto request_start = std::chrono::steady_clock::now();
         try {
             std::string queue_name = std::string(req->getParameter(0));
             std::string consumer_group = get_query_param(req, "consumerGroup", "__QUEUE_MODE__");
@@ -239,34 +220,20 @@ void setup_pop_routes(uWS::App* app, const RouteContext& ctx) {
                 res, ctx.worker_id, nullptr
             );
             
-            // Build sidecar request using POP_BATCH for wildcard partition
-            // This enables true batching via partition pre-allocation
+            // Build sidecar request for state machine processing
+            // State machine handles wildcard via RESOLVING -> LEASING -> FETCHING flow
             SidecarRequest sidecar_req;
-            sidecar_req.op_type = SidecarOpType::POP_BATCH;  // Use batchable POP for wildcard
+            sidecar_req.op_type = SidecarOpType::POP_BATCH;
             sidecar_req.request_id = request_id;
             sidecar_req.queue_name = queue_name;
-            sidecar_req.partition_name = "";  // Wildcard
+            sidecar_req.partition_name = "";  // Wildcard - state machine will resolve
             sidecar_req.consumer_group = consumer_group;
             sidecar_req.batch_size = options.batch;
+            sidecar_req.subscription_mode = options.subscription_mode.value_or("all");
+            sidecar_req.subscription_from = options.subscription_from.value_or("");
             
-            // Build JSON array for batch processing (single request)
-            nlohmann::json batch_item;
-            batch_item["idx"] = 0;
-            batch_item["queue"] = queue_name;
-            batch_item["partition"] = "";  // Wildcard
-            batch_item["consumerGroup"] = consumer_group;
-            batch_item["batch"] = options.batch;
-            batch_item["leaseTime"] = 0;  // Use queue config
-            batch_item["subMode"] = options.subscription_mode.value_or("all");
-            batch_item["subFrom"] = options.subscription_from.value_or("");
-            
-            nlohmann::json batch_array = nlohmann::json::array();
-            batch_array.push_back(batch_item);
-            
-            sidecar_req.params = {batch_array.dump()};
-            sidecar_req.item_count = 1;
-            
-            ctx.sidecar->submit(std::move(sidecar_req));
+            // Use state machine for parallel processing
+            ctx.sidecar->submit_pop_batch_sm({std::move(sidecar_req)});
             
         } catch (const std::exception& e) {
             send_error_response(res, e.what(), 500);

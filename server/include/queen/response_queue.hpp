@@ -116,6 +116,13 @@ public:
     bool send_response(const std::string& request_id, const nlohmann::json& data, 
                       bool is_error = false, int status_code = 200);
     
+    /**
+     * Check if a request is still valid (not aborted)
+     * @param request_id The request ID to check
+     * @return true if the request exists and is valid, false if aborted or not found
+     */
+    bool is_valid(const std::string& request_id) const;
+    
     void cleanup_expired(std::chrono::milliseconds max_age = std::chrono::seconds(60));
     
     size_t size() const {

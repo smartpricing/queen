@@ -198,6 +198,7 @@ export async function testConsumerOrderingBatch(client) {
 
 
 export async function testConsumerBatchConsumeBatch(client) { 
+    await client.queue('test-queue-v2-consume-batch').delete()
     const queue = await client.queue('test-queue-v2-consume-batch').create()
     if (!queue.configured) {
         return { success: false, message: 'Queue not created' }
@@ -217,7 +218,7 @@ export async function testConsumerBatchConsumeBatch(client) {
     .queue('test-queue-v2-consume-batch')
     .batch(10)
     .wait(false)
-    .limit(1)
+    .limit(3)
     .consume(async msgs => {
         msgLength = msgs.length
     })
@@ -411,11 +412,11 @@ export async function manualAck(client) {
 
     await client
     .queue('test-queue-v2-manual-ack')
-    .concurrency(10)
+    .concurrency(1)
     .subscriptionMode('from_beginning')
     .batch(1000)
     .wait(false)
-    .limit(1)
+    .limit(10000)
     .consume(async msgs => {
         console.log('Messages: ' + msgs.length)
         for (const msg of msgs) {

@@ -338,7 +338,7 @@ bool SharedStateManager::try_acquire_group(const std::string& group_key) {
     return true;
 }
 
-void SharedStateManager::release_group(const std::string& group_key, bool had_messages) {
+void SharedStateManager::release_group(const std::string& group_key, bool had_messages, int worker_id) {
     std::lock_guard lock(backoff_mutex_);
     auto it = group_backoff_.find(group_key);
     if (it == group_backoff_.end()) {
@@ -352,6 +352,11 @@ void SharedStateManager::release_group(const std::string& group_key, bool had_me
     
     if (had_messages) {
         // Reset backoff - set to 0ms for immediate recheck when messages exist
+        if (state.consecutive_empty >= backoff_threshold_) {
+            // Was in backoff, now recovered
+            spdlog::info("[Worker {}] [Backoff] {} exiting backoff (had {} consecutive empty) | next_retry=now", 
+                        worker_id, group_key, state.consecutive_empty);
+        }
         state.consecutive_empty = 0;
         state.current_interval = std::chrono::milliseconds(0);
     } else {
@@ -364,6 +369,15 @@ void SharedStateManager::release_group(const std::string& group_key, bool had_me
             // Multiple empty results - exponential backoff
             int new_interval = static_cast<int>(state.current_interval.count() * backoff_multiplier_);
             state.current_interval = std::chrono::milliseconds(std::min(new_interval, max_interval_ms_));
+            
+            // Log when entering or increasing backoff
+            if (state.consecutive_empty == backoff_threshold_) {
+                spdlog::info("[Worker {}] [Backoff] {} entering backoff after {} consecutive empty | next_retry={}ms", 
+                            worker_id, group_key, state.consecutive_empty, state.current_interval.count());
+            } else {
+                spdlog::debug("[Worker {}] [Backoff] {} increased interval to {}ms (consecutive_empty={}) | next_retry={}ms", 
+                             worker_id, group_key, state.current_interval.count(), state.consecutive_empty, state.current_interval.count());
+            }
         }
     }
     

@@ -3,7 +3,7 @@ import axios from 'axios';
 
 const SERVER_URL = process.env.SERVER_URL || 'http://localhost:6632';
 const QUEUE_NAME = 'test-queue-pop';
-const MESSAGE_COUNT = 50000;       // Messages to pre-populate
+const MESSAGE_COUNT = 500000;       // Messages to pre-populate
 const MAX_PARTITION = 500;
 const CONCURRENT_WORKERS = 500;   // Number of concurrent POP+ACK workers
 const IDLE_TIMEOUT_MS = 3000;     // Exit after 3s of no messages
@@ -47,7 +47,10 @@ async function populateQueue() {
   
   const batchSize = 1000;  // Messages per request
   const batches = Math.ceil(MESSAGE_COUNT / batchSize);
+  const maxConcurrent = 10;
   
+  // Prepare all batch payloads
+  const batchPayloads = [];
   for (let b = 0; b < batches; b++) {
     const items = [];
     for (let i = 0; i < batchSize; i++) {
@@ -63,12 +66,16 @@ async function populateQueue() {
         }
       });
     }
-    
-    await axios.post(`${SERVER_URL}/api/v1/push`, { items });
-    
-    if ((b + 1) % 1000 === 0) {
-      console.log(`  Pushed ${(b + 1) * batchSize} messages...`);
-    }
+    batchPayloads.push(items);
+  }
+  
+  // Execute in parallel with max 10 concurrent requests
+  let completed = 0;
+  for (let i = 0; i < batchPayloads.length; i += maxConcurrent) {
+    const chunk = batchPayloads.slice(i, i + maxConcurrent);
+    await Promise.all(chunk.map(items => axios.post(`${SERVER_URL}/api/v1/push`, { items })));
+    completed += chunk.length;
+    console.log(`  Pushed ${completed * batchSize} messages...`);
   }
   
   // Verify
