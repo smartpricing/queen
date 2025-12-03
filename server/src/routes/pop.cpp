@@ -179,11 +179,6 @@ void setup_pop_routes(uWS::App* app, const RouteContext& ctx) {
             int timeout_ms = get_query_param_int(req, "timeout", ctx.config.queue.default_timeout);
             int batch = get_query_param_int(req, "batch", ctx.config.queue.default_batch_size);
             
-            auto pool_stats = ctx.async_queue_manager->get_pool_stats();
-            spdlog::info("[Worker {}] QPOP: [{}/*@{}] batch={}, wait={} | Pool: {}/{} conn ({} in use)", 
-                        ctx.worker_id, queue_name, consumer_group, batch, wait,
-                        pool_stats.available, pool_stats.total, pool_stats.in_use);
-            
             PopOptions options;
             options.wait = false;  // Always false - registry handles waiting
             options.timeout = timeout_ms;
@@ -228,26 +223,16 @@ void setup_pop_routes(uWS::App* app, const RouteContext& ctx) {
                 sidecar_req.next_check = std::chrono::steady_clock::now();  // Check immediately
                 
                 // SQL is built by sidecar using pop_messages_batch_v2
-                
-                auto route_time_us = std::chrono::duration_cast<std::chrono::microseconds>(
-                    std::chrono::steady_clock::now() - request_start).count();
                 ctx.sidecar->submit(std::move(sidecar_req));
                 
                 // Register consumer presence for targeted notifications
                 if (global_shared_state && global_shared_state->is_enabled()) {
                     global_shared_state->register_consumer(queue_name);
                 }
-                
-                /*spdlog::info("[Worker {}] QPOP TIMING: route_setup={}us | Submitted POP_WAIT {} for queue {} (timeout={}ms)", 
-                            ctx.worker_id, route_time_us, request_id, queue_name, timeout_ms);*/
-                
+
                 // Return immediately - sidecar will handle it
                 return;
             }
-            
-            // Non-waiting mode: use sidecar for async pop
-            // Use POP_BATCH for wildcard partition (any partition) - enables true batching
-            spdlog::info("[Worker {}] QPOP: Executing immediate pop for {}/* (wait=false)", ctx.worker_id, queue_name);
                 
             std::string request_id = worker_response_registries[ctx.worker_id]->register_response(
                 res, ctx.worker_id, nullptr
@@ -280,11 +265,7 @@ void setup_pop_routes(uWS::App* app, const RouteContext& ctx) {
             sidecar_req.params = {batch_array.dump()};
             sidecar_req.item_count = 1;
             
-            auto route_time_us = std::chrono::duration_cast<std::chrono::microseconds>(
-                std::chrono::steady_clock::now() - request_start).count();
             ctx.sidecar->submit(std::move(sidecar_req));
-            /*spdlog::info("[Worker {}] QPOP TIMING: route_setup={}us | Submitted POP_BATCH (request_id={})", 
-                         ctx.worker_id, route_time_us, request_id);*/
             
         } catch (const std::exception& e) {
             send_error_response(res, e.what(), 500);

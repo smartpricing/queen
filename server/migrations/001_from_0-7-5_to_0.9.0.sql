@@ -1,6 +1,12 @@
 -- ============================================================================
--- Queen Schema Migration: Master → Tasync
--- Run this BEFORE deploying tasync to production
+-- Queen Schema Migration: Master → Tasync (Cleanup)
+-- Run this AFTER deploying tasync to production
+-- 
+-- This migration removes objects that exist in master but are NOT used by tasync.
+-- It's safe to run after tasync is deployed because:
+--   1. Tasync's schema.sql uses CREATE OR REPLACE for objects it needs
+--   2. This script only drops objects tasync doesn't use
+--   3. All DROP statements use IF EXISTS for idempotency
 -- ============================================================================
 
 BEGIN;
@@ -43,6 +49,7 @@ DROP TRIGGER IF EXISTS trigger_update_pending_on_push ON queen.messages;
 DROP TRIGGER IF EXISTS trigger_update_watermark ON queen.messages;
 
 -- 4. DROP MASTER-ONLY TRIGGER FUNCTIONS
+DROP FUNCTION IF EXISTS update_partition_last_activity();
 DROP FUNCTION IF EXISTS update_pending_on_push();
 DROP FUNCTION IF EXISTS update_queue_watermark();
 
