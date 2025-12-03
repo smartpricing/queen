@@ -238,6 +238,9 @@ void SidecarDbPool::submit(SidecarRequest request) {
         return;
     }
     
+    // PUSH ops should buffer without immediate wakeup - rely on batch timer
+    bool is_push = (request.op_type == SidecarOpType::PUSH);
+    
     {
         std::lock_guard<std::mutex> lock(pending_mutex_);
         pending_requests_.push_back(std::move(request));
@@ -245,7 +248,8 @@ void SidecarDbPool::submit(SidecarRequest request) {
     
     // Wake up the event loop to drain pending requests
     // Note: uv_async_send is thread-safe and coalescing (multiple calls = one callback)
-    if (loop_initialized_) {
+    // PUSH ops skip the signal - they batch better by waiting for the timer
+    if (loop_initialized_ && !is_push) {
         uv_async_send(&submit_signal_);
     }
 }

@@ -22,25 +22,31 @@ Queen MQ uses a high-performance **acceptor/worker pattern** with fully asynchro
 └────────────────────────────────────────────────────────────────┘
                               ↓
 ┌────────────────────────────────────────────────────────────────┐
-│                      QUEUE LAYER                               │
-│         AsyncQueueManager (Non-blocking Operations)            │
-│    PUSH │ POP │ ACK │ TRANSACTION │ STREAM │ LEASE             │
+│                   PRIMARY OPERATIONS (Sidecar)                 │
+│              PUSH │ POP │ ACK │ TRANSACTION │ LEASE            │
+│         High-performance path via libuv + async libpq          │
+└────────────────────────────────────────────────────────────────┘
+                              ↓
+┌────────────────────────────────────────────────────────────────┐
+│              SECONDARY OPERATIONS (AsyncQueueManager)          │
+│     Schema Init │ Queue Config │ Tracing │ Consumer Groups     │
+│              Maintenance Mode │ File Buffer Replay             │
 └────────────────────────────────────────────────────────────────┘
                               ↓
 ┌────────────────────────────────────────────────────────────────┐
 │                    DATABASE LAYER                              │
 │  ┌──────────────────────────────────────────────────────┐     │
-│  │  AsyncDbPool (95% of DB_POOL_SIZE connections)       │     │
-│  │  + Per-worker Sidecars (libuv event loops)           │     │
+│  │  Per-worker Sidecars (libuv event loops + libpq)     │     │
+│  │  + AsyncDbPool (for secondary operations)            │     │
 │  └──────────────────────────────────────────────────────┘     │
 │                            ↓                                   │
 │              PostgreSQL (Stored Procedures)                    │
-│    push_messages_v2 │ pop_messages_v2 │ ack_messages_v2        │
+│   push_messages_v2 │ pop_sm_* │ ack_messages_v2 │ configure    │
 └────────────────────────────────────────────────────────────────┘
                               ↓
 ┌────────────────────────────────────────────────────────────────┐
 │                  BACKGROUND SERVICES                           │
-│  Stream Poll Workers │ Metrics │ Retention │ Eviction          │
+│              Metrics │ Retention │ Eviction                    │
 └────────────────────────────────────────────────────────────────┘
                               ↓
 ┌────────────────────────────────────────────────────────────────┐
@@ -60,20 +66,20 @@ Queen MQ uses a high-performance **acceptor/worker pattern** with fully asynchro
 - **Non-blocking** operation
 
 #### Worker Threads
-- **10 threads by default** (configurable via `NUM_WORKERS`)
+- **2 threads by default** (configurable via `NUM_WORKERS`)
 - **Event loop** in each worker (uWebSockets + libuv)
 - **Per-worker sidecar** for async PostgreSQL operations
 - **Non-blocking I/O** throughout
 
 **Configuration:**
 ```bash
-export NUM_WORKERS=10
+export NUM_WORKERS=2
 export PORT=6632
 ```
 
 ### 2. Sidecar Pattern (libuv + libpq)
 
-Each worker has a dedicated **sidecar** that handles all PostgreSQL operations asynchronously using libuv.
+Each worker has a dedicated **sidecar** that handles all PostgreSQL operations asynchronously using libuv. The sidecar is the heart of Queen's high-performance database layer.
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
@@ -95,10 +101,27 @@ Each worker has a dedicated **sidecar** that handles all PostgreSQL operations a
 └─────────────────────────────────────────────────────────────┘
 ```
 
-**Key components:**
-- **`uv_poll`** - Monitor PostgreSQL socket file descriptors
-- **`uv_timer`** - Micro-batching (5ms windows) for efficiency
-- **`uv_async`** - Cross-thread wakeup from HTTP to sidecar
+#### libuv Components
+
+| Component | Purpose | How It's Used |
+|-----------|---------|---------------|
+| `uv_poll` | Socket monitoring | Watch PostgreSQL connection file descriptors for read/write events |
+| `uv_timer` (batch) | Micro-batching | Accumulate requests for 5ms before sending to maximize throughput |
+| `uv_timer` (waiting) | Long-polling | Check for messages at configurable intervals with exponential backoff |
+| `uv_async` | Cross-thread wakeup | Signal sidecar when HTTP thread receives a request |
+
+#### Operation-Specific Behavior
+
+The sidecar treats different operations differently for optimal performance:
+
+| Operation | Signal Behavior | Why |
+|-----------|-----------------|-----|
+| **PUSH** | Buffer only (no immediate wake) | Allows maximum batching for throughput |
+| **POP** | Immediate wake + drain | Latency-sensitive, needs fast response |
+| **ACK** | Immediate wake + drain | Consumers waiting for acknowledgment |
+| **POP_WAIT** | Goes to waiting queue | Separate timer-based polling |
+
+**PUSH Optimization:** When a PUSH request arrives, it's added to the pending queue but does *not* wake up the sidecar immediately. This allows multiple PUSH requests to accumulate and be batched together when the batch timer fires, significantly improving throughput.
 
 **Configuration:**
 ```bash
@@ -113,7 +136,112 @@ export POP_WAIT_BACKOFF_MULTIPLIER=2.0   # Exponential multiplier
 export POP_WAIT_MAX_INTERVAL_MS=1000     # Max interval after backoff
 ```
 
-### 3. Database Layer (AsyncDbPool)
+### 3. POP State Machine (Parallel Processing)
+
+POP operations require special handling because each partition needs independent lease management and cursor tracking. The **POP State Machine** enables parallel processing across multiple database connections.
+
+#### The Problem with Sequential POP
+
+Traditional batch processing executes POPs sequentially in a PostgreSQL loop:
+
+```
+500 POP requests arrive
+        ↓
+    Sidecar combines into JSON array
+        ↓
+    1 SQL call: SELECT queen.pop_messages_batch($1::jsonb)
+        ↓
+    PostgreSQL executes FOR LOOP (500 iterations)
+        ↓
+    Each iteration: lock → UPDATE → SELECT → UPDATE
+        ↓
+    ~1500ms total (500 × 3ms per iteration)
+```
+
+**Result:** 50 database connections available, but only 1 is used. 98% of capacity wasted.
+
+#### State Machine Solution
+
+The state machine processes POP requests **in parallel** across all available connections:
+
+```
+Time →
+─────────────────────────────────────────────────────────────────────
+
+BEFORE (Sequential in PostgreSQL):
+Conn 1: [P0][P1][P2][P3][P4]...[P499]                    = 1500ms
+Conn 2: idle
+...
+Conn 50: idle
+
+AFTER (Parallel State Machine):
+Conn 1:  [P0 ][P50 ][P100][P150]...[P450]                = 30ms
+Conn 2:  [P1 ][P51 ][P101][P151]...[P451]
+Conn 3:  [P2 ][P52 ][P102][P152]...[P452]
+...
+Conn 50: [P49][P99 ][P149][P199]...[P499]
+
+─────────────────────────────────────────────────────────────────────
+```
+
+**Key insight:** Different partitions have ZERO dependencies - they can be processed in parallel.
+
+#### State Machine States
+
+```
+┌─────────┐     ┌───────────┐     ┌──────────┐     ┌───────────┐
+│ PENDING │────▶│ RESOLVING │────▶│ LEASING  │────▶│ FETCHING  │
+└─────────┘     └───────────┘     └──────────┘     └───────────┘
+     │               │                  │                │
+     │               │                  │                ▼
+     │               │                  │         ┌───────────┐
+     │               │                  └────────▶│ COMPLETED │
+     │               │                            └───────────┘
+     │               │                                  ▲
+     │               ▼                                  │
+     │          ┌─────────┐                             │
+     └─────────▶│  EMPTY  │◀────────────────────────────┘
+                └─────────┘
+                     │
+                     ▼
+                ┌─────────┐
+                │ FAILED  │
+                └─────────┘
+```
+
+| State | Description | SQL Procedure |
+|-------|-------------|---------------|
+| `PENDING` | Waiting for DB connection | - |
+| `RESOLVING` | Finding partition (wildcard only) | `pop_sm_resolve()` |
+| `LEASING` | Acquiring partition lease | `pop_sm_lease()` |
+| `FETCHING` | Reading messages | `pop_sm_fetch()` |
+| `COMPLETED` | Success - has messages | - |
+| `EMPTY` | No messages available | `pop_sm_release()` |
+| `FAILED` | Error occurred | - |
+
+#### State Machine Flow
+
+**Specific Partition POP:**
+```
+PENDING → LEASING → FETCHING → COMPLETED/EMPTY
+```
+
+**Wildcard POP:**
+```
+PENDING → RESOLVING → LEASING → FETCHING → COMPLETED/EMPTY
+```
+
+#### Performance Impact
+
+| Metric | Before (Sequential) | After (State Machine) |
+|--------|--------------------|-----------------------|
+| 500 POPs latency | 1500ms | 60ms |
+| POP throughput | 5,000 ops/s | 50,000+ ops/s |
+| Connection utilization | 2% | 80%+ |
+| p50 latency | 12ms | 3ms |
+| p99 latency | 100ms | 15ms |
+
+### 4. Database Layer (AsyncDbPool)
 
 The AsyncDbPool provides **non-blocking PostgreSQL connections** for background services.
 
@@ -130,58 +258,54 @@ export DB_IDLE_TIMEOUT=30000     # Idle timeout (ms)
 export DB_STATEMENT_TIMEOUT=30000 # Query timeout (ms)
 ```
 
-### 4. Queue Layer (AsyncQueueManager)
+### 5. AsyncQueueManager (Secondary Operations)
 
-Implements all message queue operations using PostgreSQL stored procedures.
+Handles administrative and secondary operations that don't need the high-performance sidecar path.
 
 **Operations:**
-- **PUSH** - Calls `push_messages_v2()` - batch insert with duplicate detection
-- **POP** - Calls `pop_messages_v2()` - two-phase locking, lease acquisition
-- **ACK** - Calls `ack_messages_v2()` - batch acknowledgment, cursor update
-- **TRANSACTION** - Atomic multi-operation execution
+- **Schema initialization** - Database setup and migrations
+- **Queue configuration** - Create/update queue settings
+- **Consumer group management** - Subscription metadata, group deletion
+- **Message tracing** - Record and query traces
+- **Maintenance mode** - Toggle and status
+- **File buffer replay** - Internal push operations
 
-All operations are:
-- ✅ Non-blocking (async libpq)
-- ✅ Batched for efficiency
-- ✅ Executed via stored procedures (single round-trip)
+**Primary operations (PUSH, POP, ACK)** go through the Sidecar for maximum performance.
 
-### 5. Background Services
+### 6. Background Services
 
-#### Stream Poll Workers
+Queen runs three background services for housekeeping:
 
-Handle long-polling for stream/consumer group operations.
+#### MetricsCollector
+- **System metrics** - CPU, memory, connections
+- **Queue metrics** - Depths, throughput, latencies
+- **Sampling** - 1 second sample interval, 60 second aggregation
+- **Storage** - PostgreSQL `queen.metrics_history` table
 
-**Design:**
-- Dedicated threads managed by DB ThreadPool
-- Exponential backoff (1000ms → 5000ms)
-- Window-based message consumption
+#### RetentionService
+- **Message cleanup** - Delete expired messages (TTL-based)
+- **Partition cleanup** - Remove empty partitions older than N days
+- **Metrics cleanup** - Prune old metrics history
+- **Batch processing** - Configurable batch size to avoid long locks
 
-**Configuration:**
-```bash
-export STREAM_POLL_WORKER_COUNT=1        # Stream poll worker threads
-export STREAM_POLL_WORKER_INTERVAL=100   # Registry check interval (ms)
-export STREAM_POLL_INTERVAL=1000         # Initial stream check interval (ms)
-export STREAM_BACKOFF_THRESHOLD=5        # Empty checks before backoff
-export STREAM_BACKOFF_MULTIPLIER=2.0     # Backoff multiplier
-export STREAM_MAX_POLL_INTERVAL=5000     # Max backoff interval (ms)
-export STREAM_CONCURRENT_CHECKS=2        # Concurrent window checks per worker
-```
-
-#### Other Services
-
-- **MetricsCollector** - System and queue metrics (1s sample, 60s aggregate)
-- **RetentionService** - Cleanup expired messages and partitions
-- **EvictionService** - Handle max wait time eviction
+#### EvictionService
+- **Max wait time** - Evict messages exceeding `max_wait_time_seconds`
+- **Periodic check** - Every 60 seconds (configurable)
+- **DLQ routing** - Evicted messages go to dead letter queue if configured
 
 **Configuration:**
 ```bash
 export METRICS_SAMPLE_INTERVAL_MS=1000
 export METRICS_AGGREGATE_INTERVAL_S=60
 export RETENTION_INTERVAL=300000         # 5 minutes
+export RETENTION_BATCH_SIZE=1000         # Messages per batch
+export PARTITION_CLEANUP_DAYS=7          # Days before removing empty partitions
+export METRICS_RETENTION_DAYS=30         # Days to keep metrics history
 export EVICTION_INTERVAL=60000           # 1 minute
+export EVICTION_BATCH_SIZE=100           # Messages per eviction batch
 ```
 
-### 6. Inter-Instance Communication (UDP)
+### 7. Inter-Instance Communication (UDP)
 
 In clustered deployments, servers notify each other via UDP when messages are pushed or acknowledged.
 
@@ -202,7 +326,7 @@ export QUEEN_UDP_NOTIFY_PORT=6633
 |----------|----------------------|------------------------|
 | Cross-server message delivery | Up to 5000ms (backoff) | 10-50ms |
 
-### 7. Failover Layer (File Buffer)
+### 8. Failover Layer (File Buffer)
 
 **Zero message loss** when PostgreSQL is unavailable.
 
@@ -244,9 +368,10 @@ export FILE_BUFFER_EVENTS_PER_FILE=10000
 3. Worker parses JSON, registers in ResponseRegistry
         ↓
 4. Worker queues request to Sidecar
-   uv_async_send() wakes sidecar
+   (PUSH does NOT call uv_async_send - relies on batch timer)
         ↓
-5. Sidecar batches requests (5ms window)
+5. Sidecar batch timer fires (every 5ms)
+   Collects all pending PUSH requests
         ↓
 6. Sidecar calls: SELECT queen.push_messages_v2($1)
    PQsendQueryParams() (non-blocking)
@@ -261,6 +386,33 @@ export FILE_BUFFER_EVENTS_PER_FILE=10000
 Total time: 10-50ms (typical)
 ```
 
+### POP Operation (State Machine)
+
+```
+1. Client sends GET to /api/v1/pop?partition=orders-123
+        ↓
+2. Worker registers in ResponseRegistry
+        ↓
+3. Sidecar creates PopBatchStateMachine
+        ↓
+4. State Machine assigns available connection
+   Request: PENDING → LEASING
+        ↓
+5. Connection executes: SELECT * FROM queen.pop_sm_lease(...)
+        ↓
+6. Lease acquired, cursor returned
+   Request: LEASING → FETCHING
+        ↓
+7. Connection executes: SELECT queen.pop_sm_fetch(...)
+        ↓
+8. Messages returned
+   Request: FETCHING → COMPLETED
+        ↓
+9. Response delivered to HTTP thread
+
+Total time: 3-10ms (typical)
+```
+
 ### POP with Wait (Long-Polling)
 
 ```
@@ -268,7 +420,7 @@ Total time: 10-50ms (typical)
         ↓
 2. Worker registers in ResponseRegistry
         ↓
-3. Sidecar submits POP_WAIT request
+3. Sidecar submits POP_WAIT request to waiting queue
         ↓
 4. Sidecar polls database periodically:
    - Initial: 100ms interval
@@ -277,7 +429,7 @@ Total time: 10-50ms (typical)
 5. SharedStateManager notifies on PUSH events
    → Sidecar wakes immediately, resets backoff
         ↓
-6. Messages found → deliver to worker → HTTP 200
+6. Messages found → State Machine processes → HTTP 200
    OR timeout → HTTP 204 No Content
 ```
 
@@ -287,19 +439,20 @@ Total time: 10-50ms (typical)
 
 | Operation | Latency | Notes |
 |-----------|---------|-------|
-| PUSH (single) | 10-30ms | Via sidecar + stored procedure |
-| PUSH (batch) | 20-50ms | Micro-batched |
-| POP (immediate) | 10-30ms | No wait |
+| PUSH (single) | 5-15ms | Batched via timer |
+| PUSH (batch) | 10-30ms | Micro-batched |
+| POP (immediate) | 3-10ms | State machine parallel |
 | POP (long-poll) | 10ms-30s | Configurable timeout |
-| ACK (single) | 10-30ms | Via sidecar |
-| ACK (batch) | 20-50ms | Micro-batched |
+| ACK (single) | 5-15ms | Via sidecar |
+| ACK (batch) | 10-30ms | Micro-batched |
 | TRANSACTION | 30-100ms | Multiple operations |
 
 ### Throughput
 
 | Metric | Value | Configuration |
 |--------|-------|---------------|
-| Sustained | 130K+ msg/s | Batch operations |
+| PUSH sustained | 130K+ msg/s | Batch operations |
+| POP sustained | 50K+ ops/s | State machine parallel |
 | Peak | 148K+ msg/s | Large batches |
 | Single message | 2-5K msg/s | No batching |
 
@@ -307,10 +460,11 @@ Total time: 10-50ms (typical)
 
 | Resource | Default | Notes |
 |----------|---------|-------|
-| Worker threads | 10 | `NUM_WORKERS` |
-| DB connections | 150 | `DB_POOL_SIZE` (95% async) |
+| Worker threads | 2 | `NUM_WORKERS` |
+| AsyncDbPool connections | 50 | `DB_POOL_SIZE` (for secondary ops) |
 | Sidecar connections | 50 | `SIDECAR_POOL_SIZE` (split among workers) |
-| Stream workers | 1 | `STREAM_POLL_WORKER_COUNT` |
+| Thread pool | 4 threads | Database operations |
+| System thread pool | 2 threads | Background services |
 
 ## Scalability
 
@@ -353,28 +507,31 @@ export SIDECAR_POOL_SIZE=100
 1. **Non-blocking I/O** - All database operations use async libpq + libuv
 2. **Event-driven** - Worker threads never block on I/O
 3. **Micro-batching** - Amortize overhead across multiple requests
-4. **Stored procedures** - Complex logic in PostgreSQL (single round-trip)
-5. **Fail-safe** - Automatic failover to file buffer
-6. **Horizontal scalability** - Stateless server design with UDP coordination
+4. **Operation-specific optimization** - PUSH buffers, POP parallelizes
+5. **Stored procedures** - Complex logic in PostgreSQL (single round-trip)
+6. **Fail-safe** - Automatic failover to file buffer
+7. **Horizontal scalability** - Stateless server design with UDP coordination
 
 ## Configuration Summary
 
 ```bash
 # Server
 export PORT=6632
-export NUM_WORKERS=10
+export NUM_WORKERS=2
 
-# Database
-export DB_POOL_SIZE=150
+# Database (secondary operations)
+export DB_POOL_SIZE=50
 export DB_STATEMENT_TIMEOUT=30000
 
-# Sidecar
+# Sidecar (primary operations)
 export SIDECAR_POOL_SIZE=50
 export SIDECAR_MICRO_BATCH_WAIT_MS=5
+export SIDECAR_MAX_ITEMS_PER_TX=1000
 
-# Stream polling
-export STREAM_POLL_WORKER_COUNT=1
-export STREAM_POLL_INTERVAL=1000
+# Background services
+export METRICS_SAMPLE_INTERVAL_MS=1000
+export RETENTION_INTERVAL=300000
+export EVICTION_INTERVAL=60000
 
 # Inter-instance (clustered)
 export QUEEN_UDP_PEERS="queen-b:6633,queen-c:6633"
@@ -386,7 +543,7 @@ export FILE_BUFFER_DIR=/var/lib/queen/buffers
 
 ## See Also
 
-- [How It Works](/server/how-it-works) - Deep dive into uWebSockets, libuv, and PostgreSQL stored procedures
+- [How It Works](/server/how-it-works) - Deep dive into uWebSockets, libuv, POP state machine, and PostgreSQL stored procedures
 - [Environment Variables](/server/environment-variables) - Complete configuration reference
 - [Performance Tuning](/server/tuning) - Optimization guide
 - [Deployment](/server/deployment) - Production deployment patterns
