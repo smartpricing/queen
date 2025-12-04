@@ -342,11 +342,11 @@ static void worker_thread(const Config& config, int worker_id, int num_workers,
                 config.queue.pop_wait_max_interval_ms
             );
             
-            // Always call start() - it loads queue configs for encryption even when sync is disabled
-            queen::global_shared_state->start();
+            // Note: SharedStateManager::start() is called AFTER schema initialization in worker 0
+            // This ensures the database tables exist before querying them
             
             if (config.inter_instance.has_udp_peers() && config.inter_instance.shared_state.enabled) {
-                spdlog::info("Shared State Manager (UDPSYNC):");
+                spdlog::info("Shared State Manager (UDPSYNC) configured:");
                 spdlog::info("  - UDP Peers: {}", config.inter_instance.udp_peers);
                 spdlog::info("  - UDP Port: {}", config.inter_instance.udp_port);
                 spdlog::info("  - Partition cache: {} max entries, {}ms TTL",
@@ -356,7 +356,7 @@ static void worker_thread(const Config& config, int worker_id, int num_workers,
                             config.inter_instance.shared_state.heartbeat_interval_ms,
                             config.inter_instance.shared_state.dead_threshold_ms);
             } else {
-                spdlog::info("Shared State Manager: Sync disabled, queue config cache active");
+                spdlog::info("Shared State Manager configured: Sync disabled, queue config cache will be active");
             }
             
             
@@ -394,6 +394,11 @@ static void worker_thread(const Config& config, int worker_id, int num_workers,
             if (worker_id == 0) {
                 spdlog::info("[Worker 0] Initializing database schema...");
                 async_queue_manager->initialize_schema();
+                
+                // Start SharedStateManager AFTER schema is initialized
+                // This ensures queen.queues and queen.system_state tables exist
+                spdlog::info("[Worker 0] Starting Shared State Manager...");
+                queen::global_shared_state->start();
                 
                 // Start metrics collector
                 spdlog::info("[Worker 0] Starting background metrics collector (sample: {}ms, aggregate: {}s)...",
@@ -440,6 +445,13 @@ static void worker_thread(const Config& config, int worker_id, int num_workers,
             spdlog::warn("[Worker {}] Database connection: UNAVAILABLE (Pool: 0/{}) - Will use file buffer for failover", 
                          worker_id, pool_stats.total);
             spdlog::warn("[Worker {}] Server will operate with file buffer until PostgreSQL becomes available", worker_id);
+            
+            // Still start SharedStateManager in worker 0 (for UDP sync, health tracking)
+            // DB-dependent features will gracefully degrade
+            if (worker_id == 0) {
+                spdlog::info("[Worker 0] Starting Shared State Manager (DB unavailable - limited functionality)...");
+                queen::global_shared_state->start();
+            }
         }
         
         // Create or wait for SHARED FileBufferManager

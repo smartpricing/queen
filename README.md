@@ -41,10 +41,9 @@ Perfect for:
 
 ## Performance
 
-### Push
+All the following beanchmarks are without client side batching, so each operation is a single request. **With client side batching, the throughput is much higher (x4, x5)**. 
 
-On Linux machines on DO. Ulimit extended and Postgres 16 tuned with 300 connections, high memory buffer and wal and
-12 workers.
+On Linux machines on DO. Ulimit extended and Postgres 16 tuned with 300 connections, high memory buffer and wal and 12 workers.
 
 ──────────────────────────────────────────────────
 Server Core        16    
@@ -56,14 +55,25 @@ Workers:           32
 Connections:       3200
 Duration:          30s
 ──────────────────────────────────────────────────
-Total Requests:    1,350,438
+
+### Push
+
 Throughput:        45,015 req/s
-Data transferred:  631.51 MB
-──────────────────────────────────────────────────
 Latency avg:       72.71ms
 Latency p50:       69.41ms
 Latency p90:       96.28ms
 Latency p99:       119.41ms
+
+## Pop
+
+Using serverAutoAck at true (so we can pop without ack and so it'easier to setup a very concurrent benchmark), with the same setup as above:
+
+Throughput: 27,000 req/s 
+Latency p50: 28ms
+Latency p75: 51ms
+Latency p90: 106ms
+Latency p99: 531ms
+
 
 ## Quick Start
 
@@ -175,7 +185,6 @@ Some example logs:
 - 🎯 **Unlimited FIFO Partitions** - No limits on ordered message streams
 - 👥 **Consumer Groups** - Kafka-style with replay from any timestamp
 - 🔄 **Transactions** - Atomic push+ack for exactly-once delivery
-- 📡 **Streaming** - Window aggregation and processing
 - 🛡️ **Zero Message Loss** - Automatic failover to disk buffer
 - 💀 **Dead Letter Queue** - Automatic handling of failed messages
 - 🔍 **Message Tracing** - Debug distributed workflows
@@ -191,7 +200,7 @@ Some example logs:
 
 | Metric | Value |
 |--------|-------|
-| **Throughput** | 100K+ msg/s sustained |
+| **Throughput** | 20K+ req/s sustained |
 | **Latency** | 10-50ms (POP/ACK), 50-200ms (TRANSACTION) |
 | **Partitions** | Unlimited |
 
@@ -203,6 +212,7 @@ Some example logs:
 
 | Server Version | Description | Compatible Clients |
 |----------------|-------------|-------------------|
+| **0.9.9** | Total rewrite of the engine with libuv and stored procedures, removed streaming engine | JS ≥0.7.4, Python ≥0.7.4 |
 | **0.8.0** | Added Shared Cache with UDP sync for clustered deployment | JS ≥0.7.4, Python ≥0.7.4 |
 | **0.7.5** | First stable release | JS ≥0.7.4, Python ≥0.7.4 |
 
