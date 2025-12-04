@@ -827,6 +827,5 @@ For more examples and advanced patterns:
 - [Batch Operations](./batch.md)
 - [Consumer Groups](./consumer-groups.md)
 - [Transactions](./transactions.md)
-- [Streaming](./streaming.md)
 - [Python Client GitHub](https://github.com/smartpricing/queen/tree/master/client-py)
 
