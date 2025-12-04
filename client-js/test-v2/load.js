@@ -47,7 +47,7 @@ export async function testLoad(client) {
     return { success: uniqueIdsCount === messagesToPush, message: 'Load test completed successfully' }
 }
 
-/*export async function testLoadPartition(client) { 
+export async function testLoadPartition(client) { 
     const queue = await client
     .queue('test-queue-v2-load-partition')
     .create()
@@ -73,9 +73,10 @@ export async function testLoad(client) {
     }  
 
     let uniqueIds = new Set();
-    let lastId = null;
+    
     
     for (let i = 0; i < 10; i++) {
+        let lastId = null;
     await client
     .queue('test-queue-v2-load-partition')
     .partition(i.toString())
@@ -84,7 +85,6 @@ export async function testLoad(client) {
     .limit(10000)
     .consume(async msgs => {
         for (const msg of msgs) {
-            console.log(`Message: ${msg}`)
             if (lastId === null) {
                 lastId = msg.data.id
             } else {
@@ -99,10 +99,11 @@ export async function testLoad(client) {
     })
     }
 
+    console.log(uniqueIds.size, messagesToPush)
     const uniqueIdsCount = uniqueIds.size;
 
-    return { success: uniqueIdsCount === messagesToPush, message: 'Load test completed successfully' }
-}*/
+    return { success: uniqueIdsCount === messagesToPush / 10, message: 'Load test completed successfully' }
+}
 
 export async function testLoadConsumerGroup(client) { 
     const queue = await client

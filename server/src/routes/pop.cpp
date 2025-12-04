@@ -141,7 +141,7 @@ void setup_pop_routes(uWS::App* app, const RouteContext& ctx) {
             
             // Use state machine for specific-partition POPs
             // This enables parallel processing across multiple DB connections
-            ctx.sidecar->submit_pop_batch_sm({std::move(sidecar_req)});
+            ctx.sidecar->submit_pop_batch({std::move(sidecar_req)});
             
             /*spdlog::info("[Worker {}] SPOP TIMING: route_setup={}us | Submitted POP_SM (request_id={})", 
                          ctx.worker_id, route_time_us, request_id);*/
@@ -233,7 +233,7 @@ void setup_pop_routes(uWS::App* app, const RouteContext& ctx) {
             sidecar_req.subscription_from = options.subscription_from.value_or("");
             
             // Use state machine for parallel processing
-            ctx.sidecar->submit_pop_batch_sm({std::move(sidecar_req)});
+            ctx.sidecar->submit_pop_batch({std::move(sidecar_req)});
             
         } catch (const std::exception& e) {
             send_error_response(res, e.what(), 500);

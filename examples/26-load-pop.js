@@ -168,9 +168,9 @@ async function runBenchmark() {
   // Progress reporting
   const progressInterval = setInterval(() => {
     const elapsed = (Date.now() - startTime) / 1000;
-    const opsPerSec = Math.round(totalAcks / elapsed);
+    const popPerSec = Math.round(totalPops / elapsed);
     const idleTime = ((Date.now() - lastPopTime) / 1000).toFixed(1);
-    process.stdout.write(`\r  Progress: ${totalAcks} ops | ${opsPerSec} ops/s | Errors: ${totalErrors} | Idle: ${idleTime}s    `);
+    process.stdout.write(`\r  Progress: ${totalPops} POPs | ${popPerSec} POP/s | Errors: ${totalErrors} | Idle: ${idleTime}s    `);
   }, 500);
   
   // Start all workers
@@ -203,7 +203,7 @@ async function runBenchmark() {
   console.log(`Total POP+ACK cycles: ${totalAcks}`);
   console.log(`Total POP+ACK messages: ${totalMessagesPopped}`);
   console.log(`Duration: ${duration.toFixed(2)}s`);
-  console.log(`Throughput: ${Math.round(totalAcks / duration)} ops/s`);
+  console.log(`Throughput: ${Math.round(totalPops / duration)} POP/s`);
   console.log(`Errors: ${totalErrors}`);
   console.log(`Empty POPs: ${emptyPops}`);
   

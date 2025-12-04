@@ -57,7 +57,7 @@ async function run() {
     const message = popResponse.data.messages[0];
     console.log(`✅ Message popped (index: ${message.payload?.index})`);
     console.log(`   ⏱️  POP latency: ${popTime}ms`);
-    
+     console.log(message)
     // ACK
     console.log(`Acknowledging message ${i}...`);
     const ackStart = Date.now();

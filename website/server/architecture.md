@@ -41,7 +41,7 @@ Queen MQ uses a high-performance **acceptor/worker pattern** with fully asynchro
 │  └──────────────────────────────────────────────────────┘     │
 │                            ↓                                   │
 │              PostgreSQL (Stored Procedures)                    │
-│   push_messages_v2 │ pop_sm_* │ ack_messages_v2 │ configure    │
+│   push_messages_v2 │ pop_unified_batch │ ack_messages_v2       │
 └────────────────────────────────────────────────────────────────┘
                               ↓
 ┌────────────────────────────────────────────────────────────────┐
@@ -136,110 +136,41 @@ export POP_WAIT_BACKOFF_MULTIPLIER=2.0   # Exponential multiplier
 export POP_WAIT_MAX_INTERVAL_MS=1000     # Max interval after backoff
 ```
 
-### 3. POP State Machine (Parallel Processing)
+### 3. Unified POP Batch (Single Round-Trip)
 
-POP operations require special handling because each partition needs independent lease management and cursor tracking. The **POP State Machine** enables parallel processing across multiple database connections.
+POP operations use a **unified batch procedure** that handles lease acquisition, message fetching, and cleanup in a single database call. This eliminates multiple round-trips and simplifies the architecture.
 
-#### The Problem with Sequential POP
-
-Traditional batch processing executes POPs sequentially in a PostgreSQL loop:
+#### How It Works
 
 ```
-500 POP requests arrive
+POP requests arrive
         ↓
     Sidecar combines into JSON array
         ↓
-    1 SQL call: SELECT queen.pop_messages_batch($1::jsonb)
+    1 SQL call: SELECT queen.pop_unified_batch($1::jsonb)
         ↓
-    PostgreSQL executes FOR LOOP (500 iterations)
+    PostgreSQL handles in single transaction:
+      - Acquire leases (SKIP LOCKED for wildcards)
+      - Fetch messages after cursor position
+      - Release empty leases automatically
         ↓
-    Each iteration: lock → UPDATE → SELECT → UPDATE
-        ↓
-    ~1500ms total (500 × 3ms per iteration)
+    Return results as JSON
 ```
 
-**Result:** 50 database connections available, but only 1 is used. 98% of capacity wasted.
+**Key features:**
+- **Single round-trip**: Lease + fetch + cleanup in one call
+- **SKIP LOCKED**: Wildcard POPs don't block each other
+- **Automatic cleanup**: Empty leases released immediately
+- **Deadlock-safe**: Consistent ordering prevents deadlocks
 
-#### State Machine Solution
+#### Performance
 
-The state machine processes POP requests **in parallel** across all available connections:
-
-```
-Time →
-─────────────────────────────────────────────────────────────────────
-
-BEFORE (Sequential in PostgreSQL):
-Conn 1: [P0][P1][P2][P3][P4]...[P499]                    = 1500ms
-Conn 2: idle
-...
-Conn 50: idle
-
-AFTER (Parallel State Machine):
-Conn 1:  [P0 ][P50 ][P100][P150]...[P450]                = 30ms
-Conn 2:  [P1 ][P51 ][P101][P151]...[P451]
-Conn 3:  [P2 ][P52 ][P102][P152]...[P452]
-...
-Conn 50: [P49][P99 ][P149][P199]...[P499]
-
-─────────────────────────────────────────────────────────────────────
-```
-
-**Key insight:** Different partitions have ZERO dependencies - they can be processed in parallel.
-
-#### State Machine States
-
-```
-┌─────────┐     ┌───────────┐     ┌──────────┐     ┌───────────┐
-│ PENDING │────▶│ RESOLVING │────▶│ LEASING  │────▶│ FETCHING  │
-└─────────┘     └───────────┘     └──────────┘     └───────────┘
-     │               │                  │                │
-     │               │                  │                ▼
-     │               │                  │         ┌───────────┐
-     │               │                  └────────▶│ COMPLETED │
-     │               │                            └───────────┘
-     │               │                                  ▲
-     │               ▼                                  │
-     │          ┌─────────┐                             │
-     └─────────▶│  EMPTY  │◀────────────────────────────┘
-                └─────────┘
-                     │
-                     ▼
-                ┌─────────┐
-                │ FAILED  │
-                └─────────┘
-```
-
-| State | Description | SQL Procedure |
-|-------|-------------|---------------|
-| `PENDING` | Waiting for DB connection | - |
-| `RESOLVING` | Finding partition (wildcard only) | `pop_sm_resolve()` |
-| `LEASING` | Acquiring partition lease | `pop_sm_lease()` |
-| `FETCHING` | Reading messages | `pop_sm_fetch()` |
-| `COMPLETED` | Success - has messages | - |
-| `EMPTY` | No messages available | `pop_sm_release()` |
-| `FAILED` | Error occurred | - |
-
-#### State Machine Flow
-
-**Specific Partition POP:**
-```
-PENDING → LEASING → FETCHING → COMPLETED/EMPTY
-```
-
-**Wildcard POP:**
-```
-PENDING → RESOLVING → LEASING → FETCHING → COMPLETED/EMPTY
-```
-
-#### Performance Impact
-
-| Metric | Before (Sequential) | After (State Machine) |
-|--------|--------------------|-----------------------|
-| 500 POPs latency | 1500ms | 60ms |
-| POP throughput | 5,000 ops/s | 50,000+ ops/s |
-| Connection utilization | 2% | 80%+ |
-| p50 latency | 12ms | 3ms |
-| p99 latency | 100ms | 15ms |
+| Metric | Value |
+|--------|-------|
+| POP throughput | 50,000+ ops/s |
+| p50 latency | 3-10ms |
+| p99 latency | 15-30ms |
+| Connection utilization | 80%+ |
 
 ### 4. Database Layer (AsyncDbPool)
 
@@ -386,29 +317,24 @@ export FILE_BUFFER_EVENTS_PER_FILE=10000
 Total time: 10-50ms (typical)
 ```
 
-### POP Operation (State Machine)
+### POP Operation
 
 ```
 1. Client sends GET to /api/v1/pop?partition=orders-123
         ↓
 2. Worker registers in ResponseRegistry
         ↓
-3. Sidecar creates PopBatchStateMachine
+3. Sidecar batches POP requests
         ↓
-4. State Machine assigns available connection
-   Request: PENDING → LEASING
+4. Single call: SELECT queen.pop_unified_batch($1::jsonb)
+   PostgreSQL:
+     - Acquires lease (atomic UPDATE)
+     - Fetches messages after cursor
+     - Releases lease if empty
         ↓
-5. Connection executes: SELECT * FROM queen.pop_sm_lease(...)
+5. Messages returned as JSON
         ↓
-6. Lease acquired, cursor returned
-   Request: LEASING → FETCHING
-        ↓
-7. Connection executes: SELECT queen.pop_sm_fetch(...)
-        ↓
-8. Messages returned
-   Request: FETCHING → COMPLETED
-        ↓
-9. Response delivered to HTTP thread
+6. Response delivered to HTTP thread
 
 Total time: 3-10ms (typical)
 ```
@@ -429,7 +355,7 @@ Total time: 3-10ms (typical)
 5. SharedStateManager notifies on PUSH events
    → Sidecar wakes immediately, resets backoff
         ↓
-6. Messages found → State Machine processes → HTTP 200
+6. Messages found → HTTP 200
    OR timeout → HTTP 204 No Content
 ```
 
@@ -543,7 +469,7 @@ export FILE_BUFFER_DIR=/var/lib/queen/buffers
 
 ## See Also
 
-- [How It Works](/server/how-it-works) - Deep dive into uWebSockets, libuv, POP state machine, and PostgreSQL stored procedures
+- [How It Works](/server/how-it-works) - Deep dive into uWebSockets, libuv, Sidecar pattern, and PostgreSQL stored procedures
 - [Environment Variables](/server/environment-variables) - Complete configuration reference
 - [Performance Tuning](/server/tuning) - Optimization guide
 - [Deployment](/server/deployment) - Production deployment patterns

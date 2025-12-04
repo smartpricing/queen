@@ -1,6 +1,6 @@
 # How Queen Works
 
-This page provides a deep dive into Queen's internal architecture, explaining how the core technologies work together: **uWebSockets**, **libuv**, **the Sidecar pattern**, **the POP State Machine**, and **PostgreSQL stored procedures**.
+This page provides a deep dive into Queen's internal architecture, explaining how the core technologies work together: **uWebSockets**, **libuv**, **the Sidecar pattern**, and **PostgreSQL stored procedures**.
 
 ## Technology Stack
 
@@ -13,11 +13,6 @@ This page provides a deep dive into Queen's internal architecture, explaining ho
 ┌────────────────────────────────────────────────────────────────┐
 │                  Sidecar Pattern (libuv + libpq)               │
 │     Per-worker async DB: PUSH, POP, ACK, TRANSACTION, LEASE    │
-└────────────────────────────────────────────────────────────────┘
-                              ↓
-┌────────────────────────────────────────────────────────────────┐
-│                    POP State Machine                           │
-│     Parallel POP processing across multiple DB connections     │
 └────────────────────────────────────────────────────────────────┘
                               ↓
 ┌────────────────────────────────────────────────────────────────┐
@@ -296,205 +291,79 @@ void SidecarDbPool::drain_pending_to_slots() {
 - `MAX_BATCH_SIZE` = 100 requests per batch
 - `MAX_ITEMS_PER_TX` = 1000 items per transaction
 
-## 3. The POP State Machine: Parallel Processing
+## 3. Unified POP Batch Processing
 
-POP operations are fundamentally different from PUSH/ACK because each partition needs:
-- Independent lease management
-- Separate cursor tracking
-- Advisory lock handling
+POP operations use a **unified batch procedure** that handles everything in a single database round-trip:
+- Lease acquisition
+- Message fetching  
+- Automatic cleanup of empty leases
 
-The **POP State Machine** enables parallel processing across all available database connections.
-
-### Why Not Batch POP?
-
-Traditional batching doesn't work for POP:
-
-```sql
--- This runs sequentially in PostgreSQL
-FOR v_request IN SELECT * FROM parsed_requests
-LOOP
-    -- Each partition one at a time
-    PERFORM pg_advisory_xact_lock(...);
-    UPDATE queen.partition_consumers ...;
-    SELECT ... FROM queen.messages ...;
-END LOOP;
-```
-
-**Problem:** 50 connections available, only 1 used. Sequential processing = 1500ms for 500 POPs.
-
-### State Machine Solution
-
-The state machine processes POPs **in parallel**:
+### Single Round-Trip Design
 
 ```
 ┌──────────────────────────────────────────────────────────────────────┐
-│                      PopBatchStateMachine                             │
+│                      Sidecar POP Batch                                │
 │                                                                       │
-│   requests_: [                                                        │
-│     { idx: 0, queue: "orders", partition: "p-0", state: PENDING },   │
-│     { idx: 1, queue: "orders", partition: "p-1", state: PENDING },   │
-│     { idx: 2, queue: "orders", partition: "p-2", state: PENDING },   │
-│     ...                                                               │
+│   requests: [                                                         │
+│     { idx: 0, queue: "orders", partition: "p-0" },                   │
+│     { idx: 1, queue: "orders", partition: "p-1" },                   │
+│     { idx: 2, queue: "orders", partition: null },  // wildcard       │
 │   ]                                                                   │
 │                                                                       │
-│   assign_connection(slot) → finds PENDING request → advances state    │
-│   on_query_complete(slot, result) → handles result → advances state   │
+│   → Single call to pop_unified_batch()                                │
+│   ← Results for all requests in one response                          │
 │                                                                       │
 └──────────────────────────────────────────────────────────────────────┘
 ```
 
-### State Transitions
+### How It Works
 
-```
-                                    ┌──────────────────────┐
-                                    │      PENDING         │
-                                    │  (waiting for conn)  │
-                                    └──────────┬───────────┘
-                                               │
-                        ┌──────────────────────┴──────────────────────┐
-                        │ partition specified?                        │
-                        ▼                                             ▼
-            ┌───────────────────┐                         ┌───────────────────┐
-            │    RESOLVING      │                         │     LEASING       │
-            │ (wildcard: find   │                         │ (acquire lease)   │
-            │  partition)       │                         │                   │
-            └────────┬──────────┘                         └─────────┬─────────┘
-                     │                                              │
-         ┌───────────┴───────────┐                      ┌───────────┴───────────┐
-         │ found?                │                      │ acquired?             │
-         ▼                       ▼                      ▼                       ▼
-┌─────────────────┐    ┌─────────────────┐    ┌─────────────────┐    ┌─────────────────┐
-│     EMPTY       │    │    LEASING      │    │    FETCHING     │    │     EMPTY       │
-│ (no partition)  │    │                 │    │ (get messages)  │    │ (lease taken)   │
-└─────────────────┘    └────────┬────────┘    └────────┬────────┘    └─────────────────┘
-                                │                      │
-                                ▼                      │
-                       ┌─────────────────┐             │
-                       │    FETCHING     │             │
-                       └────────┬────────┘             │
-                                │                      │
-                    ┌───────────┴───────────┐          │
-                    │ has messages?         │          │
-                    ▼                       ▼          ▼
-           ┌─────────────────┐    ┌─────────────────┐
-           │   COMPLETED     │    │     EMPTY       │
-           │ (has messages)  │    │ (no messages)   │
-           └─────────────────┘    └─────────────────┘
+```sql
+-- Single procedure handles everything atomically
+SELECT queen.pop_unified_batch('[
+    {"idx": 0, "queue_name": "orders", "partition_name": "p-0", ...},
+    {"idx": 1, "queue_name": "orders", "partition_name": "p-1", ...},
+    {"idx": 2, "queue_name": "orders", "partition_name": null, ...}
+]'::jsonb);
 ```
 
-### State Machine Implementation
+**Inside the procedure:**
 
-```cpp
-class PopBatchStateMachine {
-public:
-    using CompletionCallback = std::function<void(std::vector<PopRequestState>&)>;
-    
-    PopBatchStateMachine(
-        std::vector<PopRequestState> requests,
-        CompletionCallback on_complete,
-        int worker_id);
-    
-    // Called when a connection becomes available
-    bool assign_connection(ConnectionSlot* slot);
-    
-    // Called when a query completes
-    void on_query_complete(ConnectionSlot* slot, PGresult* result);
-    
-    // Check completion status
-    bool is_complete() const;
-    int pending_count() const;
+1. **Specific partitions** - Direct lookup and lease acquisition
+2. **Wildcard partitions** - Use `FOR UPDATE SKIP LOCKED` to find available partition
+3. **Lease acquisition** - Atomic `UPDATE ... WHERE lease_expires_at IS NULL`
+4. **Message fetch** - Query messages after cursor position
+5. **Auto cleanup** - Release lease immediately if no messages found
 
-private:
-    std::vector<PopRequestState> requests_;
-    CompletionCallback on_complete_;
-    
-    void advance_state(PopRequestState& req);
-    void submit_resolve_query(PopRequestState& req);
-    void submit_lease_query(PopRequestState& req);
-    void submit_fetch_query(PopRequestState& req);
-    void submit_release_query(PopRequestState& req);
-};
+### SKIP LOCKED for Wildcards
+
+When partition is not specified, the procedure uses `SKIP LOCKED` to avoid contention:
+
+```sql
+SELECT partition_id, partition_name, ...
+FROM queen.partition_lookup pl
+LEFT JOIN queen.partition_consumers pc ON ...
+WHERE pl.queue_name = v_queue_name
+  AND (pc.lease_expires_at IS NULL OR pc.lease_expires_at <= NOW())
+  AND (has unconsumed messages)
+ORDER BY pc.last_consumed_at ASC NULLS FIRST
+LIMIT 1
+FOR UPDATE OF pl SKIP LOCKED;  -- Critical: don't block on contested partitions
 ```
 
-### State Flow Example
+**Benefits:**
+- Multiple concurrent wildcards get different partitions
+- No blocking on contested partitions
+- Fair distribution via `ORDER BY last_consumed_at`
 
-**Setup:** 3 POPs, 2 connections available
+### Performance
 
-```
-T=0ms   State Machine receives 3 requests
-        
-        Request 0: PENDING → LEASING (gets Connection 1)
-        Request 1: PENDING → LEASING (gets Connection 2)
-        Request 2: PENDING (waiting)
-        
-        Conn 1 sends: SELECT * FROM queen.pop_sm_lease(...)
-        Conn 2 sends: SELECT * FROM queen.pop_sm_lease(...)
-
-T=2ms   Connection 1 completes lease
-        
-        Request 0: LEASING → FETCHING
-        Conn 1 sends: SELECT queen.pop_sm_fetch(...)
-
-T=3ms   Connection 2 completes lease
-        
-        Request 1: LEASING → FETCHING
-        Conn 2 sends: SELECT queen.pop_sm_fetch(...)
-
-T=4ms   Connection 1 completes fetch (3 messages)
-        
-        Request 0: FETCHING → COMPLETED
-        Connection 1 released
-        
-        Request 2: PENDING → LEASING (gets Connection 1)
-        Conn 1 sends: SELECT * FROM queen.pop_sm_lease(...)
-
-T=5ms   Connection 2 completes fetch (5 messages)
-        
-        Request 1: FETCHING → COMPLETED
-        Connection 2 released
-
-T=6ms   Connection 1 completes lease
-        
-        Request 2: LEASING → FETCHING
-        Conn 1 sends: SELECT queen.pop_sm_fetch(...)
-
-T=8ms   Connection 1 completes fetch (2 messages)
-        
-        Request 2: FETCHING → COMPLETED
-        
-        All requests complete → invoke on_complete_ callback
-
-TOTAL: 8ms for 3 POPs (vs 24ms sequential)
-```
-
-### Connection Slot Management
-
-The sidecar integrates state machines with regular batched operations:
-
-```cpp
-void SidecarDbPool::drain_pending_to_slots() {
-    // First: Clean up completed state machines
-    cleanup_completed_state_machines();
-    
-    // Second: Process pending regular requests
-    // ... (PUSH, ACK batching) ...
-    
-    // Third: Assign remaining connections to state machines
-    for (auto& sm : active_state_machines_) {
-        if (sm->is_complete()) continue;
-        
-        for (auto& slot : slots_) {
-            if (!slot.busy && slot.conn && sm->pending_count() > 0) {
-                slot.busy = true;
-                slot.state_machine = sm.get();
-                sm->assign_connection(&slot);
-            }
-        }
-    }
-}
-```
-
-This ensures fair sharing: batched ops (PUSH, ACK) get connections first, then state machines get remaining connections.
+| Metric | Value |
+|--------|-------|
+| POP throughput | 50,000+ ops/s |
+| Round-trips per POP | 1 |
+| p50 latency | 3-10ms |
+| p99 latency | 15-30ms |
 
 ## 4. PostgreSQL Stored Procedures
 
@@ -505,10 +374,7 @@ All Queen operations are implemented as PostgreSQL **PL/pgSQL functions**. This 
 | Procedure | Purpose | Key Features |
 |-----------|---------|--------------|
 | `push_messages_v2` | Insert messages | Batch insert, duplicate detection, partition auto-creation |
-| `pop_sm_resolve` | Find partition (wildcard) | SKIP LOCKED for concurrent wildcards |
-| `pop_sm_lease` | Acquire partition lease | Atomic check-and-update |
-| `pop_sm_fetch` | Read messages | Cursor-based, respects window_buffer |
-| `pop_sm_release` | Release empty lease | Only if worker_id matches |
+| `pop_unified_batch` | Pop messages | Single round-trip: lease + fetch + cleanup, SKIP LOCKED for wildcards |
 | `ack_messages_v2` | Acknowledge | Batch ACK, lease release, DLQ support |
 
 ### How PUSH Works
@@ -551,105 +417,48 @@ CREATE OR REPLACE FUNCTION queen.push_messages_v2(
 - ✅ ON CONFLICT for upserts (no SELECT + INSERT)
 - ✅ Temp table for working data (efficient)
 
-### How POP State Machine Procedures Work
+### How POP Unified Batch Works
 
-#### `pop_sm_resolve`: Find Partition (Wildcard)
+#### `pop_unified_batch`: Complete POP in One Call
 
 ```sql
-CREATE OR REPLACE FUNCTION queen.pop_sm_resolve(
-    p_queue_name TEXT,
-    p_consumer_group TEXT
-) RETURNS TABLE (
-    partition_id UUID,
-    partition_name TEXT,
-    queue_id UUID,
-    lease_time INT,
-    window_buffer INT,
-    delayed_processing INT
-)
+CREATE OR REPLACE FUNCTION queen.pop_unified_batch(p_requests JSONB)
+RETURNS JSONB
+```
+
+**Input format:**
+```json
+[
+    {"idx": 0, "queue_name": "orders", "partition_name": "p-0", 
+     "consumer_group": "worker", "batch_size": 10, "worker_id": "uuid"},
+    {"idx": 1, "queue_name": "orders", "partition_name": null,
+     "consumer_group": "worker", "batch_size": 10, "worker_id": "uuid2"}
+]
+```
+
+**What it does (single transaction):**
+
+1. **Specific partitions**: Direct lookup, atomic lease acquisition
+2. **Wildcard partitions**: Use `FOR UPDATE SKIP LOCKED` to find available partition
+3. **Lease acquisition**: Atomic `UPDATE ... WHERE lease_expires_at IS NULL OR <= NOW()`
+4. **Message fetch**: Query messages after cursor position with window_buffer support
+5. **Auto cleanup**: Release lease if no messages found
+
+**Output format:**
+```json
+[
+    {"idx": 0, "result": {"success": true, "partition": "p-0", 
+     "leaseId": "uuid", "messages": [...]}},
+    {"idx": 1, "result": {"success": true, "partition": "p-5",
+     "leaseId": "uuid2", "messages": [...]}}
+]
 ```
 
 **Key features:**
-- **SKIP LOCKED** prevents concurrent wildcards from grabbing the same partition
-- **ORDER BY last_consumed_at** for fair distribution
-- Returns partition info + queue config
-
-#### `pop_sm_lease`: Acquire Lease
-
-```sql
-CREATE OR REPLACE FUNCTION queen.pop_sm_lease(
-    p_queue_name TEXT,
-    p_partition_name TEXT,
-    p_consumer_group TEXT,
-    p_lease_seconds INT,
-    p_worker_id TEXT,
-    p_batch_size INT
-) RETURNS TABLE (
-    partition_id UUID,
-    cursor_id UUID,
-    cursor_ts TIMESTAMPTZ,
-    queue_lease_time INT,
-    window_buffer INT,
-    delayed_processing INT
-)
-```
-
-**Atomic lease acquisition:**
-
-```sql
--- Try to acquire lease (atomic check-and-update)
-UPDATE queen.partition_consumers pc
-SET 
-    lease_acquired_at = NOW(),
-    lease_expires_at = NOW() + (v_effective_lease * INTERVAL '1 second'),
-    worker_id = p_worker_id,
-    batch_size = p_batch_size,
-    acked_count = 0
-WHERE pc.partition_id = v_partition_id
-  AND pc.consumer_group = p_consumer_group
-  AND (pc.lease_expires_at IS NULL OR pc.lease_expires_at <= NOW())
-RETURNING ...;
-```
-
-**Key features:**
-- **Single UPDATE with WHERE clause** = atomic check-and-set
-- No race conditions between check and acquire
-- Returns cursor position for fetching
-
-#### `pop_sm_fetch`: Get Messages
-
-```sql
-CREATE OR REPLACE FUNCTION queen.pop_sm_fetch(
-    p_partition_id UUID,
-    p_cursor_ts TIMESTAMPTZ,
-    p_cursor_id UUID,
-    p_batch_size INT,
-    p_window_buffer INT DEFAULT 0,
-    p_delayed_processing INT DEFAULT 0
-) RETURNS JSONB
-```
-
-**Cursor-based fetching:**
-
-```sql
-SELECT COALESCE(jsonb_agg(
-    jsonb_build_object(
-        'id', m.id::text,
-        'transactionId', m.transaction_id,
-        'data', m.payload,
-        'createdAt', to_char(m.created_at, ...)
-    ) ORDER BY m.created_at, m.id
-), '[]'::jsonb)
-FROM queen.messages m
-WHERE m.partition_id = p_partition_id
-  -- After cursor position
-  AND (p_cursor_ts IS NULL OR (m.created_at, m.id) > (p_cursor_ts, v_effective_cursor_id))
-  -- Respect window_buffer
-  AND (p_window_buffer = 0 OR m.created_at <= NOW() - (p_window_buffer || ' seconds')::interval)
-  -- Respect delayed_processing
-  AND (p_delayed_processing = 0 OR m.created_at <= NOW() - (p_delayed_processing || ' seconds')::interval)
-LIMIT p_batch_size;
-```
+- **Single round-trip**: Everything in one procedure call
+- **SKIP LOCKED**: Wildcards don't block each other
+- **Atomic lease**: No race conditions
+- **Auto cleanup**: Empty leases released immediately
 
 ### How ACK Works
 
@@ -818,7 +627,7 @@ This is simpler than the Sidecar's libuv-based approach, but sufficient for seco
 Total latency: 5-20ms typical (batched)
 ```
 
-### Complete POP Flow (State Machine)
+### Complete POP Flow
 
 ```
 ┌─────────────────────────────────────────────────────────────────────┐
@@ -839,57 +648,32 @@ Total latency: 5-20ms typical (batched)
 │                     2. SIDECAR (libuv)                              │
 │             on_submit_signal() fires                                │
 │             drain_pending_to_slots() processes request              │
-│             Creates PopBatchStateMachine for POP requests           │
-│             Assigns available connection to state machine           │
+│             Batches POP requests together                           │
+│             Sends unified batch query                               │
 └─────────────────────────────────────────────────────────────────────┘
                                 │
                                 ↓
 ┌─────────────────────────────────────────────────────────────────────┐
-│                  3. STATE MACHINE: LEASING                          │
-│             Request state: PENDING → LEASING                        │
-│             Send: SELECT * FROM queen.pop_sm_lease(...)             │
-│             Poll socket for response                                │
+│                  3. POSTGRESQL: pop_unified_batch                   │
+│             Single transaction handles all:                         │
+│               - Acquire leases (SKIP LOCKED for wildcards)          │
+│               - Fetch messages after cursor                         │
+│               - Release empty leases                                │
+│             Return: JSONB array of results                          │
 └─────────────────────────────────────────────────────────────────────┘
                                 │
                                 ↓
 ┌─────────────────────────────────────────────────────────────────────┐
-│                  4. POSTGRESQL: pop_sm_lease                        │
-│             Ensure partition_consumers row exists                   │
-│             Atomic UPDATE with WHERE lease_expires_at check         │
-│             Return: partition_id, cursor_id, cursor_ts, config      │
+│                     4. SIDECAR (libuv)                              │
+│             Socket readable: uv_poll callback fires                 │
+│             Read result: PQgetResult()                              │
+│             Parse JSONB, distribute to requests                     │
+│             Deliver to worker: uWS::Loop::defer()                   │
 └─────────────────────────────────────────────────────────────────────┘
                                 │
                                 ↓
 ┌─────────────────────────────────────────────────────────────────────┐
-│                  5. STATE MACHINE: FETCHING                         │
-│             on_query_complete() processes lease result              │
-│             Request state: LEASING → FETCHING                       │
-│             Send: SELECT queen.pop_sm_fetch(...)                    │
-│             Poll socket for response                                │
-└─────────────────────────────────────────────────────────────────────┘
-                                │
-                                ↓
-┌─────────────────────────────────────────────────────────────────────┐
-│                  6. POSTGRESQL: pop_sm_fetch                        │
-│             Query messages after cursor position                    │
-│             Apply window_buffer and delayed_processing              │
-│             Return: JSONB array of messages                         │
-└─────────────────────────────────────────────────────────────────────┘
-                                │
-                                ↓
-┌─────────────────────────────────────────────────────────────────────┐
-│                  7. STATE MACHINE: COMPLETED                        │
-│             on_query_complete() processes fetch result              │
-│             Request state: FETCHING → COMPLETED                     │
-│             Release connection slot                                 │
-│             All requests done → invoke completion callback          │
-└─────────────────────────────────────────────────────────────────────┘
-                                │
-                                ↓
-┌─────────────────────────────────────────────────────────────────────┐
-│                     8. WORKER (uWebSockets)                         │
-│             Completion callback delivers response                   │
-│             uWS::Loop::defer() posts to HTTP thread                 │
+│                     5. WORKER (uWebSockets)                         │
 │             Look up request in ResponseRegistry                     │
 │             Send HTTP 200 with messages                             │
 └─────────────────────────────────────────────────────────────────────┘
@@ -900,7 +684,7 @@ Total latency: 5-20ms typical (batched)
 │            HTTP 200 { messages: [...], leaseId: "..." }             │
 └─────────────────────────────────────────────────────────────────────┘
 
-Total latency: 3-10ms typical
+Total latency: 3-10ms typical (single DB round-trip)
 ```
 
 ## Performance Benefits
@@ -910,8 +694,8 @@ Total latency: 3-10ms typical
 | **uWebSockets** | 100K+ req/s HTTP handling |
 | **Sidecar (libuv)** | Non-blocking I/O, operation-specific optimization |
 | **PUSH buffering** | Maximum batching, 130K+ msg/s throughput |
-| **POP State Machine** | Parallel processing, 50K+ ops/s |
-| **Stored Procedures** | 1 round-trip, atomic operations |
+| **Unified POP Batch** | Single round-trip, 50K+ ops/s |
+| **Stored Procedures** | Atomic operations, minimal round-trips |
 | **Connection pooling** | Reuse PostgreSQL connections |
 
 ## Configuration Impact
@@ -946,7 +730,7 @@ export DB_STATEMENT_TIMEOUT=30000       # Query timeout
 
 ## Summary
 
-Queen's architecture combines four key innovations:
+Queen's architecture combines key innovations:
 
 1. **uWebSockets** - Handles HTTP with minimal overhead using an acceptor/worker pattern
 
@@ -955,9 +739,10 @@ Queen's architecture combines four key innovations:
    - POP/ACK: immediate processing for low latency
    - POP_WAIT: separate timer-based polling with exponential backoff
 
-3. **POP State Machine** - Parallel POP processing across all database connections:
-   - 10x throughput improvement (5K → 50K+ ops/s)
-   - 25x latency reduction for large batches
+3. **Unified POP Batch** - Single database round-trip for POP operations:
+   - Lease + fetch + cleanup in one call
+   - SKIP LOCKED for concurrent wildcard POPs
+   - 50K+ ops/s throughput
 
 4. **PostgreSQL Stored Procedures** - Execute complex operations atomically with single round-trips
 

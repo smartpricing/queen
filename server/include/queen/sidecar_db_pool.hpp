@@ -18,10 +18,6 @@
 
 namespace queen {
 
-// Forward declarations
-class PopBatchStateMachine;
-struct PopRequestState;
-
 /**
  * Operation type for sidecar requests
  * Determines how the request is processed and batched
@@ -99,7 +95,6 @@ struct BatchedRequestInfo {
 
 /**
  * Connection slot for async PostgreSQL operations
- * Used by both SidecarDbPool and PopBatchStateMachine
  */
 struct ConnectionSlot {
     PGconn* conn = nullptr;
@@ -121,10 +116,6 @@ struct ConnectionSlot {
     uv_poll_t poll_handle;
     SidecarDbPool* pool = nullptr;  // Back-reference for callbacks
     bool poll_initialized = false;  // Track if poll handle is initialized
-    
-    // State machine support (for parallel POP processing)
-    PopBatchStateMachine* state_machine = nullptr;
-    void* state_machine_request = nullptr;  // Pointer to PopRequestState
 };
 
 /**
@@ -210,13 +201,12 @@ public:
     void notify_queue_activity(const std::string& queue_name);
     
     /**
-     * Submit a batch of POP requests for parallel processing via state machine.
-     * Each request will be processed independently, allowing different partitions
-     * to be fetched in parallel across multiple connections.
+     * Submit a batch of POP requests using the unified procedure.
+     * Uses a single DB round-trip for efficient batch processing.
      * 
      * @param requests Vector of sidecar requests (POP_BATCH type)
      */
-    void submit_pop_batch_sm(std::vector<SidecarRequest> requests);
+    void submit_pop_batch(std::vector<SidecarRequest> requests);
     
     // Per-operation statistics
     struct OpStats {
@@ -324,10 +314,6 @@ private:
     PGconn* check_conn_ = nullptr;
     std::mutex check_conn_mutex_;
     
-    // State machine support for parallel POP processing
-    std::vector<std::shared_ptr<PopBatchStateMachine>> active_state_machines_;
-    mutable std::mutex state_machines_mutex_;
-    
     // ========== libuv methods ==========
     
     // Drain pending requests to available slots
@@ -349,11 +335,6 @@ private:
     static void on_submit_signal(uv_async_t* handle);
     static void on_socket_event(uv_poll_t* handle, int status, int events);
     static void on_handle_close(uv_handle_t* handle);
-    
-    // State machine support methods
-    void process_state_machine_result(ConnectionSlot& slot);
-    void assign_connections_to_state_machines();
-    void cleanup_completed_state_machines();
 };
 
 } // namespace queen
