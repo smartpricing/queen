@@ -85,21 +85,22 @@ void setup_pop_routes(uWS::App* app, const RouteContext& ctx) {
                         spdlog::info("SPOP: Connection aborted for {}", req_id);
                     });
             
-                // Submit POP_WAIT to sidecar - it will manage waiting and backoff
-                SidecarRequest sidecar_req;
-                sidecar_req.op_type = SidecarOpType::POP_WAIT;
-                sidecar_req.request_id = request_id;
-                sidecar_req.queue_name = queue_name;
-                sidecar_req.partition_name = partition_name;
-                sidecar_req.consumer_group = consumer_group;
-                sidecar_req.batch_size = options.batch;
-                sidecar_req.subscription_mode = options.subscription_mode.value_or("all");
-                sidecar_req.subscription_from = options.subscription_from.value_or("");
-                sidecar_req.wait_deadline = std::chrono::steady_clock::now() + 
-                                            std::chrono::milliseconds(timeout_ms);
-                sidecar_req.next_check = std::chrono::steady_clock::now();  // Check immediately
-                
-                // SQL is built by sidecar using pop_messages_batch_v2
+            // Submit POP_WAIT to sidecar - it will manage waiting and backoff
+            SidecarRequest sidecar_req;
+            sidecar_req.op_type = SidecarOpType::POP_WAIT;
+            sidecar_req.request_id = request_id;
+            sidecar_req.queue_name = queue_name;
+            sidecar_req.partition_name = partition_name;
+            sidecar_req.consumer_group = consumer_group;
+            sidecar_req.batch_size = options.batch;
+            sidecar_req.subscription_mode = options.subscription_mode.value_or("all");
+            sidecar_req.subscription_from = options.subscription_from.value_or("");
+            sidecar_req.auto_ack = options.auto_ack;
+            sidecar_req.wait_deadline = std::chrono::steady_clock::now() + 
+                                        std::chrono::milliseconds(timeout_ms);
+            sidecar_req.next_check = std::chrono::steady_clock::now();  // Check immediately
+            
+            // SQL is built by sidecar using pop_unified_batch
                 
                 // Register consumer presence for targeted notifications
                 if (global_shared_state && global_shared_state->is_enabled()) {
@@ -134,6 +135,7 @@ void setup_pop_routes(uWS::App* app, const RouteContext& ctx) {
             sidecar_req.batch_size = options.batch;
             sidecar_req.subscription_mode = options.subscription_mode.value_or("all");
             sidecar_req.subscription_from = options.subscription_from.value_or("");
+            sidecar_req.auto_ack = options.auto_ack;
             
             auto route_time_us = std::chrono::duration_cast<std::chrono::microseconds>(
                 std::chrono::steady_clock::now() - request_start).count();
@@ -190,22 +192,23 @@ void setup_pop_routes(uWS::App* app, const RouteContext& ctx) {
                         spdlog::info("QPOP: Connection aborted for {}", req_id);
                     });
             
-                // Submit POP_WAIT to sidecar - it will manage waiting and backoff
-                SidecarRequest sidecar_req;
-                sidecar_req.op_type = SidecarOpType::POP_WAIT;
-                sidecar_req.request_id = request_id;
-                sidecar_req.queue_name = queue_name;
-                sidecar_req.partition_name = "";  // Any partition
-                sidecar_req.consumer_group = consumer_group;
-                sidecar_req.batch_size = options.batch;
-                sidecar_req.subscription_mode = options.subscription_mode.value_or("all");
-                sidecar_req.subscription_from = options.subscription_from.value_or("");
-                sidecar_req.wait_deadline = std::chrono::steady_clock::now() + 
-                                            std::chrono::milliseconds(timeout_ms);
-                sidecar_req.next_check = std::chrono::steady_clock::now();  // Check immediately
-                
-                // SQL is built by sidecar using pop_messages_batch_v2
-                ctx.sidecar->submit(std::move(sidecar_req));
+            // Submit POP_WAIT to sidecar - it will manage waiting and backoff
+            SidecarRequest sidecar_req;
+            sidecar_req.op_type = SidecarOpType::POP_WAIT;
+            sidecar_req.request_id = request_id;
+            sidecar_req.queue_name = queue_name;
+            sidecar_req.partition_name = "";  // Any partition
+            sidecar_req.consumer_group = consumer_group;
+            sidecar_req.batch_size = options.batch;
+            sidecar_req.subscription_mode = options.subscription_mode.value_or("all");
+            sidecar_req.subscription_from = options.subscription_from.value_or("");
+            sidecar_req.auto_ack = options.auto_ack;
+            sidecar_req.wait_deadline = std::chrono::steady_clock::now() + 
+                                        std::chrono::milliseconds(timeout_ms);
+            sidecar_req.next_check = std::chrono::steady_clock::now();  // Check immediately
+            
+            // SQL is built by sidecar using pop_unified_batch
+            ctx.sidecar->submit(std::move(sidecar_req));
                 
                 // Register consumer presence for targeted notifications
                 if (global_shared_state && global_shared_state->is_enabled()) {
@@ -231,6 +234,7 @@ void setup_pop_routes(uWS::App* app, const RouteContext& ctx) {
             sidecar_req.batch_size = options.batch;
             sidecar_req.subscription_mode = options.subscription_mode.value_or("all");
             sidecar_req.subscription_from = options.subscription_from.value_or("");
+            sidecar_req.auto_ack = options.auto_ack;
             
             // Use state machine for parallel processing
             ctx.sidecar->submit_pop_batch({std::move(sidecar_req)});

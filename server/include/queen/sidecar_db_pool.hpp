@@ -56,6 +56,7 @@ struct SidecarRequest {
     int batch_size = 1;           // Client's requested batch size
     std::string subscription_mode;
     std::string subscription_from;
+    bool auto_ack = false;        // Auto-acknowledge messages on delivery (QoS 0)
 };
 
 /**
@@ -262,6 +263,7 @@ private:
         std::string subscription_from;
         std::string sql;
         std::vector<std::string> params;
+        bool auto_ack = false;
     };
     std::unordered_map<std::string, PopWaitTracker> pop_wait_trackers_;
     mutable std::mutex tracker_mutex_;

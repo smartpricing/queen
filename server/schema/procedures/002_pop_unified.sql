@@ -161,6 +161,7 @@ BEGIN
         
         -- =====================================================================
         -- STEP 4: Fetch messages
+        -- NOTE: Using .US (microseconds) for full timestamp precision
         -- =====================================================================
         SELECT COALESCE(jsonb_agg(
             jsonb_build_object(
@@ -168,7 +169,7 @@ BEGIN
                 'transactionId', sub.transaction_id,
                 'traceId', sub.trace_id::text,
                 'data', sub.payload,
-                'createdAt', to_char(sub.created_at, 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"')
+                'createdAt', to_char(sub.created_at, 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"')
             ) ORDER BY sub.created_at, sub.id
         ), '[]'::jsonb)
         INTO v_messages
@@ -396,6 +397,7 @@ BEGIN
         
         -- =====================================================================
         -- STEP 5: Fetch messages
+        -- NOTE: Using .US (microseconds) for full timestamp precision
         -- =====================================================================
         SELECT COALESCE(jsonb_agg(
             jsonb_build_object(
@@ -403,7 +405,7 @@ BEGIN
                 'transactionId', sub.transaction_id,
                 'traceId', sub.trace_id::text,
                 'data', sub.payload,
-                'createdAt', to_char(sub.created_at, 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"')
+                'createdAt', to_char(sub.created_at, 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"')
             ) ORDER BY sub.created_at, sub.id
         ), '[]'::jsonb)
         INTO v_messages
@@ -679,13 +681,15 @@ BEGIN
         END IF;
         
         -- Fetch messages
+        -- NOTE: Using .US (microseconds) instead of .MS (milliseconds) for full precision
+        -- This is critical for autoAck cursor updates to work correctly
         SELECT COALESCE(jsonb_agg(
             jsonb_build_object(
                 'id', sub.id::text,
                 'transactionId', sub.transaction_id,
                 'traceId', sub.trace_id::text,
                 'data', sub.payload,
-                'createdAt', to_char(sub.created_at, 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"')
+                'createdAt', to_char(sub.created_at, 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"')
             ) ORDER BY sub.created_at, sub.id
         ), '[]'::jsonb)
         INTO v_messages
@@ -710,13 +714,10 @@ BEGIN
             -- AUTO-ACK: Advance cursor to last message AND release lease immediately
             -- This combines POP + ACK in a single atomic operation (QoS 0)
             -- =====================================================================
-            -- Extract last message ID from JSON (messages are ordered by created_at, id)
+            -- Extract last message position (messages are ordered by created_at, id)
             v_last_msg := v_messages->(v_msg_count - 1);
             v_last_msg_id := (v_last_msg->>'id')::UUID;
-            
-            -- Get exact timestamp from database (preserves microsecond precision)
-            -- This avoids precision loss from JSON string formatting
-            SELECT created_at INTO v_last_msg_ts FROM queen.messages WHERE id = v_last_msg_id;
+            v_last_msg_ts := (v_last_msg->>'createdAt')::TIMESTAMPTZ;
             
             -- Update cursor to last message AND release lease
             UPDATE queen.partition_consumers
@@ -749,7 +750,7 @@ BEGIN
         END IF;
         
         -- Build result (wrapped in 'result' object for compatibility with existing C++ code)
-        -- For auto_ack: return empty string leaseId to signal no ACK is needed
+        -- For auto_ack: return leaseId as NULL to signal no ACK is needed
         v_result := jsonb_build_object(
             'idx', v_req.idx,
             'result', jsonb_build_object(
@@ -757,7 +758,7 @@ BEGIN
                 'queue', v_req.queue_name,
                 'partition', v_partition_name,
                 'partitionId', v_partition_id::text,
-                'leaseId', CASE WHEN v_auto_ack THEN '' ELSE v_req.worker_id END,
+                'leaseId', CASE WHEN v_auto_ack THEN NULL ELSE v_req.worker_id END,
                 'consumerGroup', v_req.consumer_group,
                 'messages', v_messages
             )

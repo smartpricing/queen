@@ -436,6 +436,7 @@ void SidecarDbPool::process_waiting_queue() {
             tracker.batch_size = req.batch_size;
             tracker.subscription_mode = req.subscription_mode;
             tracker.subscription_from = req.subscription_from;
+            tracker.auto_ack = req.auto_ack;
             pop_wait_trackers_[req.request_id] = std::move(tracker);
         }
         
@@ -449,6 +450,7 @@ void SidecarDbPool::process_waiting_queue() {
         sm_req.batch_size = req.batch_size;
         sm_req.subscription_mode = req.subscription_mode;
         sm_req.subscription_from = req.subscription_from;
+        sm_req.auto_ack = req.auto_ack;
         sm_req.queued_at = req.queued_at;  // Preserve original queue time for wait measurement
         
         // Group by queue for batching
@@ -1321,6 +1323,7 @@ void SidecarDbPool::process_slot_result(ConnectionSlot& slot) {
                                     new_req.batch_size = tracker.batch_size;
                                     new_req.subscription_mode = tracker.subscription_mode;
                                     new_req.subscription_from = tracker.subscription_from;
+                                    new_req.auto_ack = tracker.auto_ack;
                                     new_req.queued_at = std::chrono::steady_clock::now();
                                     
                                     auto interval_ms = std::chrono::milliseconds(100);
@@ -1453,6 +1456,7 @@ void SidecarDbPool::process_slot_result(ConnectionSlot& slot) {
                             new_req.batch_size = tracker.batch_size;
                             new_req.subscription_mode = tracker.subscription_mode;
                             new_req.subscription_from = tracker.subscription_from;
+                            new_req.auto_ack = tracker.auto_ack;
                             new_req.sql = tracker.sql;
                             new_req.params = tracker.params;
                             new_req.queued_at = std::chrono::steady_clock::now();  // Fix: set queued_at for accurate timing
@@ -1519,6 +1523,7 @@ void SidecarDbPool::submit_pop_batch(std::vector<SidecarRequest> requests) {
         req_json["worker_id"] = worker_id;
         req_json["sub_mode"] = req.subscription_mode.empty() ? "all" : req.subscription_mode;
         req_json["sub_from"] = req.subscription_from;
+        req_json["auto_ack"] = req.auto_ack;
         
         requests_json.push_back(req_json);
         
@@ -1590,6 +1595,7 @@ void SidecarDbPool::submit_pop_batch(std::vector<SidecarRequest> requests) {
                 retry_req.batch_size = tracker.batch_size;
                 retry_req.subscription_mode = tracker.subscription_mode;
                 retry_req.subscription_from = tracker.subscription_from;
+                retry_req.auto_ack = tracker.auto_ack;
                 retry_req.queued_at = std::chrono::steady_clock::now();
                 retry_req.next_check = now + std::chrono::milliseconds(5);  // Short retry delay
                 

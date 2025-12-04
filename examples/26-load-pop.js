@@ -96,9 +96,10 @@ async function worker(pool, workerId, stopSignal) {
       const popStart = Date.now();
       const popResponse = await pool.request({
         method: 'GET',
-        path: `/api/v1/pop/queue/${QUEUE_NAME}/partition/${partition}?batch=1&wait=true`,
+        path: `/api/v1/pop/queue/${QUEUE_NAME}/partition/${partition}?batch=1&wait=true&autoAck=true`,
         headers: { 'Content-Type': 'application/json' }
       });
+
       
       const popBody = await popResponse.body.json();
       const popTime = Date.now() - popStart;
@@ -121,7 +122,7 @@ async function worker(pool, workerId, stopSignal) {
         partitionId: msg.partitionId
       }));
       
-      const ackStart = Date.now();
+      /*const ackStart = Date.now();
       const ackResponse = await pool.request({
         method: 'POST',
         path: `/api/v1/ack/batch`,
@@ -130,13 +131,13 @@ async function worker(pool, workerId, stopSignal) {
       });
       
       await ackResponse.body.dump(); // Consume body
-      const ackTime = Date.now() - ackStart;
+      const ackTime = Date.now() - ackStart;*/
       
       totalAcks += messageCount;  // Count actual messages ACKed
-      ackLatencies.push(ackTime);
       totalLatencies.push(Date.now() - cycleStart);
       
     } catch (error) {
+      
       totalErrors++;
     }
   }
