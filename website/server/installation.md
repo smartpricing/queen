@@ -14,12 +14,12 @@ DB_POOL_SIZE=50 ./bin/queen-server
 
 **Ubuntu/Debian:**
 ```bash
-sudo apt-get install build-essential libpq-dev libssl-dev unzip zlib1g-dev
+sudo apt-get install build-essential libpq-dev libssl-dev unzip zlib1g-dev cmake
 ```
 
 **macOS:**
 ```bash
-brew install postgresql openssl
+brew install postgresql openssl cmake
 ```
 
 ## Build Commands

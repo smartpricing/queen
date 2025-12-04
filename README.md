@@ -87,15 +87,18 @@ docker run --name postgres --network queen \
   -e POSTGRES_PASSWORD=postgres -p 5432:5432 -d postgres
 
 docker run -p 6632:6632 --network queen \
-  -e PG_HOST=postgres -e PG_PASSWORD=postgres \
-  -e DB_POOL_SIZE=20 \  
+  -e PG_HOST=postgres 
+  -e PG_PASSWORD=postgres \
   -e NUM_WORKERS=2 \
+  -e DB_POOL_SIZE=5 \  
+  -e SIDECAR_POOL_SIZE=30 \  
+  -e SIDECAR_MICRO_BATCH_WAIT_MS=10 \
+  -e POP_WAIT_INITIAL_INTERVAL_MS=500 \
+  -e POP_WAIT_BACKOFF_THRESHOLD=1 \
+  -e POP_WAIT_BACKOFF_MULTIPLIER=3.0 \
+  -e POP_WAIT_MAX_INTERVAL_MS=5000 \
   -e DEFAULT_SUBSCRIPTION_MODE=new \
   -e LOG_LEVEL=info \
-  -e POLL_WORKER_COUNT=2 \
-  -e POLL_DB_INTERVAL=100 \
-  -e POLL_WORKER_INTERVAL=10 \
-  -e QUEUE_MAX_POLL_INTERVAL=2000 \
   smartnessai/queen-mq
 ```
 
@@ -212,7 +215,7 @@ Some example logs:
 
 | Server Version | Description | Compatible Clients |
 |----------------|-------------|-------------------|
-| **0.9.9** | Total rewrite of the engine with libuv and stored procedures, removed streaming engine | JS ≥0.7.4, Python ≥0.7.4 |
+| **0.10.0** | Total rewrite of the engine with libuv and stored procedures, removed streaming engine | JS ≥0.7.4, Python ≥0.7.4 |
 | **0.8.0** | Added Shared Cache with UDP sync for clustered deployment | JS ≥0.7.4, Python ≥0.7.4 |
 | **0.7.5** | First stable release | JS ≥0.7.4, Python ≥0.7.4 |
 

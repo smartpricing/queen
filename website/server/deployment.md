@@ -14,8 +14,16 @@ docker run -p 6632:6632 \
   -e PG_USER=queen \
   -e PG_PASSWORD=secure_password \
   -e PG_DB=queen_production \
-  -e DB_POOL_SIZE=150 \
   -e NUM_WORKERS=10 \
+  -e DB_POOL_SIZE=150 \
+  -e SIDECAR_POOL_SIZE=30 \
+  -e SIDECAR_MICRO_BATCH_WAIT_MS=10 \
+  -e POP_WAIT_INITIAL_INTERVAL_MS=500 \
+  -e POP_WAIT_BACKOFF_THRESHOLD=1 \
+  -e POP_WAIT_BACKOFF_MULTIPLIER=3.0 \
+  -e POP_WAIT_MAX_INTERVAL_MS=5000 \
+  -e DEFAULT_SUBSCRIPTION_MODE=new \
+  -e LOG_LEVEL=info \
   smartnessai/queen-mq:{{VERSION}}
 ```
 
@@ -34,8 +42,15 @@ docker run -d \
   -e PG_DB=queen_production \
   -e PG_USE_SSL=true \
   -e PG_SSL_REJECT_UNAUTHORIZED=true \
-  -e DB_POOL_SIZE=300 \
   -e NUM_WORKERS=20 \
+  -e DB_POOL_SIZE=300 \
+  -e SIDECAR_POOL_SIZE=30 \
+  -e SIDECAR_MICRO_BATCH_WAIT_MS=10 \
+  -e POP_WAIT_INITIAL_INTERVAL_MS=500 \
+  -e POP_WAIT_BACKOFF_THRESHOLD=1 \
+  -e POP_WAIT_BACKOFF_MULTIPLIER=3.0 \
+  -e POP_WAIT_MAX_INTERVAL_MS=5000 \
+  -e DEFAULT_SUBSCRIPTION_MODE=new \
   -e LOG_LEVEL=info \
   -e LOG_FORMAT=json \
   -e QUEEN_ENCRYPTION_KEY=your_64_char_hex_key \

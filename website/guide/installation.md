@@ -19,11 +19,17 @@ docker run --name postgres --network queen \
 # Start Queen Server
 docker run -p 6632:6632 --network queen \
   -e PG_HOST=postgres \
-  -e PG_USER=postgres \
   -e PG_PASSWORD=postgres \
-  -e PG_DB=postgres \
-  -e DB_POOL_SIZE=20 \
   -e NUM_WORKERS=2 \
+  -e DB_POOL_SIZE=5 \
+  -e SIDECAR_POOL_SIZE=30 \
+  -e SIDECAR_MICRO_BATCH_WAIT_MS=10 \
+  -e POP_WAIT_INITIAL_INTERVAL_MS=500 \
+  -e POP_WAIT_BACKOFF_THRESHOLD=1 \
+  -e POP_WAIT_BACKOFF_MULTIPLIER=3.0 \
+  -e POP_WAIT_MAX_INTERVAL_MS=5000 \
+  -e DEFAULT_SUBSCRIPTION_MODE=new \
+  -e LOG_LEVEL=info \
   smartnessai/queen-mq:{{VERSION}}
 ```
 
@@ -91,8 +97,16 @@ docker run -p 6632:6632 \
   -e PG_USER=queen \
   -e PG_PASSWORD=your-password \
   -e PG_DB=queen \
-  -e DB_POOL_SIZE=50 \
   -e NUM_WORKERS=10 \
+  -e DB_POOL_SIZE=50 \
+  -e SIDECAR_POOL_SIZE=30 \
+  -e SIDECAR_MICRO_BATCH_WAIT_MS=10 \
+  -e POP_WAIT_INITIAL_INTERVAL_MS=500 \
+  -e POP_WAIT_BACKOFF_THRESHOLD=1 \
+  -e POP_WAIT_BACKOFF_MULTIPLIER=3.0 \
+  -e POP_WAIT_MAX_INTERVAL_MS=5000 \
+  -e DEFAULT_SUBSCRIPTION_MODE=new \
+  -e LOG_LEVEL=info \
   -e PORT=6632 \
   smartnessai/queen-mq:{{VERSION}}
 ```
@@ -170,8 +184,16 @@ services:
       PG_USER: queen
       PG_PASSWORD: queen_password
       PG_DB: queen
-      DB_POOL_SIZE: 50
       NUM_WORKERS: 10
+      DB_POOL_SIZE: 50
+      SIDECAR_POOL_SIZE: 30
+      SIDECAR_MICRO_BATCH_WAIT_MS: 10
+      POP_WAIT_INITIAL_INTERVAL_MS: 500
+      POP_WAIT_BACKOFF_THRESHOLD: 1
+      POP_WAIT_BACKOFF_MULTIPLIER: 3.0
+      POP_WAIT_MAX_INTERVAL_MS: 5000
+      DEFAULT_SUBSCRIPTION_MODE: new
+      LOG_LEVEL: info
       PORT: 6632
     restart: unless-stopped
 
@@ -199,6 +221,16 @@ docker run -p 6632:6632 \
   -e PG_USER=queen \
   -e PG_PASSWORD=your-password \
   -e PG_DB=queen \
+  -e NUM_WORKERS=2 \
+  -e DB_POOL_SIZE=5 \
+  -e SIDECAR_POOL_SIZE=30 \
+  -e SIDECAR_MICRO_BATCH_WAIT_MS=10 \
+  -e POP_WAIT_INITIAL_INTERVAL_MS=500 \
+  -e POP_WAIT_BACKOFF_THRESHOLD=1 \
+  -e POP_WAIT_BACKOFF_MULTIPLIER=3.0 \
+  -e POP_WAIT_MAX_INTERVAL_MS=5000 \
+  -e DEFAULT_SUBSCRIPTION_MODE=new \
+  -e LOG_LEVEL=info \
   smartnessai/queen-mq:{{VERSION}}
 ```
 
