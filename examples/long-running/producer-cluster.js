@@ -4,11 +4,11 @@ import cluster from 'cluster';
 import os from 'os';
 
 const SERVER_URL = process.env.SERVER_URL || 'http://localhost:6632';
-const QUEUE_NAME = 'test-queue';
-const NUM_WORKERS = parseInt(process.env.WORKERS) || os.cpus().length;
-const CONNECTIONS_PER_WORKER = parseInt(process.env.CONNECTIONS) || 250;
-const DURATION = parseInt(process.env.DURATION) || 10;
-const MAX_PARTITION = 1000;
+const QUEUE_NAME = 'queen-long-running';
+const NUM_WORKERS = 10;
+const CONNECTIONS_PER_WORKER = 100;
+const DURATION = parseInt(process.env.DURATION) || 30;
+const MAX_PARTITION = 500;
 
 // Pre-generate requests array
 function generateRequests() {
@@ -59,9 +59,6 @@ if (cluster.isPrimary) {
   console.log(`   Connections per worker: ${CONNECTIONS_PER_WORKER}`);
   console.log(`   Total connections: ${NUM_WORKERS * CONNECTIONS_PER_WORKER}`);
   console.log(`   Duration: ${DURATION}s\n`);
-
-  // Reset queue before starting
-  await resetQueue();
 
   const workerResults = [];
   let workersReady = 0;

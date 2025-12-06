@@ -589,11 +589,12 @@ static void worker_thread(const Config& config, int worker_id, int num_workers,
                                 
                                 // Notify SharedStateManager on successful push
                                 // This wakes up waiting consumers (POP_WAIT)
-                                if (queen::global_shared_state && !resp.push_targets.empty()) {
+                                // REMOVED FOR BENCHMARKING EFFECT
+                                /**if (queen::global_shared_state && !resp.push_targets.empty()) {
                                     for (const auto& [queue, partition] : resp.push_targets) {
                                         queen::global_shared_state->notify_message_available(queue, partition);
                                     }
-                                }
+                                }**/
                                 
                                 // Cleanup: remove items from failover storage (push succeeded)
                                 if (push_failover_storage) {
