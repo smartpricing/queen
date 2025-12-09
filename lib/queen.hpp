@@ -30,10 +30,10 @@ JobType {
 // map between JobType enum and std::string
 const std::map<JobType, std::string> JobTypeToSql = {
     {JobType::PUSH, "SELECT queen.push_messages_v2($1::jsonb)"},
-    {JobType::POP, "POP"},
-    {JobType::ACK, "ACK"},
-    {JobType::TRANSACTION, "TRANSACTION"},
-    {JobType::RENEW_LEASE, "RENEW_LEASE"},
+    {JobType::POP, "SELECT queen.pop_unified_batch($1::jsonb)"},
+    {JobType::ACK, "SELECT queen.ack_messages_v2($1::jsonb)"},
+    {JobType::TRANSACTION, "SELECT queen.execute_transaction_v2($1::jsonb)"},
+    {JobType::RENEW_LEASE, "SELECT queen.renew_lease_v2($1::jsonb)"},
     {JobType::CUSTOM, "CUSTOM"}
 };
     
@@ -204,16 +204,23 @@ private:
             if (type == JobType::POP) {
                 std::vector<PendingJob> ready_jobs;
                 for (auto& job : jobs) {
-                    if (job.job.next_check < std::chrono::steady_clock::now() &&
-                        job.job.wait_deadline > std::chrono::steady_clock::now()) {
+                    if (job.job.next_check > std::chrono::steady_clock::now() &&
+                        job.job.wait_deadline < std::chrono::steady_clock::now()) {
+                            std::cout << "Requeueing job " << job.job.request_id << " because it's past the next check" << std::endl;
                         jobs_to_requeue.push_back(std::move(job));
-                    } else if (job.job.next_check > std::chrono::steady_clock::now() &&
+                    } else if (job.job.next_check < std::chrono::steady_clock::now() &&
                         job.job.wait_deadline > std::chrono::steady_clock::now()) {
                         // TODO check shared state
+                        std::cout << "Sending job " << job.job.request_id << " because it's within the next check" << std::endl;
                         ready_jobs.push_back(std::move(job));
                     } else {
-                        jobs_to_requeue.push_back(std::move(job));
+                        std::cout << "Skipping job " << job.job.request_id << " because it's not within the next check" << std::endl;
+                        // jobs_to_requeue.push_back(std::move(job));
+                        // TODO SEND 204
                     }
+                }
+                if (!ready_jobs.empty()) {
+                    self->_send_jobs_to_slot(type, ready_jobs, jobs_to_requeue);
                 }
             } else if (type != JobType::CUSTOM) {
                 self->_send_jobs_to_slot(type, jobs, jobs_to_requeue);
@@ -298,6 +305,10 @@ private:
                 // Success - process result
                 std::cout << "Processing slot result" << std::endl;
                 // TODO: parse and dispatch callbacks
+                for (auto& job : slot.jobs) {
+                    job.callback(PQgetvalue(res, 0, 0));
+                }
+                slot.jobs.clear();
             } else {
                 spdlog::error("[libqueen] Query failed: {}", PQresultErrorMessage(res));
             }
@@ -359,7 +370,7 @@ private:
                 spdlog::error("[libqueen] Failed to send jobs to the database: {}", PQerrorMessage(slot.conn));
                 jobs_to_requeue.insert(jobs_to_requeue.end(), jobs.begin(), jobs.end());
             }
-            
+
             // Start watching for write (to flush) and read (for results)
             std::cout << slot.poll_initialized << " " << slot.socket_fd << std::endl;
             _start_watching_slot(slot, UV_WRITABLE | UV_READABLE);              
