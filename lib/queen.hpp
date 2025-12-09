@@ -23,6 +23,14 @@
 #include <filesystem>
 #include <algorithm>
 
+/**
+- logs
+- performance tuning
+- backoff light query 
+- shared state 
+- all the queries to custom, find better way for analytics
+*/
+
 namespace queen {
 
 // UUIDv7 generator - time-ordered UUIDs for proper message ordering
@@ -261,6 +269,48 @@ JobRequest {
 
     int batch_size = 1;           // Client's requested batch size
     bool auto_ack = false;        // Auto-acknowledge messages on delivery (QoS 0)
+    
+    // Validate the job request and return error message if invalid
+    std::optional<std::string> validate() const {
+        switch (op_type) {
+            case JobType::PUSH:
+                if (params.empty() || params[0].empty()) {
+                    return "PUSH requires params with message data (JSON array of items with queue, partition, payload, messageId)";
+                }
+                break;
+                
+            case JobType::POP:
+                if (params.empty() || params[0].empty()) {
+                    return "POP requires params with request data (JSON array with idx, queue_name, partition_name, consumer_group, batch_size, lease_seconds, worker_id)";
+                }
+                break;
+                
+            case JobType::ACK:
+                if (params.empty() || params[0].empty()) {
+                    return "ACK requires params with acknowledgment data (JSON array with index, transactionId, partitionId, status)";
+                }
+                break;
+                
+            case JobType::TRANSACTION:
+                if (params.empty() || params[0].empty()) {
+                    return "TRANSACTION requires params with operations array (JSON array of {type, queue, partition, payload, ...} objects)";
+                }
+                break;
+                
+            case JobType::RENEW_LEASE:
+                if (params.empty() || params[0].empty()) {
+                    return "RENEW_LEASE requires params with lease data (JSON array with index, leaseId, extendSeconds)";
+                }
+                break;
+                
+            case JobType::CUSTOM:
+                if (sql.empty()) {
+                    return "CUSTOM requires sql field with the SQL query to execute";
+                }
+                break;
+        }
+        return std::nullopt;  // Valid
+    }
 }; 
 
 // Job with callback
@@ -282,6 +332,7 @@ DBConnection {
     bool poll_initialized = false;
     Queen* pool = nullptr;
     std::vector<std::shared_ptr<PendingJob>> jobs;
+    std::vector<std::pair<int, int>> job_idx_ranges; // AI // (start_idx, count) for each job
     
     // Atomic flag for lock-free reconnection signaling
     std::atomic<bool> needs_poll_init{false};
@@ -298,6 +349,7 @@ DBConnection {
         , poll_initialized(other.poll_initialized)
         , pool(other.pool)
         , jobs(std::move(other.jobs))
+        , job_idx_ranges(std::move(other.job_idx_ranges))
         , needs_poll_init(other.needs_poll_init.load(std::memory_order_relaxed))
     {
         other.conn = nullptr;
@@ -315,6 +367,7 @@ DBConnection {
             poll_initialized = other.poll_initialized;
             pool = other.pool;
             jobs = std::move(other.jobs);
+            job_idx_ranges = std::move(other.job_idx_ranges);
             needs_poll_init.store(other.needs_poll_init.load(std::memory_order_relaxed), std::memory_order_relaxed);
             
             other.conn = nullptr;
@@ -371,6 +424,21 @@ public:
 
     void 
     submit(JobRequest&& job, std::function<void(std::string result)> cb) {
+        // Validate the job request before queueing
+        auto validation_error = job.validate();
+        if (validation_error.has_value()) {
+            spdlog::error("[libqueen] Invalid JobRequest: {}", validation_error.value());
+            // Call callback with error response
+            if (cb) {
+                nlohmann::json error_response = {
+                    {"success", false},
+                    {"error", validation_error.value()}
+                };
+                cb(error_response.dump());
+            }
+            return;
+        }
+        
         auto pending = std::make_shared<PendingJob>(PendingJob{std::move(job), std::move(cb)});
         uv_mutex_lock(&_mutex_job_queue);
         _job_queue.push_back(pending);
@@ -593,13 +661,7 @@ private:
         if (batch.empty()) {
             return;
         }
-        /* Here we should to:
-            - Group jobs by type  
-            - Get a free slot for each type 
-            - For pop request, understand if they are backoff or not
-            - If we a have slot, send the request to the database 
-            - Else, requeue the job to the queue 
-        */
+
         auto grouped_jobs = self->_group_jobs_by_type(batch);
         std::vector<std::shared_ptr<PendingJob>> jobs_to_requeue;
         for (auto& [type, jobs] : grouped_jobs) {
@@ -697,14 +759,73 @@ private:
             // Check status
             ExecStatusType status = PQresultStatus(res);
             if (status == PGRES_TUPLES_OK || status == PGRES_COMMAND_OK) {
-                // Success - process result
-
-                for (auto& job : slot.jobs) {
+                // Success - parse result once and dispatch by idx
+                auto data = PQgetvalue(res, 0, 0);
+                auto json_results = nlohmann::json::parse(data);
+                
+                // Handle non-array results (e.g., TRANSACTION returns a single object)
+                // In this case, send the entire result to all jobs
+                if (!json_results.is_array()) {
+                    for (auto& job : slot.jobs) {
+                        job->callback(json_results.dump());
+                    }
+                    slot.jobs.clear();
+                    slot.job_idx_ranges.clear();
+                    PQclear(res);
+                    continue;
+                }
+                
+                // Build map from idx to result for O(1) lookup
+                // Note: Different stored procedures use different field names:
+                //   - POP uses "idx"
+                //   - PUSH/ACK use "index"
+                std::map<int, nlohmann::json> results_by_idx;
+                for (auto& result_item : json_results) {
+                    int idx = -1;
+                    if (result_item.contains("idx")) {
+                        idx = result_item["idx"].get<int>();
+                    } else if (result_item.contains("index")) {
+                        idx = result_item["index"].get<int>();
+                    }
+                    if (idx >= 0) {
+                        results_by_idx[idx] = std::move(result_item);
+                    }
+                }
+                
+                // Dispatch results to jobs using idx ranges
+                // Each job may have contributed multiple items (e.g., PUSH with many messages)
+                for (size_t job_idx = 0; job_idx < slot.jobs.size(); ++job_idx) {
+                    auto& job = slot.jobs[job_idx];
+                    
+                    // Get idx range for this job (set in _send_jobs_to_slot)
+                    int start_idx = 0, count = 1;  // defaults for single-item jobs
+                    if (job_idx < slot.job_idx_ranges.size()) {
+                        start_idx = slot.job_idx_ranges[job_idx].first;
+                        count = slot.job_idx_ranges[job_idx].second;
+                    }
+                    
+                    // Collect all results for this job's idx range
+                    nlohmann::json job_results = nlohmann::json::array();
+                    for (int i = start_idx; i < start_idx + count; ++i) {
+                        auto it = results_by_idx.find(i);
+                        if (it != results_by_idx.end()) {
+                            job_results.push_back(it->second);
+                        }
+                    }
+                    
+                    if (job_results.empty()) {
+                        spdlog::warn("[libqueen] No results found for job {} (idx range [{}, {}))", 
+                                    job_idx, start_idx, start_idx + count);
+                        continue;
+                    }
+                    
                     switch (job->job.op_type) {
                         case JobType::POP: {
-                            auto data = PQgetvalue(res, 0, 0);
-                            auto json_result = nlohmann::json::parse(data);
-                            bool has_messages = !json_result[0]["result"]["messages"].empty();
+                            // For POP, we expect exactly 1 result per job
+                            nlohmann::json& result_item = job_results[0];
+                            bool has_messages = result_item.contains("result") &&
+                                              result_item["result"].contains("messages") &&
+                                              !result_item["result"]["messages"].empty();
                             bool has_wait_deadline = (job->job.wait_deadline != std::chrono::steady_clock::time_point{});
 
                             if (!has_messages && has_wait_deadline) {
@@ -718,22 +839,45 @@ private:
                                 if (queue_map.empty()) {
                                     _pop_backoff_tracker.erase(job->job.queue_name);
                                 }
-                                job->callback(data);
+                                
+                                // Inject partitionId into each message for client compatibility
+                                // Client expects partitionId on each message for ACK operations
+                                if (result_item.contains("result") && 
+                                    result_item["result"].contains("partitionId") &&
+                                    result_item["result"].contains("messages")) {
+                                    auto partition_id = result_item["result"]["partitionId"];
+                                    auto lease_id = result_item["result"].value("leaseId", nlohmann::json(nullptr));
+                                    for (auto& msg : result_item["result"]["messages"]) {
+                                        msg["partitionId"] = partition_id;
+                                        if (!lease_id.is_null()) {
+                                            msg["leaseId"] = lease_id;
+                                        }
+                                    }
+                                }
+                                
+                                // Wrap result in array for callback compatibility
+                                nlohmann::json wrapped = nlohmann::json::array();
+                                wrapped.push_back(result_item);
+                                job->callback(wrapped.dump());
                             }
                             break;
                         }
                         case JobType::PUSH: {
                             // Signal backoff tracker that the push is successful
                             _update_pop_backoff_tracker(job->job.queue_name);
-                            job->callback(PQgetvalue(res, 0, 0));
+                            // Return all results for this job (may have multiple messages)
+                            job->callback(job_results.dump());
                             break;
                         }
-                        default:
-                            job->callback(PQgetvalue(res, 0, 0));
+                        default: {
+                            // Return all results for this job
+                            job->callback(job_results.dump());
                             break;
+                        }
                     }
                 }
                 slot.jobs.clear();
+                slot.job_idx_ranges.clear();
             } else {
                 spdlog::error("[libqueen] Query failed: {}", PQresultErrorMessage(res));
             }
@@ -765,15 +909,24 @@ private:
         if (_has_free_slot()) {
             DBConnection& slot = _get_free_slot();
             // Join all the jobs params into a single jsonb
+            // IMPORTANT: Renumber idx sequentially so we can dispatch results correctly
+            // Also track idx ranges per job for proper result dispatch
 
             nlohmann::json combined = nlohmann::json::array();
+            std::vector<std::pair<int, int>> idx_ranges;  // (start_idx, count) per job
+            int sequential_idx = 0;
             for (const auto& pending : jobs) {
+                int start_idx = sequential_idx;
+                int count = 0;
                 if (!pending->job.params.empty()) {
                     auto arr = nlohmann::json::parse(pending->job.params[0]);
                     for (auto& item : arr) {
+                        item["idx"] = sequential_idx++;  // Renumber idx for correct dispatch
                         combined.push_back(std::move(item));
+                        count++;
                     }
                 }
+                idx_ranges.push_back({start_idx, count});
             }
                     
             std::string merged_jsonb = combined.dump();
@@ -782,6 +935,7 @@ private:
             // Send the jobs to the database
             auto sql_string_for_type = JobTypeToSql.at(type);
             slot.jobs.insert(slot.jobs.end(), jobs.begin(), jobs.end());
+            slot.job_idx_ranges = std::move(idx_ranges);
             int sent = PQsendQueryParams(
                 slot.conn, 
                 sql_string_for_type.c_str(), 
@@ -861,11 +1015,11 @@ private:
             {"idx", 0},
             {"result", {
                 {"success", true},
-                {"messages", nlohmann::json::array()},
-                {"leaseId", nullptr},
                 {"queue", job->job.queue_name},
+                {"partition", job->job.partition_name},
+                {"partitionId", nullptr},
+                {"leaseId", nullptr},
                 {"consumerGroup", job->job.consumer_group},
-                {"partitionName", job->job.partition_name},
                 {"messages", nlohmann::json::array()}
             }}
         });

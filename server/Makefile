@@ -29,13 +29,13 @@ ifeq ($(UNAME_S),Darwin)
     # libuv from vendor (built from source) - use static library
     UV_INCLUDES := ./vendor/libuv/include
     UV_STATIC_LIB := ./vendor/libuv/build/libuv.a
-    INCLUDES = -I./include -I./vendor -I./vendor/uSockets/src $(addprefix -I,$(PG_INCLUDES)) $(addprefix -I,$(SSL_INCLUDES)) -I$(UV_INCLUDES)
+    INCLUDES = -I./include -I./vendor -I./vendor/uSockets/src -I../lib $(addprefix -I,$(PG_INCLUDES)) $(addprefix -I,$(SSL_INCLUDES)) -I$(UV_INCLUDES)
     LIBS = $(addprefix -L,$(PG_LIBS)) $(addprefix -L,$(SSL_LIBS)) -lpq -lssl -lcrypto -lz $(UV_STATIC_LIB)
 else
     # Linux - libuv from vendor (built from source) - use static library
     UV_INCLUDES := ./vendor/libuv/include
     UV_STATIC_LIB := ./vendor/libuv/build/libuv.a
-    INCLUDES = -I./include -I./vendor -I./vendor/uSockets/src -I/usr/include/postgresql -I/usr/local/include/postgresql -I$(UV_INCLUDES)
+    INCLUDES = -I./include -I./vendor -I./vendor/uSockets/src -I../lib -I/usr/include/postgresql -I/usr/local/include/postgresql -I$(UV_INCLUDES)
     LIBS = -lpq -lssl -lcrypto -lz $(UV_STATIC_LIB)
 endif
 

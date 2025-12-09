@@ -5,7 +5,7 @@
 #include "queen/queue_types.hpp"
 #include "queen/file_buffer.hpp"
 #include "queen/response_queue.hpp"
-#include "queen/sidecar_db_pool.hpp"
+#include "queen.hpp"  // libqueen
 #include "queen/encryption.hpp"
 #include "queen/shared_state_manager.hpp"
 #include <spdlog/spdlog.h>
@@ -203,39 +203,99 @@ void setup_push_routes(uWS::App* app, const RouteContext& ctx) {
                             items_json.push_back(item_json);
                         }
                         
-                        // Build sidecar request
-                    SidecarRequest sidecar_req;
-                    sidecar_req.op_type = SidecarOpType::PUSH;
-                    sidecar_req.request_id = request_id;
-                    sidecar_req.sql = "SELECT queen.push_messages_v2($1::jsonb, $2::boolean, $3::boolean)";
-                    sidecar_req.params = {items_json.dump(), "true", "true"};
-                    sidecar_req.item_count = items.size();
-                        
-                    // Collect unique queue/partition pairs for notification and logging
-                    std::set<std::pair<std::string, std::string>> targets;
-                    for (const auto& item : items) {
-                        targets.insert({item.queue, item.partition});
-                    }
-                    
-                    // Store targets for notification after successful push
-                    for (const auto& [queue, partition] : targets) {
-                        sidecar_req.push_targets.push_back({queue, partition});
-                    }
-                    
-                    // Store items for failover before submitting to sidecar
-                    // If sidecar fails (DB down), callback will retrieve and write to file buffer
+                    // Store items for failover before submitting
+                    // If DB fails, callback will retrieve and write to file buffer
                     if (ctx.push_failover_storage) {
                         ctx.push_failover_storage->store(request_id, items_json.dump());
                     }
                     
-                    // Submit to per-worker sidecar - RETURNS IMMEDIATELY!
-                    ctx.sidecar->submit(std::move(sidecar_req));
-                        
-                    // Don't send response here - sidecar will deliver it via loop->defer()
+                    // Build Queen job request
+                    queen::JobRequest job_req;
+                    job_req.op_type = queen::JobType::PUSH;
+                    job_req.request_id = request_id;
+                    job_req.params = {items_json.dump()};
+                    job_req.item_count = items.size();
                     
-                    // TESTING: Send immediate 200 response
-                    //send_json_response(res, nlohmann::json::array(), 200);
-                    //return;
+                    // Capture context for callback
+                    auto worker_loop = ctx.worker_loop;
+                    auto worker_id = ctx.worker_id;
+                    auto push_failover_storage = ctx.push_failover_storage;
+                    auto file_buffer = ctx.file_buffer;
+                    
+                    // Submit to per-worker Queen instance - RETURNS IMMEDIATELY!
+                    ctx.queen->submit(std::move(job_req), [worker_loop, worker_id, request_id, push_failover_storage, file_buffer, items_json](std::string result) {
+                        // Callback runs on Queen's event loop thread
+                        // Defer to uWS event loop for safe response delivery
+                        worker_loop->defer([result = std::move(result), worker_id, request_id, push_failover_storage, file_buffer, items_json]() {
+                            nlohmann::json json_response;
+                            int status_code = 201;
+                            bool is_error = false;
+                            
+                            try {
+                                json_response = nlohmann::json::parse(result);
+                                
+                                // Cleanup: remove items from failover storage (push succeeded)
+                                if (push_failover_storage) {
+                                    push_failover_storage->remove(request_id);
+                                }
+                            } catch (const std::exception& e) {
+                                // Parse failed - try file buffer failover
+                                spdlog::error("[Worker {}] PUSH result parse failed: {}", worker_id, e.what());
+                                
+                                if (push_failover_storage && file_buffer) {
+                                    auto items_json_opt = push_failover_storage->retrieve_and_remove(request_id);
+                                    if (items_json_opt.has_value()) {
+                                        try {
+                                            auto items = nlohmann::json::parse(items_json_opt.value());
+                                            nlohmann::json results = nlohmann::json::array();
+                                            bool all_buffered = true;
+                                            
+                                            for (const auto& item : items) {
+                                                nlohmann::json event = {
+                                                    {"queue", item.value("queue", "")},
+                                                    {"partition", item.value("partition", "Default")},
+                                                    {"payload", item.value("payload", nlohmann::json{})},
+                                                    {"failover", true}
+                                                };
+                                                if (item.contains("transactionId")) {
+                                                    event["transactionId"] = item["transactionId"];
+                                                } else if (item.contains("messageId")) {
+                                                    event["transactionId"] = item["messageId"];
+                                                }
+                                                
+                                                if (file_buffer->write_event(event)) {
+                                                    results.push_back({{"status", "buffered"}, {"queue", item.value("queue", "")}});
+                                                } else {
+                                                    all_buffered = false;
+                                                    results.push_back({{"status", "failed"}, {"error", "File buffer write failed"}});
+                                                }
+                                            }
+                                            
+                                            json_response = results;
+                                            status_code = all_buffered ? 201 : 500;
+                                            is_error = !all_buffered;
+                                        } catch (...) {
+                                            json_response = {{"error", e.what()}};
+                                            status_code = 500;
+                                            is_error = true;
+                                        }
+                                    } else {
+                                        json_response = {{"error", e.what()}};
+                                        status_code = 500;
+                                        is_error = true;
+                                    }
+                                } else {
+                                    json_response = {{"error", e.what()}};
+                                    status_code = 500;
+                                    is_error = true;
+                                }
+                            }
+                            
+                            // Deliver response via ResponseRegistry
+                            worker_response_registries[worker_id]->send_response(
+                                request_id, json_response, is_error, status_code);
+                        });
+                    });
                     
                 } catch (const std::exception& e) {
                     spdlog::error("[Worker {}] PUSH: Error: {}", ctx.worker_id, e.what());

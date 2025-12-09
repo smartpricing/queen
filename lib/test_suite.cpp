@@ -2045,6 +2045,124 @@ TEST(test_message_ordering) {
 }
 
 // ============================================================================
+// VALIDATION TESTS
+// ============================================================================
+
+TEST(test_validation_push_missing_params) {
+    AsyncWaiter waiter;
+    bool got_error = false;
+    std::string error_msg;
+    
+    // Submit PUSH without params - should fail validation
+    queen.submit(queen::JobRequest{
+        .op_type = queen::JobType::PUSH,
+        .queue_name = "test-queue",
+        .params = {},  // Missing required params!
+    }, [&](std::string result) {
+        auto json = nlohmann::json::parse(result);
+        got_error = json.contains("error") && json["success"] == false;
+        if (json.contains("error")) error_msg = json["error"];
+        waiter.signal();
+    });
+    
+    waiter.wait();
+    ASSERT(got_error, "Expected validation error for missing params");
+}
+
+TEST(test_validation_pop_missing_params) {
+    AsyncWaiter waiter;
+    bool got_error = false;
+    
+    // Submit POP without params - should fail validation
+    queen.submit(queen::JobRequest{
+        .op_type = queen::JobType::POP,
+        .queue_name = "test-queue",
+        .params = {},  // Missing required params!
+    }, [&](std::string result) {
+        auto json = nlohmann::json::parse(result);
+        got_error = json.contains("error") && json["success"] == false;
+        waiter.signal();
+    });
+    
+    waiter.wait();
+    ASSERT(got_error, "Expected validation error for missing params");
+}
+
+TEST(test_validation_ack_missing_params) {
+    AsyncWaiter waiter;
+    bool got_error = false;
+    
+    // Submit ACK without params - should fail validation
+    queen.submit(queen::JobRequest{
+        .op_type = queen::JobType::ACK,
+        .params = {},  // Missing required params!
+    }, [&](std::string result) {
+        auto json = nlohmann::json::parse(result);
+        got_error = json.contains("error") && json["success"] == false;
+        waiter.signal();
+    });
+    
+    waiter.wait();
+    ASSERT(got_error, "Expected validation error for missing params");
+}
+
+TEST(test_validation_transaction_missing_params) {
+    AsyncWaiter waiter;
+    bool got_error = false;
+    
+    // Submit TRANSACTION without params - should fail validation
+    queen.submit(queen::JobRequest{
+        .op_type = queen::JobType::TRANSACTION,
+        .params = {},  // Missing required params!
+    }, [&](std::string result) {
+        auto json = nlohmann::json::parse(result);
+        got_error = json.contains("error") && json["success"] == false;
+        waiter.signal();
+    });
+    
+    waiter.wait();
+    ASSERT(got_error, "Expected validation error for missing params");
+}
+
+TEST(test_validation_custom_missing_sql) {
+    AsyncWaiter waiter;
+    bool got_error = false;
+    
+    // Submit CUSTOM without sql - should fail validation
+    queen.submit(queen::JobRequest{
+        .op_type = queen::JobType::CUSTOM,
+        .sql = "",  // Missing required sql!
+    }, [&](std::string result) {
+        auto json = nlohmann::json::parse(result);
+        got_error = json.contains("error") && json["success"] == false;
+        waiter.signal();
+    });
+    
+    waiter.wait();
+    ASSERT(got_error, "Expected validation error for missing sql");
+}
+
+TEST(test_validation_valid_push) {
+    std::string queue = generate_queue_name("test-validation-push");
+    AsyncWaiter waiter;
+    bool success = false;
+    
+    // Valid PUSH should work
+    queen.submit(queen::JobRequest{
+        .op_type = queen::JobType::PUSH,
+        .queue_name = queue,
+        .params = { build_push_params(queue, "Default", {{"msg", "test"}}) },
+    }, [&](std::string result) {
+        auto json = nlohmann::json::parse(result);
+        success = !json.empty() && !json.contains("error");
+        waiter.signal();
+    });
+    
+    waiter.wait();
+    ASSERT(success, "Valid PUSH should succeed");
+}
+
+// ============================================================================
 // MAIN
 // ============================================================================
 
@@ -2112,6 +2230,14 @@ int main(int argc, char* argv[]) {
         
         std::cout << std::endl << "=== ORDERING Tests ===" << std::endl;
         RUN_TEST(test_message_ordering);
+        
+        std::cout << std::endl << "=== VALIDATION Tests ===" << std::endl;
+        RUN_TEST(test_validation_push_missing_params);
+        RUN_TEST(test_validation_pop_missing_params);
+        RUN_TEST(test_validation_ack_missing_params);
+        RUN_TEST(test_validation_transaction_missing_params);
+        RUN_TEST(test_validation_custom_missing_sql);
+        RUN_TEST(test_validation_valid_push);
         
         std::cout << std::endl;
         std::cout << "============================================" << std::endl;

@@ -2,7 +2,7 @@
 #include "queen/routes/route_context.hpp"
 #include "queen/routes/route_helpers.hpp"
 #include "queen/async_queue_manager.hpp"
-#include "queen/sidecar_db_pool.hpp"
+#include "queen.hpp"  // libqueen
 #include "queen/response_queue.hpp"
 #include <spdlog/spdlog.h>
 
@@ -33,19 +33,41 @@ void setup_lease_routes(uWS::App* app, const RouteContext& ctx) {
                     nlohmann::json items_json = nlohmann::json::array();
                     items_json.push_back({
                         {"index", 0},
-                            {"leaseId", lease_id},
+                        {"leaseId", lease_id},
                         {"extendSeconds", seconds}
                     });
                     
-                    SidecarRequest sidecar_req;
-                    sidecar_req.op_type = SidecarOpType::RENEW_LEASE;
-                    sidecar_req.request_id = request_id;
-                    sidecar_req.sql = "SELECT queen.renew_lease_v2($1::jsonb)";
-                    sidecar_req.params = {items_json.dump()};
-                    sidecar_req.item_count = 1;
+                    // Build Queen job request
+                    queen::JobRequest job_req;
+                    job_req.op_type = queen::JobType::RENEW_LEASE;
+                    job_req.request_id = request_id;
+                    job_req.params = {items_json.dump()};
+                    job_req.item_count = 1;
                     
-                    ctx.sidecar->submit(std::move(sidecar_req));
-                    spdlog::debug("[Worker {}] RENEW_LEASE: Submitted to sidecar (request_id={})", 
+                    // Capture context for callback
+                    auto worker_loop = ctx.worker_loop;
+                    auto worker_id = ctx.worker_id;
+                    
+                    ctx.queen->submit(std::move(job_req), [worker_loop, worker_id, request_id](std::string result) {
+                        worker_loop->defer([result = std::move(result), worker_id, request_id]() {
+                            nlohmann::json json_response;
+                            int status_code = 200;
+                            bool is_error = false;
+                            
+                            try {
+                                json_response = nlohmann::json::parse(result);
+                            } catch (const std::exception& e) {
+                                json_response = {{"error", e.what()}};
+                                status_code = 500;
+                                is_error = true;
+                            }
+                            
+                            worker_response_registries[worker_id]->send_response(
+                                request_id, json_response, is_error, status_code);
+                        });
+                    });
+                    
+                    spdlog::debug("[Worker {}] RENEW_LEASE: Submitted (request_id={})", 
                                  ctx.worker_id, request_id);
                     
                 } catch (const std::exception& e) {

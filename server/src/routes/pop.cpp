@@ -5,7 +5,8 @@
 #include "queen/response_queue.hpp"
 #include "queen/queue_types.hpp"
 #include "queen/shared_state_manager.hpp"
-#include "queen/sidecar_db_pool.hpp"
+#include "queen/encryption.hpp"
+#include "queen.hpp"  // libqueen
 #include <spdlog/spdlog.h>
 #include <chrono>
 
@@ -44,7 +45,6 @@ static void record_consumer_group_subscription_if_needed(
 void setup_pop_routes(uWS::App* app, const RouteContext& ctx) {
     // SPECIFIC POP from queue/partition
     app->get("/api/v1/pop/queue/:queue/partition/:partition", [ctx](auto* res, auto* req) {
-        auto request_start = std::chrono::steady_clock::now();
         try {
             std::string queue_name = std::string(req->getParameter(0));
             std::string partition_name = std::string(req->getParameter(1));
@@ -77,76 +77,111 @@ void setup_pop_routes(uWS::App* app, const RouteContext& ctx) {
                 ctx, consumer_group, queue_name, partition_name, sub_mode, sub_from
             );
             
-            if (wait) {
-                // Register response with abort callback to clean up waiting request on disconnect
-                std::string request_id = worker_response_registries[ctx.worker_id]->register_response(res, ctx.worker_id,
-                    [](const std::string& req_id) {
-                        // Log abort - sidecar will handle cleanup via timeout
-                        spdlog::info("SPOP: Connection aborted for {}", req_id);
-                    });
-            
-            // Submit POP_WAIT to sidecar - it will manage waiting and backoff
-            SidecarRequest sidecar_req;
-            sidecar_req.op_type = SidecarOpType::POP_WAIT;
-            sidecar_req.request_id = request_id;
-            sidecar_req.queue_name = queue_name;
-            sidecar_req.partition_name = partition_name;
-            sidecar_req.consumer_group = consumer_group;
-            sidecar_req.batch_size = options.batch;
-            sidecar_req.subscription_mode = options.subscription_mode.value_or("all");
-            sidecar_req.subscription_from = options.subscription_from.value_or("");
-            sidecar_req.auto_ack = options.auto_ack;
-            sidecar_req.wait_deadline = std::chrono::steady_clock::now() + 
-                                        std::chrono::milliseconds(timeout_ms);
-            sidecar_req.next_check = std::chrono::steady_clock::now();  // Check immediately
-            
-            // SQL is built by sidecar using pop_unified_batch
-                
-                // Register consumer presence for targeted notifications
-                if (global_shared_state && global_shared_state->is_enabled()) {
-                    global_shared_state->register_consumer(queue_name);
-                }
-
-                ctx.sidecar->submit(std::move(sidecar_req));
-                
-                //spdlog::info("[Worker {}] SPOP TIMING: route_setup={}us | Submitted POP_WAIT {} for queue {}/{} (timeout={}ms)", ctx.worker_id, route_time_us, request_id, queue_name, partition_name, timeout_ms);
-                
-                // Return immediately - sidecar will handle it
-                return;
-            }
-            
-            // Non-waiting mode: use state machine for async parallel pop
-            // State machine enables true parallel processing across DB connections
-            // Each specific-partition POP is processed independently
-                
             // Register response for async delivery
             std::string request_id = worker_response_registries[ctx.worker_id]->register_response(
-                res, ctx.worker_id, nullptr
+                res, ctx.worker_id, 
+                wait ? [](const std::string& req_id) {
+                    spdlog::info("SPOP: Connection aborted for {}", req_id);
+                } : std::function<void(const std::string&)>(nullptr)
             );
             
-            // Build sidecar request for state machine processing
-            // State machine processes requests in parallel on multiple DB connections
-            SidecarRequest sidecar_req;
-            sidecar_req.op_type = SidecarOpType::POP_BATCH;
-            sidecar_req.request_id = request_id;
-            sidecar_req.queue_name = queue_name;
-            sidecar_req.partition_name = partition_name;
-            sidecar_req.consumer_group = consumer_group;
-            sidecar_req.batch_size = options.batch;
-            sidecar_req.subscription_mode = options.subscription_mode.value_or("all");
-            sidecar_req.subscription_from = options.subscription_from.value_or("");
-            sidecar_req.auto_ack = options.auto_ack;
+            // Build pop params JSON for stored procedure
+            std::string worker_id_str = ctx.async_queue_manager->generate_uuid();
+            nlohmann::json pop_params = nlohmann::json::array();
+            pop_params.push_back({
+                {"idx", 0},
+                {"queue_name", queue_name},
+                {"partition_name", partition_name},
+                {"consumer_group", consumer_group},
+                {"batch_size", options.batch},
+                {"lease_seconds", 0},  // 0 = use queue's configured leaseTime
+                {"worker_id", worker_id_str},
+                {"sub_mode", options.subscription_mode.value_or("new")},
+                {"sub_from", options.subscription_from.value_or("now")},
+                {"auto_ack", options.auto_ack}
+            });
             
-            auto route_time_us = std::chrono::duration_cast<std::chrono::microseconds>(
-                std::chrono::steady_clock::now() - request_start).count();
-            (void)route_time_us;  // Silence unused variable warning in release builds
+            // Build Queen job request
+            queen::JobRequest job_req;
+            job_req.op_type = queen::JobType::POP;
+            job_req.request_id = request_id;
+            job_req.queue_name = queue_name;
+            job_req.partition_name = partition_name;
+            job_req.consumer_group = consumer_group;
+            job_req.batch_size = options.batch;
+            job_req.auto_ack = options.auto_ack;
+            job_req.params = {pop_params.dump()};
             
-            // Use state machine for specific-partition POPs
-            // This enables parallel processing across multiple DB connections
-            ctx.sidecar->submit_pop_batch({std::move(sidecar_req)});
+            // Set wait deadline if long-polling
+            if (wait) {
+                job_req.wait_deadline = std::chrono::steady_clock::now() + 
+                                        std::chrono::milliseconds(timeout_ms);
+                job_req.next_check = std::chrono::steady_clock::now();  // Check immediately
+            }
             
-            /*spdlog::info("[Worker {}] SPOP TIMING: route_setup={}us | Submitted POP_SM (request_id={})", 
-                         ctx.worker_id, route_time_us, request_id);*/
+            // Capture context for callback
+            auto worker_loop = ctx.worker_loop;
+            auto worker_id = ctx.worker_id;
+            
+            // Helper to decrypt messages
+            auto decrypt_messages = [](nlohmann::json& response) {
+                if (!response.contains("messages") || !response["messages"].is_array()) return;
+                queen::EncryptionService* enc_service = queen::get_encryption_service();
+                if (!enc_service || !enc_service->is_enabled()) return;
+                
+                for (auto& msg : response["messages"]) {
+                    if (msg.contains("data") && msg["data"].is_object()) {
+                        auto& data = msg["data"];
+                        if (data.contains("encrypted") && data.contains("iv") && data.contains("authTag")) {
+                            try {
+                                queen::EncryptionService::EncryptedData enc_data{
+                                    data["encrypted"].get<std::string>(),
+                                    data["iv"].get<std::string>(),
+                                    data["authTag"].get<std::string>()
+                                };
+                                auto decrypted = enc_service->decrypt_payload(enc_data);
+                                if (decrypted.has_value()) {
+                                    msg["data"] = nlohmann::json::parse(decrypted.value());
+                                }
+                            } catch (...) {}
+                        }
+                    }
+                }
+            };
+            
+            // Submit to Queen
+            ctx.queen->submit(std::move(job_req), [worker_loop, worker_id, request_id, decrypt_messages](std::string result) {
+                worker_loop->defer([result = std::move(result), worker_id, request_id, decrypt_messages]() {
+                    nlohmann::json json_response;
+                    int status_code = 200;
+                    bool is_error = false;
+                    
+                    try {
+                        json_response = nlohmann::json::parse(result);
+                        
+                        // Extract result from array format
+                        if (json_response.is_array() && !json_response.empty() && 
+                            json_response[0].contains("result")) {
+                            json_response = json_response[0]["result"];
+                        }
+                        
+                        // Decrypt any encrypted payloads
+                        decrypt_messages(json_response);
+                        
+                        // Set status code based on whether messages were returned
+                        if (json_response.contains("messages") && json_response["messages"].empty()) {
+                            status_code = 204;  // No Content
+                        }
+                    } catch (const std::exception& e) {
+                        json_response = {{"error", e.what()}};
+                        status_code = 500;
+                        is_error = true;
+                    }
+                    
+                    worker_response_registries[worker_id]->send_response(
+                        request_id, json_response, is_error, status_code);
+                });
+            });
             
         } catch (const std::exception& e) {
             send_error_response(res, e.what(), 500);
@@ -184,60 +219,111 @@ void setup_pop_routes(uWS::App* app, const RouteContext& ctx) {
                 ctx, consumer_group, queue_name, "", sub_mode, sub_from
             );
             
-            if (wait) {
-                // Register response with abort callback to clean up waiting request on disconnect
-                std::string request_id = worker_response_registries[ctx.worker_id]->register_response(res, ctx.worker_id,
-                    [](const std::string& req_id) {
-                        // Log abort - sidecar will handle cleanup via timeout
-                        spdlog::info("QPOP: Connection aborted for {}", req_id);
-                    });
-            
-            // Submit POP_WAIT to sidecar - it will manage waiting and backoff
-            SidecarRequest sidecar_req;
-            sidecar_req.op_type = SidecarOpType::POP_WAIT;
-            sidecar_req.request_id = request_id;
-            sidecar_req.queue_name = queue_name;
-            sidecar_req.partition_name = "";  // Any partition
-            sidecar_req.consumer_group = consumer_group;
-            sidecar_req.batch_size = options.batch;
-            sidecar_req.subscription_mode = options.subscription_mode.value_or("all");
-            sidecar_req.subscription_from = options.subscription_from.value_or("");
-            sidecar_req.auto_ack = options.auto_ack;
-            sidecar_req.wait_deadline = std::chrono::steady_clock::now() + 
-                                        std::chrono::milliseconds(timeout_ms);
-            sidecar_req.next_check = std::chrono::steady_clock::now();  // Check immediately
-            
-            // SQL is built by sidecar using pop_unified_batch
-            ctx.sidecar->submit(std::move(sidecar_req));
-                
-                // Register consumer presence for targeted notifications
-                if (global_shared_state && global_shared_state->is_enabled()) {
-                    global_shared_state->register_consumer(queue_name);
-                }
-
-                // Return immediately - sidecar will handle it
-                return;
-            }
-                
+            // Register response for async delivery
             std::string request_id = worker_response_registries[ctx.worker_id]->register_response(
-                res, ctx.worker_id, nullptr
+                res, ctx.worker_id,
+                wait ? [](const std::string& req_id) {
+                    spdlog::info("QPOP: Connection aborted for {}", req_id);
+                } : std::function<void(const std::string&)>(nullptr)
             );
             
-            // Build sidecar request for state machine processing
-            // State machine handles wildcard via RESOLVING -> LEASING -> FETCHING flow
-            SidecarRequest sidecar_req;
-            sidecar_req.op_type = SidecarOpType::POP_BATCH;
-            sidecar_req.request_id = request_id;
-            sidecar_req.queue_name = queue_name;
-            sidecar_req.partition_name = "";  // Wildcard - state machine will resolve
-            sidecar_req.consumer_group = consumer_group;
-            sidecar_req.batch_size = options.batch;
-            sidecar_req.subscription_mode = options.subscription_mode.value_or("all");
-            sidecar_req.subscription_from = options.subscription_from.value_or("");
-            sidecar_req.auto_ack = options.auto_ack;
+            // Build pop params JSON for stored procedure
+            std::string worker_id_str = ctx.async_queue_manager->generate_uuid();
+            nlohmann::json pop_params = nlohmann::json::array();
+            pop_params.push_back({
+                {"idx", 0},
+                {"queue_name", queue_name},
+                {"partition_name", ""},  // Any partition
+                {"consumer_group", consumer_group},
+                {"batch_size", options.batch},
+                {"lease_seconds", 0},  // 0 = use queue's configured leaseTime
+                {"worker_id", worker_id_str},
+                {"sub_mode", options.subscription_mode.value_or("new")},
+                {"sub_from", options.subscription_from.value_or("now")},
+                {"auto_ack", options.auto_ack}
+            });
             
-            // Use state machine for parallel processing
-            ctx.sidecar->submit_pop_batch({std::move(sidecar_req)});
+            // Build Queen job request
+            queen::JobRequest job_req;
+            job_req.op_type = queen::JobType::POP;
+            job_req.request_id = request_id;
+            job_req.queue_name = queue_name;
+            job_req.partition_name = "";  // Any partition
+            job_req.consumer_group = consumer_group;
+            job_req.batch_size = options.batch;
+            job_req.auto_ack = options.auto_ack;
+            job_req.params = {pop_params.dump()};
+            
+            // Set wait deadline if long-polling
+            if (wait) {
+                job_req.wait_deadline = std::chrono::steady_clock::now() + 
+                                        std::chrono::milliseconds(timeout_ms);
+                job_req.next_check = std::chrono::steady_clock::now();
+            }
+            
+            // Capture context for callback
+            auto worker_loop = ctx.worker_loop;
+            auto worker_id = ctx.worker_id;
+            
+            // Helper to decrypt messages
+            auto decrypt_messages = [](nlohmann::json& response) {
+                if (!response.contains("messages") || !response["messages"].is_array()) return;
+                queen::EncryptionService* enc_service = queen::get_encryption_service();
+                if (!enc_service || !enc_service->is_enabled()) return;
+                
+                for (auto& msg : response["messages"]) {
+                    if (msg.contains("data") && msg["data"].is_object()) {
+                        auto& data = msg["data"];
+                        if (data.contains("encrypted") && data.contains("iv") && data.contains("authTag")) {
+                            try {
+                                queen::EncryptionService::EncryptedData enc_data{
+                                    data["encrypted"].get<std::string>(),
+                                    data["iv"].get<std::string>(),
+                                    data["authTag"].get<std::string>()
+                                };
+                                auto decrypted = enc_service->decrypt_payload(enc_data);
+                                if (decrypted.has_value()) {
+                                    msg["data"] = nlohmann::json::parse(decrypted.value());
+                                }
+                            } catch (...) {}
+                        }
+                    }
+                }
+            };
+            
+            // Submit to Queen
+            ctx.queen->submit(std::move(job_req), [worker_loop, worker_id, request_id, decrypt_messages](std::string result) {
+                worker_loop->defer([result = std::move(result), worker_id, request_id, decrypt_messages]() {
+                    nlohmann::json json_response;
+                    int status_code = 200;
+                    bool is_error = false;
+                    
+                    try {
+                        json_response = nlohmann::json::parse(result);
+                        
+                        // Extract result from array format
+                        if (json_response.is_array() && !json_response.empty() && 
+                            json_response[0].contains("result")) {
+                            json_response = json_response[0]["result"];
+                        }
+                        
+                        // Decrypt any encrypted payloads
+                        decrypt_messages(json_response);
+                        
+                        // Set status code based on whether messages were returned
+                        if (json_response.contains("messages") && json_response["messages"].empty()) {
+                            status_code = 204;
+                        }
+                    } catch (const std::exception& e) {
+                        json_response = {{"error", e.what()}};
+                        status_code = 500;
+                        is_error = true;
+                    }
+                    
+                    worker_response_registries[worker_id]->send_response(
+                        request_id, json_response, is_error, status_code);
+                });
+            });
             
         } catch (const std::exception& e) {
             send_error_response(res, e.what(), 500);

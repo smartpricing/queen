@@ -3,7 +3,7 @@
 #include "queen/routes/route_helpers.hpp"
 #include "queen/async_queue_manager.hpp"
 #include "queen/shared_state_manager.hpp"
-#include "queen/sidecar_db_pool.hpp"
+#include "queen.hpp"  // libqueen
 #include "queen/response_queue.hpp"
 #include <spdlog/spdlog.h>
 #include <chrono>
@@ -56,8 +56,6 @@ void setup_ack_routes(uWS::App* app, const RouteContext& ctx) {
                         ack_items.push_back(ack_item);
                     }
                     
-                    //spdlog::info("[Worker {}] ACK BATCH: Executing batch ACK ({} items)", ctx.worker_id, ack_items.size());
-                    
                     std::string request_id = worker_response_registries[ctx.worker_id]->register_response(
                         res, ctx.worker_id, nullptr
                     );
@@ -71,15 +69,37 @@ void setup_ack_routes(uWS::App* app, const RouteContext& ctx) {
                         ack_json.push_back(ack_item);
                     }
                     
-                    SidecarRequest sidecar_req;
-                    sidecar_req.op_type = SidecarOpType::ACK_BATCH;
-                    sidecar_req.request_id = request_id;
-                    sidecar_req.sql = "SELECT queen.ack_messages_v2($1::jsonb)";
-                    sidecar_req.params = {ack_json.dump()};
-                    sidecar_req.item_count = ack_items.size();
+                    // Build Queen job request
+                    queen::JobRequest job_req;
+                    job_req.op_type = queen::JobType::ACK;
+                    job_req.request_id = request_id;
+                    job_req.params = {ack_json.dump()};
+                    job_req.item_count = ack_items.size();
                     
-                    ctx.sidecar->submit(std::move(sidecar_req));
-                    spdlog::debug("[Worker {}] ACK BATCH: Submitted {} items to sidecar (request_id={})", 
+                    // Capture context for callback
+                    auto worker_loop = ctx.worker_loop;
+                    auto worker_id = ctx.worker_id;
+                    
+                    ctx.queen->submit(std::move(job_req), [worker_loop, worker_id, request_id](std::string result) {
+                        worker_loop->defer([result = std::move(result), worker_id, request_id]() {
+                            nlohmann::json json_response;
+                            int status_code = 200;
+                            bool is_error = false;
+                            
+                            try {
+                                json_response = nlohmann::json::parse(result);
+                            } catch (const std::exception& e) {
+                                json_response = {{"error", e.what()}};
+                                status_code = 500;
+                                is_error = true;
+                            }
+                            
+                            worker_response_registries[worker_id]->send_response(
+                                request_id, json_response, is_error, status_code);
+                        });
+                    });
+                    
+                    spdlog::debug("[Worker {}] ACK BATCH: Submitted {} items (request_id={})", 
                                  ctx.worker_id, ack_items.size(), request_id);
                     
                 } catch (const std::exception& e) {
@@ -144,7 +164,7 @@ void setup_ack_routes(uWS::App* app, const RouteContext& ctx) {
                     nlohmann::json ack_json = nlohmann::json::array();
                     ack_json.push_back({
                         {"index", 0},
-                                {"transactionId", transaction_id},
+                        {"transactionId", transaction_id},
                         {"partitionId", partition_id.value()},
                         {"leaseId", lease_id.value_or("")},
                         {"status", status},
@@ -152,15 +172,37 @@ void setup_ack_routes(uWS::App* app, const RouteContext& ctx) {
                         {"error", error.value_or("")}
                     });
                     
-                    SidecarRequest sidecar_req;
-                    sidecar_req.op_type = SidecarOpType::ACK_BATCH;  // Use batch procedure even for single ACK
-                    sidecar_req.request_id = request_id;
-                    sidecar_req.sql = "SELECT queen.ack_messages_v2($1::jsonb)";
-                    sidecar_req.params = {ack_json.dump()};
-                    sidecar_req.item_count = 1;
+                    // Build Queen job request
+                    queen::JobRequest job_req;
+                    job_req.op_type = queen::JobType::ACK;
+                    job_req.request_id = request_id;
+                    job_req.params = {ack_json.dump()};
+                    job_req.item_count = 1;
                     
-                    ctx.sidecar->submit(std::move(sidecar_req));
-                    spdlog::debug("[Worker {}] ACK: Submitted to sidecar (request_id={})", 
+                    // Capture context for callback
+                    auto worker_loop = ctx.worker_loop;
+                    auto worker_id = ctx.worker_id;
+                    
+                    ctx.queen->submit(std::move(job_req), [worker_loop, worker_id, request_id](std::string result) {
+                        worker_loop->defer([result = std::move(result), worker_id, request_id]() {
+                            nlohmann::json json_response;
+                            int status_code = 200;
+                            bool is_error = false;
+                            
+                            try {
+                                json_response = nlohmann::json::parse(result);
+                            } catch (const std::exception& e) {
+                                json_response = {{"error", e.what()}};
+                                status_code = 500;
+                                is_error = true;
+                            }
+                            
+                            worker_response_registries[worker_id]->send_response(
+                                request_id, json_response, is_error, status_code);
+                        });
+                    });
+                    
+                    spdlog::debug("[Worker {}] ACK: Submitted (request_id={})", 
                                  ctx.worker_id, request_id);
                     
                 } catch (const std::exception& e) {
@@ -176,4 +218,3 @@ void setup_ack_routes(uWS::App* app, const RouteContext& ctx) {
 
 } // namespace routes
 } // namespace queen
-

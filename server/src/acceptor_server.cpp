@@ -9,7 +9,7 @@
 #include "queen/retention_service.hpp"
 #include "queen/eviction_service.hpp"
 #include "queen/shared_state_manager.hpp"
-#include "queen/sidecar_db_pool.hpp"
+#include "queen.hpp"  // libqueen - replaces sidecar
 #include "threadpool.hpp"
 #include "queen/routes/route_registry.hpp"
 #include "queen/routes/route_context.hpp"
@@ -101,7 +101,8 @@ static void setup_worker_routes(uWS::App* app,
                                 std::shared_ptr<queen::AsyncQueueManager> async_queue_manager,
                                 std::shared_ptr<AnalyticsManager> analytics_manager,
                                 std::shared_ptr<FileBufferManager> file_buffer,
-                                queen::SidecarDbPool* sidecar,
+                                queen::Queen* queen_instance,
+                                uWS::Loop* worker_loop,
                                 const Config& config,
                                 int worker_id,
                                 std::shared_ptr<astp::ThreadPool> db_thread_pool,
@@ -112,7 +113,8 @@ static void setup_worker_routes(uWS::App* app,
         async_queue_manager,
         analytics_manager,
         file_buffer,
-        sidecar,
+        queen_instance,
+        worker_loop,
         config,
         worker_id,
         db_thread_pool,
@@ -189,7 +191,7 @@ struct ResponseTimerContext {
 };
 
 // Timer callback for processing response queue (poll worker responses only)
-// NOTE: Sidecar responses are now delivered directly via loop->defer() - no routing needed
+// NOTE: Queen responses are delivered directly via loop->defer() from per-job callbacks
 static void response_timer_callback(us_timer_t* timer) {
     auto* ctx = (ResponseTimerContext*)us_timer_ext(timer);
     
@@ -265,24 +267,23 @@ static void worker_thread(const Config& config, int worker_id, int num_workers,
             
             // Thread pool sizing calculations:
             // ALL workers use ThreadPool for proper resource management and visibility
-            // - Sidecar pollers: one per HTTP worker (each runs a blocking poller loop)
+            // - Queen instances: one per HTTP worker (each runs its own libuv event loop thread)
             // - Background services: use system_thread_pool for scheduling
             
             // DB ThreadPool Formula:
-            // = Sidecar pollers (one per HTTP worker) - handles POP_WAIT
-            // + Service threads (metrics, etc.)
-            int sidecar_pollers = num_workers;  // Each HTTP worker has its own sidecar poller
+            // = Service threads (metrics, etc.)
+            // Note: Queen instances manage their own threads internally
             int service_threads = config.queue.db_thread_pool_service_threads;
-            int db_thread_pool_size = sidecar_pollers + service_threads;
+            int db_thread_pool_size = num_workers + service_threads;
             
             // System ThreadPool: Used by background services (metrics sampling, retention, eviction)
             int system_threads = 4; // MetricsCollector, RetentionService, EvictionService scheduling
             
             spdlog::info("Initializing GLOBAL shared resources (ASYNC-ONLY MODE):");
             spdlog::info("  - Total DB connections: {} (95% of {}) - ALL ASYNC", total_connections, config.database.pool_size);
-            spdlog::info("  - DB ThreadPool size: {} = {} sidecar + {} service", 
-                        db_thread_pool_size, sidecar_pollers, service_threads);
-            spdlog::info("    * Sidecar pollers: {} (one per HTTP worker, handles POP_WAIT)", sidecar_pollers);
+            spdlog::info("  - DB ThreadPool size: {} = {} workers + {} service", 
+                        db_thread_pool_size, num_workers, service_threads);
+            spdlog::info("    * Queen instances: {} (one per HTTP worker, each with own event loop)", num_workers);
             spdlog::info("    * Service DB threads: {} (metrics, retention, eviction)", service_threads);
             spdlog::info("  - System ThreadPool threads: {} (for background service scheduling)", system_threads);
             spdlog::info("  - Number of HTTP workers: {}", num_workers);
@@ -304,7 +305,7 @@ static void worker_thread(const Config& config, int worker_id, int num_workers,
             // Create global System operations ThreadPool (for metrics, cleanup, etc.)
             global_system_thread_pool = std::make_shared<astp::ThreadPool>(system_threads);
             
-            // Create per-worker response queues (for poll workers - sidecar uses direct delivery)
+            // Create per-worker response queues (for poll workers - Queen uses direct delivery via callbacks)
             num_workers_global = num_workers;
             worker_response_queues.resize(num_workers);
             for (int i = 0; i < num_workers; i++) {
@@ -312,9 +313,9 @@ static void worker_thread(const Config& config, int worker_id, int num_workers,
                 spdlog::info("  - Created response queue for worker {} (poll workers)", i);
             }
             
-            // NOTE: Per-worker sidecars are created in worker_thread() after uWS::App
-            // Each worker gets its own sidecar with callback-based delivery via loop->defer()
-            spdlog::info("  - Per-worker sidecars will be created in each worker thread");
+            // NOTE: Per-worker Queen instances are created in worker_thread() after uWS::App
+            // Each worker gets its own Queen instance with per-job callback-based delivery
+            spdlog::info("  - Per-worker Queen instances will be created in each worker thread");
             
             // Create per-worker response registries (NO lock contention between workers!)
             queen::worker_response_registries.resize(num_workers);
@@ -512,14 +513,14 @@ static void worker_thread(const Config& config, int worker_id, int num_workers,
         spdlog::info("[Worker {}] Creating uWS::App...", worker_id);
         auto worker_app = new uWS::App();
         
-        // Get the event loop for this worker (needed for sidecar callback)
+        // Get the event loop for this worker (needed for deferred callback delivery)
         uWS::Loop* worker_loop = uWS::Loop::get();
         
-        // Create per-worker push failover storage (for file buffer failover on sidecar failure)
+        // Create per-worker push failover storage (for file buffer failover on failure)
         auto push_failover_storage = std::make_shared<PushFailoverStorage>();
         spdlog::debug("[Worker {}] Created push failover storage", worker_id);
         
-        // Calculate per-worker sidecar connections (divide total among workers)
+        // Calculate per-worker connections (divide total among workers)
         // Ensure at least 1 connection per worker
         int per_worker_connections = std::max(1, config.queue.sidecar_pool_size / num_workers);
         // Give any remainder connections to the first workers
@@ -527,295 +528,29 @@ static void worker_thread(const Config& config, int worker_id, int num_workers,
             per_worker_connections++;
         }
         
-        // Create per-worker sidecar with callback-based response delivery
-        // The callback uses loop->defer() to safely deliver responses to the HTTP response
-        spdlog::info("[Worker {}] Creating per-worker sidecar ({} connections, total pool split across {} workers)...", 
+        // Create per-worker Queen instance (libqueen) for async DB operations
+        spdlog::info("[Worker {}] Creating per-worker Queen instance ({} connections, total pool split across {} workers)...", 
                     worker_id, per_worker_connections, num_workers);
         
-        // Helper lambda to decrypt messages in a response
-        auto decrypt_messages = [](nlohmann::json& response) {
-            if (!response.contains("messages") || !response["messages"].is_array()) {
-                return;
-            }
-            
-            queen::EncryptionService* enc_service = queen::get_encryption_service();
-            if (!enc_service || !enc_service->is_enabled()) {
-                return;
-            }
-            
-            for (auto& msg : response["messages"]) {
-                // Check if 'data' field contains encrypted payload
-                if (msg.contains("data") && msg["data"].is_object()) {
-                    auto& data = msg["data"];
-                    if (data.contains("encrypted") && data.contains("iv") && data.contains("authTag")) {
-                        try {
-                            queen::EncryptionService::EncryptedData encrypted_data{
-                                data["encrypted"].get<std::string>(),
-                                data["iv"].get<std::string>(),
-                                data["authTag"].get<std::string>()
-                            };
-                            auto decrypted = enc_service->decrypt_payload(encrypted_data);
-                            if (decrypted.has_value()) {
-                                msg["data"] = nlohmann::json::parse(decrypted.value());
-                                spdlog::debug("Decrypted message payload");
-                            }
-                        } catch (const std::exception& e) {
-                            spdlog::warn("Failed to decrypt message: {}", e.what());
-                            // Keep encrypted payload on failure
-                        }
-                    }
-                }
-            }
-        };
-        
-        auto sidecar_callback = [worker_loop, worker_id, decrypt_messages, push_failover_storage, file_buffer](queen::SidecarResponse resp) {
-            auto callback_start = std::chrono::steady_clock::now();
-            // Capture response data by value, then defer to event loop for safe delivery
-            worker_loop->defer([resp = std::move(resp), worker_id, decrypt_messages, push_failover_storage, file_buffer, callback_start]() {
-                auto defer_start = std::chrono::steady_clock::now();
-                // Parse JSON and determine status code based on operation type
-                nlohmann::json json_response;
-                int status_code = 200;
-                bool is_error = false;
-                
-                if (resp.success) {
-                    try {
-                        json_response = nlohmann::json::parse(resp.result_json);
-                        
-                        // Set status code based on operation type
-                        switch (resp.op_type) {
-                            case queen::SidecarOpType::PUSH:
-                                status_code = 201;
-                                
-                                // Notify SharedStateManager on successful push
-                                // This wakes up waiting consumers (POP_WAIT)
-                                // REMOVED FOR BENCHMARKING EFFECT
-                                /**if (queen::global_shared_state && !resp.push_targets.empty()) {
-                                    for (const auto& [queue, partition] : resp.push_targets) {
-                                        queen::global_shared_state->notify_message_available(queue, partition);
-                                    }
-                                }**/
-                                
-                                // Cleanup: remove items from failover storage (push succeeded)
-                                if (push_failover_storage) {
-                                    push_failover_storage->remove(resp.request_id);
-                                }
-                                break;
-                            case queen::SidecarOpType::POP:
-                            case queen::SidecarOpType::POP_WAIT:
-                                // For POP/POP_WAIT, check if messages were returned
-                                if (json_response.is_array() && json_response.size() == 1 && 
-                                    json_response[0].contains("result")) {
-                                    json_response = json_response[0]["result"];
-                                }
-                                // Decrypt any encrypted payloads
-                                decrypt_messages(json_response);
-                                if (json_response.contains("messages") && json_response["messages"].empty()) {
-                                    status_code = 204;  // No Content
-                                }
-                                break;
-                            case queen::SidecarOpType::POP_BATCH:
-                                // For POP_BATCH, result is array of {idx, result: {messages, leaseId}}
-                                // Extract the first result for this request
-                                if (json_response.is_array() && !json_response.empty()) {
-                                    // Find result by idx (for batched) or take first
-                                    for (const auto& item : json_response) {
-                                        if (item.contains("result")) {
-                                            json_response = item["result"];
-                                            break;
-                                        }
-                                    }
-                                }
-                                // Decrypt any encrypted payloads
-                                decrypt_messages(json_response);
-                                if (json_response.contains("messages") && json_response["messages"].empty()) {
-                                    status_code = 204;  // No Content
-                                }
-                                break;
-                            case queen::SidecarOpType::ACK:
-                            case queen::SidecarOpType::ACK_BATCH:
-                                status_code = 200;
-                                
-                                // Notify SharedStateManager on successful ACK
-                                // This wakes up waiting consumers (partition may now be free)
-                                if (queen::global_shared_state && json_response.is_array()) {
-                                    std::set<std::pair<std::string, std::string>> notified;
-                                    for (const auto& item : json_response) {
-                                        if (item.value("success", false)) {
-                                            std::string queue = item.value("queue", "");
-                                            std::string partition = item.value("partition", "");
-                                            if (!queue.empty() && notified.find({queue, partition}) == notified.end()) {
-                                                queen::global_shared_state->notify_partition_free(queue, partition, "");
-                                                notified.insert({queue, partition});
-                                            }
-                                        }
-                                    }
-                                }
-                                break;
-                            case queen::SidecarOpType::TRANSACTION:
-                            case queen::SidecarOpType::RENEW_LEASE:
-                                status_code = 200;
-                                break;
-                        }
-                        
-                        spdlog::debug("[Worker {}] Sidecar response for {}: op={} status={}", 
-                                    worker_id, resp.request_id, 
-                                    static_cast<int>(resp.op_type), status_code);
-                    } catch (const std::exception& e) {
-                        json_response = nlohmann::json::array();
-                        spdlog::error("[Worker {}] Failed to parse sidecar result for {}: {}", 
-                                     worker_id, resp.request_id, e.what());
-                    }
-                } else {
-                    // Sidecar operation failed
-                    
-                    // Special handling for PUSH failures: try file buffer failover
-                    if (resp.op_type == queen::SidecarOpType::PUSH && 
-                        push_failover_storage && file_buffer) {
-                        
-                        auto items_json_opt = push_failover_storage->retrieve_and_remove(resp.request_id);
-                        
-                        if (items_json_opt.has_value()) {
-                            spdlog::warn("[Worker {}] PUSH failed ({}), attempting file buffer failover...", 
-                                        worker_id, resp.error_message);
-                            
-                            try {
-                                auto items = nlohmann::json::parse(items_json_opt.value());
-                                nlohmann::json results = nlohmann::json::array();
-                                bool all_buffered = true;
-                                size_t buffered_count = 0;
-                                
-                                for (const auto& item : items) {
-                                    // Build event for file buffer (same format as maintenance mode)
-                                    nlohmann::json event = {
-                                        {"queue", item.value("queue", "")},
-                                        {"partition", item.value("partition", "Default")},
-                                        {"payload", item.value("payload", nlohmann::json{})},
-                                        {"failover", true}
-                                    };
-                                    
-                                    // Use transactionId if present, otherwise use messageId
-                                    if (item.contains("transactionId") && !item["transactionId"].get<std::string>().empty()) {
-                                        event["transactionId"] = item["transactionId"];
-                                    } else if (item.contains("messageId")) {
-                                        event["transactionId"] = item["messageId"];
-                                    }
-                                    
-                                    if (item.contains("traceId") && item["traceId"].is_string()) {
-                                        event["traceId"] = item["traceId"];
-                                    }
-                                    
-                                    if (file_buffer->write_event(event)) {
-                                        buffered_count++;
-                                        nlohmann::json result = {
-                                            {"status", "buffered"},
-                                            {"queue", item.value("queue", "")},
-                                            {"partition", item.value("partition", "Default")}
-                                        };
-                                        if (item.contains("transactionId")) {
-                                            result["transactionId"] = item["transactionId"];
-                                        } else if (item.contains("messageId")) {
-                                            result["transactionId"] = item["messageId"];
-                                        }
-                                        results.push_back(result);
-                                    } else {
-                                        all_buffered = false;
-                                        results.push_back({
-                                            {"status", "failed"},
-                                            {"queue", item.value("queue", "")},
-                                            {"partition", item.value("partition", "Default")},
-                                            {"error", "File buffer write failed"}
-                                        });
-                                    }
-                                }
-                                
-                                spdlog::info("[Worker {}] PUSH failover: {}/{} items buffered to disk", 
-                                            worker_id, buffered_count, items.size());
-                                
-                                // Mark DB as unhealthy for faster failover on subsequent requests
-                                file_buffer->mark_db_unhealthy();
-                                
-                                json_response = results;
-                                status_code = all_buffered ? 201 : 500;
-                                is_error = !all_buffered;
-                                
-                            } catch (const std::exception& e) {
-                                spdlog::error("[Worker {}] PUSH failover failed: {}", worker_id, e.what());
-                                json_response = {{"error", std::string("Database error: ") + resp.error_message + 
-                                                          "; Failover error: " + e.what()}};
-                                status_code = 500;
-                                is_error = true;
-                            }
-                        } else {
-                            // No items in storage (shouldn't happen, but handle gracefully)
-                            spdlog::error("[Worker {}] PUSH failed but no items in failover storage for {}", 
-                                         worker_id, resp.request_id);
-                            json_response = {{"error", resp.error_message}};
-                            status_code = 500;
-                            is_error = true;
-                        }
-                    } else {
-                        // Non-PUSH failure or no failover available
-                        json_response = {{"error", resp.error_message}};
-                        status_code = 500;
-                        is_error = true;
-                        spdlog::warn("[Worker {}] Sidecar error for {}: {}", 
-                                    worker_id, resp.request_id, resp.error_message);
-                    }
-                }
-                
-                // Get operation type name for logging
-                const char* op_name = "UNKNOWN";
-                switch (resp.op_type) {
-                    case queen::SidecarOpType::PUSH: op_name = "PUSH"; break;
-                    case queen::SidecarOpType::POP: op_name = "POP"; break;
-                    case queen::SidecarOpType::POP_BATCH: op_name = "POP_BATCH"; break;
-                    case queen::SidecarOpType::POP_WAIT: op_name = "POP_WAIT"; break;
-                    case queen::SidecarOpType::ACK: op_name = "ACK"; break;
-                    case queen::SidecarOpType::ACK_BATCH: op_name = "ACK_BATCH"; break;
-                    case queen::SidecarOpType::TRANSACTION: op_name = "TRANSACTION"; break;
-                    case queen::SidecarOpType::RENEW_LEASE: op_name = "RENEW_LEASE"; break;
-                }
-                
-                // Deliver directly via ResponseRegistry (safe - we're in the event loop)
-                // Use per-worker registry - no lock contention with other workers!
-                queen::worker_response_registries[worker_id]->send_response(
-                    resp.request_id, json_response, is_error, status_code);
-
-            });
-        };
-        
-        // Build sidecar tuning from config
-        queen::SidecarDbPool::SidecarTuning sidecar_tuning{
-            config.queue.sidecar_micro_batch_wait_ms,
-            config.queue.sidecar_max_items_per_tx,
-            config.queue.sidecar_max_batch_size,
-            config.queue.sidecar_max_pending_count
-        };
-        
-        auto worker_sidecar = std::make_unique<queen::SidecarDbPool>(
+        auto worker_queen = std::make_unique<queen::Queen>(
             config.database.connection_string(),
-            per_worker_connections,  // Split connections among workers
             config.database.statement_timeout,
-            global_db_thread_pool,
-            sidecar_callback,
-            worker_id,  // For logging
-            sidecar_tuning
+            per_worker_connections,
+            config.queue.sidecar_micro_batch_wait_ms,
+            config.queue.pop_wait_initial_interval_ms,
+            config.queue.pop_wait_backoff_threshold,
+            config.queue.pop_wait_backoff_multiplier,
+            config.queue.pop_wait_max_interval_ms
         );
         
-        // Start sidecar immediately (connections established, poller thread started)
-        worker_sidecar->start();
-        spdlog::info("[Worker {}] Per-worker sidecar started with {} connections", worker_id, per_worker_connections);
+        // Allow time for connections to be established
+        std::this_thread::sleep_for(std::chrono::milliseconds(500));
+        spdlog::info("[Worker {}] Queen instance ready with {} connections", worker_id, per_worker_connections);
         
-        // Register sidecar with SharedStateManager for POP_WAIT notifications
-        if (queen::global_shared_state) {
-            queen::global_shared_state->register_sidecar(worker_sidecar.get());
-        }
-        
-        // Setup routes (pass raw pointer - sidecar lifetime managed by this thread)
+        // Setup routes (pass raw pointer - Queen lifetime managed by this thread)
         spdlog::info("[Worker {}] Setting up routes...", worker_id);
         setup_worker_routes(worker_app, async_queue_manager, analytics_manager, file_buffer, 
-                           worker_sidecar.get(), config, worker_id, db_thread_pool,
+                           worker_queen.get(), worker_loop, config, worker_id, db_thread_pool,
                            push_failover_storage);
         spdlog::info("[Worker {}] Routes configured", worker_id);
         
@@ -860,18 +595,14 @@ static void worker_thread(const Config& config, int worker_id, int num_workers,
         
         // Run worker event loop (blocks forever)
         // Will receive sockets adopted from the acceptor
-        // NOTE: worker_sidecar must stay alive during run() - it's owned by this thread
+        // NOTE: worker_queen must stay alive during run() - it's owned by this thread
         worker_app->run();
         
-        // Cleanup sidecar when event loop exits
-        spdlog::info("[Worker {}] Stopping sidecar...", worker_id);
+        // Cleanup Queen when event loop exits
+        spdlog::info("[Worker {}] Stopping Queen instance...", worker_id);
         
-        // Unregister sidecar from SharedStateManager
-        if (queen::global_shared_state) {
-            queen::global_shared_state->unregister_sidecar(worker_sidecar.get());
-        }
-        
-        worker_sidecar->stop();
+        // Queen destructor handles cleanup
+        worker_queen.reset();
         
         spdlog::info("[Worker {}] Event loop exited", worker_id);
         

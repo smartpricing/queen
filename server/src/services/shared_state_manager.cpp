@@ -1,6 +1,6 @@
 #include "queen/shared_state_manager.hpp"
 #include "queen/async_database.hpp"
-#include "queen/sidecar_db_pool.hpp"
+// Note: Queen library notification integration will be added later
 #include <spdlog/spdlog.h>
 #include <chrono>
 #include <algorithm>
@@ -222,8 +222,8 @@ std::vector<std::string> SharedStateManager::get_alive_servers() {
 // ============================================================
 
 void SharedStateManager::notify_message_available(const std::string& queue, const std::string& partition) {
-    // ALWAYS: Notify local sidecars (works in single-node mode)
-    notify_local_sidecars(queue);
+    // Note: Local worker notification via Queen library will be added later
+    notify_local_workers(queue);
     reset_backoff_for_queue(queue);
     
     // CLUSTER: If UDP enabled, broadcast to other servers
@@ -252,8 +252,8 @@ void SharedStateManager::notify_message_available(const std::string& queue, cons
 void SharedStateManager::notify_partition_free(const std::string& queue,
                                               const std::string& partition,
                                               const std::string& consumer_group) {
-    // ALWAYS: Notify local sidecars (works in single-node mode)
-    notify_local_sidecars(queue);
+    // Note: Local worker notification via Queen library will be added later
+    notify_local_workers(queue);
     reset_backoff_for_queue(queue);
     
     // CLUSTER: If UDP enabled, broadcast to other servers
@@ -279,35 +279,13 @@ void SharedStateManager::notify_partition_free(const std::string& queue,
 }
 
 // ============================================================
-// Tier 4: Local Sidecar Registry
+// Tier 4: Local Worker Registry (Queen integration later)
 // ============================================================
 
-void SharedStateManager::register_sidecar(SidecarDbPool* sidecar) {
-    std::unique_lock lock(sidecar_mutex_);
-    local_sidecars_.push_back(sidecar);
-    spdlog::debug("SharedState: Registered sidecar (total: {})", local_sidecars_.size());
-}
-
-void SharedStateManager::unregister_sidecar(SidecarDbPool* sidecar) {
-    std::unique_lock lock(sidecar_mutex_);
-    local_sidecars_.erase(
-        std::remove(local_sidecars_.begin(), local_sidecars_.end(), sidecar),
-        local_sidecars_.end()
-    );
-    spdlog::debug("SharedState: Unregistered sidecar (total: {})", local_sidecars_.size());
-}
-
-void SharedStateManager::notify_local_sidecars(const std::string& queue_name) {
-    std::shared_lock lock(sidecar_mutex_);
-    for (auto* sidecar : local_sidecars_) {
-        if (sidecar) {
-            sidecar->notify_queue_activity(queue_name);
-        }
-    }
-    if (!local_sidecars_.empty()) {
-        spdlog::debug("SharedState: Notified {} local sidecars for queue {}", 
-                     local_sidecars_.size(), queue_name);
-    }
+void SharedStateManager::notify_local_workers(const std::string& queue_name) {
+    // Note: Queen library notification integration will be added later
+    // For now, the Queen library manages POP wait internally
+    (void)queue_name;
 }
 
 // ============================================================
@@ -452,9 +430,9 @@ void SharedStateManager::handle_message_available(const std::string& sender, con
     spdlog::debug("SharedState: MESSAGE_AVAILABLE from {} for {}:{}",
                  sender, queue, payload.value("partition", ""));
     
-    // Forward to local sidecars (received from another server)
+    // Forward to local workers (received from another server)
     if (!queue.empty()) {
-        notify_local_sidecars(queue);
+        notify_local_workers(queue);
         reset_backoff_for_queue(queue);
     }
 }
@@ -465,9 +443,9 @@ void SharedStateManager::handle_partition_free(const std::string& sender, const 
                  sender, queue, payload.value("partition", ""),
                  payload.value("consumer_group", ""));
     
-    // Forward to local sidecars (received from another server)
+    // Forward to local workers (received from another server)
     if (!queue.empty()) {
-        notify_local_sidecars(queue);
+        notify_local_workers(queue);
         reset_backoff_for_queue(queue);
     }
 }
@@ -925,11 +903,8 @@ nlohmann::json SharedStateManager::get_stats() const {
         {"restarts_detected", server_health_.restarts_detected()}
     };
     
-    // Tier 4: Local Sidecar Registry
-    {
-        std::shared_lock lock(sidecar_mutex_);
-        stats["local_sidecars"] = local_sidecars_.size();
-    }
+    // Tier 4: Local Worker Registry (Queen integration later)
+    stats["local_workers"] = 0;  // Note: Will be populated when Queen integration is added
     
     // Tier 5: Group Backoff State
     {
@@ -947,88 +922,16 @@ nlohmann::json SharedStateManager::get_stats() const {
         };
     }
     
-    // Add aggregated sidecar stats and queue backoff summary
-    stats["sidecar_ops"] = get_aggregated_sidecar_stats();
+    // Add queue backoff summary
+    // Note: Worker stats will be added when Queen integration is complete
     stats["queue_backoff_summary"] = get_queue_backoff_summary();
     
     return stats;
 }
 
 nlohmann::json SharedStateManager::get_aggregated_sidecar_stats() const {
-    nlohmann::json result = nlohmann::json::object();
-    
-    // Aggregated counters
-    uint64_t push_count = 0, pop_count = 0, ack_count = 0;
-    uint64_t ack_batch_count = 0, transaction_count = 0, renew_lease_count = 0;
-    uint64_t push_time_us = 0, pop_time_us = 0, ack_time_us = 0;
-    uint64_t push_items = 0, pop_items = 0, ack_items = 0;
-    
-    {
-        std::shared_lock lock(sidecar_mutex_);
-        
-        for (auto* sidecar : local_sidecars_) {
-            if (!sidecar) continue;
-            
-            auto stats = sidecar->get_stats();
-            
-            for (const auto& [op_type, op_stats] : stats.op_stats) {
-                switch (op_type) {
-                    case SidecarOpType::PUSH:
-                        push_count += op_stats.count;
-                        push_time_us += op_stats.total_time_us;
-                        push_items += op_stats.items_processed;
-                        break;
-                    case SidecarOpType::POP:
-                        pop_count += op_stats.count;
-                        pop_time_us += op_stats.total_time_us;
-                        pop_items += op_stats.items_processed;
-                        break;
-                    case SidecarOpType::ACK:
-                        ack_count += op_stats.count;
-                        ack_time_us += op_stats.total_time_us;
-                        ack_items += op_stats.items_processed;
-                        break;
-                    case SidecarOpType::ACK_BATCH:
-                        ack_batch_count += op_stats.count;
-                        break;
-                    case SidecarOpType::TRANSACTION:
-                        transaction_count += op_stats.count;
-                        break;
-                    case SidecarOpType::RENEW_LEASE:
-                        renew_lease_count += op_stats.count;
-                        break;
-                    case SidecarOpType::POP_BATCH:
-                    case SidecarOpType::POP_WAIT:
-                        // These are tracked under POP
-                        pop_count += op_stats.count;
-                        pop_time_us += op_stats.total_time_us;
-                        pop_items += op_stats.items_processed;
-                        break;
-                }
-            }
-        }
-    }
-    
-    result["push"] = {
-        {"count", push_count},
-        {"avg_latency_us", push_count > 0 ? push_time_us / push_count : 0},
-        {"items", push_items}
-    };
-    result["pop"] = {
-        {"count", pop_count},
-        {"avg_latency_us", pop_count > 0 ? pop_time_us / pop_count : 0},
-        {"items", pop_items}
-    };
-    result["ack"] = {
-        {"count", ack_count},
-        {"avg_latency_us", ack_count > 0 ? ack_time_us / ack_count : 0},
-        {"items", ack_items}
-    };
-    result["ack_batch"] = {{"count", ack_batch_count}};
-    result["transaction"] = {{"count", transaction_count}};
-    result["renew_lease"] = {{"count", renew_lease_count}};
-    
-    return result;
+    // Note: Worker stats will be available when Queen library integration is complete
+    return nlohmann::json::object();
 }
 
 nlohmann::json SharedStateManager::get_queue_backoff_summary() const {

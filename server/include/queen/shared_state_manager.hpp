@@ -21,7 +21,7 @@ namespace queen {
 
 // Forward declarations
 class AsyncDbPool;
-class SidecarDbPool;
+// Note: Queen library integration for notifications will be added later
 
 /**
  * SharedStateManager
@@ -159,24 +159,13 @@ public:
     std::vector<std::string> get_alive_servers();
     
     // ============================================================
-    // Tier 4: Local Sidecar Registry (for POP_WAIT notifications)
+    // Tier 4: Local Worker Registry (for POP_WAIT notifications)
+    // Note: Queen library integration will be added later
     // ============================================================
-    
-    /**
-     * Register a local sidecar for notifications
-     * Called when each worker creates its sidecar
-     */
-    void register_sidecar(SidecarDbPool* sidecar);
-    
-    /**
-     * Unregister a local sidecar
-     * Called when worker shuts down
-     */
-    void unregister_sidecar(SidecarDbPool* sidecar);
     
     // ============================================================
     // Tier 5: Group Backoff Coordination (local only, not synced via UDP)
-    // Used by sidecars to coordinate POP_WAIT polling
+    // Used by workers to coordinate POP_WAIT polling
     // ============================================================
     
     /**
@@ -187,8 +176,8 @@ public:
     
     /**
      * Try to acquire exclusive access for querying a group
-     * Prevents multiple sidecars from querying the same group simultaneously
-     * @return true if acquired, false if another sidecar is already querying
+     * Prevents multiple workers from querying the same group simultaneously
+     * @return true if acquired, false if another worker is already querying
      */
     bool try_acquire_group(const std::string& group_key);
     
@@ -216,19 +205,19 @@ public:
     void reset_backoff_for_queue(const std::string& queue_name);
     
     // ============================================================
-    // Notifications (local sidecars + cluster broadcast via UDP)
+    // Notifications (local workers + cluster broadcast via UDP)
     // ============================================================
     
     /**
      * Send MESSAGE_AVAILABLE notification to servers with consumers
      * Falls back to broadcast if no presence info
-     * ALSO notifies local sidecars (for POP_WAIT)
+     * Note: Local worker notification via Queen library will be added later
      */
     void notify_message_available(const std::string& queue, const std::string& partition);
     
     /**
      * Send PARTITION_FREE notification
-     * ALSO notifies local sidecars (for POP_WAIT)
+     * Note: Local worker notification via Queen library will be added later
      */
     void notify_partition_free(const std::string& queue, 
                               const std::string& partition,
@@ -241,8 +230,8 @@ public:
     nlohmann::json get_stats() const;
     
     /**
-     * Get aggregated sidecar operation statistics
-     * Aggregates across all local sidecars (all workers)
+     * Get aggregated worker operation statistics
+     * Note: Will be populated when Queen library integration is complete
      */
     nlohmann::json get_aggregated_sidecar_stats() const;
     
@@ -289,10 +278,9 @@ private:
     std::thread dns_refresh_thread_;
     
     // ============================================================
-    // Tier 4: Local Sidecar Registry
+    // Tier 4: Local Worker Registry (Queen integration later)
     // ============================================================
-    std::vector<SidecarDbPool*> local_sidecars_;
-    mutable std::shared_mutex sidecar_mutex_;
+    // Note: Queen library notification integration will be added later
     
     // ============================================================
     // Tier 5: Group Backoff State (local only)
@@ -318,8 +306,8 @@ private:
     int base_interval_ms_ = 100;          // POP_WAIT_INITIAL_INTERVAL_MS
     int backoff_cleanup_threshold_seconds_ = 3600;  // QUEUE_BACKOFF_CLEANUP_THRESHOLD
     
-    // Internal: notify all local sidecars
-    void notify_local_sidecars(const std::string& queue_name);
+    // Internal: notify all local workers (Queen integration later)
+    void notify_local_workers(const std::string& queue_name);
     
     // ============================================================
     // Message Handlers

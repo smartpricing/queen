@@ -2,6 +2,7 @@
 
 #include <memory>
 #include <string>
+#include <App.h>
 
 namespace queen {
 
@@ -9,7 +10,7 @@ namespace queen {
 class AsyncQueueManager;
 class AnalyticsManager;
 class FileBufferManager;
-class SidecarDbPool;
+class Queen;  // From libqueen (queen.hpp)
 class PushFailoverStorage;
 struct Config;
 
@@ -36,9 +37,12 @@ struct RouteContext {
     // File buffer for maintenance mode and failover
     std::shared_ptr<FileBufferManager> file_buffer;
     
-    // Per-worker sidecar for async DB operations
+    // Per-worker Queen instance for async DB operations (libqueen)
     // Raw pointer - lifetime managed by worker thread
-    SidecarDbPool* sidecar;
+    Queen* queen;
+    
+    // uWS worker event loop for deferred response delivery
+    uWS::Loop* worker_loop;
     
     // Configuration reference
     const Config& config;
@@ -49,14 +53,15 @@ struct RouteContext {
     // Database thread pool
     std::shared_ptr<astp::ThreadPool> db_thread_pool;
     
-    // Storage for pending push items (for file buffer failover on sidecar failure)
+    // Storage for pending push items (for file buffer failover on failure)
     std::shared_ptr<PushFailoverStorage> push_failover_storage;
     
     RouteContext(
         std::shared_ptr<AsyncQueueManager> qm,
         std::shared_ptr<AnalyticsManager> am,
         std::shared_ptr<FileBufferManager> fb,
-        SidecarDbPool* sc,
+        Queen* q,
+        uWS::Loop* loop,
         const Config& cfg,
         int wid,
         std::shared_ptr<astp::ThreadPool> dbtp,
@@ -64,7 +69,8 @@ struct RouteContext {
     ) : async_queue_manager(std::move(qm)),
         analytics_manager(std::move(am)),
         file_buffer(std::move(fb)),
-        sidecar(sc),
+        queen(q),
+        worker_loop(loop),
         config(cfg),
         worker_id(wid),
         db_thread_pool(std::move(dbtp)),

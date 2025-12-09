@@ -2,7 +2,7 @@
 #include "queen/routes/route_context.hpp"
 #include "queen/routes/route_helpers.hpp"
 #include "queen/async_queue_manager.hpp"
-#include "queen/sidecar_db_pool.hpp"
+#include "queen.hpp"  // libqueen
 #include "queen/response_queue.hpp"
 #include "queen/encryption.hpp"
 #include "queen/shared_state_manager.hpp"
@@ -111,15 +111,37 @@ void setup_transaction_routes(uWS::App* app, const RouteContext& ctx) {
                         }
                     }
                     
-                    SidecarRequest sidecar_req;
-                    sidecar_req.op_type = SidecarOpType::TRANSACTION;
-                    sidecar_req.request_id = request_id;
-                    sidecar_req.sql = "SELECT queen.execute_transaction_v2($1::jsonb)";
-                    sidecar_req.params = {ops_json.dump()};
-                    sidecar_req.item_count = ops_json.size();
+                    // Build Queen job request
+                    queen::JobRequest job_req;
+                    job_req.op_type = queen::JobType::TRANSACTION;
+                    job_req.request_id = request_id;
+                    job_req.params = {ops_json.dump()};
+                    job_req.item_count = ops_json.size();
                     
-                    ctx.sidecar->submit(std::move(sidecar_req));
-                    spdlog::debug("[Worker {}] TRANSACTION: Submitted {} ops to sidecar (request_id={})", 
+                    // Capture context for callback
+                    auto worker_loop = ctx.worker_loop;
+                    auto worker_id = ctx.worker_id;
+                    
+                    ctx.queen->submit(std::move(job_req), [worker_loop, worker_id, request_id](std::string result) {
+                        worker_loop->defer([result = std::move(result), worker_id, request_id]() {
+                            nlohmann::json json_response;
+                            int status_code = 200;
+                            bool is_error = false;
+                            
+                            try {
+                                json_response = nlohmann::json::parse(result);
+                            } catch (const std::exception& e) {
+                                json_response = {{"error", e.what()}};
+                                status_code = 500;
+                                is_error = true;
+                            }
+                            
+                            worker_response_registries[worker_id]->send_response(
+                                request_id, json_response, is_error, status_code);
+                        });
+                    });
+                    
+                    spdlog::debug("[Worker {}] TRANSACTION: Submitted {} ops (request_id={})", 
                                  ctx.worker_id, ops_json.size(), request_id);
                     
                 } catch (const std::exception& e) {

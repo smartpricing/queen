@@ -294,8 +294,8 @@ bool AsyncQueueManager::initialize_schema() {
         std::string schema_dir = "schema";
         std::string migrations_dir = "migrations";
         
-        // Check common locations
-        for (const auto& base : {".", "..", "server", "../server"}) {
+        // Check common locations (lib/schema is where libqueen stores schema files)
+        for (const auto& base : {".", "..", "lib", "../lib", "server", "../server"}) {
             if (std::filesystem::exists(std::string(base) + "/schema/schema.sql")) {
                 schema_dir = std::string(base) + "/schema";
                 migrations_dir = std::string(base) + "/migrations";
