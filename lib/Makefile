@@ -49,24 +49,37 @@ LIBS = $(UV_STATIC_LIB) -lpq $(addprefix -L,$(PG_LIBS))
 # Build directory
 BUILD_DIR = build
 
-# Test executable
+# Test executables
 TEST_TARGET = $(BUILD_DIR)/test_queen
+TEST_SUITE_TARGET = $(BUILD_DIR)/test_suite
 
-.PHONY: all test clean help
+.PHONY: all test test-suite clean help
 
 all: test
 
-# Build and run test
+# Build and run basic test
 test: $(TEST_TARGET)
-	@echo "Running test..."
+	@echo "Running basic test..."
 	@./$(TEST_TARGET)
 
-# Compile test.cpp
+# Build and run comprehensive test suite
+test-suite: $(TEST_SUITE_TARGET)
+	@echo "Running comprehensive test suite..."
+	@./$(TEST_SUITE_TARGET)
+
+# Compile test.cpp (basic test)
 $(TEST_TARGET): test.cpp queen.hpp
 	@mkdir -p $(BUILD_DIR)
 	@echo "Compiling test.cpp..."
 	$(CXX) $(CXXFLAGS) $(INCLUDES) test.cpp -o $@ $(LIBS)
 	@echo "✅ Build complete!"
+
+# Compile test_suite.cpp (comprehensive test suite)
+$(TEST_SUITE_TARGET): test_suite.cpp queen.hpp
+	@mkdir -p $(BUILD_DIR)
+	@echo "Compiling test_suite.cpp..."
+	$(CXX) $(CXXFLAGS) $(INCLUDES) test_suite.cpp -o $@ $(LIBS)
+	@echo "✅ Test suite build complete!"
 
 # Clean build artifacts
 clean:
@@ -92,10 +105,20 @@ help:
 	@echo "libqueen - Header-only Queen core library"
 	@echo ""
 	@echo "Targets:"
-	@echo "  all    - Build test executable (default)"
-	@echo "  test   - Build and run test"
-	@echo "  clean  - Remove build artifacts"
-	@echo "  debug  - Show build configuration paths"
+	@echo "  all        - Build basic test executable (default)"
+	@echo "  test       - Build and run basic test"
+	@echo "  test-suite - Build and run comprehensive test suite"
+	@echo "  clean      - Remove build artifacts"
+	@echo "  debug      - Show build configuration paths"
+	@echo ""
+	@echo "Test Suite:"
+	@echo "  The comprehensive test suite (test_suite.cpp) tests:"
+	@echo "  - PUSH: single, batch, duplicate detection, partitions, large payloads"
+	@echo "  - POP: empty queue, non-empty, batch, partitions, consumer groups"
+	@echo "  - ACK: single, batch, success/failed status"
+	@echo "  - TRANSACTIONS: push+ack atomic, multiple ops, partitions"
+	@echo "  - RENEW_LEASE: manual, batch, expired lease, multiple renewals"
+	@echo "  - MESSAGE ORDERING: FIFO ordering verification"
 	@echo ""
 	@echo "Dependencies (from ../server/vendor/):"
 	@echo "  - libuv (static library)"

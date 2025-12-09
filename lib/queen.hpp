@@ -15,11 +15,211 @@
 #include <iostream>
 #include <functional>
 #include <memory>
-
-// TODO make test
-// TODO make pop set consumer group subscription in pop procedure
+#include <random>
+#include <array>
+#include <sstream>
+#include <iomanip>
+#include <fstream>
+#include <filesystem>
+#include <algorithm>
 
 namespace queen {
+
+// UUIDv7 generator - time-ordered UUIDs for proper message ordering
+inline std::string generate_uuidv7() {
+    static std::mutex uuid_mutex;
+    static uint64_t last_ms = 0;
+    static uint16_t sequence = 0;
+    static std::random_device rd;
+    static std::mt19937_64 gen(rd());
+    
+    std::lock_guard<std::mutex> lock(uuid_mutex);
+    
+    auto now = std::chrono::system_clock::now();
+    uint64_t current_ms = std::chrono::duration_cast<std::chrono::milliseconds>(now.time_since_epoch()).count();
+
+    if (current_ms <= last_ms) {
+        sequence++;
+    } else {
+        last_ms = current_ms;
+        sequence = 0; 
+    }
+
+    std::array<uint8_t, 16> bytes;
+
+    // 48-bit unix_ts_ms (big-endian)
+    bytes[0] = (last_ms >> 40) & 0xFF;
+    bytes[1] = (last_ms >> 32) & 0xFF;
+    bytes[2] = (last_ms >> 24) & 0xFF;
+    bytes[3] = (last_ms >> 16) & 0xFF;
+    bytes[4] = (last_ms >> 8) & 0xFF;
+    bytes[5] = last_ms & 0xFF;
+
+    // 4-bit version (0111) and 12-bit sequence
+    uint16_t sequence_and_version = sequence & 0x0FFF;
+    bytes[6] = 0x70 | (sequence_and_version >> 8);
+    bytes[7] = sequence_and_version & 0xFF;
+
+    // 2-bit variant (10) and 62-bits of random data
+    uint64_t rand_data = gen();
+    bytes[8] = 0x80 | ((rand_data >> 56) & 0x3F);
+    bytes[9] = (rand_data >> 48) & 0xFF;
+    bytes[10] = (rand_data >> 40) & 0xFF;
+    bytes[11] = (rand_data >> 32) & 0xFF;
+    bytes[12] = (rand_data >> 24) & 0xFF;
+    bytes[13] = (rand_data >> 16) & 0xFF;
+    bytes[14] = (rand_data >> 8) & 0xFF;
+    bytes[15] = rand_data & 0xFF;
+
+    // Format to string
+    std::stringstream ss;
+    ss << std::hex << std::setfill('0');
+    for (int i = 0; i < 16; ++i) {
+        if (i == 4 || i == 6 || i == 8 || i == 10) ss << '-';
+        ss << std::setw(2) << static_cast<int>(bytes[i]);
+    }
+    
+    return ss.str();
+}
+
+// ============================================================================
+// Schema Initialization
+// ============================================================================
+
+namespace detail {
+
+// Helper: Read file contents
+inline std::string read_sql_file(const std::string& path) {
+    std::ifstream file(path);
+    if (!file.is_open()) {
+        throw std::runtime_error("Cannot open SQL file: " + path);
+    }
+    std::stringstream buffer;
+    buffer << file.rdbuf();
+    return buffer.str();
+}
+
+// Helper: Get sorted SQL files from directory
+inline std::vector<std::string> get_sql_files(const std::string& dir) {
+    std::vector<std::string> files;
+    if (!std::filesystem::exists(dir)) return files;
+    
+    for (const auto& entry : std::filesystem::directory_iterator(dir)) {
+        if (entry.path().extension() == ".sql") {
+            files.push_back(entry.path().string());
+        }
+    }
+    std::sort(files.begin(), files.end());
+    return files;
+}
+
+// Helper: Execute SQL (blocking, handles multi-statement)
+inline bool exec_sql(PGconn* conn, const std::string& sql, const std::string& context = "") {
+    if (!PQsendQuery(conn, sql.c_str())) {
+        spdlog::error("[libqueen] [{}] PQsendQuery failed: {}", context, PQerrorMessage(conn));
+        return false;
+    }
+    
+    while (PQisBusy(conn)) {
+        if (!PQconsumeInput(conn)) {
+            spdlog::error("[libqueen] [{}] PQconsumeInput failed: {}", context, PQerrorMessage(conn));
+            return false;
+        }
+    }
+    
+    bool success = true;
+    PGresult* res;
+    while ((res = PQgetResult(conn)) != nullptr) {
+        ExecStatusType status = PQresultStatus(res);
+        if (status != PGRES_COMMAND_OK && status != PGRES_TUPLES_OK) {
+            spdlog::error("[libqueen] [{}] SQL error: {}", context, PQerrorMessage(conn));
+            success = false;
+        }
+        PQclear(res);
+    }
+    return success;
+}
+
+} // namespace detail
+
+/**
+ * Initialize database schema and stored procedures.
+ * 
+ * This function creates the queen schema and loads all SQL files from:
+ * - schema/schema.sql (base tables, indexes, triggers)
+ * - schema/procedures/NNN_name.sql (stored procedures, loaded in alphabetical order)
+ * 
+ * The function is idempotent - safe to call multiple times.
+ * 
+ * @param connection_string PostgreSQL connection string
+ * @param schema_dir Path to schema directory (default: "schema")
+ * @return true if successful, false on error
+ */
+inline bool initialize_schema(const std::string& connection_string, 
+                              const std::string& schema_dir = "schema") {
+    // Connect to database
+    PGconn* conn = PQconnectdb(connection_string.c_str());
+    if (PQstatus(conn) != CONNECTION_OK) {
+        spdlog::error("[libqueen] Failed to connect for schema initialization: {}", 
+                      PQerrorMessage(conn));
+        PQfinish(conn);
+        return false;
+    }
+    
+    spdlog::info("[libqueen] Initializing schema from: {}", schema_dir);
+    
+    try {
+        // 1. Create queen schema
+        if (!detail::exec_sql(conn, "CREATE SCHEMA IF NOT EXISTS queen", "create schema")) {
+            spdlog::error("[libqueen] Failed to create queen schema");
+            PQfinish(conn);
+            return false;
+        }
+        
+        // 2. Load base schema
+        std::string schema_file = schema_dir + "/schema.sql";
+        if (!std::filesystem::exists(schema_file)) {
+            spdlog::error("[libqueen] Base schema file not found: {}", schema_file);
+            PQfinish(conn);
+            return false;
+        }
+        
+        std::string schema_sql = detail::read_sql_file(schema_file);
+        if (!detail::exec_sql(conn, schema_sql, "base schema")) {
+            spdlog::error("[libqueen] Failed to apply base schema");
+            PQfinish(conn);
+            return false;
+        }
+        spdlog::info("[libqueen] Base schema applied successfully");
+        
+        // 3. Load stored procedures (sorted alphabetically)
+        std::string procedures_dir = schema_dir + "/procedures";
+        auto procedure_files = detail::get_sql_files(procedures_dir);
+        
+        if (!procedure_files.empty()) {
+            spdlog::info("[libqueen] Loading {} stored procedure(s)...", procedure_files.size());
+            for (const auto& proc_file : procedure_files) {
+                spdlog::debug("[libqueen] Loading: {}", proc_file);
+                std::string proc_sql = detail::read_sql_file(proc_file);
+                if (!detail::exec_sql(conn, proc_sql, proc_file)) {
+                    spdlog::error("[libqueen] Failed to load procedure: {}", proc_file);
+                    PQfinish(conn);
+                    return false;
+                }
+            }
+            spdlog::info("[libqueen] All stored procedures loaded successfully");
+        }
+        
+        PQfinish(conn);
+        spdlog::info("[libqueen] Schema initialization complete");
+        return true;
+        
+    } catch (const std::exception& e) {
+        spdlog::error("[libqueen] Schema initialization failed: {}", e.what());
+        PQfinish(conn);
+        return false;
+    }
+}
 
 enum class 
 JobType {
@@ -406,18 +606,20 @@ private:
             if (type == JobType::POP) {
                 std::vector<std::shared_ptr<PendingJob>> ready_jobs;
                 for (auto& job : jobs) {
-                    if (job->job.next_check > std::chrono::steady_clock::now() &&
+                    bool has_wait_deadline = (job->job.wait_deadline != std::chrono::steady_clock::time_point{});
+                    if (!has_wait_deadline) { // This if for pop with no wait deadline
+                        ready_jobs.push_back(job);
+                    } else if (job->job.next_check > std::chrono::steady_clock::now() &&
                         job->job.wait_deadline < std::chrono::steady_clock::now()) {
-                           std::cout << "SEND 204 for job " << job->job.request_id << std::endl;
+                           self->_send_empty_response(job);
                     } else if (job->job.next_check <= std::chrono::steady_clock::now() &&
                         job->job.wait_deadline > std::chrono::steady_clock::now()) {
-                        std::cout << "Sending job " << job->job.request_id << " because it's within the next check" << std::endl;
                         ready_jobs.push_back(job);
                     } else if (job->job.next_check > std::chrono::steady_clock::now() &&
                         job->job.wait_deadline > std::chrono::steady_clock::now()) {
                         jobs_to_requeue.push_back(job);
                     } else {
-                        std::cout << "SEND 204 for job " << job->job.request_id << std::endl;
+                        self->_send_empty_response(job);
                     }
                 }
                 if (!ready_jobs.empty()) {
@@ -440,7 +642,6 @@ private:
         }
     } 
 
-    
     static void
     _uv_socket_event_cb(uv_poll_t* handle, int status, int events) noexcept(false) {
         auto* slot = static_cast<DBConnection*>(handle->data);
@@ -504,7 +705,9 @@ private:
                             auto data = PQgetvalue(res, 0, 0);
                             auto json_result = nlohmann::json::parse(data);
                             bool has_messages = !json_result[0]["result"]["messages"].empty();
-                            if (!has_messages) {
+                            bool has_wait_deadline = (job->job.wait_deadline != std::chrono::steady_clock::time_point{});
+
+                            if (!has_messages && has_wait_deadline) {
                                 // Set next backoff time and requeue (same shared_ptr!)
                                 _set_next_backoff_time(job);
                                 _requeue_jobs({job});
@@ -605,7 +808,6 @@ private:
             }
 
             // Start watching for write (to flush) and read (for results)
-            std::cout << slot.poll_initialized << " " << slot.socket_fd << std::endl;
             _start_watching_slot(slot, UV_WRITABLE | UV_READABLE);              
         } else {
             jobs_to_requeue.insert(jobs_to_requeue.end(), jobs.begin(), jobs.end());
@@ -650,6 +852,24 @@ private:
                 job_ptr->job.backoff_count = 0;  // Reset backoff on activity
             }
         }
+    }
+
+    void
+    _send_empty_response(std::shared_ptr<PendingJob>& job) noexcept(true) {
+        auto response = nlohmann::json::array();
+        response.push_back({
+            {"idx", 0},
+            {"result", {
+                {"success", true},
+                {"messages", nlohmann::json::array()},
+                {"leaseId", nullptr},
+                {"queue", job->job.queue_name},
+                {"consumerGroup", job->job.consumer_group},
+                {"partitionName", job->job.partition_name},
+                {"messages", nlohmann::json::array()}
+            }}
+        });
+        job->callback(response.dump());
     }
     
     //  ___                            _    _               

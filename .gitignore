@@ -18,6 +18,8 @@ client-js/node_modules
 
 client-cpp/bin
 
+lib/build
+
 helm
 upgrade.sh
 start.sh
