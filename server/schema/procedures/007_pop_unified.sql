@@ -151,11 +151,38 @@ BEGIN
             LIMIT 1;
             
             IF v_sub_ts IS NOT NULL THEN
+                -- Use pre-recorded subscription timestamp
                 v_cursor_ts := v_sub_ts;
                 v_cursor_id := '00000000-0000-0000-0000-000000000000'::uuid;
+            ELSIF v_req.sub_from != '' AND v_req.sub_from != 'now' THEN
+                -- Explicit timestamp provided: parse and record it
+                BEGIN
+                    v_cursor_ts := v_req.sub_from::timestamptz;
+                    v_cursor_id := '00000000-0000-0000-0000-000000000000'::uuid;
+                    
+                    -- Insert subscription metadata with explicit timestamp
+                    INSERT INTO queen.consumer_groups_metadata (
+                        consumer_group, queue_name, partition_name, subscription_mode, subscription_timestamp
+                    ) VALUES (
+                        v_req.consumer_group, v_req.queue_name, COALESCE(v_req.partition_name, ''), 'timestamp', v_cursor_ts
+                    )
+                    ON CONFLICT (consumer_group, queue_name, partition_name, namespace, task) DO NOTHING;
+                EXCEPTION WHEN OTHERS THEN
+                    -- Invalid timestamp format - fall through to default behavior
+                    NULL;
+                END;
             ELSIF v_req.sub_from = 'now' OR v_req.sub_mode = 'new' THEN
+                -- New subscription with "new" mode: record timestamp so all workers share it
                 v_cursor_ts := v_now;
                 v_cursor_id := '00000000-0000-0000-0000-000000000000'::uuid;
+                
+                -- Insert subscription metadata (idempotent - ON CONFLICT ignores duplicates)
+                INSERT INTO queen.consumer_groups_metadata (
+                    consumer_group, queue_name, partition_name, subscription_mode, subscription_timestamp
+                ) VALUES (
+                    v_req.consumer_group, v_req.queue_name, COALESCE(v_req.partition_name, ''), 'new', v_now
+                )
+                ON CONFLICT (consumer_group, queue_name, partition_name, namespace, task) DO NOTHING;
             END IF;
         END IF;
         
@@ -386,11 +413,38 @@ BEGIN
             LIMIT 1;
             
             IF v_sub_ts IS NOT NULL THEN
+                -- Use pre-recorded subscription timestamp
                 v_cursor_ts := v_sub_ts;
                 v_cursor_id := '00000000-0000-0000-0000-000000000000'::uuid;
+            ELSIF v_req.sub_from != '' AND v_req.sub_from != 'now' THEN
+                -- Explicit timestamp provided: parse and record it
+                BEGIN
+                    v_cursor_ts := v_req.sub_from::timestamptz;
+                    v_cursor_id := '00000000-0000-0000-0000-000000000000'::uuid;
+                    
+                    -- Insert subscription metadata with explicit timestamp
+                    INSERT INTO queen.consumer_groups_metadata (
+                        consumer_group, queue_name, partition_name, subscription_mode, subscription_timestamp
+                    ) VALUES (
+                        v_req.consumer_group, v_req.queue_name, COALESCE(v_partition_name, ''), 'timestamp', v_cursor_ts
+                    )
+                    ON CONFLICT (consumer_group, queue_name, partition_name, namespace, task) DO NOTHING;
+                EXCEPTION WHEN OTHERS THEN
+                    -- Invalid timestamp format - fall through to default behavior
+                    NULL;
+                END;
             ELSIF v_req.sub_from = 'now' OR v_req.sub_mode = 'new' THEN
+                -- New subscription with "new" mode: record timestamp so all workers share it
                 v_cursor_ts := v_now;
                 v_cursor_id := '00000000-0000-0000-0000-000000000000'::uuid;
+                
+                -- Insert subscription metadata (idempotent - ON CONFLICT ignores duplicates)
+                INSERT INTO queen.consumer_groups_metadata (
+                    consumer_group, queue_name, partition_name, subscription_mode, subscription_timestamp
+                ) VALUES (
+                    v_req.consumer_group, v_req.queue_name, COALESCE(v_partition_name, ''), 'new', v_now
+                )
+                ON CONFLICT (consumer_group, queue_name, partition_name, namespace, task) DO NOTHING;
             END IF;
         END IF;
         
@@ -670,11 +724,38 @@ BEGIN
             LIMIT 1;
             
             IF v_sub_ts IS NOT NULL THEN
+                -- Use pre-recorded subscription timestamp
                 v_cursor_ts := v_sub_ts;
                 v_cursor_id := '00000000-0000-0000-0000-000000000000'::uuid;
+            ELSIF v_req.sub_from != '' AND v_req.sub_from != 'now' THEN
+                -- Explicit timestamp provided: parse and record it
+                BEGIN
+                    v_cursor_ts := v_req.sub_from::timestamptz;
+                    v_cursor_id := '00000000-0000-0000-0000-000000000000'::uuid;
+                    
+                    -- Insert subscription metadata with explicit timestamp
+                    INSERT INTO queen.consumer_groups_metadata (
+                        consumer_group, queue_name, partition_name, subscription_mode, subscription_timestamp
+                    ) VALUES (
+                        v_req.consumer_group, v_req.queue_name, COALESCE(v_partition_name, ''), 'timestamp', v_cursor_ts
+                    )
+                    ON CONFLICT (consumer_group, queue_name, partition_name, namespace, task) DO NOTHING;
+                EXCEPTION WHEN OTHERS THEN
+                    -- Invalid timestamp format - fall through to default behavior
+                    NULL;
+                END;
             ELSIF v_req.sub_from = 'now' OR v_req.sub_mode = 'new' THEN
+                -- New subscription with "new" mode: record timestamp so all workers share it
                 v_cursor_ts := v_now;
                 v_cursor_id := '00000000-0000-0000-0000-000000000000'::uuid;
+                
+                -- Insert subscription metadata (idempotent - ON CONFLICT ignores duplicates)
+                INSERT INTO queen.consumer_groups_metadata (
+                    consumer_group, queue_name, partition_name, subscription_mode, subscription_timestamp
+                ) VALUES (
+                    v_req.consumer_group, v_req.queue_name, COALESCE(v_partition_name, ''), 'new', v_now
+                )
+                ON CONFLICT (consumer_group, queue_name, partition_name, namespace, task) DO NOTHING;
             END IF;
         END IF;
         

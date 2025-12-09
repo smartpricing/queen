@@ -14,6 +14,10 @@
 #include <deque>
 #include <iostream>
 #include <functional>
+#include <memory>
+
+// TODO make test
+// TODO make pop set consumer group subscription in pop procedure
 
 namespace queen {
 
@@ -51,15 +55,11 @@ JobRequest {
     size_t item_count = 0;  // Number of items in this request (for micro-batching decisions)
     std::chrono::steady_clock::time_point queued_at;
         
-    // For PUSH: queues to notify after success (queue -> partition list)
-    std::vector<std::pair<std::string, std::string>> push_targets;
-        
     std::chrono::steady_clock::time_point wait_deadline;  // Absolute timeout
     std::chrono::steady_clock::time_point next_check;     // When to check next
+    uint16_t backoff_count = 0; // Number of times the job has been backoff
 
     int batch_size = 1;           // Client's requested batch size
-    std::string subscription_mode;
-    std::string subscription_from;
     bool auto_ack = false;        // Auto-acknowledge messages on delivery (QoS 0)
 }; 
 
@@ -75,13 +75,58 @@ class Queen;
 
 struct 
 DBConnection {
-    PGconn* conn;
-    int socket_fd;
-    uint16_t idx;
+    PGconn* conn = nullptr;
+    int socket_fd = -1;
+    uint16_t idx = 0;
     uv_poll_t poll_handle;
-    bool poll_initialized;
-    Queen* pool;
-    std::vector<PendingJob> jobs;
+    bool poll_initialized = false;
+    Queen* pool = nullptr;
+    std::vector<std::shared_ptr<PendingJob>> jobs;
+    
+    // Atomic flag for lock-free reconnection signaling
+    std::atomic<bool> needs_poll_init{false};
+    
+    // Default constructor
+    DBConnection() = default;
+    
+    // Move constructor (needed because atomic has deleted copy ctor)
+    DBConnection(DBConnection&& other) noexcept
+        : conn(other.conn)
+        , socket_fd(other.socket_fd)
+        , idx(other.idx)
+        , poll_handle(other.poll_handle)
+        , poll_initialized(other.poll_initialized)
+        , pool(other.pool)
+        , jobs(std::move(other.jobs))
+        , needs_poll_init(other.needs_poll_init.load(std::memory_order_relaxed))
+    {
+        other.conn = nullptr;
+        other.socket_fd = -1;
+        other.poll_initialized = false;
+    }
+    
+    // Move assignment (needed for vector operations)
+    DBConnection& operator=(DBConnection&& other) noexcept {
+        if (this != &other) {
+            conn = other.conn;
+            socket_fd = other.socket_fd;
+            idx = other.idx;
+            poll_handle = other.poll_handle;
+            poll_initialized = other.poll_initialized;
+            pool = other.pool;
+            jobs = std::move(other.jobs);
+            needs_poll_init.store(other.needs_poll_init.load(std::memory_order_relaxed), std::memory_order_relaxed);
+            
+            other.conn = nullptr;
+            other.socket_fd = -1;
+            other.poll_initialized = false;
+        }
+        return *this;
+    }
+    
+    // Delete copy operations (atomic is not copyable)
+    DBConnection(const DBConnection&) = delete;
+    DBConnection& operator=(const DBConnection&) = delete;
 };
 
 class Queen {
@@ -89,13 +134,21 @@ public:
     Queen(const std::string& conn_str, 
         uint16_t statement_timeout_ms = 30000,
         uint16_t db_connection_count = 10,
-        uint16_t queue_interval_ms = 10) noexcept(false) : 
+        uint16_t queue_interval_ms = 10,
+        uint16_t pop_wait_initial_interval_ms = 100,
+        uint16_t pop_wait_backoff_threshold = 3,
+        double pop_wait_backoff_multiplier = 3.0,
+        uint16_t pop_wait_max_interval_ms = 5000) noexcept(false) : 
         _loop(nullptr), 
         _loop_initialized(false),
         _queue_interval_ms(queue_interval_ms),
         _conn_str(conn_str),
         _statement_timeout_ms(statement_timeout_ms),
-        _db_connection_count(db_connection_count) {
+        _db_connection_count(db_connection_count),
+        _pop_wait_initial_interval_ms(pop_wait_initial_interval_ms),
+        _pop_wait_backoff_threshold(pop_wait_backoff_threshold),
+        _pop_wait_backoff_multiplier(pop_wait_backoff_multiplier),
+        _pop_wait_max_interval_ms(pop_wait_max_interval_ms) {
         // Initialize libuv mutex
         uv_mutex_init(&_mutex_job_queue);
         // Start the event loop thread
@@ -103,6 +156,12 @@ public:
     }
 
     ~Queen() {
+        // Stop reconnection thread first
+        _reconnect_running.store(false);
+        if (_reconnect_thread.joinable()) {
+            _reconnect_thread.join();
+        }
+        
         if (_loop_initialized) {
             uv_loop_close(_loop);
             delete _loop;
@@ -112,8 +171,9 @@ public:
 
     void 
     submit(JobRequest&& job, std::function<void(std::string result)> cb) {
+        auto pending = std::make_shared<PendingJob>(PendingJob{std::move(job), std::move(cb)});
         uv_mutex_lock(&_mutex_job_queue);
-        _job_queue.push_back({std::move(job), std::move(cb)});
+        _job_queue.push_back(pending);
         uv_mutex_unlock(&_mutex_job_queue);
         // uv_async_send(&_queue_signal);
     }
@@ -130,7 +190,7 @@ private:
     // job queue mutex
     uv_mutex_t _mutex_job_queue;
     // job queue
-    std::deque<PendingJob> _job_queue;
+    std::deque<std::shared_ptr<PendingJob>> _job_queue;
 
     // connection to the database 
     std::string _conn_str;
@@ -138,6 +198,20 @@ private:
     uint16_t _db_connection_count;
     std::vector<uint16_t> _free_slot_indexes;
     std::vector<DBConnection> _db_connections;
+
+    // Pop wait configuration
+    uint16_t _pop_wait_initial_interval_ms;
+    uint16_t _pop_wait_backoff_threshold;
+    double _pop_wait_backoff_multiplier;
+    uint16_t _pop_wait_max_interval_ms;
+
+    // Pop backoff tracker - stores shared_ptr to same jobs in _job_queue
+    std::unordered_map<std::string, std::map<std::string, std::shared_ptr<PendingJob>>> _pop_backoff_tracker;
+
+    // Reconnection thread (runs in background, reconnects dead DB connections)
+    std::thread _reconnect_thread;
+    std::atomic<bool> _reconnect_running{false};
+    uv_async_t _reconnect_signal;
 
     // _ _  _ _ 
     // | | || | |
@@ -160,27 +234,155 @@ private:
             // Set data pointer so callbacks can access this instance
             uv_handle_set_data((uv_handle_t*)&_queue_timer, this);
             uv_handle_set_data((uv_handle_t*)&_queue_signal, this);
+            uv_handle_set_data((uv_handle_t*)&_reconnect_signal, this);
             
             uv_timer_init(_loop, &_queue_timer);
             uv_timer_start(&_queue_timer, _uv_timer_cb, 0, _queue_interval_ms);
             uv_async_init(_loop, &_queue_signal, _uv_async_cb);
+            uv_async_init(_loop, &_reconnect_signal, _uv_reconnect_signal_cb);
 
             // Connect all slots to the database
             if (!_connect_all_slots()) {
                 throw std::runtime_error("Failed to connect all slots to the database");
             }
 
+            // Start reconnection thread after initial connections are established
+            _start_reconnect_thread();
+
             uv_run(_loop, UV_RUN_DEFAULT);
         }).detach();
+    }
+    
+    // Start the background reconnection thread
+    void
+    _start_reconnect_thread() noexcept(true) {
+        _reconnect_running.store(true);
+        _reconnect_thread = std::thread([this] {
+            _reconnect_loop();
+        });
+    }
+    
+    // Background thread that reconnects dead database connections
+    void
+    _reconnect_loop() noexcept(true) {
+        spdlog::info("[libqueen] Reconnection thread started");
+        
+        while (_reconnect_running.load()) {
+            // Sleep for 1 second between reconnection attempts
+            std::this_thread::sleep_for(std::chrono::seconds(1));
+            
+            if (!_reconnect_running.load()) break;
+            
+            // Check for dead connections and reconnect
+            for (uint16_t i = 0; i < _db_connection_count; i++) {
+                DBConnection& slot = _db_connections[i];
+                
+                // Skip if connection is alive or already pending poll init
+                if (slot.conn != nullptr || slot.needs_poll_init.load(std::memory_order_acquire)) {
+                    continue;
+                }
+                
+                spdlog::info("[libqueen] Reconnecting dead slot {}", i);
+                
+                // Reconnect (blocking - OK in this thread)
+                if (_reconnect_slot_db(slot)) {
+                    // Signal event loop to initialize poll handle
+                    slot.needs_poll_init.store(true, std::memory_order_release);
+                    uv_async_send(&_reconnect_signal);
+                    spdlog::info("[libqueen] Slot {} reconnected, signaling event loop", i);
+                } else {
+                    spdlog::warn("[libqueen] Failed to reconnect slot {}", i);
+                }
+                
+                // Only try ONE slot per cycle to avoid overwhelming
+                break;
+            }
+        }
+        
+        spdlog::info("[libqueen] Reconnection thread stopped");
+    }
+    
+    // Reconnect slot - DB connection only (called from reconnect thread)
+    // Does NOT touch libuv handles (not thread-safe)
+    bool
+    _reconnect_slot_db(DBConnection& slot) noexcept(true) {
+        slot.conn = PQconnectdb(_conn_str.c_str());
+        
+        if (PQstatus(slot.conn) != CONNECTION_OK) {
+            spdlog::error("[libqueen] Reconnection failed: {}", PQerrorMessage(slot.conn));
+            PQfinish(slot.conn);
+            slot.conn = nullptr;
+            return false;
+        }
+        
+        // Set non-blocking mode
+        if (PQsetnonblocking(slot.conn, 1) != 0) {
+            spdlog::error("[libqueen] Failed to set non-blocking on reconnect: {}", PQerrorMessage(slot.conn));
+            PQfinish(slot.conn);
+            slot.conn = nullptr;
+            return false;
+        }
+        
+        // Set statement timeout
+        std::string timeout_sql = "SET statement_timeout = " + std::to_string(_statement_timeout_ms);
+        PGresult* res = PQexec(slot.conn, timeout_sql.c_str());
+        if (PQresultStatus(res) != PGRES_COMMAND_OK) {
+            spdlog::warn("[libqueen] Failed to set statement timeout on reconnect: {}", PQerrorMessage(slot.conn));
+        }
+        PQclear(res);
+        
+        // Store socket fd (will be used by event loop for poll init)
+        slot.socket_fd = PQsocket(slot.conn);
+        
+        return true;
+    }
+    
+    // Callback when reconnect signal is received - initialize poll handles
+    static void
+    _uv_reconnect_signal_cb(uv_async_t* handle) noexcept(false) {
+        auto* self = static_cast<Queen*>(uv_handle_get_data((uv_handle_t*)handle));
+        self->_finalize_reconnected_slots();
+    }
+    
+    // Finalize reconnected slots by initializing their poll handles (must run on event loop thread)
+    void
+    _finalize_reconnected_slots() noexcept(true) {
+        for (uint16_t i = 0; i < _db_connection_count; i++) {
+            DBConnection& slot = _db_connections[i];
+            
+            if (!slot.needs_poll_init.load(std::memory_order_acquire)) {
+                continue;
+            }
+            
+            // Initialize poll handle (must be on event loop thread)
+            if (slot.socket_fd >= 0) {
+                if (uv_poll_init(_loop, &slot.poll_handle, slot.socket_fd) == 0) {
+                    slot.poll_handle.data = &slot;
+                    slot.poll_initialized = true;
+                    
+                    // Add back to free pool
+                    _free_slot_indexes.push_back(i);
+                    spdlog::info("[libqueen] Slot {} poll initialized and added to pool", i);
+                } else {
+                    spdlog::error("[libqueen] Failed to init poll for reconnected slot {}", i);
+                    // Disconnect and let reconnect thread try again
+                    PQfinish(slot.conn);
+                    slot.conn = nullptr;
+                    slot.socket_fd = -1;
+                }
+            }
+            
+            // Clear flag
+            slot.needs_poll_init.store(false, std::memory_order_release);
+        }
     }
 
     // Timer callback to process the job queue
     static void 
     _uv_timer_cb(uv_timer_t* handle) noexcept(false) {
         auto* self = static_cast<Queen*>(uv_handle_get_data((uv_handle_t*)handle));
-        
         // Drain the queue
-        std::vector<PendingJob> batch;
+        std::vector<std::shared_ptr<PendingJob>> batch;
         uv_mutex_lock(&self->_mutex_job_queue);
         while (!self->_job_queue.empty()) {
             batch.push_back(std::move(self->_job_queue.front()));
@@ -199,24 +401,23 @@ private:
             - Else, requeue the job to the queue 
         */
         auto grouped_jobs = self->_group_jobs_by_type(batch);
-        std::vector<PendingJob> jobs_to_requeue;
+        std::vector<std::shared_ptr<PendingJob>> jobs_to_requeue;
         for (auto& [type, jobs] : grouped_jobs) {
             if (type == JobType::POP) {
-                std::vector<PendingJob> ready_jobs;
+                std::vector<std::shared_ptr<PendingJob>> ready_jobs;
                 for (auto& job : jobs) {
-                    if (job.job.next_check > std::chrono::steady_clock::now() &&
-                        job.job.wait_deadline < std::chrono::steady_clock::now()) {
-                            std::cout << "Requeueing job " << job.job.request_id << " because it's past the next check" << std::endl;
-                        jobs_to_requeue.push_back(std::move(job));
-                    } else if (job.job.next_check < std::chrono::steady_clock::now() &&
-                        job.job.wait_deadline > std::chrono::steady_clock::now()) {
-                        // TODO check shared state
-                        std::cout << "Sending job " << job.job.request_id << " because it's within the next check" << std::endl;
-                        ready_jobs.push_back(std::move(job));
+                    if (job->job.next_check > std::chrono::steady_clock::now() &&
+                        job->job.wait_deadline < std::chrono::steady_clock::now()) {
+                           std::cout << "SEND 204 for job " << job->job.request_id << std::endl;
+                    } else if (job->job.next_check <= std::chrono::steady_clock::now() &&
+                        job->job.wait_deadline > std::chrono::steady_clock::now()) {
+                        std::cout << "Sending job " << job->job.request_id << " because it's within the next check" << std::endl;
+                        ready_jobs.push_back(job);
+                    } else if (job->job.next_check > std::chrono::steady_clock::now() &&
+                        job->job.wait_deadline > std::chrono::steady_clock::now()) {
+                        jobs_to_requeue.push_back(job);
                     } else {
-                        std::cout << "Skipping job " << job.job.request_id << " because it's not within the next check" << std::endl;
-                        // jobs_to_requeue.push_back(std::move(job));
-                        // TODO SEND 204
+                        std::cout << "SEND 204 for job " << job->job.request_id << std::endl;
                     }
                 }
                 if (!ready_jobs.empty()) {
@@ -289,13 +490,6 @@ private:
     }
 
     void
-    _handle_slot_error(DBConnection& slot, const std::string& error_msg) noexcept(false) {
-        spdlog::error("[libqueen] Slot error: {}", error_msg);
-        _disconnect_slot(slot);
-        _requeue_jobs(slot.jobs);
-    }
-
-    void
     _process_slot_result(DBConnection& slot) noexcept(false) {
         PGresult* res;
         while ((res = PQgetResult(slot.conn)) != NULL) {
@@ -303,10 +497,38 @@ private:
             ExecStatusType status = PQresultStatus(res);
             if (status == PGRES_TUPLES_OK || status == PGRES_COMMAND_OK) {
                 // Success - process result
-                std::cout << "Processing slot result" << std::endl;
-                // TODO: parse and dispatch callbacks
+
                 for (auto& job : slot.jobs) {
-                    job.callback(PQgetvalue(res, 0, 0));
+                    switch (job->job.op_type) {
+                        case JobType::POP: {
+                            auto data = PQgetvalue(res, 0, 0);
+                            auto json_result = nlohmann::json::parse(data);
+                            bool has_messages = !json_result[0]["result"]["messages"].empty();
+                            if (!has_messages) {
+                                // Set next backoff time and requeue (same shared_ptr!)
+                                _set_next_backoff_time(job);
+                                _requeue_jobs({job});
+                            } else {
+                                // Remove the job from the pop backoff tracker
+                                auto& queue_map = _pop_backoff_tracker[job->job.queue_name];
+                                queue_map.erase(job->job.request_id);
+                                if (queue_map.empty()) {
+                                    _pop_backoff_tracker.erase(job->job.queue_name);
+                                }
+                                job->callback(data);
+                            }
+                            break;
+                        }
+                        case JobType::PUSH: {
+                            // Signal backoff tracker that the push is successful
+                            _update_pop_backoff_tracker(job->job.queue_name);
+                            job->callback(PQgetvalue(res, 0, 0));
+                            break;
+                        }
+                        default:
+                            job->callback(PQgetvalue(res, 0, 0));
+                            break;
+                    }
                 }
                 slot.jobs.clear();
             } else {
@@ -325,17 +547,17 @@ private:
     //  _| |/ . \| . \<_-<
     //  \__/\___/|___//__/
     //      
-    std::map<JobType, std::vector<PendingJob>>
-    _group_jobs_by_type(const std::vector<PendingJob>& jobs) noexcept(true) {
-        std::map<JobType, std::vector<PendingJob>> grouped_jobs;
+    std::map<JobType, std::vector<std::shared_ptr<PendingJob>>>
+    _group_jobs_by_type(const std::vector<std::shared_ptr<PendingJob>>& jobs) noexcept(true) {
+        std::map<JobType, std::vector<std::shared_ptr<PendingJob>>> grouped_jobs;
         for (auto& job : jobs) {
-            grouped_jobs[job.job.op_type].push_back(job);
+            grouped_jobs[job->job.op_type].push_back(job);
         }
         return grouped_jobs;
     }
 
     void
-    _send_jobs_to_slot(JobType type, const std::vector<PendingJob>& jobs, std::vector<PendingJob>& jobs_to_requeue) noexcept(false) {
+    _send_jobs_to_slot(JobType type, const std::vector<std::shared_ptr<PendingJob>>& jobs, std::vector<std::shared_ptr<PendingJob>>& jobs_to_requeue) noexcept(false) {
         // Send all the batched jobs to the database if we have a free slot
         if (_has_free_slot()) {
             DBConnection& slot = _get_free_slot();
@@ -343,8 +565,8 @@ private:
 
             nlohmann::json combined = nlohmann::json::array();
             for (const auto& pending : jobs) {
-                if (!pending.job.params.empty()) {
-                    auto arr = nlohmann::json::parse(pending.job.params[0]);
+                if (!pending->job.params.empty()) {
+                    auto arr = nlohmann::json::parse(pending->job.params[0]);
                     for (auto& item : arr) {
                         combined.push_back(std::move(item));
                     }
@@ -366,9 +588,20 @@ private:
                 nullptr, nullptr, 0);
 
             if (!sent) { 
-                // TODO manage errors cases
                 spdlog::error("[libqueen] Failed to send jobs to the database: {}", PQerrorMessage(slot.conn));
                 jobs_to_requeue.insert(jobs_to_requeue.end(), jobs.begin(), jobs.end());
+                slot.jobs.clear();  // Clear jobs from slot since we're requeuing them
+                
+                // Check if connection is dead - if so, disconnect it
+                // Reconnection thread will automatically reconnect it
+                if (PQstatus(slot.conn) != CONNECTION_OK) {
+                    spdlog::warn("[libqueen] Connection dead, marking for reconnection");
+                    _disconnect_slot(slot);
+                } else {
+                    // Connection still OK, return slot to pool
+                    _free_slot(slot);
+                }
+                return;  // Don't start watching a failed/disconnected slot
             }
 
             // Start watching for write (to flush) and read (for results)
@@ -382,12 +615,41 @@ private:
 
     // TODO: check starvation
     void
-    _requeue_jobs(const std::vector<PendingJob>& jobs) noexcept(true) {
+    _requeue_jobs(const std::vector<std::shared_ptr<PendingJob>>& jobs) noexcept(true) {
         uv_mutex_lock(&_mutex_job_queue);
-        for (auto& job : jobs) {
-            _job_queue.push_front(std::move(job));
+        for (const auto& job : jobs) {
+            _job_queue.push_front(job);
         }
         uv_mutex_unlock(&_mutex_job_queue);
+    }
+
+    void
+    _set_next_backoff_time(std::shared_ptr<PendingJob>& job) noexcept(true) {
+        // TODO check shared state
+        job->job.backoff_count++;
+        // Compute the next backoff time
+        // if backoff count is greater than the threshold, set the next backoff time to the max interval
+        if (job->job.backoff_count > _pop_wait_backoff_threshold) {
+            job->job.next_check = std::chrono::steady_clock::now() + std::chrono::milliseconds(static_cast<long long>(_pop_wait_initial_interval_ms * job->job.backoff_count * _pop_wait_backoff_multiplier)); 
+            if (job->job.next_check > std::chrono::steady_clock::now() + std::chrono::milliseconds(_pop_wait_max_interval_ms)) {
+                job->job.next_check = std::chrono::steady_clock::now() + std::chrono::milliseconds(_pop_wait_max_interval_ms);
+            }
+        } else {
+            job->job.next_check = std::chrono::steady_clock::now() + std::chrono::milliseconds(_pop_wait_initial_interval_ms);
+        }
+        // Store the SAME shared_ptr in tracker (not a copy!) - now updates propagate to queued job
+        _pop_backoff_tracker[job->job.queue_name][job->job.request_id] = job;
+    }
+
+    void 
+    _update_pop_backoff_tracker (const std::string& queue_name) noexcept(true) {
+        auto it = _pop_backoff_tracker.find(queue_name);
+        if (it != _pop_backoff_tracker.end()) {
+            for (auto& [request_id, job_ptr] : it->second) {
+                job_ptr->job.next_check = std::chrono::steady_clock::now();
+                job_ptr->job.backoff_count = 0;  // Reset backoff on activity
+            }
+        }
     }
     
     //  ___                            _    _               
@@ -458,9 +720,7 @@ private:
         PQclear(res);
         
         slot.socket_fd = PQsocket(slot.conn);
-        //slot.busy = false;
-        //slot.pool = this;  // Back-reference for callbacks
-        
+
         // Initialize libuv poll handle for this connection's socket
         if (_loop_initialized && slot.socket_fd >= 0) {
             if (uv_poll_init(_loop, &slot.poll_handle, slot.socket_fd) == 0) {
@@ -475,12 +735,19 @@ private:
         return true;
     }
 
+    void
+    _handle_slot_error(DBConnection& slot, const std::string& error_msg) noexcept(false) {
+        spdlog::error("[libqueen] Slot error: {}", error_msg);
+        _disconnect_slot(slot);
+        _requeue_jobs(slot.jobs);
+        slot.jobs.clear();
+    }    
+
     // Disconnect from the database
     void _disconnect_slot(DBConnection& slot) noexcept(true) {
         // Stop polling before disconnecting
         if (slot.poll_initialized) {
             uv_poll_stop(&slot.poll_handle);
-            // Mark as needing reinitialization for reconnection
             slot.poll_initialized = false;
         }
 
@@ -488,8 +755,10 @@ private:
             PQfinish(slot.conn);
             slot.conn = nullptr;
             slot.socket_fd = -1;
-            //slot.busy = false;
         }
+        
+        // Reset reconnection flag - slot is now available for reconnect thread
+        slot.needs_poll_init.store(false, std::memory_order_release);
     }
 };
 
