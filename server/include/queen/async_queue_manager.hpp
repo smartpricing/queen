@@ -43,17 +43,6 @@ public:
         const std::string& trace_id = ""
     );
     
-    // Consumer group subscription metadata tracking
-    void record_consumer_group_subscription(
-        const std::string& consumer_group,
-        const std::string& queue_name,
-        const std::string& partition_name,
-        const std::string& namespace_name,
-        const std::string& task_name,
-        const std::string& subscription_mode,
-        const std::string& subscription_timestamp_sql
-    );
-    
 private:
     std::shared_ptr<AsyncDbPool> async_db_pool_;
     std::shared_ptr<FileBufferManager> file_buffer_manager_;
@@ -160,12 +149,6 @@ public:
     size_t get_buffer_pending_count() const;
     bool is_buffer_healthy() const;
     nlohmann::json get_buffer_stats() const;
-    
-    // Queue configuration
-    bool configure_queue(const std::string& queue_name,
-                        const QueueOptions& options,
-                        const std::string& namespace_name = "",
-                        const std::string& task_name = "");
 };
 
 } // namespace queen

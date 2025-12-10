@@ -25,14 +25,12 @@
 
 
 /**
-- logs
-- check ai has made good owrk on liqeueen idx returns mapping
+- logs, with atomic counters every second?
+- udp on push - shared state 
+- improve metrics analtyics query
 - readme libqueen
-- performance tuning
-- backoff light query 
-- shared state 
-- all the queries to custom, find better way for analytics
-- optmize things
+- backoff light query, not necessary?
+- deploy to stage
 */
 
 namespace queen {
@@ -390,8 +388,9 @@ public:
     }
 
     void 
-    submit(JobRequest&& job, std::function<void(std::string result)> cb) {        
+    submit(JobRequest&& job, std::function<void(std::string result)> cb) {
         auto pending = std::make_shared<PendingJob>(PendingJob{std::move(job), std::move(cb)});
+        
         uv_mutex_lock(&_mutex_job_queue);
         _job_queue.push_back(pending);
         uv_mutex_unlock(&_mutex_job_queue);

@@ -19,29 +19,6 @@ extern std::shared_ptr<SharedStateManager> global_shared_state;
 namespace queen {
 namespace routes {
 
-// Helper: Record consumer group subscription with deduplication
-static void record_consumer_group_subscription_if_needed(
-    const RouteContext& ctx,
-    const std::string& consumer_group,
-    const std::string& queue_name,
-    const std::string& partition_name,
-    const std::string& sub_mode,
-    const std::string& sub_from) {
-    
-    if (consumer_group == "__QUEUE_MODE__") {
-        return;  // Skip for queue mode
-    }
-    
-    auto [mode_value, timestamp_sql] = parse_subscription_mode(
-        sub_mode, sub_from, ctx.config.queue.default_subscription_mode
-    );
-    
-    ctx.async_queue_manager->record_consumer_group_subscription(
-        consumer_group, queue_name, partition_name, "", "",
-        mode_value, timestamp_sql
-    );
-}
-
 void setup_pop_routes(uWS::App* app, const RouteContext& ctx) {
     // SPECIFIC POP from queue/partition
     app->get("/api/v1/pop/queue/:queue/partition/:partition", [ctx](auto* res, auto* req) {
@@ -72,11 +49,6 @@ void setup_pop_routes(uWS::App* app, const RouteContext& ctx) {
                 options.subscription_from = sub_from;
             }
             
-            // Record consumer group subscription metadata (for NEW mode support)
-            record_consumer_group_subscription_if_needed(
-                ctx, consumer_group, queue_name, partition_name, sub_mode, sub_from
-            );
-            
             // Register response for async delivery
             std::string request_id = worker_response_registries[ctx.worker_id]->register_response(
                 res, ctx.worker_id, 
@@ -87,6 +59,10 @@ void setup_pop_routes(uWS::App* app, const RouteContext& ctx) {
             
             // Build pop params JSON for stored procedure
             std::string worker_id_str = ctx.async_queue_manager->generate_uuid();
+            // Use server's default subscription mode if not specified (empty string = "all")
+            std::string effective_sub_mode = options.subscription_mode.value_or(ctx.config.queue.default_subscription_mode);
+            std::string effective_sub_from = options.subscription_from.value_or("");
+            
             nlohmann::json pop_params = nlohmann::json::array();
             pop_params.push_back({
                 {"idx", 0},
@@ -96,8 +72,8 @@ void setup_pop_routes(uWS::App* app, const RouteContext& ctx) {
                 {"batch_size", options.batch},
                 {"lease_seconds", 0},  // 0 = use queue's configured leaseTime
                 {"worker_id", worker_id_str},
-                {"sub_mode", options.subscription_mode.value_or("new")},
-                {"sub_from", options.subscription_from.value_or("now")},
+                {"sub_mode", effective_sub_mode},
+                {"sub_from", effective_sub_from},
                 {"auto_ack", options.auto_ack}
             });
             
@@ -213,12 +189,7 @@ void setup_pop_routes(uWS::App* app, const RouteContext& ctx) {
             if (!sub_from.empty()) {
                 options.subscription_from = sub_from;
             }
-            
-            // Record consumer group subscription metadata (for NEW mode support)
-            record_consumer_group_subscription_if_needed(
-                ctx, consumer_group, queue_name, "", sub_mode, sub_from
-            );
-            
+
             // Register response for async delivery
             std::string request_id = worker_response_registries[ctx.worker_id]->register_response(
                 res, ctx.worker_id,
@@ -229,6 +200,10 @@ void setup_pop_routes(uWS::App* app, const RouteContext& ctx) {
             
             // Build pop params JSON for stored procedure
             std::string worker_id_str = ctx.async_queue_manager->generate_uuid();
+            // Use server's default subscription mode if not specified (empty string = "all")
+            std::string effective_sub_mode = options.subscription_mode.value_or(ctx.config.queue.default_subscription_mode);
+            std::string effective_sub_from = options.subscription_from.value_or("");
+            
             nlohmann::json pop_params = nlohmann::json::array();
             pop_params.push_back({
                 {"idx", 0},
@@ -238,8 +213,8 @@ void setup_pop_routes(uWS::App* app, const RouteContext& ctx) {
                 {"batch_size", options.batch},
                 {"lease_seconds", 0},  // 0 = use queue's configured leaseTime
                 {"worker_id", worker_id_str},
-                {"sub_mode", options.subscription_mode.value_or("new")},
-                {"sub_from", options.subscription_from.value_or("now")},
+                {"sub_mode", effective_sub_mode},
+                {"sub_from", effective_sub_from},
                 {"auto_ack", options.auto_ack}
             });
             
