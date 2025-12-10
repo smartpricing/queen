@@ -23,6 +23,9 @@ class FileBufferManager;
  * It uses the AsyncDbPool for all database interactions, with non-blocking I/O.
  * 
  * Focus: Push operations (push_single_message, push_messages, push_messages_batch, push_messages_chunk)
+ * 
+ * Note: Analytics and management operations (delete_queue, traces, consumer group management)
+ * have been moved to stored procedures accessed via libqueen CUSTOM queries.
  */
 class AsyncQueueManager {
 public:
@@ -49,17 +52,6 @@ public:
         const std::string& task_name,
         const std::string& subscription_mode,
         const std::string& subscription_timestamp_sql
-    );
-    
-    // Consumer group management
-    void delete_consumer_group(
-        const std::string& consumer_group,
-        bool delete_metadata = true
-    );
-    
-    void update_consumer_group_subscription(
-        const std::string& consumer_group,
-        const std::string& new_timestamp
     );
     
 private:
@@ -174,36 +166,6 @@ public:
                         const QueueOptions& options,
                         const std::string& namespace_name = "",
                         const std::string& task_name = "");
-    
-    bool delete_queue(const std::string& queue_name);
-    
-    // Message tracing
-    bool record_trace(
-        const std::string& transaction_id,
-        const std::string& partition_id,
-        const std::string& consumer_group,
-        const std::vector<std::string>& trace_names,
-        const std::string& event_type,
-        const nlohmann::json& data,
-        const std::string& worker_id
-    );
-    
-    nlohmann::json get_message_traces(
-        const std::string& partition_id,
-        const std::string& transaction_id
-    );
-    
-    nlohmann::json get_traces_by_name(
-        const std::string& trace_name,
-        int limit,
-        int offset
-    );
-    
-    nlohmann::json get_available_trace_names(
-        int limit,
-        int offset
-    );
 };
 
 } // namespace queen
-

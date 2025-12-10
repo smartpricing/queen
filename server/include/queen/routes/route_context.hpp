@@ -8,7 +8,6 @@ namespace queen {
 
 // Forward declarations
 class AsyncQueueManager;
-class AnalyticsManager;
 class FileBufferManager;
 class Queen;  // From libqueen (queen.hpp)
 class PushFailoverStorage;
@@ -30,9 +29,6 @@ namespace routes {
 struct RouteContext {
     // Core queue operations manager
     std::shared_ptr<AsyncQueueManager> async_queue_manager;
-    
-    // Analytics and dashboard queries
-    std::shared_ptr<AnalyticsManager> analytics_manager;
     
     // File buffer for maintenance mode and failover
     std::shared_ptr<FileBufferManager> file_buffer;
@@ -58,7 +54,6 @@ struct RouteContext {
     
     RouteContext(
         std::shared_ptr<AsyncQueueManager> qm,
-        std::shared_ptr<AnalyticsManager> am,
         std::shared_ptr<FileBufferManager> fb,
         Queen* q,
         uWS::Loop* loop,
@@ -67,7 +62,6 @@ struct RouteContext {
         std::shared_ptr<astp::ThreadPool> dbtp,
         std::shared_ptr<PushFailoverStorage> pfs = nullptr
     ) : async_queue_manager(std::move(qm)),
-        analytics_manager(std::move(am)),
         file_buffer(std::move(fb)),
         queen(q),
         worker_loop(loop),

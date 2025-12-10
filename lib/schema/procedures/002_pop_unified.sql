@@ -151,17 +151,43 @@ BEGIN
             LIMIT 1;
             
             IF v_sub_ts IS NOT NULL THEN
+                -- Use pre-recorded subscription timestamp
                 v_cursor_ts := v_sub_ts;
                 v_cursor_id := '00000000-0000-0000-0000-000000000000'::uuid;
+            ELSIF v_req.sub_from != '' AND v_req.sub_from != 'now' THEN
+                -- Explicit timestamp provided: parse and record it
+                BEGIN
+                    v_cursor_ts := v_req.sub_from::timestamptz;
+                    v_cursor_id := '00000000-0000-0000-0000-000000000000'::uuid;
+                    
+                    -- Insert subscription metadata with explicit timestamp
+                    INSERT INTO queen.consumer_groups_metadata (
+                        consumer_group, queue_name, partition_name, subscription_mode, subscription_timestamp
+                    ) VALUES (
+                        v_req.consumer_group, v_req.queue_name, COALESCE(v_req.partition_name, ''), 'timestamp', v_cursor_ts
+                    )
+                    ON CONFLICT (consumer_group, queue_name, partition_name, namespace, task) DO NOTHING;
+                EXCEPTION WHEN OTHERS THEN
+                    -- Invalid timestamp format - fall through to default behavior
+                    NULL;
+                END;
             ELSIF v_req.sub_from = 'now' OR v_req.sub_mode = 'new' THEN
+                -- New subscription with "new" mode: record timestamp so all workers share it
                 v_cursor_ts := v_now;
                 v_cursor_id := '00000000-0000-0000-0000-000000000000'::uuid;
+                
+                -- Insert subscription metadata (idempotent - ON CONFLICT ignores duplicates)
+                INSERT INTO queen.consumer_groups_metadata (
+                    consumer_group, queue_name, partition_name, subscription_mode, subscription_timestamp
+                ) VALUES (
+                    v_req.consumer_group, v_req.queue_name, COALESCE(v_req.partition_name, ''), 'new', v_now
+                )
+                ON CONFLICT (consumer_group, queue_name, partition_name, namespace, task) DO NOTHING;
             END IF;
         END IF;
         
         -- =====================================================================
         -- STEP 4: Fetch messages
-        -- NOTE: Using .US (microseconds) for full timestamp precision
         -- =====================================================================
         SELECT COALESCE(jsonb_agg(
             jsonb_build_object(
@@ -387,17 +413,43 @@ BEGIN
             LIMIT 1;
             
             IF v_sub_ts IS NOT NULL THEN
+                -- Use pre-recorded subscription timestamp
                 v_cursor_ts := v_sub_ts;
                 v_cursor_id := '00000000-0000-0000-0000-000000000000'::uuid;
+            ELSIF v_req.sub_from != '' AND v_req.sub_from != 'now' THEN
+                -- Explicit timestamp provided: parse and record it
+                BEGIN
+                    v_cursor_ts := v_req.sub_from::timestamptz;
+                    v_cursor_id := '00000000-0000-0000-0000-000000000000'::uuid;
+                    
+                    -- Insert subscription metadata with explicit timestamp
+                    INSERT INTO queen.consumer_groups_metadata (
+                        consumer_group, queue_name, partition_name, subscription_mode, subscription_timestamp
+                    ) VALUES (
+                        v_req.consumer_group, v_req.queue_name, COALESCE(v_partition_name, ''), 'timestamp', v_cursor_ts
+                    )
+                    ON CONFLICT (consumer_group, queue_name, partition_name, namespace, task) DO NOTHING;
+                EXCEPTION WHEN OTHERS THEN
+                    -- Invalid timestamp format - fall through to default behavior
+                    NULL;
+                END;
             ELSIF v_req.sub_from = 'now' OR v_req.sub_mode = 'new' THEN
+                -- New subscription with "new" mode: record timestamp so all workers share it
                 v_cursor_ts := v_now;
                 v_cursor_id := '00000000-0000-0000-0000-000000000000'::uuid;
+                
+                -- Insert subscription metadata (idempotent - ON CONFLICT ignores duplicates)
+                INSERT INTO queen.consumer_groups_metadata (
+                    consumer_group, queue_name, partition_name, subscription_mode, subscription_timestamp
+                ) VALUES (
+                    v_req.consumer_group, v_req.queue_name, COALESCE(v_partition_name, ''), 'new', v_now
+                )
+                ON CONFLICT (consumer_group, queue_name, partition_name, namespace, task) DO NOTHING;
             END IF;
         END IF;
         
         -- =====================================================================
         -- STEP 5: Fetch messages
-        -- NOTE: Using .US (microseconds) for full timestamp precision
         -- =====================================================================
         SELECT COALESCE(jsonb_agg(
             jsonb_build_object(
@@ -672,17 +724,42 @@ BEGIN
             LIMIT 1;
             
             IF v_sub_ts IS NOT NULL THEN
+                -- Use pre-recorded subscription timestamp
                 v_cursor_ts := v_sub_ts;
                 v_cursor_id := '00000000-0000-0000-0000-000000000000'::uuid;
+            ELSIF v_req.sub_from != '' AND v_req.sub_from != 'now' THEN
+                -- Explicit timestamp provided: parse and record it
+                BEGIN
+                    v_cursor_ts := v_req.sub_from::timestamptz;
+                    v_cursor_id := '00000000-0000-0000-0000-000000000000'::uuid;
+                    
+                    -- Insert subscription metadata with explicit timestamp
+                    INSERT INTO queen.consumer_groups_metadata (
+                        consumer_group, queue_name, partition_name, subscription_mode, subscription_timestamp
+                    ) VALUES (
+                        v_req.consumer_group, v_req.queue_name, COALESCE(v_partition_name, ''), 'timestamp', v_cursor_ts
+                    )
+                    ON CONFLICT (consumer_group, queue_name, partition_name, namespace, task) DO NOTHING;
+                EXCEPTION WHEN OTHERS THEN
+                    -- Invalid timestamp format - fall through to default behavior
+                    NULL;
+                END;
             ELSIF v_req.sub_from = 'now' OR v_req.sub_mode = 'new' THEN
+                -- New subscription with "new" mode: record timestamp so all workers share it
                 v_cursor_ts := v_now;
                 v_cursor_id := '00000000-0000-0000-0000-000000000000'::uuid;
+                
+                -- Insert subscription metadata (idempotent - ON CONFLICT ignores duplicates)
+                INSERT INTO queen.consumer_groups_metadata (
+                    consumer_group, queue_name, partition_name, subscription_mode, subscription_timestamp
+                ) VALUES (
+                    v_req.consumer_group, v_req.queue_name, COALESCE(v_partition_name, ''), 'new', v_now
+                )
+                ON CONFLICT (consumer_group, queue_name, partition_name, namespace, task) DO NOTHING;
             END IF;
         END IF;
         
         -- Fetch messages
-        -- NOTE: Using .US (microseconds) instead of .MS (milliseconds) for full precision
-        -- This is critical for autoAck cursor updates to work correctly
         SELECT COALESCE(jsonb_agg(
             jsonb_build_object(
                 'id', sub.id::text,
@@ -714,10 +791,13 @@ BEGIN
             -- AUTO-ACK: Advance cursor to last message AND release lease immediately
             -- This combines POP + ACK in a single atomic operation (QoS 0)
             -- =====================================================================
-            -- Extract last message position (messages are ordered by created_at, id)
+            -- Extract last message ID from JSON (messages are ordered by created_at, id)
             v_last_msg := v_messages->(v_msg_count - 1);
             v_last_msg_id := (v_last_msg->>'id')::UUID;
-            v_last_msg_ts := (v_last_msg->>'createdAt')::TIMESTAMPTZ;
+            
+            -- Get exact timestamp from database (preserves microsecond precision)
+            -- This avoids precision loss from JSON string formatting
+            SELECT created_at INTO v_last_msg_ts FROM queen.messages WHERE id = v_last_msg_id;
             
             -- Update cursor to last message AND release lease
             UPDATE queen.partition_consumers
@@ -750,7 +830,7 @@ BEGIN
         END IF;
         
         -- Build result (wrapped in 'result' object for compatibility with existing C++ code)
-        -- For auto_ack: return leaseId as NULL to signal no ACK is needed
+        -- For auto_ack: return empty string leaseId to signal no ACK is needed
         v_result := jsonb_build_object(
             'idx', v_req.idx,
             'result', jsonb_build_object(
@@ -758,7 +838,7 @@ BEGIN
                 'queue', v_req.queue_name,
                 'partition', v_partition_name,
                 'partitionId', v_partition_id::text,
-                'leaseId', CASE WHEN v_auto_ack THEN NULL ELSE v_req.worker_id END,
+                'leaseId', CASE WHEN v_auto_ack THEN '' ELSE v_req.worker_id END,
                 'consumerGroup', v_req.consumer_group,
                 'messages', v_messages
             )

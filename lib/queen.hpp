@@ -443,7 +443,6 @@ private:
     // Setup the uv event loop
     void 
     _init() noexcept(false) {
-        _last_timer_expected = std::chrono::steady_clock::now();
         std::thread([this] {
             if (_loop_initialized) return;
             
@@ -472,7 +471,8 @@ private:
 
             // Start reconnection thread after initial connections are established
             _start_reconnect_thread();
-
+            
+            _last_timer_expected = std::chrono::steady_clock::now();
             uv_run(_loop, UV_RUN_DEFAULT);
         }).detach();
     }
@@ -528,7 +528,7 @@ private:
         self->_event_loop_lag = lag;
         self->_last_timer_expected = now;
 
-        if (lag > self->_queue_interval_ms * 2) {
+        if (lag > 100 /*self->_queue_interval_ms * 2*/) {
             spdlog::warn("[libqueen] Event loop lag is too high: {}ms, expected: {}ms", lag, self->_queue_interval_ms);
         }
 
@@ -544,7 +544,7 @@ private:
         if (batch.empty()) {
             return;
         }
-        spdlog::info("[libqueen] Draining queue: {} jobs", batch.size());
+        //spdlog::info("[libqueen] Draining queue: {} jobs", batch.size());
 
         auto grouped_jobs = self->_group_jobs_by_type(batch);
         std::vector<std::shared_ptr<PendingJob>> jobs_to_requeue;
@@ -571,10 +571,13 @@ private:
                 if (!ready_jobs.empty()) {
                     self->_send_jobs_to_slot(type, ready_jobs, jobs_to_requeue);
                 }
-            } else if (type != JobType::CUSTOM) {
-                self->_send_jobs_to_slot(type, jobs, jobs_to_requeue);
+            } else if (type == JobType::CUSTOM) {
+                // CUSTOM jobs: execute one per slot, no batching
+                for (auto& job : jobs) {
+                    self->_send_custom_job_to_slot(job, jobs_to_requeue);
+                }
             } else {
-                // For loop for custom jobs
+                self->_send_jobs_to_slot(type, jobs, jobs_to_requeue);
             }
         }
 
@@ -643,6 +646,13 @@ private:
             // Check status
             ExecStatusType status = PQresultStatus(res);
             if (status == PGRES_TUPLES_OK || status == PGRES_COMMAND_OK) {
+                // Handle CUSTOM queries - return raw result as JSON
+                if (!slot.jobs.empty() && slot.jobs[0]->job.op_type == JobType::CUSTOM) {
+                    _process_custom_result(slot, res);
+                    PQclear(res);
+                    continue;
+                }
+                
                 // Success - parse result once and dispatch by idx
                 auto data = PQgetvalue(res, 0, 0);
                 auto json_results = nlohmann::json::parse(data);
@@ -763,7 +773,20 @@ private:
                 slot.jobs.clear();
                 slot.job_idx_ranges.clear();
             } else {
-                spdlog::error("[libqueen] Query failed: {}", PQresultErrorMessage(res));
+                // Query failed - send error to all jobs
+                std::string error_msg = PQresultErrorMessage(res);
+                spdlog::error("[libqueen] Query failed: {}", error_msg);
+                
+                nlohmann::json error_result = {
+                    {"success", false},
+                    {"error", error_msg}
+                };
+                
+                for (auto& job : slot.jobs) {
+                    job->callback(error_result.dump());
+                }
+                slot.jobs.clear();
+                slot.job_idx_ranges.clear();
             }
             PQclear(res);  // Free the result
         }
@@ -852,6 +875,125 @@ private:
         }
     }
 
+    // Process result for CUSTOM queries - converts PGresult to JSON
+    void
+    _process_custom_result(DBConnection& slot, PGresult* res) noexcept(true) {
+        nlohmann::json result;
+        
+        int num_rows = PQntuples(res);
+        int num_cols = PQnfields(res);
+        
+        if (num_rows == 0) {
+            // No rows - return empty result with success flag
+            result = {
+                {"success", true},
+                {"rows", nlohmann::json::array()},
+                {"rowCount", 0},
+                {"command", PQcmdStatus(res) ? PQcmdStatus(res) : ""}
+            };
+        } else if (num_rows == 1 && num_cols == 1) {
+            // Single value - try to parse as JSON, otherwise return as string
+            const char* value = PQgetvalue(res, 0, 0);
+            if (value && strlen(value) > 0) {
+                try {
+                    result = nlohmann::json::parse(value);
+                } catch (...) {
+                    result = {
+                        {"success", true},
+                        {"value", value}
+                    };
+                }
+            } else {
+                result = {{"success", true}, {"value", nullptr}};
+            }
+        } else {
+            // Multiple rows/columns - build array of objects
+            nlohmann::json rows = nlohmann::json::array();
+            
+            for (int row = 0; row < num_rows; ++row) {
+                nlohmann::json row_obj;
+                for (int col = 0; col < num_cols; ++col) {
+                    const char* col_name = PQfname(res, col);
+                    if (PQgetisnull(res, row, col)) {
+                        row_obj[col_name] = nullptr;
+                    } else {
+                        const char* value = PQgetvalue(res, row, col);
+                        // Try to parse JSON values, otherwise keep as string
+                        if (value && (value[0] == '{' || value[0] == '[')) {
+                            try {
+                                row_obj[col_name] = nlohmann::json::parse(value);
+                            } catch (...) {
+                                row_obj[col_name] = value;
+                            }
+                        } else {
+                            row_obj[col_name] = value ? value : "";
+                        }
+                    }
+                }
+                rows.push_back(std::move(row_obj));
+            }
+            
+            result = {
+                {"success", true},
+                {"rows", std::move(rows)},
+                {"rowCount", num_rows}
+            };
+        }
+        
+        // Send result to the single job (CUSTOM queries are not batched)
+        if (!slot.jobs.empty()) {
+            slot.jobs[0]->callback(result.dump());
+        }
+        slot.jobs.clear();
+        slot.job_idx_ranges.clear();
+    }
+
+    // Send a single CUSTOM query to a slot (no batching)
+    void
+    _send_custom_job_to_slot(std::shared_ptr<PendingJob>& job, std::vector<std::shared_ptr<PendingJob>>& jobs_to_requeue) noexcept(false) {
+        if (!_has_free_slot()) {
+            jobs_to_requeue.push_back(job);
+            return;
+        }
+        
+        DBConnection& slot = _get_free_slot();
+        slot.jobs.push_back(job);
+        slot.job_idx_ranges.push_back({0, 1});  // Single result expected
+        
+        // Build parameter pointers for PQsendQueryParams
+        std::vector<const char*> param_ptrs;
+        param_ptrs.reserve(job->job.params.size());
+        for (const auto& param : job->job.params) {
+            param_ptrs.push_back(param.c_str());
+        }
+        
+        int sent = PQsendQueryParams(
+            slot.conn,
+            job->job.sql.c_str(),
+            static_cast<int>(param_ptrs.size()),
+            nullptr,  // Let PostgreSQL infer parameter types
+            param_ptrs.empty() ? nullptr : param_ptrs.data(),
+            nullptr,  // Text format
+            nullptr,  // Text format
+            0);       // Text result format
+        
+        if (!sent) {
+            spdlog::error("[libqueen] Failed to send custom query: {}", PQerrorMessage(slot.conn));
+            jobs_to_requeue.push_back(job);
+            slot.jobs.clear();
+            
+            if (PQstatus(slot.conn) != CONNECTION_OK) {
+                spdlog::warn("[libqueen] Connection dead, marking for reconnection");
+                _disconnect_slot(slot);
+            } else {
+                _free_slot(slot);
+            }
+            return;
+        }
+        
+        // Start watching for write (to flush) and read (for results)
+        _start_watching_slot(slot, UV_WRITABLE | UV_READABLE);
+    }
 
     // TODO: check starvation
     void

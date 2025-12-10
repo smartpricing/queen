@@ -1,6 +1,5 @@
 #include "queen/async_database.hpp"
 #include "queen/async_queue_manager.hpp"
-#include "queen/analytics_manager.hpp"
 #include "queen/config.hpp"
 #include "queen/encryption.hpp"
 #include "queen/file_buffer.hpp"
@@ -9,7 +8,7 @@
 #include "queen/retention_service.hpp"
 #include "queen/eviction_service.hpp"
 #include "queen/shared_state_manager.hpp"
-#include "queen.hpp"  // libqueen - replaces sidecar
+#include "queen.hpp"
 #include "threadpool.hpp"
 #include "queen/routes/route_registry.hpp"
 #include "queen/routes/route_context.hpp"
@@ -99,7 +98,6 @@ std::atomic<bool> g_shutdown{false};
 // Setup routes for a worker app using route registry
 static void setup_worker_routes(uWS::App* app, 
                                 std::shared_ptr<queen::AsyncQueueManager> async_queue_manager,
-                                std::shared_ptr<AnalyticsManager> analytics_manager,
                                 std::shared_ptr<FileBufferManager> file_buffer,
                                 queen::Queen* queen_instance,
                                 uWS::Loop* worker_loop,
@@ -111,7 +109,6 @@ static void setup_worker_routes(uWS::App* app,
     // Create route context with all dependencies
     queen::routes::RouteContext ctx(
         async_queue_manager,
-        analytics_manager,
         file_buffer,
         queen_instance,
         worker_loop,
@@ -376,9 +373,6 @@ static void worker_thread(const Config& config, int worker_id, int num_workers,
             async_db_pool, config.queue, config.database.schema
         );
         
-        // Thread-local analytics manager (uses async pool for dashboard queries)
-        auto analytics_manager = std::make_shared<AnalyticsManager>(async_db_pool);
-        
         spdlog::info("[Worker {}] Using GLOBAL shared ThreadPool and Async Database Pool", worker_id);
         
         // Test database connection and log pool stats
@@ -549,7 +543,7 @@ static void worker_thread(const Config& config, int worker_id, int num_workers,
         
         // Setup routes (pass raw pointer - Queen lifetime managed by this thread)
         spdlog::info("[Worker {}] Setting up routes...", worker_id);
-        setup_worker_routes(worker_app, async_queue_manager, analytics_manager, file_buffer, 
+        setup_worker_routes(worker_app, async_queue_manager, file_buffer, 
                            worker_queen.get(), worker_loop, config, worker_id, db_thread_pool,
                            push_failover_storage);
         spdlog::info("[Worker {}] Routes configured", worker_id);

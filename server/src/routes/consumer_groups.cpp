@@ -1,25 +1,77 @@
 #include "queen/routes/route_registry.hpp"
 #include "queen/routes/route_context.hpp"
 #include "queen/routes/route_helpers.hpp"
-#include "queen/analytics_manager.hpp"
 #include "queen/async_queue_manager.hpp"
+#include "queen/response_queue.hpp"
+#include "queen.hpp"  // libqueen
+#include <spdlog/spdlog.h>
+
+// External globals (declared in acceptor_server.cpp)
+namespace queen {
+extern std::vector<std::shared_ptr<ResponseRegistry>> worker_response_registries;
+}
 
 namespace queen {
 namespace routes {
 
+// Helper: Submit a stored procedure call via libqueen and handle the response
+static void submit_sp_call(
+    const RouteContext& ctx,
+    uWS::HttpResponse<false>* res,
+    const std::string& sql,
+    const std::vector<std::string>& params = {}
+) {
+    std::string request_id = worker_response_registries[ctx.worker_id]->register_response(
+        res, ctx.worker_id, nullptr
+    );
+    
+    queen::JobRequest job_req;
+    job_req.op_type = queen::JobType::CUSTOM;
+    job_req.request_id = request_id;
+    job_req.sql = sql;
+    job_req.params = params;
+    
+    auto worker_loop = ctx.worker_loop;
+    auto worker_id = ctx.worker_id;
+    
+    ctx.queen->submit(std::move(job_req), [worker_loop, worker_id, request_id](std::string result) {
+        worker_loop->defer([result = std::move(result), worker_id, request_id]() {
+            nlohmann::json json_response;
+            int status_code = 200;
+            bool is_error = false;
+            
+            try {
+                json_response = nlohmann::json::parse(result);
+                
+                // Check for error in response
+                if (json_response.contains("error") && !json_response["error"].is_null()) {
+                    is_error = true;
+                    status_code = 500;
+                }
+            } catch (const std::exception& e) {
+                json_response = {{"error", e.what()}};
+                status_code = 500;
+                is_error = true;
+            }
+            
+            worker_response_registries[worker_id]->send_response(
+                request_id, json_response, is_error, status_code);
+        });
+    });
+}
+
 void setup_consumer_group_routes(uWS::App* app, const RouteContext& ctx) {
-    // GET /api/v1/consumer-groups - Consumer groups summary
+    // GET /api/v1/consumer-groups - Consumer groups summary (async via stored procedure)
     app->get("/api/v1/consumer-groups", [ctx](auto* res, auto* req) {
         (void)req;
         try {
-            auto response = ctx.analytics_manager->get_consumer_groups();
-            send_json_response(res, response);
+            submit_sp_call(ctx, res, "SELECT queen.get_consumer_groups_v1()");
         } catch (const std::exception& e) {
             send_error_response(res, e.what(), 500);
         }
     });
     
-    // GET /api/v1/consumer-groups/lagging - Get lagging partitions
+    // GET /api/v1/consumer-groups/lagging - Get lagging partitions (async via stored procedure)
     app->get("/api/v1/consumer-groups/lagging", [ctx](auto* res, auto* req) {
         try {
             int min_lag_seconds = 3600; // Default: 1 hour
@@ -27,44 +79,44 @@ void setup_consumer_group_routes(uWS::App* app, const RouteContext& ctx) {
             if (!lag_param.empty()) {
                 min_lag_seconds = std::stoi(lag_param);
             }
-            auto response = ctx.analytics_manager->get_lagging_partitions(min_lag_seconds);
-            send_json_response(res, response);
+            submit_sp_call(ctx, res, 
+                "SELECT queen.get_lagging_partitions_v1($1::integer)",
+                {std::to_string(min_lag_seconds)});
         } catch (const std::exception& e) {
             send_error_response(res, e.what(), 500);
         }
     });
     
-    // GET /api/v1/consumer-groups/:group - Consumer group details (partitions)
+    // GET /api/v1/consumer-groups/:group - Consumer group details (async via stored procedure)
     app->get("/api/v1/consumer-groups/:group", [ctx](auto* res, auto* req) {
         try {
             std::string consumer_group = std::string(req->getParameter(0));
-            auto response = ctx.analytics_manager->get_consumer_group_details(consumer_group);
-            send_json_response(res, response);
+            submit_sp_call(ctx, res, 
+                "SELECT queen.get_consumer_group_details_v1($1)",
+                {consumer_group});
         } catch (const std::exception& e) {
             send_error_response(res, e.what(), 500);
         }
     });
     
-    // DELETE /api/v1/consumer-groups/:group - Delete consumer group and metadata
+    // DELETE /api/v1/consumer-groups/:group - Delete consumer group (async via stored procedure)
     app->del("/api/v1/consumer-groups/:group", [ctx](auto* res, auto* req) {
         try {
             std::string consumer_group = std::string(req->getParameter(0));
             bool delete_metadata = get_query_param_bool(req, "deleteMetadata", true);
             
-            ctx.async_queue_manager->delete_consumer_group(consumer_group, delete_metadata);
+            spdlog::info("[Worker {}] DELETE consumer group: {} (deleteMetadata={})", 
+                ctx.worker_id, consumer_group, delete_metadata);
             
-            nlohmann::json response = {
-                {"success", true},
-                {"consumerGroup", consumer_group},
-                {"metadataDeleted", delete_metadata}
-            };
-            send_json_response(res, response);
+            submit_sp_call(ctx, res, 
+                "SELECT queen.delete_consumer_group_v1($1, $2::boolean)",
+                {consumer_group, delete_metadata ? "true" : "false"});
         } catch (const std::exception& e) {
             send_error_response(res, e.what(), 500);
         }
     });
     
-    // POST /api/v1/consumer-groups/:group/subscription - Update subscription timestamp
+    // POST /api/v1/consumer-groups/:group/subscription - Update subscription timestamp (async)
     app->post("/api/v1/consumer-groups/:group/subscription", [ctx](auto* res, auto* req) {
         std::string consumer_group = std::string(req->getParameter(0));
         
@@ -78,14 +130,12 @@ void setup_consumer_group_routes(uWS::App* app, const RouteContext& ctx) {
                     
                     std::string new_timestamp = body["subscriptionTimestamp"].get<std::string>();
                     
-                    ctx.async_queue_manager->update_consumer_group_subscription(consumer_group, new_timestamp);
+                    spdlog::info("[Worker {}] UPDATE consumer group subscription: {} -> {}", 
+                        ctx.worker_id, consumer_group, new_timestamp);
                     
-                    nlohmann::json response = {
-                        {"success", true},
-                        {"consumerGroup", consumer_group},
-                        {"subscriptionTimestamp", new_timestamp}
-                    };
-                    send_json_response(res, response);
+                    submit_sp_call(ctx, res, 
+                        "SELECT queen.update_consumer_group_subscription_v1($1, $2)",
+                        {consumer_group, new_timestamp});
                 } catch (const std::exception& e) {
                     send_error_response(res, e.what(), 500);
                 }
@@ -99,4 +149,3 @@ void setup_consumer_group_routes(uWS::App* app, const RouteContext& ctx) {
 
 } // namespace routes
 } // namespace queen
-
