@@ -23,18 +23,23 @@
 #include <filesystem>
 #include <algorithm>
 
+
 /**
 - logs
+- check ai has made good owrk on liqeueen idx returns mapping
+- readme libqueen
 - performance tuning
 - backoff light query 
 - shared state 
 - all the queries to custom, find better way for analytics
+- optmize things
 */
 
 namespace queen {
 
 // UUIDv7 generator - time-ordered UUIDs for proper message ordering
-inline std::string generate_uuidv7() {
+inline std::string 
+generate_uuidv7() {
     static std::mutex uuid_mutex;
     static uint64_t last_ms = 0;
     static uint16_t sequence = 0;
@@ -97,7 +102,8 @@ inline std::string generate_uuidv7() {
 namespace detail {
 
 // Helper: Read file contents
-inline std::string read_sql_file(const std::string& path) {
+inline std::string 
+read_sql_file(const std::string& path) {
     std::ifstream file(path);
     if (!file.is_open()) {
         throw std::runtime_error("Cannot open SQL file: " + path);
@@ -108,7 +114,8 @@ inline std::string read_sql_file(const std::string& path) {
 }
 
 // Helper: Get sorted SQL files from directory
-inline std::vector<std::string> get_sql_files(const std::string& dir) {
+inline std::vector<std::string> 
+get_sql_files(const std::string& dir) {
     std::vector<std::string> files;
     if (!std::filesystem::exists(dir)) return files;
     
@@ -122,7 +129,8 @@ inline std::vector<std::string> get_sql_files(const std::string& dir) {
 }
 
 // Helper: Execute SQL (blocking, handles multi-statement)
-inline bool exec_sql(PGconn* conn, const std::string& sql, const std::string& context = "") {
+inline bool 
+exec_sql(PGconn* conn, const std::string& sql, const std::string& context = "") {
     if (!PQsendQuery(conn, sql.c_str())) {
         spdlog::error("[libqueen] [{}] PQsendQuery failed: {}", context, PQerrorMessage(conn));
         return false;
@@ -163,7 +171,8 @@ inline bool exec_sql(PGconn* conn, const std::string& sql, const std::string& co
  * @param schema_dir Path to schema directory (default: "schema")
  * @return true if successful, false on error
  */
-inline bool initialize_schema(const std::string& connection_string, 
+inline bool 
+initialize_schema(const std::string& connection_string, 
                               const std::string& schema_dir = "schema") {
     // Connect to database
     PGconn* conn = PQconnectdb(connection_string.c_str());
@@ -269,48 +278,6 @@ JobRequest {
 
     int batch_size = 1;           // Client's requested batch size
     bool auto_ack = false;        // Auto-acknowledge messages on delivery (QoS 0)
-    
-    // Validate the job request and return error message if invalid
-    std::optional<std::string> validate() const {
-        switch (op_type) {
-            case JobType::PUSH:
-                if (params.empty() || params[0].empty()) {
-                    return "PUSH requires params with message data (JSON array of items with queue, partition, payload, messageId)";
-                }
-                break;
-                
-            case JobType::POP:
-                if (params.empty() || params[0].empty()) {
-                    return "POP requires params with request data (JSON array with idx, queue_name, partition_name, consumer_group, batch_size, lease_seconds, worker_id)";
-                }
-                break;
-                
-            case JobType::ACK:
-                if (params.empty() || params[0].empty()) {
-                    return "ACK requires params with acknowledgment data (JSON array with index, transactionId, partitionId, status)";
-                }
-                break;
-                
-            case JobType::TRANSACTION:
-                if (params.empty() || params[0].empty()) {
-                    return "TRANSACTION requires params with operations array (JSON array of {type, queue, partition, payload, ...} objects)";
-                }
-                break;
-                
-            case JobType::RENEW_LEASE:
-                if (params.empty() || params[0].empty()) {
-                    return "RENEW_LEASE requires params with lease data (JSON array with index, leaseId, extendSeconds)";
-                }
-                break;
-                
-            case JobType::CUSTOM:
-                if (sql.empty()) {
-                    return "CUSTOM requires sql field with the SQL query to execute";
-                }
-                break;
-        }
-        return std::nullopt;  // Valid
-    }
 }; 
 
 // Job with callback
@@ -423,22 +390,7 @@ public:
     }
 
     void 
-    submit(JobRequest&& job, std::function<void(std::string result)> cb) {
-        // Validate the job request before queueing
-        auto validation_error = job.validate();
-        if (validation_error.has_value()) {
-            spdlog::error("[libqueen] Invalid JobRequest: {}", validation_error.value());
-            // Call callback with error response
-            if (cb) {
-                nlohmann::json error_response = {
-                    {"success", false},
-                    {"error", validation_error.value()}
-                };
-                cb(error_response.dump());
-            }
-            return;
-        }
-        
+    submit(JobRequest&& job, std::function<void(std::string result)> cb) {        
         auto pending = std::make_shared<PendingJob>(PendingJob{std::move(job), std::move(cb)});
         uv_mutex_lock(&_mutex_job_queue);
         _job_queue.push_back(pending);
@@ -447,7 +399,10 @@ public:
     }
 
 private:
-    
+    // Performance stats 
+    std::chrono::steady_clock::time_point _last_timer_expected;
+    uint64_t _event_loop_lag; 
+
     // libuv event loop and handles
     uv_loop_t* _loop;
     uv_timer_t _queue_timer;
@@ -488,6 +443,7 @@ private:
     // Setup the uv event loop
     void 
     _init() noexcept(false) {
+        _last_timer_expected = std::chrono::steady_clock::now();
         std::thread([this] {
             if (_loop_initialized) return;
             
@@ -519,90 +475,6 @@ private:
 
             uv_run(_loop, UV_RUN_DEFAULT);
         }).detach();
-    }
-    
-    // Start the background reconnection thread
-    void
-    _start_reconnect_thread() noexcept(true) {
-        _reconnect_running.store(true);
-        _reconnect_thread = std::thread([this] {
-            _reconnect_loop();
-        });
-    }
-    
-    // Background thread that reconnects dead database connections
-    void
-    _reconnect_loop() noexcept(true) {
-        spdlog::info("[libqueen] Reconnection thread started");
-        
-        while (_reconnect_running.load()) {
-            // Sleep for 1 second between reconnection attempts
-            std::this_thread::sleep_for(std::chrono::seconds(1));
-            
-            if (!_reconnect_running.load()) break;
-            
-            // Check for dead connections and reconnect
-            for (uint16_t i = 0; i < _db_connection_count; i++) {
-                DBConnection& slot = _db_connections[i];
-                
-                // Skip if connection is alive or already pending poll init
-                if (slot.conn != nullptr || slot.needs_poll_init.load(std::memory_order_acquire)) {
-                    continue;
-                }
-                
-                spdlog::info("[libqueen] Reconnecting dead slot {}", i);
-                
-                // Reconnect (blocking - OK in this thread)
-                if (_reconnect_slot_db(slot)) {
-                    // Signal event loop to initialize poll handle
-                    slot.needs_poll_init.store(true, std::memory_order_release);
-                    uv_async_send(&_reconnect_signal);
-                    spdlog::info("[libqueen] Slot {} reconnected, signaling event loop", i);
-                } else {
-                    spdlog::warn("[libqueen] Failed to reconnect slot {}", i);
-                }
-                
-                // Only try ONE slot per cycle to avoid overwhelming
-                break;
-            }
-        }
-        
-        spdlog::info("[libqueen] Reconnection thread stopped");
-    }
-    
-    // Reconnect slot - DB connection only (called from reconnect thread)
-    // Does NOT touch libuv handles (not thread-safe)
-    bool
-    _reconnect_slot_db(DBConnection& slot) noexcept(true) {
-        slot.conn = PQconnectdb(_conn_str.c_str());
-        
-        if (PQstatus(slot.conn) != CONNECTION_OK) {
-            spdlog::error("[libqueen] Reconnection failed: {}", PQerrorMessage(slot.conn));
-            PQfinish(slot.conn);
-            slot.conn = nullptr;
-            return false;
-        }
-        
-        // Set non-blocking mode
-        if (PQsetnonblocking(slot.conn, 1) != 0) {
-            spdlog::error("[libqueen] Failed to set non-blocking on reconnect: {}", PQerrorMessage(slot.conn));
-            PQfinish(slot.conn);
-            slot.conn = nullptr;
-            return false;
-        }
-        
-        // Set statement timeout
-        std::string timeout_sql = "SET statement_timeout = " + std::to_string(_statement_timeout_ms);
-        PGresult* res = PQexec(slot.conn, timeout_sql.c_str());
-        if (PQresultStatus(res) != PGRES_COMMAND_OK) {
-            spdlog::warn("[libqueen] Failed to set statement timeout on reconnect: {}", PQerrorMessage(slot.conn));
-        }
-        PQclear(res);
-        
-        // Store socket fd (will be used by event loop for poll init)
-        slot.socket_fd = PQsocket(slot.conn);
-        
-        return true;
     }
     
     // Callback when reconnect signal is received - initialize poll handles
@@ -649,6 +521,17 @@ private:
     static void 
     _uv_timer_cb(uv_timer_t* handle) noexcept(false) {
         auto* self = static_cast<Queen*>(uv_handle_get_data((uv_handle_t*)handle));
+        
+        // Performance stats
+        auto now = std::chrono::steady_clock::now();
+        uint64_t lag = std::chrono::duration_cast<std::chrono::milliseconds>(now - self->_last_timer_expected).count();
+        self->_event_loop_lag = lag;
+        self->_last_timer_expected = now;
+
+        if (lag > self->_queue_interval_ms * 2) {
+            spdlog::warn("[libqueen] Event loop lag is too high: {}ms, expected: {}ms", lag, self->_queue_interval_ms);
+        }
+
         // Drain the queue
         std::vector<std::shared_ptr<PendingJob>> batch;
         uv_mutex_lock(&self->_mutex_job_queue);
@@ -661,6 +544,7 @@ private:
         if (batch.empty()) {
             return;
         }
+        spdlog::info("[libqueen] Draining queue: {} jobs", batch.size());
 
         auto grouped_jobs = self->_group_jobs_by_type(batch);
         std::vector<std::shared_ptr<PendingJob>> jobs_to_requeue;
@@ -1134,6 +1018,90 @@ private:
         // Reset reconnection flag - slot is now available for reconnect thread
         slot.needs_poll_init.store(false, std::memory_order_release);
     }
+
+    // Start the background reconnection thread
+    void
+    _start_reconnect_thread() noexcept(true) {
+        _reconnect_running.store(true);
+        _reconnect_thread = std::thread([this] {
+            _reconnect_loop();
+        });
+    }
+    
+    // Background thread that reconnects dead database connections
+    void
+    _reconnect_loop() noexcept(true) {
+        spdlog::info("[libqueen] Reconnection thread started");
+        
+        while (_reconnect_running.load()) {
+            // Sleep for 1 second between reconnection attempts
+            std::this_thread::sleep_for(std::chrono::seconds(1));
+            
+            if (!_reconnect_running.load()) break;
+            
+            // Check for dead connections and reconnect
+            for (uint16_t i = 0; i < _db_connection_count; i++) {
+                DBConnection& slot = _db_connections[i];
+                
+                // Skip if connection is alive or already pending poll init
+                if (slot.conn != nullptr || slot.needs_poll_init.load(std::memory_order_acquire)) {
+                    continue;
+                }
+                
+                spdlog::info("[libqueen] Reconnecting dead slot {}", i);
+                
+                // Reconnect (blocking - OK in this thread)
+                if (_reconnect_slot_db(slot)) {
+                    // Signal event loop to initialize poll handle
+                    slot.needs_poll_init.store(true, std::memory_order_release);
+                    uv_async_send(&_reconnect_signal);
+                    spdlog::info("[libqueen] Slot {} reconnected, signaling event loop", i);
+                } else {
+                    spdlog::warn("[libqueen] Failed to reconnect slot {}", i);
+                }
+                
+                // Only try ONE slot per cycle to avoid overwhelming
+                break;
+            }
+        }
+        
+        spdlog::info("[libqueen] Reconnection thread stopped");
+    }
+    
+    // Reconnect slot - DB connection only (called from reconnect thread)
+    // Does NOT touch libuv handles (not thread-safe)
+    bool
+    _reconnect_slot_db(DBConnection& slot) noexcept(true) {
+        slot.conn = PQconnectdb(_conn_str.c_str());
+        
+        if (PQstatus(slot.conn) != CONNECTION_OK) {
+            spdlog::error("[libqueen] Reconnection failed: {}", PQerrorMessage(slot.conn));
+            PQfinish(slot.conn);
+            slot.conn = nullptr;
+            return false;
+        }
+        
+        // Set non-blocking mode
+        if (PQsetnonblocking(slot.conn, 1) != 0) {
+            spdlog::error("[libqueen] Failed to set non-blocking on reconnect: {}", PQerrorMessage(slot.conn));
+            PQfinish(slot.conn);
+            slot.conn = nullptr;
+            return false;
+        }
+        
+        // Set statement timeout
+        std::string timeout_sql = "SET statement_timeout = " + std::to_string(_statement_timeout_ms);
+        PGresult* res = PQexec(slot.conn, timeout_sql.c_str());
+        if (PQresultStatus(res) != PGRES_COMMAND_OK) {
+            spdlog::warn("[libqueen] Failed to set statement timeout on reconnect: {}", PQerrorMessage(slot.conn));
+        }
+        PQclear(res);
+        
+        // Store socket fd (will be used by event loop for poll init)
+        slot.socket_fd = PQsocket(slot.conn);
+        
+        return true;
+    }    
 };
 
 }

@@ -3,6 +3,8 @@
 
 CXX = g++
 CXXFLAGS = -std=c++17 -O3 -Wall -Wextra -pthread -DWITH_OPENSSL=1
+# Automatic dependency generation
+DEPFLAGS = -MMD -MP
 # Auto-detect include and library paths
 UNAME_S := $(shell uname -s)
 ifeq ($(UNAME_S),Darwin)
@@ -54,6 +56,7 @@ SOURCES = $(SRC_DIR)/main_acceptor.cpp \
           $(wildcard $(SRC_DIR)/services/*.cpp) \
           $(wildcard $(SRC_DIR)/routes/*.cpp)
 OBJECTS = $(SOURCES:$(SRC_DIR)/%.cpp=$(BUILD_DIR)/%.o)
+DEPS = $(OBJECTS:.o=.d)
 
 # uSockets source files (C and C++ files)
 # Note: Make wildcard doesn't support ** so we need to explicitly list subdirectories
@@ -150,11 +153,14 @@ $(TARGET): $(OBJECTS) $(USOCKETS_OBJECTS)
 	@$(CXX) $(OBJECTS) $(USOCKETS_OBJECTS) -o $@ $(LIBS)
 	@echo "✅ Build complete! (Acceptor/Worker pattern - works on all platforms)"
 
-# Compile C++ source files
+# Compile C++ source files (with automatic dependency generation)
 $(BUILD_DIR)/%.o: $(SRC_DIR)/%.cpp
 	@mkdir -p $(dir $@)
 	@echo "Compiling $<..."
-	@$(CXX) $(CXXFLAGS) $(INCLUDES) -I$(VENDOR_DIR)/uWebSockets/src -I$(VENDOR_DIR)/spdlog/include -I$(VENDOR_DIR) -c $< -o $@
+	@$(CXX) $(CXXFLAGS) $(DEPFLAGS) $(INCLUDES) -I$(VENDOR_DIR)/uWebSockets/src -I$(VENDOR_DIR)/spdlog/include -I$(VENDOR_DIR) -c $< -o $@
+
+# Include generated dependency files (silently ignore if they don't exist yet)
+-include $(DEPS)
 
 # Compile uSockets - single rule that handles all subdirectories
 # Using static pattern rules for better control
