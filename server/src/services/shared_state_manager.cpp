@@ -1,9 +1,7 @@
 #include "queen/shared_state_manager.hpp"
 #include "queen/async_database.hpp"
-// Note: Queen library notification integration will be added later
 #include <spdlog/spdlog.h>
 #include <chrono>
-#include <algorithm>
 
 namespace queen {
 
@@ -12,21 +10,11 @@ std::shared_ptr<SharedStateManager> global_shared_state;
 
 SharedStateManager::SharedStateManager(const InterInstanceConfig& config,
                                        const std::string& server_id,
-                                       std::shared_ptr<AsyncDbPool> db_pool,
-                                       int backoff_cleanup_threshold_seconds,
-                                       int pop_wait_initial_interval_ms,
-                                       int pop_wait_backoff_threshold,
-                                       double pop_wait_backoff_multiplier,
-                                       int pop_wait_max_interval_ms)
+                                       std::shared_ptr<AsyncDbPool> db_pool)
     : config_(config)
     , server_id_(server_id)
     , db_pool_(db_pool)
     , server_health_(config.shared_state.dead_threshold_ms)
-    , backoff_threshold_(pop_wait_backoff_threshold)
-    , backoff_multiplier_(pop_wait_backoff_multiplier)
-    , max_interval_ms_(pop_wait_max_interval_ms)
-    , base_interval_ms_(pop_wait_initial_interval_ms)
-    , backoff_cleanup_threshold_seconds_(backoff_cleanup_threshold_seconds)
 {
     // Enable if UDP peers are configured
     enabled_ = config.shared_state.enabled && config.has_udp_peers();
@@ -44,11 +32,6 @@ SharedStateManager::SharedStateManager(const InterInstanceConfig& config,
             transport_->add_peer(peer.host, peer.port);
         }
         
-        // Set up dead server callback
-        server_health_.on_server_dead([this](const std::string& sid) {
-            on_server_dead(sid);
-        });
-        
         spdlog::info("SharedStateManager: Enabled with {} peers, server_id={}",
                     config.parse_udp_peers().size(), server_id);
     } else {
@@ -61,7 +44,7 @@ SharedStateManager::~SharedStateManager() {
 }
 
 void SharedStateManager::start() {
-    // Always load queue configs and maintenance mode on startup (needed even when sync disabled)
+    // Always load queue configs and maintenance mode on startup
     if (db_pool_) {
         spdlog::info("SharedStateManager: Loading queue configs and maintenance mode from database...");
         refresh_queue_configs_from_db();
@@ -119,7 +102,7 @@ void SharedStateManager::stop() {
 }
 
 // ============================================================
-// Queue Config (Tier 1)
+// Queue Config Cache
 // ============================================================
 
 std::optional<caches::CachedQueueConfig> SharedStateManager::get_queue_config(const std::string& queue) {
@@ -169,64 +152,36 @@ void SharedStateManager::delete_queue_config(const std::string& queue) {
 }
 
 // ============================================================
-// Consumer Presence (Tier 2)
+// Server Health
 // ============================================================
 
-std::set<std::string> SharedStateManager::get_servers_for_queue(const std::string& queue) {
-    return consumer_presence_.get_servers_for_queue(queue);
-}
-
-void SharedStateManager::register_consumer(const std::string& queue) {
-    consumer_presence_.register_consumer(queue, server_id_);
-    
-    if (running_ && transport_) {
-        nlohmann::json payload = {
-            {"queue", queue},
-            {"server_id", server_id_}
-        };
-        transport_->broadcast(UDPSyncMessageType::CONSUMER_REGISTERED, payload);
-    }
-}
-
-void SharedStateManager::deregister_consumer(const std::string& queue) {
-    consumer_presence_.deregister_consumer(queue, server_id_);
-    
-    if (running_ && transport_) {
-        nlohmann::json payload = {
-            {"queue", queue},
-            {"server_id", server_id_}
-        };
-        transport_->broadcast(UDPSyncMessageType::CONSUMER_DEREGISTERED, payload);
-    }
-}
-
-// ============================================================
-// Server Health (Tier 3)
-// ============================================================
-
-bool SharedStateManager::is_server_alive(const std::string& server_id) {
-    if (server_id == server_id_) return true;  // We're always alive to ourselves
-    return server_health_.is_alive(server_id);
+std::vector<std::string> SharedStateManager::get_alive_servers() {
+    return server_health_.get_alive_servers();
 }
 
 std::vector<std::string> SharedStateManager::get_dead_servers() {
     return server_health_.get_dead_servers();
 }
 
-std::vector<std::string> SharedStateManager::get_alive_servers() {
-    return server_health_.get_alive_servers();
-}
+// ============================================================
+// Message Available Notification
+// ============================================================
 
-// ============================================================
-// Notifications
-// ============================================================
+void SharedStateManager::on_message_available(MessageAvailableCallback callback) {
+    std::lock_guard<std::mutex> lock(callback_mutex_);
+    message_available_callback_ = std::move(callback);
+}
 
 void SharedStateManager::notify_message_available(const std::string& queue, const std::string& partition) {
-    // Note: Local worker notification via Queen library will be added later
-    notify_local_workers(queue);
-    reset_backoff_for_queue(queue);
+    // Notify local Queen instances (thread-safe via uv_async)
+    {
+        std::lock_guard<std::mutex> lock(callback_mutex_);
+        if (message_available_callback_) {
+            message_available_callback_(queue, partition);
+        }
+    }
     
-    // CLUSTER: If UDP enabled, broadcast to other servers
+    // Broadcast to other servers via UDP
     if (running_ && transport_) {
         nlohmann::json payload = {
             {"queue", queue},
@@ -234,154 +189,7 @@ void SharedStateManager::notify_message_available(const std::string& queue, cons
             {"ts", now_ms()}
         };
         
-        auto servers = get_servers_for_queue(queue);
-        
-        if (servers.empty()) {
-            // No presence info - broadcast to all
-            transport_->broadcast(UDPSyncMessageType::MESSAGE_AVAILABLE, payload);
-        } else {
-            // Remove ourselves
-            servers.erase(server_id_);
-            if (!servers.empty()) {
-                transport_->send_to(servers, UDPSyncMessageType::MESSAGE_AVAILABLE, payload);
-            }
-        }
-    }
-}
-
-void SharedStateManager::notify_partition_free(const std::string& queue,
-                                              const std::string& partition,
-                                              const std::string& consumer_group) {
-    // Note: Local worker notification via Queen library will be added later
-    notify_local_workers(queue);
-    reset_backoff_for_queue(queue);
-    
-    // CLUSTER: If UDP enabled, broadcast to other servers
-    if (running_ && transport_) {
-        nlohmann::json payload = {
-            {"queue", queue},
-            {"partition", partition},
-            {"consumer_group", consumer_group},
-            {"ts", now_ms()}
-        };
-        
-        auto servers = get_servers_for_queue(queue);
-        
-        if (servers.empty()) {
-            transport_->broadcast(UDPSyncMessageType::PARTITION_FREE, payload);
-        } else {
-            servers.erase(server_id_);
-            if (!servers.empty()) {
-                transport_->send_to(servers, UDPSyncMessageType::PARTITION_FREE, payload);
-            }
-        }
-    }
-}
-
-// ============================================================
-// Tier 4: Local Worker Registry (Queen integration later)
-// ============================================================
-
-void SharedStateManager::notify_local_workers(const std::string& queue_name) {
-    // Note: Queen library notification integration will be added later
-    // For now, the Queen library manages POP wait internally
-    (void)queue_name;
-}
-
-// ============================================================
-// Tier 5: Group Backoff Coordination
-// ============================================================
-
-bool SharedStateManager::should_check_group(const std::string& group_key) {
-    std::lock_guard lock(backoff_mutex_);
-    auto it = group_backoff_.find(group_key);
-    if (it == group_backoff_.end()) {
-        return true;  // New group, check immediately
-    }
-    
-    auto now = std::chrono::steady_clock::now();
-    return (now - it->second.last_checked) >= it->second.current_interval;
-}
-
-bool SharedStateManager::try_acquire_group(const std::string& group_key) {
-    std::lock_guard lock(backoff_mutex_);
-    auto& state = group_backoff_[group_key];  // Creates if not exists
-    
-    // Update last_accessed for cleanup tracking
-    state.last_accessed = std::chrono::steady_clock::now();
-    
-    if (state.in_flight) {
-        return false;  // Already being queried
-    }
-    state.in_flight = true;
-    return true;
-}
-
-void SharedStateManager::release_group(const std::string& group_key, bool had_messages, int worker_id) {
-    std::lock_guard lock(backoff_mutex_);
-    auto it = group_backoff_.find(group_key);
-    if (it == group_backoff_.end()) {
-        return;
-    }
-    
-    auto& state = it->second;
-    auto now = std::chrono::steady_clock::now();
-    state.last_checked = now;
-    state.last_accessed = now;  // Update for cleanup tracking
-    
-    if (had_messages) {
-        // Reset backoff - set to 0ms for immediate recheck when messages exist
-        if (state.consecutive_empty >= backoff_threshold_) {
-            // Was in backoff, now recovered
-            spdlog::info("[Worker {}] [Backoff] {} exiting backoff (had {} consecutive empty) | next_retry=now", 
-                        worker_id, group_key, state.consecutive_empty);
-        }
-        state.consecutive_empty = 0;
-        state.current_interval = std::chrono::milliseconds(0);
-    } else {
-        // Increase backoff - use base_interval_ms_ as starting point
-        state.consecutive_empty++;
-        if (state.consecutive_empty == 1) {
-            // First empty result - start with base interval
-            state.current_interval = std::chrono::milliseconds(base_interval_ms_);
-        } else if (state.consecutive_empty >= backoff_threshold_) {
-            // Multiple empty results - exponential backoff
-            int new_interval = static_cast<int>(state.current_interval.count() * backoff_multiplier_);
-            state.current_interval = std::chrono::milliseconds(std::min(new_interval, max_interval_ms_));
-            
-            // Log when entering or increasing backoff
-            if (state.consecutive_empty == backoff_threshold_) {
-                spdlog::info("[Worker {}] [Backoff] {} entering backoff after {} consecutive empty | next_retry={}ms", 
-                            worker_id, group_key, state.consecutive_empty, state.current_interval.count());
-            } else {
-                spdlog::debug("[Worker {}] [Backoff] {} increased interval to {}ms (consecutive_empty={}) | next_retry={}ms", 
-                             worker_id, group_key, state.current_interval.count(), state.consecutive_empty, state.current_interval.count());
-            }
-        }
-    }
-    
-    state.in_flight = false;
-}
-
-std::chrono::milliseconds SharedStateManager::get_group_interval(const std::string& group_key) {
-    std::lock_guard lock(backoff_mutex_);
-    auto it = group_backoff_.find(group_key);
-    if (it == group_backoff_.end()) {
-        return std::chrono::milliseconds(0);  // New group = immediate check
-    }
-    return it->second.current_interval;
-}
-
-void SharedStateManager::reset_backoff_for_queue(const std::string& queue_name) {
-    std::lock_guard lock(backoff_mutex_);
-    std::string prefix = queue_name + "/";
-    for (auto& [key, state] : group_backoff_) {
-        // Check if key starts with "queue_name/"
-        if (key.size() >= prefix.size() && key.compare(0, prefix.size(), prefix) == 0) {
-            state.consecutive_empty = 0;
-            state.current_interval = std::chrono::milliseconds(base_interval_ms_);
-            // Note: Don't touch in_flight - let current query complete
-        }
+        transport_->broadcast(UDPSyncMessageType::MESSAGE_AVAILABLE, payload);
     }
 }
 
@@ -396,10 +204,6 @@ void SharedStateManager::setup_message_handlers() {
         handle_message_available(sender, p);
     });
     
-    transport_->on_message(Type::PARTITION_FREE, [this](Type, const std::string& sender, const nlohmann::json& p) {
-        handle_partition_free(sender, p);
-    });
-    
     transport_->on_message(Type::HEARTBEAT, [this](Type, const std::string& sender, const nlohmann::json& p) {
         handle_heartbeat(sender, p);
     });
@@ -412,14 +216,6 @@ void SharedStateManager::setup_message_handlers() {
         handle_queue_config_delete(sender, p);
     });
     
-    transport_->on_message(Type::CONSUMER_REGISTERED, [this](Type, const std::string& sender, const nlohmann::json& p) {
-        handle_consumer_registered(sender, p);
-    });
-    
-    transport_->on_message(Type::CONSUMER_DEREGISTERED, [this](Type, const std::string& sender, const nlohmann::json& p) {
-        handle_consumer_deregistered(sender, p);
-    });
-    
     transport_->on_message(Type::MAINTENANCE_MODE_SET, [this](Type, const std::string& sender, const nlohmann::json& p) {
         handle_maintenance_mode_set(sender, p);
     });
@@ -427,26 +223,19 @@ void SharedStateManager::setup_message_handlers() {
 
 void SharedStateManager::handle_message_available(const std::string& sender, const nlohmann::json& payload) {
     std::string queue = payload.value("queue", "");
-    spdlog::debug("SharedState: MESSAGE_AVAILABLE from {} for {}:{}",
-                 sender, queue, payload.value("partition", ""));
+    std::string partition = payload.value("partition", "");
     
-    // Forward to local workers (received from another server)
-    if (!queue.empty()) {
-        notify_local_workers(queue);
-        reset_backoff_for_queue(queue);
-    }
-}
-
-void SharedStateManager::handle_partition_free(const std::string& sender, const nlohmann::json& payload) {
-    std::string queue = payload.value("queue", "");
-    spdlog::debug("SharedState: PARTITION_FREE from {} for {}:{}:{}",
-                 sender, queue, payload.value("partition", ""),
-                 payload.value("consumer_group", ""));
+    spdlog::debug("SharedState: MESSAGE_AVAILABLE from {} for {}:{}", sender, queue, partition);
     
-    // Forward to local workers (received from another server)
+    // Notify local Queen instances (thread-safe via uv_async)
     if (!queue.empty()) {
-        notify_local_workers(queue);
-        reset_backoff_for_queue(queue);
+        std::lock_guard<std::mutex> lock(callback_mutex_);
+        if (message_available_callback_) {
+            spdlog::debug("SharedState: Invoking callback for {}:{}", queue, partition);
+            message_available_callback_(queue, partition);
+        } else {
+            spdlog::warn("SharedState: No callback registered!");
+        }
     }
 }
 
@@ -499,30 +288,9 @@ void SharedStateManager::handle_queue_config_delete(const std::string& sender, c
     spdlog::debug("SharedState: QUEUE_CONFIG_DELETE from {} for {}", sender, queue);
 }
 
-void SharedStateManager::handle_consumer_registered(const std::string& sender, const nlohmann::json& payload) {
-    std::string queue = payload.value("queue", "");
-    std::string sid = payload.value("server_id", sender);
-    
-    if (!queue.empty()) {
-        consumer_presence_.register_consumer(queue, sid);
-        spdlog::debug("SharedState: CONSUMER_REGISTERED {} for {}", sid, queue);
-    }
-}
-
-void SharedStateManager::handle_consumer_deregistered(const std::string& sender, const nlohmann::json& payload) {
-    std::string queue = payload.value("queue", "");
-    std::string sid = payload.value("server_id", sender);
-    
-    if (!queue.empty()) {
-        consumer_presence_.deregister_consumer(queue, sid);
-        spdlog::debug("SharedState: CONSUMER_DEREGISTERED {} for {}", sid, queue);
-    }
-}
-
 void SharedStateManager::handle_maintenance_mode_set(const std::string& sender, const nlohmann::json& payload) {
     bool enabled = payload.value("enabled", false);
     
-    // Update local cache
     bool prev = maintenance_mode_.exchange(enabled);
     if (prev != enabled) {
         spdlog::info("SharedState: MAINTENANCE_MODE_SET from {} -> {} (from peer {})", 
@@ -535,16 +303,10 @@ void SharedStateManager::handle_maintenance_mode_set(const std::string& sender, 
 // ============================================================
 
 void SharedStateManager::heartbeat_loop() {
-    spdlog::info("SharedStateManager: Heartbeat thread started (interval={}ms, backoff_cleanup_threshold={}s)",
-                 config_.shared_state.heartbeat_interval_ms, backoff_cleanup_threshold_seconds_);
-    
-    // Run cleanup every ~60 heartbeats (about once per minute at 1000ms interval)
-    constexpr int CLEANUP_INTERVAL_HEARTBEATS = 60;
-    int heartbeat_count = 0;
+    spdlog::info("SharedStateManager: Heartbeat thread started (interval={}ms)",
+                 config_.shared_state.heartbeat_interval_ms);
     
     while (running_) {
-        heartbeat_count++;
-        
         // Send heartbeat
         nlohmann::json payload = {
             {"session_id", transport_->session_id()},
@@ -556,11 +318,6 @@ void SharedStateManager::heartbeat_loop() {
         
         // Check for dead servers
         server_health_.check_dead_servers();
-        
-        // Periodic cleanup of stale backoff entries
-        if (heartbeat_count % CLEANUP_INTERVAL_HEARTBEATS == 0) {
-            cleanup_stale_backoff_entries();
-        }
         
         // Sleep
         std::this_thread::sleep_for(
@@ -602,16 +359,12 @@ void SharedStateManager::refresh_loop() {
 }
 
 void SharedStateManager::dns_refresh_loop() {
-    // DNS refresh interval: 30 seconds
-    // This ensures that if a pod restarts and gets a new IP, other pods
-    // will discover the new IP within 30 seconds
     constexpr int DNS_REFRESH_INTERVAL_SECONDS = 30;
     
     spdlog::info("SharedStateManager: DNS refresh thread started (interval={}s)",
                  DNS_REFRESH_INTERVAL_SECONDS);
     
     while (running_) {
-        // Sleep first - initial resolution is done in start()
         std::this_thread::sleep_for(std::chrono::seconds(DNS_REFRESH_INTERVAL_SECONDS));
         
         if (!running_) break;
@@ -620,8 +373,7 @@ void SharedStateManager::dns_refresh_loop() {
             int changes = transport_->resolve_peers();
             
             if (changes > 0) {
-                spdlog::warn("SharedStateManager: DNS refresh detected {} IP change(s) - "
-                            "peer addresses updated", changes);
+                spdlog::warn("SharedStateManager: DNS refresh detected {} IP change(s)", changes);
             }
         } catch (const std::exception& e) {
             spdlog::error("SharedStateManager: DNS refresh failed: {}", e.what());
@@ -632,10 +384,7 @@ void SharedStateManager::dns_refresh_loop() {
 }
 
 void SharedStateManager::refresh_queue_configs_from_db() {
-    if (!db_pool_) {
-        spdlog::debug("SharedStateManager: No DB pool, skipping queue config refresh");
-        return;
-    }
+    if (!db_pool_) return;
     
     try {
         auto conn = db_pool_->acquire();
@@ -644,7 +393,6 @@ void SharedStateManager::refresh_queue_configs_from_db() {
             return;
         }
         
-        // Query all queue configs
         std::string sql = R"(
             SELECT 
                 id, name, namespace, task, priority,
@@ -660,7 +408,6 @@ void SharedStateManager::refresh_queue_configs_from_db() {
         auto result = getTuplesResult(conn.get());
         
         int num_rows = PQntuples(result.get());
-        spdlog::debug("SharedStateManager: Loaded {} queue configs from DB", num_rows);
         
         std::vector<caches::CachedQueueConfig> configs;
         
@@ -718,7 +465,6 @@ void SharedStateManager::refresh_queue_configs_from_db() {
             configs.push_back(std::move(cfg));
         }
         
-        // Bulk update the cache
         queue_configs_.bulk_update(configs, true);
         
         spdlog::debug("SharedStateManager: Queue config cache refreshed with {} entries", configs.size());
@@ -729,9 +475,7 @@ void SharedStateManager::refresh_queue_configs_from_db() {
 }
 
 void SharedStateManager::refresh_maintenance_mode_from_db() {
-    if (!db_pool_) {
-        return;
-    }
+    if (!db_pool_) return;
     
     try {
         auto conn = db_pool_->acquire();
@@ -755,7 +499,6 @@ void SharedStateManager::refresh_maintenance_mode_from_db() {
             enabled = (val && std::string(val) == "true");
         }
         
-        // Only log if state changed
         bool prev = maintenance_mode_.exchange(enabled);
         if (prev != enabled) {
             spdlog::info("SharedStateManager: Maintenance mode changed {} -> {} (from DB refresh)", 
@@ -772,15 +515,14 @@ void SharedStateManager::refresh_maintenance_mode_from_db() {
 // ============================================================
 
 void SharedStateManager::set_maintenance_mode(bool enabled) {
-    // Update local cache immediately
     bool prev = maintenance_mode_.exchange(enabled);
     
     if (prev != enabled) {
-        spdlog::info("SharedStateManager: Maintenance mode set {} -> {} (local)", 
+        spdlog::info("SharedStateManager: Maintenance mode set {} -> {}", 
                     prev ? "ON" : "OFF", enabled ? "ON" : "OFF");
     }
     
-    // Persist to database (authoritative source)
+    // Persist to database
     if (db_pool_) {
         try {
             auto conn = db_pool_->acquire();
@@ -797,72 +539,20 @@ void SharedStateManager::set_maintenance_mode(bool enabled) {
                 
                 sendQueryParamsAsync(conn.get(), sql, {value_json});
                 getCommandResult(conn.get());
-                
-                spdlog::debug("SharedStateManager: Maintenance mode persisted to DB");
             }
         } catch (const std::exception& e) {
             spdlog::warn("SharedStateManager: Failed to persist maintenance mode to DB: {}", e.what());
         }
     }
     
-    // Broadcast to other instances via UDP
+    // Broadcast to other instances
     if (running_ && transport_) {
         nlohmann::json payload = {
             {"enabled", enabled},
             {"ts", now_ms()}
         };
         transport_->broadcast(UDPSyncMessageType::MAINTENANCE_MODE_SET, payload);
-        spdlog::debug("SharedStateManager: Broadcast MAINTENANCE_MODE_SET enabled={}", enabled);
     }
-}
-
-// ============================================================
-// Callbacks
-// ============================================================
-
-void SharedStateManager::on_server_dead(const std::string& server_id) {
-    spdlog::warn("SharedStateManager: Server {} detected as dead", server_id);
-    
-    // Clear consumer presence for dead server
-    consumer_presence_.clear_server(server_id);
-}
-
-// ============================================================
-// Cleanup
-// ============================================================
-
-size_t SharedStateManager::cleanup_stale_backoff_entries() {
-    std::lock_guard lock(backoff_mutex_);
-    
-    auto now = std::chrono::steady_clock::now();
-    size_t initial_size = group_backoff_.size();
-    
-    for (auto it = group_backoff_.begin(); it != group_backoff_.end();) {
-        // Skip entries that are currently in-flight
-        if (it->second.in_flight) {
-            ++it;
-            continue;
-        }
-        
-        auto age_seconds = std::chrono::duration_cast<std::chrono::seconds>(
-            now - it->second.last_accessed
-        ).count();
-        
-        if (age_seconds > backoff_cleanup_threshold_seconds_) {
-            it = group_backoff_.erase(it);
-        } else {
-            ++it;
-        }
-    }
-    
-    size_t removed = initial_size - group_backoff_.size();
-    
-    if (removed > 0) {
-        spdlog::info("SharedStateManager: Cleaned up {} stale backoff entries ({} -> {})",
-                    removed, initial_size, group_backoff_.size());
-    }
-    
-    return removed;
 }
 
 // ============================================================
@@ -887,14 +577,6 @@ nlohmann::json SharedStateManager::get_stats() const {
         {"hit_rate", queue_configs_.hit_rate()}
     };
     
-    stats["consumer_presence"] = {
-        {"queues_tracked", consumer_presence_.queue_count()},
-        {"servers_tracked", consumer_presence_.server_count()},
-        {"total_registrations", consumer_presence_.total_registrations()},
-        {"registrations_received", consumer_presence_.registrations()},
-        {"deregistrations_received", consumer_presence_.deregistrations()}
-    };
-    
     stats["server_health"] = {
         {"servers_tracked", server_health_.server_count()},
         {"servers_alive", server_health_.get_alive_servers().size()},
@@ -903,100 +585,9 @@ nlohmann::json SharedStateManager::get_stats() const {
         {"restarts_detected", server_health_.restarts_detected()}
     };
     
-    // Tier 4: Local Worker Registry (Queen integration later)
-    stats["local_workers"] = 0;  // Note: Will be populated when Queen integration is added
-    
-    // Tier 5: Group Backoff State
-    {
-        std::lock_guard lock(backoff_mutex_);
-        int in_flight = 0;
-        int backed_off = 0;
-        for (const auto& [key, state] : group_backoff_) {
-            if (state.in_flight) in_flight++;
-            if (state.consecutive_empty >= backoff_threshold_) backed_off++;
-        }
-        stats["group_backoff"] = {
-            {"groups_tracked", group_backoff_.size()},
-            {"groups_in_flight", in_flight},
-            {"groups_backed_off", backed_off}
-        };
-    }
-    
-    // Add queue backoff summary
-    // Note: Worker stats will be added when Queen integration is complete
-    stats["queue_backoff_summary"] = get_queue_backoff_summary();
+    stats["maintenance_mode"] = maintenance_mode_.load();
     
     return stats;
-}
-
-nlohmann::json SharedStateManager::get_aggregated_sidecar_stats() const {
-    // Note: Worker stats will be available when Queen library integration is complete
-    return nlohmann::json::object();
-}
-
-nlohmann::json SharedStateManager::get_queue_backoff_summary() const {
-    nlohmann::json result = nlohmann::json::array();
-    
-    // Aggregate by queue name
-    struct QueueSummary {
-        int groups_tracked = 0;
-        int groups_backed_off = 0;
-        int groups_in_flight = 0;
-        int64_t total_interval_ms = 0;
-        int max_consecutive_empty = 0;
-    };
-    std::unordered_map<std::string, QueueSummary> by_queue;
-    
-    {
-        std::lock_guard lock(backoff_mutex_);
-        
-        for (const auto& [group_key, state] : group_backoff_) {
-            // group_key format: "queue/partition/consumer_group"
-            size_t first_slash = group_key.find('/');
-            std::string queue = (first_slash != std::string::npos) 
-                ? group_key.substr(0, first_slash) 
-                : group_key;
-            
-            auto& summary = by_queue[queue];
-            summary.groups_tracked++;
-            if (state.consecutive_empty >= backoff_threshold_) {
-                summary.groups_backed_off++;
-            }
-            if (state.in_flight) {
-                summary.groups_in_flight++;
-            }
-            summary.total_interval_ms += state.current_interval.count();
-            summary.max_consecutive_empty = std::max(summary.max_consecutive_empty, 
-                                                      state.consecutive_empty);
-        }
-    }
-    
-    // Convert to JSON array (sorted by groups_tracked descending)
-    std::vector<std::pair<std::string, QueueSummary>> sorted_queues(
-        by_queue.begin(), by_queue.end()
-    );
-    std::sort(sorted_queues.begin(), sorted_queues.end(),
-              [](const auto& a, const auto& b) {
-                  return a.second.groups_tracked > b.second.groups_tracked;
-              });
-    
-    // Return top 20 queues
-    int count = 0;
-    for (const auto& [queue, summary] : sorted_queues) {
-        if (count++ >= 20) break;
-        
-        result.push_back({
-            {"queue", queue},
-            {"groups_tracked", summary.groups_tracked},
-            {"groups_backed_off", summary.groups_backed_off},
-            {"groups_in_flight", summary.groups_in_flight},
-            {"avg_interval_ms", summary.groups_tracked > 0 
-                ? summary.total_interval_ms / summary.groups_tracked : 0},
-            {"max_consecutive_empty", summary.max_consecutive_empty}
-        });
-    }
-    
-    return result;
 }
 
 } // namespace queen

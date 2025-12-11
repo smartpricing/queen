@@ -64,11 +64,6 @@ struct MetricsSample {
     uint64_t qc_cache_hits = 0;
     uint64_t qc_cache_misses = 0;
     
-    // Consumer presence
-    int consumer_queues_tracked = 0;
-    int consumer_servers_tracked = 0;
-    int consumer_total_registrations = 0;
-    
     // Server health
     int servers_alive = 0;
     int servers_dead = 0;
@@ -139,10 +134,6 @@ struct AggregatedMetrics {
     AggregatedMetric qc_cache_size;
     AggregatedMetric qc_cache_hits;
     AggregatedMetric qc_cache_misses;
-    
-    AggregatedMetric consumer_queues_tracked;
-    AggregatedMetric consumer_servers_tracked;
-    AggregatedMetric consumer_total_registrations;
     
     AggregatedMetric servers_alive;
     AggregatedMetric servers_dead;
@@ -235,11 +226,6 @@ struct AggregatedMetrics {
                 {"size", qc_cache_size.to_json()},
                 {"hits", qc_cache_hits.to_json()},
                 {"misses", qc_cache_misses.to_json()}
-            };
-            result["shared_state"]["consumer_presence"] = {
-                {"queues_tracked", consumer_queues_tracked.to_json()},
-                {"servers_tracked", consumer_servers_tracked.to_json()},
-                {"total_registrations", consumer_total_registrations.to_json()}
             };
             result["shared_state"]["server_health"] = {
                 {"alive", servers_alive.to_json()},

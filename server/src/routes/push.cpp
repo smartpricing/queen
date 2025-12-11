@@ -238,6 +238,21 @@ void setup_push_routes(uWS::App* app, const RouteContext& ctx) {
                                 if (push_failover_storage) {
                                     push_failover_storage->remove(request_id);
                                 }
+                                
+                                // Notify other instances via UDP that messages are available
+                                // This triggers pop backoff reset on remote workers
+                                if (global_shared_state && global_shared_state->is_enabled()) {
+                                    // Extract unique queue/partition pairs from the pushed items
+                                    // items_json is already a nlohmann::json array
+                                    std::set<std::pair<std::string, std::string>> notified;
+                                    for (const auto& item : items_json) {
+                                        std::string queue = item.value("queue", "");
+                                        std::string partition = item.value("partition", "Default");
+                                        if (!queue.empty() && notified.insert({queue, partition}).second) {
+                                            global_shared_state->notify_message_available(queue, partition);
+                                        }
+                                    }
+                                }
                             } catch (const std::exception& e) {
                                 // Parse failed - try file buffer failover
                                 spdlog::error("[Worker {}] PUSH result parse failed: {}", worker_id, e.what());

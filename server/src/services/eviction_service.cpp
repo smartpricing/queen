@@ -50,17 +50,57 @@ void EvictionService::schedule_next_run() {
 void EvictionService::eviction_cycle() {
     auto cycle_start = std::chrono::steady_clock::now();
     
+    // Advisory lock ID shared between retention and eviction services
+    // Prevents multiple instances from running cleanup concurrently (avoids deadlocks)
+    // MUST match the lock ID in retention_service.cpp
+    constexpr int64_t CLEANUP_LOCK_ID = 737001;
+    
+    // Connection used to hold the advisory lock for the duration of eviction
+    AsyncDbPool::PooledConnection lock_conn;
+    bool has_lock = false;
+    
     try {
-        // Run eviction
-        int evicted = evict_expired_waiting_messages();
+        lock_conn = db_pool_->acquire();
         
-        // Only log if something was evicted
-        if (evicted > 0) {
-            spdlog::info("EvictionService: Evicted {} messages exceeding max_wait_time", evicted);
+        // Try to acquire advisory lock (non-blocking)
+        sendQueryParamsAsync(lock_conn.get(), 
+            "SELECT pg_try_advisory_lock($1::bigint)", 
+            {std::to_string(CLEANUP_LOCK_ID)});
+        auto lock_result = getTuplesResult(lock_conn.get());
+        
+        if (PQntuples(lock_result.get()) > 0) {
+            std::string result_str = PQgetvalue(lock_result.get(), 0, 0);
+            has_lock = (result_str == "t");
+        }
+        
+        if (!has_lock) {
+            // Another instance is running cleanup - skip this cycle
+            spdlog::debug("EvictionService: Skipping cycle, another instance holds the lock");
+        } else {
+            // We have the lock - run eviction
+            int evicted = evict_expired_waiting_messages();
+            
+            // Only log if something was evicted
+            if (evicted > 0) {
+                spdlog::info("EvictionService: Evicted {} messages exceeding max_wait_time", evicted);
+            }
         }
         
     } catch (const std::exception& e) {
         spdlog::error("EvictionService cycle error: {}", e.what());
+    }
+    
+    // Always release the lock if we acquired it
+    if (has_lock && lock_conn) {
+        try {
+            sendQueryParamsAsync(lock_conn.get(), 
+                "SELECT pg_advisory_unlock($1::bigint)", 
+                {std::to_string(CLEANUP_LOCK_ID)});
+            getCommandResult(lock_conn.get());
+        } catch (const std::exception& e) {
+            // Lock will be released when connection closes anyway
+            spdlog::debug("EvictionService: Failed to release lock explicitly: {}", e.what());
+        }
     }
     
     // Calculate sleep time and reschedule

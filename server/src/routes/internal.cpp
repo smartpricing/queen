@@ -20,10 +20,8 @@ void setup_internal_routes(uWS::App* app, const RouteContext& ctx) {
         read_json_body(res,
             [res](const nlohmann::json& body) {
                 try {
-                    std::string type = body.value("type", "");
                     std::string queue = body.value("queue", "");
                     std::string partition = body.value("partition", "");
-                    std::string consumer_group = body.value("consumer_group", "__QUEUE_MODE__");
                     
                     if (queue.empty()) {
                         send_error_response(res, "queue is required", 400);
@@ -31,14 +29,8 @@ void setup_internal_routes(uWS::App* app, const RouteContext& ctx) {
                     }
                     
                     if (global_shared_state) {
-                        if (type == "message_available") {
-                            global_shared_state->notify_message_available(queue, partition);
-                        } else if (type == "partition_free") {
-                            global_shared_state->notify_partition_free(queue, partition, consumer_group);
-                        } else {
-                            // Default to message_available for backward compatibility
-                            global_shared_state->notify_message_available(queue, partition);
-                        }
+                        // All notification types trigger message_available
+                        global_shared_state->notify_message_available(queue, partition);
                     }
                     
                     send_json_response(res, {{"status", "ok"}}, 200);

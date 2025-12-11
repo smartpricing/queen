@@ -29,10 +29,10 @@ X when consumer disconnect, invalidated queen lib
 X logs, with atomic counters every second?
 - in push, trigger or query to update partition consumers?
 - udp on push - shared state only for push
-- retnetion cleanup improve
+X retnetion cleanup improve
 X backoff push per partition, not queue
 X improve metrics analtyics query
-- only one worker shodul write analtyics
+X only one worker shodul write analtyics
 - maintenace mode pop and reset pt
 - readme libqueen
 - backoff light query, not necessary?
@@ -377,8 +377,9 @@ public:
         _pop_wait_backoff_multiplier(pop_wait_backoff_multiplier),
         _pop_wait_max_interval_ms(pop_wait_max_interval_ms),
         _worker_id(worker_id) {
-        // Initialize libuv mutex
+        // Initialize libuv mutexes
         uv_mutex_init(&_mutex_job_queue);
+        uv_mutex_init(&_mutex_backoff_signal);
         // Start the event loop thread
         _init();
     }
@@ -395,6 +396,7 @@ public:
             delete _loop;
         }
         uv_mutex_destroy(&_mutex_job_queue);
+        uv_mutex_destroy(&_mutex_backoff_signal);
     }
 
     void 
@@ -435,6 +437,19 @@ public:
         }
     }
 
+    /**
+     * Thread-safe method to update pop backoff tracker.
+     * Can be called from any thread (e.g., UDP receive thread).
+     * Queues the update and signals the event loop to process it.
+     */
+    void
+    update_pop_backoff_tracker(const std::string& queue_name, const std::string& partition_name) {
+        uv_mutex_lock(&_mutex_backoff_signal);
+        _backoff_signal_queue.push_back({queue_name, partition_name});
+        uv_mutex_unlock(&_mutex_backoff_signal);
+        uv_async_send(&_backoff_signal);
+    }
+
 private:
     // Performance stats 
     std::chrono::steady_clock::time_point _last_timer_expected;
@@ -449,6 +464,15 @@ private:
     uv_async_t _queue_signal;
     std::atomic<bool> _loop_initialized;    
     uint16_t _queue_interval_ms;
+
+    // Thread-safe backoff signal (for UDP notifications from other threads)
+    struct BackoffSignal {
+        std::string queue_name;
+        std::string partition_name;
+    };
+    uv_async_t _backoff_signal;
+    uv_mutex_t _mutex_backoff_signal;
+    std::deque<BackoffSignal> _backoff_signal_queue;
 
     // job queue mutex
     uv_mutex_t _mutex_job_queue;
@@ -467,7 +491,7 @@ private:
     uint16_t _pop_wait_backoff_threshold;
     double _pop_wait_backoff_multiplier;
     uint16_t _pop_wait_max_interval_ms;
-
+    uint16_t _max_backoff_age_seconds = 65;
     uint16_t _worker_id;
 
     // Pop backoff tracker - stores shared_ptr to same jobs in _job_queue
@@ -512,6 +536,7 @@ private:
             uv_handle_set_data((uv_handle_t*)&_stats_timer, this);
             uv_handle_set_data((uv_handle_t*)&_queue_signal, this);
             uv_handle_set_data((uv_handle_t*)&_reconnect_signal, this);
+            uv_handle_set_data((uv_handle_t*)&_backoff_signal, this);
             
             uv_timer_init(_loop, &_queue_timer);
             uv_timer_init(_loop, &_stats_timer);
@@ -519,6 +544,7 @@ private:
             uv_timer_start(&_stats_timer, _uv_stats_timer_cb, 0, _stats_interval_ms);
             uv_async_init(_loop, &_queue_signal, _uv_async_cb);
             uv_async_init(_loop, &_reconnect_signal, _uv_reconnect_signal_cb);
+            uv_async_init(_loop, &_backoff_signal, _uv_backoff_signal_cb);
 
             // Connect all slots to the database
             if (!_connect_all_slots()) {
@@ -538,6 +564,35 @@ private:
     _uv_reconnect_signal_cb(uv_async_t* handle) noexcept(false) {
         auto* self = static_cast<Queen*>(uv_handle_get_data((uv_handle_t*)handle));
         self->_finalize_reconnected_slots();
+    }
+    
+    // Callback when backoff signal is received - process pending backoff updates
+    // Called on the event loop thread when UDP notifications arrive from other threads
+    static void
+    _uv_backoff_signal_cb(uv_async_t* handle) noexcept(true) {
+        auto* self = static_cast<Queen*>(uv_handle_get_data((uv_handle_t*)handle));
+        self->_process_backoff_signals();
+    }
+    
+    // Process all pending backoff signals (runs on event loop thread)
+    void
+    _process_backoff_signals() noexcept(true) {
+        std::deque<BackoffSignal> signals;
+        
+        // Drain the queue under lock
+        uv_mutex_lock(&_mutex_backoff_signal);
+        signals.swap(_backoff_signal_queue);
+        uv_mutex_unlock(&_mutex_backoff_signal);
+        
+        // Process all signals (now lock-free)
+        for (const auto& sig : signals) {
+            _update_pop_backoff_tracker(sig.queue_name, sig.partition_name);
+        }
+        
+        if (!signals.empty()) {
+            spdlog::debug("[Worker {}] [libqueen] Processed {} backoff signals from UDP", 
+                         _worker_id, signals.size());
+        }
     }
     
     // Finalize reconnected slots by initializing their poll handles (must run on event loop thread)
@@ -643,6 +698,11 @@ private:
     static void
     _uv_stats_timer_cb(uv_timer_t* handle) noexcept(false) {
         auto* self = static_cast<Queen*>(uv_handle_get_data((uv_handle_t*)handle));
+        
+        // Periodic cleanup of stale backoff entries (every stats interval)
+        // Entries are stale if their next_check time is more than 5 minutes old
+        self->_cleanup_stale_backoff_entries();
+        
         if (self->_jobs_done == 0) {
             return;
         }
@@ -664,6 +724,46 @@ private:
         // Get last timer expected
         spdlog::info("[Worker {}] [libqueen] EVL: {}ms, Slots: {}/{}, Queue: {}, Backoff: {}, JobsDone: {}, jobs/s: {}", self->_worker_id, event_loop_lag, free_slot_indexes_size, db_connections_size, job_queue_size, backoff_size, self->_jobs_done, jobs_per_second);
         self->_jobs_done = 0;
+    }
+    
+    // Cleanup stale backoff entries - entries where the job is no longer in the queue
+    // or entries that haven't been touched in a long time (5 minutes)
+    void
+    _cleanup_stale_backoff_entries() noexcept(true) {
+        auto now = std::chrono::steady_clock::now();
+        auto STALE_THRESHOLD = std::chrono::seconds(_max_backoff_age_seconds);
+        
+        size_t removed = 0;
+        
+        for (auto queue_it = _pop_backoff_tracker.begin(); queue_it != _pop_backoff_tracker.end(); ) {
+            auto& request_map = queue_it->second;
+            
+            for (auto req_it = request_map.begin(); req_it != request_map.end(); ) {
+                auto& job_ptr = req_it->second;
+                
+                // Check if job is stale (next_check is very old)
+                // This means the job was never removed properly (consumer disconnected without cleanup)
+                if (job_ptr && (now - job_ptr->job.next_check) > STALE_THRESHOLD) {
+                    spdlog::debug("[Worker {}] [libqueen] Removing stale backoff entry: {}/{}", 
+                                 _worker_id, queue_it->first, req_it->first);
+                    req_it = request_map.erase(req_it);
+                    removed++;
+                } else {
+                    ++req_it;
+                }
+            }
+            
+            // Remove empty queue entries
+            if (request_map.empty()) {
+                queue_it = _pop_backoff_tracker.erase(queue_it);
+            } else {
+                ++queue_it;
+            }
+        }
+        
+        if (removed > 0) {
+            spdlog::info("[Worker {}] [libqueen] Cleaned up {} stale backoff entries", _worker_id, removed);
+        }
     }
 
     static void

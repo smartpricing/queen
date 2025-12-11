@@ -218,14 +218,6 @@ MetricsSample MetricsCollector::collect_sample() {
                     sample.qc_cache_misses = qc.value("misses", 0ULL);
                 }
                 
-                // Consumer presence
-                if (stats.contains("consumer_presence")) {
-                    auto& cp = stats["consumer_presence"];
-                    sample.consumer_queues_tracked = cp.value("queues_tracked", 0);
-                    sample.consumer_servers_tracked = cp.value("servers_tracked", 0);
-                    sample.consumer_total_registrations = cp.value("total_registrations", 0);
-                }
-                
                 // Server health
                 if (stats.contains("server_health")) {
                     auto& sh = stats["server_health"];
@@ -462,10 +454,6 @@ AggregatedMetrics MetricsCollector::aggregate(const std::vector<MetricsSample>& 
         agg.qc_cache_size = aggregate_metric([](const auto& s) { return s.qc_cache_size; });
         agg.qc_cache_hits = aggregate_metric([](const auto& s) { return s.qc_cache_hits; });
         agg.qc_cache_misses = aggregate_metric([](const auto& s) { return s.qc_cache_misses; });
-        
-        agg.consumer_queues_tracked = aggregate_metric([](const auto& s) { return s.consumer_queues_tracked; });
-        agg.consumer_servers_tracked = aggregate_metric([](const auto& s) { return s.consumer_servers_tracked; });
-        agg.consumer_total_registrations = aggregate_metric([](const auto& s) { return s.consumer_total_registrations; });
         
         agg.servers_alive = aggregate_metric([](const auto& s) { return s.servers_alive; });
         agg.servers_dead = aggregate_metric([](const auto& s) { return s.servers_dead; });

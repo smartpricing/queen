@@ -108,6 +108,7 @@ CREATE INDEX IF NOT EXISTS idx_stats_history_lookup ON queen.stats_history(stat_
 -- Compute partition-level stats using INCREMENTAL SCAN
 -- Only scans NEW messages since last_scanned_at (fast!)
 -- Uses partition_consumers metadata for completed/processing (no message scan needed)
+-- Uses transaction-level advisory lock to prevent concurrent execution
 CREATE OR REPLACE FUNCTION queen.compute_partition_stats_v1()
 RETURNS JSONB
 LANGUAGE plpgsql
@@ -116,7 +117,31 @@ DECLARE
     v_updated INTEGER := 0;
     v_new_partitions INTEGER := 0;
     v_now TIMESTAMPTZ := NOW();
+    v_lock_key BIGINT := 7868669788; -- hash of 'queen_stats_partition'
+    v_last_computed TIMESTAMPTZ;
 BEGIN
+    -- Try to acquire transaction-level advisory lock
+    -- If another instance is computing, skip this execution
+    IF NOT pg_try_advisory_xact_lock(v_lock_key) THEN
+        RETURN jsonb_build_object(
+            'skipped', true, 
+            'reason', 'another_instance_computing'
+        );
+    END IF;
+    
+    -- Check if stats were computed very recently (within 5 seconds)
+    -- This prevents redundant work when multiple instances call in sequence
+    SELECT MAX(last_computed_at) INTO v_last_computed
+    FROM queen.stats
+    WHERE stat_type = 'system';
+    
+    IF v_last_computed IS NOT NULL AND v_last_computed > v_now - INTERVAL '5 seconds' THEN
+        RETURN jsonb_build_object(
+            'skipped', true,
+            'reason', 'recently_computed',
+            'lastComputedAt', v_last_computed
+        );
+    END IF;
     -- STEP 1: Handle partitions that already have stats (INCREMENTAL - only new messages)
     -- Count new messages since last_scanned_at and ADD to existing totals
     WITH new_message_counts AS (
@@ -541,6 +566,7 @@ $$;
 
 -- Write stats snapshot to history table
 -- Calculates deltas by comparing to previous bucket in history (not stats.prev_* fields)
+-- Skips if this bucket was already written recently (prevents duplicate work across instances)
 CREATE OR REPLACE FUNCTION queen.write_stats_history_v1(p_bucket_minutes INTEGER DEFAULT 1)
 RETURNS JSONB
 LANGUAGE plpgsql
@@ -549,11 +575,26 @@ DECLARE
     v_bucket_time TIMESTAMPTZ;
     v_prev_bucket_time TIMESTAMPTZ;
     v_inserted INTEGER := 0;
+    v_last_written TIMESTAMPTZ;
 BEGIN
     -- Round to bucket
     v_bucket_time := date_trunc('minute', NOW()) - 
         (EXTRACT(minute FROM NOW())::integer % p_bucket_minutes) * INTERVAL '1 minute';
     v_prev_bucket_time := v_bucket_time - (p_bucket_minutes || ' minutes')::INTERVAL;
+    
+    -- Check if this bucket was already written (by another instance)
+    -- We check the system stat since it's always present
+    SELECT MAX(sh.bucket_time) INTO v_last_written
+    FROM queen.stats_history sh
+    WHERE sh.stat_type = 'system' AND sh.bucket_time = v_bucket_time;
+    
+    IF v_last_written IS NOT NULL THEN
+        RETURN jsonb_build_object(
+            'skipped', true,
+            'reason', 'bucket_already_written',
+            'bucketTime', v_bucket_time
+        );
+    END IF;
     
     -- Insert system and queue stats to history
     -- Calculate delta from previous history bucket (not stats.prev_* which updates every 10s)
@@ -1237,6 +1278,8 @@ $$;
 -- ============================================================================
 -- FULL STATS REFRESH (for initial population or reconciliation)
 -- ============================================================================
+-- Uses transaction-level advisory lock to prevent concurrent execution
+-- across multiple server instances. Lock auto-releases when function returns.
 
 CREATE OR REPLACE FUNCTION queen.refresh_all_stats_v1()
 RETURNS JSONB
@@ -1245,7 +1288,17 @@ AS $$
 DECLARE
     v_result JSONB := '{}'::jsonb;
     v_step JSONB;
+    v_lock_key BIGINT := 7868669787; -- hash of 'queen_stats_refresh'
 BEGIN
+    -- Try to acquire transaction-level advisory lock
+    -- If another instance is running, skip this execution
+    IF NOT pg_try_advisory_xact_lock(v_lock_key) THEN
+        RETURN jsonb_build_object(
+            'skipped', true, 
+            'reason', 'another_instance_running'
+        );
+    END IF;
+    
     -- Step 1: Compute partition stats (from messages)
     SELECT queen.compute_partition_stats_v1() INTO v_step;
     v_result := v_result || jsonb_build_object('partition', v_step);
@@ -1274,6 +1327,7 @@ BEGIN
     SELECT queen.cleanup_orphaned_stats_v1() INTO v_step;
     v_result := v_result || jsonb_build_object('cleanup', v_step);
     
+    -- Lock automatically released when transaction commits
     RETURN v_result;
 END;
 $$;

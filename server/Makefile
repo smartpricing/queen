@@ -79,7 +79,7 @@ UWS_URL = https://github.com/uNetworking/uWebSockets/archive/refs/heads/master.z
 USOCKETS_URL = https://github.com/uNetworking/uSockets/archive/refs/heads/master.zip
 NLOHMANN_JSON_URL = https://github.com/nlohmann/json/releases/download/v3.11.3/json.hpp
 CPPHTTPLIB_URL = https://raw.githubusercontent.com/yhirose/cpp-httplib/master/httplib.h
-SPDLOG_URL = https://github.com/gabime/spdlog/archive/refs/heads/v1.x.zip
+SPDLOG_URL = https://github.com/gabime/spdlog/archive/refs/tags/v1.14.1.zip
 LIBUV_URL = https://github.com/libuv/libuv/archive/refs/tags/v1.48.0.zip
 
 .PHONY: all clean deps setup test build-only debug-objects
@@ -127,7 +127,7 @@ $(VENDOR_DIR)/.deps_ready: setup
 		curl -L $(SPDLOG_URL) -o spdlog.zip && \
 		unzip -qo spdlog.zip && \
 		rm -rf spdlog && \
-		mv spdlog-1.x spdlog && \
+		mv spdlog-1.14.1 spdlog && \
 		rm spdlog.zip
 	
 	# Download and build libuv (static library)

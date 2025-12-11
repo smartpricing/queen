@@ -43,6 +43,8 @@ static std::shared_ptr<queen::StatsService> global_stats_service;
 // These globals need to be accessible from route files (non-static, in queen namespace)
 namespace queen {
 std::vector<std::shared_ptr<ResponseRegistry>> worker_response_registries;  // Per-worker registries (no lock contention!)
+std::vector<Queen*> worker_queen_instances;  // Per-worker Queen instances for UDP notifications
+std::mutex worker_queen_mutex;  // Protects worker_queen_instances
 }
 
 static std::once_flag global_pool_init_flag;
@@ -319,6 +321,9 @@ static void worker_thread(const Config& config, int worker_id, int num_workers,
                 spdlog::info("  - Created response registry for worker {} (lock-free across workers)", i);
             }
             
+            // Initialize per-worker Queen instance vector (populated in worker threads)
+            queen::worker_queen_instances.resize(num_workers, nullptr);
+            
             // Get system info for metrics
             global_system_info = SystemInfo::get_current();
             global_system_info.port = config.server.port;
@@ -330,12 +335,7 @@ static void worker_thread(const Config& config, int worker_id, int num_workers,
             queen::global_shared_state = std::make_shared<queen::SharedStateManager>(
                 config.inter_instance,
                 server_id,
-                global_async_db_pool,
-                config.queue.backoff_cleanup_inactive_threshold,
-                config.queue.pop_wait_initial_interval_ms,
-                config.queue.pop_wait_backoff_threshold,
-                config.queue.pop_wait_backoff_multiplier,
-                config.queue.pop_wait_max_interval_ms
+                global_async_db_pool
             );
             
             // Note: SharedStateManager::start() is called AFTER schema initialization in worker 0
@@ -392,6 +392,20 @@ static void worker_thread(const Config& config, int worker_id, int num_workers,
                 // This ensures queen.queues and queen.system_state tables exist
                 spdlog::info("[Worker 0] Starting Shared State Manager...");
                 queen::global_shared_state->start();
+                
+                // Register callback to notify Queen instances on MESSAGE_AVAILABLE from UDP
+                // This is thread-safe as Queen::update_pop_backoff_tracker uses uv_async
+                queen::global_shared_state->on_message_available(
+                    [](const std::string& queue, const std::string& partition) {
+                        std::lock_guard<std::mutex> lock(queen::worker_queen_mutex);
+                        for (auto* q : queen::worker_queen_instances) {
+                            if (q) {
+                                q->update_pop_backoff_tracker(queue, partition);
+                            }
+                        }
+                    }
+                );
+                spdlog::info("[Worker 0] Registered MESSAGE_AVAILABLE callback for Queen instances");
                 
                 // Start metrics collector
                 spdlog::info("[Worker 0] Starting background metrics collector (sample: {}ms, aggregate: {}s)...",
@@ -457,6 +471,18 @@ static void worker_thread(const Config& config, int worker_id, int num_workers,
             if (worker_id == 0) {
                 spdlog::info("[Worker 0] Starting Shared State Manager (DB unavailable - limited functionality)...");
                 queen::global_shared_state->start();
+                
+                // Register callback for MESSAGE_AVAILABLE notifications
+                queen::global_shared_state->on_message_available(
+                    [](const std::string& queue, const std::string& partition) {
+                        std::lock_guard<std::mutex> lock(queen::worker_queen_mutex);
+                        for (auto* q : queen::worker_queen_instances) {
+                            if (q) {
+                                q->update_pop_backoff_tracker(queue, partition);
+                            }
+                        }
+                    }
+                );
             }
         }
         
@@ -553,6 +579,13 @@ static void worker_thread(const Config& config, int worker_id, int num_workers,
         std::this_thread::sleep_for(std::chrono::milliseconds(500));
         spdlog::info("[Worker {}] Queen instance ready with {} connections", worker_id, per_worker_connections);
         
+        // Register Queen instance for UDP notifications
+        {
+            std::lock_guard<std::mutex> lock(queen::worker_queen_mutex);
+            queen::worker_queen_instances[worker_id] = worker_queen.get();
+        }
+        spdlog::info("[Worker {}] Registered Queen instance for UDP notifications", worker_id);
+        
         // Setup routes (pass raw pointer - Queen lifetime managed by this thread)
         spdlog::info("[Worker {}] Setting up routes...", worker_id);
         setup_worker_routes(worker_app, async_queue_manager, file_buffer, 
@@ -606,6 +639,12 @@ static void worker_thread(const Config& config, int worker_id, int num_workers,
         
         // Cleanup Queen when event loop exits
         spdlog::info("[Worker {}] Stopping Queen instance...", worker_id);
+        
+        // Unregister Queen instance before cleanup
+        {
+            std::lock_guard<std::mutex> lock(queen::worker_queen_mutex);
+            queen::worker_queen_instances[worker_id] = nullptr;
+        }
         
         // Queen destructor handles cleanup
         worker_queen.reset();

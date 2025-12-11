@@ -60,22 +60,61 @@ void RetentionService::schedule_next_run() {
 void RetentionService::cleanup_cycle() {
     auto cycle_start = std::chrono::steady_clock::now();
     
+    // Advisory lock ID shared between retention and eviction services
+    // Prevents multiple instances from running cleanup concurrently (avoids deadlocks)
+    constexpr int64_t CLEANUP_LOCK_ID = 737001;
+    
+    // Connection used to hold the advisory lock for the duration of cleanup
+    AsyncDbPool::PooledConnection lock_conn;
+    bool has_lock = false;
+    
     try {
-        // Run all cleanup operations
-        int expired = cleanup_expired_messages();
-        int completed = cleanup_completed_messages();
-        int partitions = cleanup_inactive_partitions();
-        int metrics = cleanup_old_metrics();
+        lock_conn = db_pool_->acquire();
         
-        // Only log if something was cleaned up
-        if (expired > 0 || completed > 0 || partitions > 0 || metrics > 0) {
-            spdlog::info("RetentionService: Cleaned up expired_messages={}, completed_messages={}, "
-                        "inactive_partitions={}, old_metrics={}",
-                        expired, completed, partitions, metrics);
+        // Try to acquire advisory lock (non-blocking)
+        sendQueryParamsAsync(lock_conn.get(), 
+            "SELECT pg_try_advisory_lock($1::bigint)", 
+            {std::to_string(CLEANUP_LOCK_ID)});
+        auto lock_result = getTuplesResult(lock_conn.get());
+        
+        if (PQntuples(lock_result.get()) > 0) {
+            std::string result_str = PQgetvalue(lock_result.get(), 0, 0);
+            has_lock = (result_str == "t");
+        }
+        
+        if (!has_lock) {
+            // Another instance is running cleanup - skip this cycle
+            spdlog::debug("RetentionService: Skipping cycle, another instance holds the lock");
+        } else {
+            // We have the lock - run all cleanup operations
+            int expired = cleanup_expired_messages();
+            int completed = cleanup_completed_messages();
+            int partitions = cleanup_inactive_partitions();
+            int metrics = cleanup_old_metrics();
+            
+            // Only log if something was cleaned up
+            if (expired > 0 || completed > 0 || partitions > 0 || metrics > 0) {
+                spdlog::info("RetentionService: Cleaned up expired_messages={}, completed_messages={}, "
+                            "inactive_partitions={}, old_metrics={}",
+                            expired, completed, partitions, metrics);
+            }
         }
         
     } catch (const std::exception& e) {
         spdlog::error("RetentionService cycle error: {}", e.what());
+    }
+    
+    // Always release the lock if we acquired it
+    if (has_lock && lock_conn) {
+        try {
+            sendQueryParamsAsync(lock_conn.get(), 
+                "SELECT pg_advisory_unlock($1::bigint)", 
+                {std::to_string(CLEANUP_LOCK_ID)});
+            getCommandResult(lock_conn.get());
+        } catch (const std::exception& e) {
+            // Lock will be released when connection closes anyway
+            spdlog::debug("RetentionService: Failed to release lock explicitly: {}", e.what());
+        }
     }
     
     // Calculate sleep time and reschedule
