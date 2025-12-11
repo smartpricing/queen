@@ -174,11 +174,7 @@ static void setup_worker_routes(uWS::App* app,
     queen::routes::setup_static_file_routes(app, ctx);
 }
 
-// NOTE: All helper functions (CORS, JSON, query params, static files) have been moved to
-// src/routes/route_helpers.cpp and declared in include/queen/routes/route_helpers.hpp
-
 // Global shared resources initialized in worker_thread
-
 // Context struct for response timer callback
 struct ResponseTimerContext {
     queen::ResponseQueue* queue;
@@ -534,7 +530,8 @@ static void worker_thread(const Config& config, int worker_id, int num_workers,
             config.queue.pop_wait_initial_interval_ms,
             config.queue.pop_wait_backoff_threshold,
             config.queue.pop_wait_backoff_multiplier,
-            config.queue.pop_wait_max_interval_ms
+            config.queue.pop_wait_max_interval_ms,
+            worker_id
         );
         
         // Allow time for connections to be established

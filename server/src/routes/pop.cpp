@@ -52,8 +52,9 @@ void setup_pop_routes(uWS::App* app, const RouteContext& ctx) {
             // Register response for async delivery
             std::string request_id = worker_response_registries[ctx.worker_id]->register_response(
                 res, ctx.worker_id, 
-                wait ? [](const std::string& req_id) {
+                wait ? [ctx](const std::string& req_id) {
                     spdlog::info("SPOP: Connection aborted for {}", req_id);
+                    ctx.queen->invalidate_request(req_id);
                 } : std::function<void(const std::string&)>(nullptr)
             );
             
@@ -193,8 +194,9 @@ void setup_pop_routes(uWS::App* app, const RouteContext& ctx) {
             // Register response for async delivery
             std::string request_id = worker_response_registries[ctx.worker_id]->register_response(
                 res, ctx.worker_id,
-                wait ? [](const std::string& req_id) {
+                wait ? [ctx](const std::string& req_id) {
                     spdlog::info("QPOP: Connection aborted for {}", req_id);
+                    ctx.queen->invalidate_request(req_id);
                 } : std::function<void(const std::string&)>(nullptr)
             );
             

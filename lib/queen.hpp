@@ -25,11 +25,13 @@
 
 
 /**
+X when consumer disconnect, invalidated queen lib
 - logs, with atomic counters every second?
 - udp on push - shared state 
 - improve metrics analtyics query
 - readme libqueen
 - backoff light query, not necessary?
+- sc test
 - deploy to stage
 */
 
@@ -356,7 +358,8 @@ public:
         uint16_t pop_wait_initial_interval_ms = 100,
         uint16_t pop_wait_backoff_threshold = 3,
         double pop_wait_backoff_multiplier = 3.0,
-        uint16_t pop_wait_max_interval_ms = 5000) noexcept(false) : 
+        uint16_t pop_wait_max_interval_ms = 5000,
+        uint16_t worker_id = 0) noexcept(false) : 
         _loop(nullptr), 
         _loop_initialized(false),
         _queue_interval_ms(queue_interval_ms),
@@ -366,7 +369,8 @@ public:
         _pop_wait_initial_interval_ms(pop_wait_initial_interval_ms),
         _pop_wait_backoff_threshold(pop_wait_backoff_threshold),
         _pop_wait_backoff_multiplier(pop_wait_backoff_multiplier),
-        _pop_wait_max_interval_ms(pop_wait_max_interval_ms) {
+        _pop_wait_max_interval_ms(pop_wait_max_interval_ms),
+        _worker_id(worker_id) {
         // Initialize libuv mutex
         uv_mutex_init(&_mutex_job_queue);
         // Start the event loop thread
@@ -397,14 +401,45 @@ public:
         // uv_async_send(&_queue_signal);
     }
 
+    bool 
+    invalidate_request(const std::string& request_id) 
+    noexcept(true) {
+        uv_mutex_lock(&_mutex_job_queue); 
+        try {
+            // Here we need to find and delete the request from the job queue 
+            // and from the pop backoff tracker
+            _job_queue.erase(std::remove_if(_job_queue.begin(), _job_queue.end(), [&request_id, this](const std::shared_ptr<PendingJob>& job) {
+                return job->job.request_id == request_id;
+            }), _job_queue.end());
+            
+            for (auto it = _pop_backoff_tracker.begin(); it != _pop_backoff_tracker.end(); ) {
+                it->second.erase(request_id);
+                if (it->second.empty()) {
+                    it = _pop_backoff_tracker.erase(it);
+                } else {
+                    ++it;
+                }
+            }
+            uv_mutex_unlock(&_mutex_job_queue);
+            return true;
+        } catch (const std::exception& e) {
+            spdlog::error("[Worker {}] [libqueen] Failed to invalidate request: {}", _worker_id, e.what());
+            uv_mutex_unlock(&_mutex_job_queue);
+            return false;
+        }
+    }
+
 private:
     // Performance stats 
     std::chrono::steady_clock::time_point _last_timer_expected;
     uint64_t _event_loop_lag; 
+    uint64_t _jobs_done = 0;
+    uint16_t _stats_interval_ms = 1000;
 
     // libuv event loop and handles
     uv_loop_t* _loop;
     uv_timer_t _queue_timer;
+    uv_timer_t _stats_timer;
     uv_async_t _queue_signal;
     std::atomic<bool> _loop_initialized;    
     uint16_t _queue_interval_ms;
@@ -426,6 +461,8 @@ private:
     uint16_t _pop_wait_backoff_threshold;
     double _pop_wait_backoff_multiplier;
     uint16_t _pop_wait_max_interval_ms;
+
+    uint16_t _worker_id;
 
     // Pop backoff tracker - stores shared_ptr to same jobs in _job_queue
     std::unordered_map<std::string, std::map<std::string, std::shared_ptr<PendingJob>>> _pop_backoff_tracker;
@@ -455,11 +492,14 @@ private:
             
             // Set data pointer so callbacks can access this instance
             uv_handle_set_data((uv_handle_t*)&_queue_timer, this);
+            uv_handle_set_data((uv_handle_t*)&_stats_timer, this);
             uv_handle_set_data((uv_handle_t*)&_queue_signal, this);
             uv_handle_set_data((uv_handle_t*)&_reconnect_signal, this);
             
             uv_timer_init(_loop, &_queue_timer);
+            uv_timer_init(_loop, &_stats_timer);
             uv_timer_start(&_queue_timer, _uv_timer_cb, 0, _queue_interval_ms);
+            uv_timer_start(&_stats_timer, _uv_stats_timer_cb, 0, _stats_interval_ms);
             uv_async_init(_loop, &_queue_signal, _uv_async_cb);
             uv_async_init(_loop, &_reconnect_signal, _uv_reconnect_signal_cb);
 
@@ -501,9 +541,9 @@ private:
                     
                     // Add back to free pool
                     _free_slot_indexes.push_back(i);
-                    spdlog::info("[libqueen] Slot {} poll initialized and added to pool", i);
+                    spdlog::info("[Worker {}] [libqueen] Slot {} poll initialized and added to pool", _worker_id, i);
                 } else {
-                    spdlog::error("[libqueen] Failed to init poll for reconnected slot {}", i);
+                    spdlog::error("[Worker {}] [libqueen] Failed to init poll for reconnected slot {}", _worker_id, i);
                     // Disconnect and let reconnect thread try again
                     PQfinish(slot.conn);
                     slot.conn = nullptr;
@@ -528,7 +568,7 @@ private:
         self->_last_timer_expected = now;
 
         if (lag > 100 /*self->_queue_interval_ms * 2*/) {
-            spdlog::warn("[libqueen] Event loop lag is too high: {}ms, expected: {}ms", lag, self->_queue_interval_ms);
+            spdlog::warn("[Worker {}] [libqueen] Event loop lag is too high: {}ms, expected: {}ms", self->_worker_id, lag, self->_queue_interval_ms);
         }
 
         // Drain the queue
@@ -583,12 +623,31 @@ private:
         self->_requeue_jobs(jobs_to_requeue);
     }
 
-    void
-    _start_watching_slot(DBConnection& slot, int events) noexcept(true) {
-        if (slot.poll_initialized && slot.socket_fd >= 0) {
-            uv_poll_start(&slot.poll_handle, events, _uv_socket_event_cb);
+    static void
+    _uv_stats_timer_cb(uv_timer_t* handle) noexcept(false) {
+        auto* self = static_cast<Queen*>(uv_handle_get_data((uv_handle_t*)handle));
+        if (self->_jobs_done == 0) {
+            return;
         }
-    } 
+
+        // Get backoff size 
+        int backoff_size = self->_pop_backoff_tracker.size();
+        // Get free slot indexes size
+        int free_slot_indexes_size = self->_free_slot_indexes.size();
+        // Get db connections size
+        int db_connections_size = self->_db_connections.size();
+        // Get job queue size
+        int job_queue_size = self->_job_queue.size();
+        // Get event loop lag
+        int event_loop_lag = self->_event_loop_lag - self->_queue_interval_ms;
+        if (event_loop_lag < 0) {
+            event_loop_lag = 0;
+        }
+        auto jobs_per_second = self->_jobs_done / (self->_stats_interval_ms / 1000.0);
+        // Get last timer expected
+        spdlog::info("[Worker {}] [libqueen] EVL: {}ms, Slots: {}/{}, Queue: {}, Backoff: {}, JobsDone: {}, jobs/s: {}", self->_worker_id, event_loop_lag, free_slot_indexes_size, db_connections_size, job_queue_size, backoff_size, self->_jobs_done, jobs_per_second);
+        self->_jobs_done = 0;
+    }
 
     static void
     _uv_socket_event_cb(uv_poll_t* handle, int status, int events) noexcept(false) {
@@ -598,7 +657,7 @@ private:
         auto* pool = slot->pool;
         
         if (status < 0) {
-            spdlog::error("[libqueen] Poll error: {}", uv_strerror(status));
+            spdlog::error("[Worker {}] [libqueen] Poll error: {}", pool->_worker_id, uv_strerror(status));
             return;
         }
                 
@@ -610,7 +669,7 @@ private:
                 uv_poll_start(handle, UV_READABLE, _uv_socket_event_cb);
             } else if (flush_result == -1) {
                 // Flush failed - error
-                spdlog::error("[libqueen] PQflush failed");
+                spdlog::error("[Worker {}] [libqueen] PQflush failed", pool->_worker_id);
                 return;
             }
             // flush_result == 1: more to send, keep watching WRITABLE
@@ -639,6 +698,13 @@ private:
     }
 
     void
+    _start_watching_slot(DBConnection& slot, int events) noexcept(true) {
+        if (slot.poll_initialized && slot.socket_fd >= 0) {
+            uv_poll_start(&slot.poll_handle, events, _uv_socket_event_cb);
+        }
+    } 
+
+    void
     _process_slot_result(DBConnection& slot) noexcept(false) {
         PGresult* res;
         while ((res = PQgetResult(slot.conn)) != NULL) {
@@ -661,6 +727,7 @@ private:
                 if (!json_results.is_array()) {
                     for (auto& job : slot.jobs) {
                         job->callback(json_results.dump());
+                        _jobs_done++;
                     }
                     slot.jobs.clear();
                     slot.job_idx_ranges.clear();
@@ -707,8 +774,8 @@ private:
                     }
                     
                     if (job_results.empty()) {
-                        spdlog::warn("[libqueen] No results found for job {} (idx range [{}, {}))", 
-                                    job_idx, start_idx, start_idx + count);
+                        spdlog::warn("[Worker {}] [libqueen] No results found for job {} (idx range [{}, {}))", 
+                                    _worker_id, job_idx, start_idx, start_idx + count);
                         continue;
                     }
                     
@@ -751,6 +818,7 @@ private:
                                 // Wrap result in array for callback compatibility
                                 nlohmann::json wrapped = nlohmann::json::array();
                                 wrapped.push_back(result_item);
+                                _jobs_done++;
                                 job->callback(wrapped.dump());
                             }
                             break;
@@ -759,11 +827,13 @@ private:
                             // Signal backoff tracker that the push is successful
                             _update_pop_backoff_tracker(job->job.queue_name);
                             // Return all results for this job (may have multiple messages)
+                            _jobs_done++;
                             job->callback(job_results.dump());
                             break;
                         }
                         default: {
                             // Return all results for this job
+                            _jobs_done++;
                             job->callback(job_results.dump());
                             break;
                         }
@@ -774,7 +844,7 @@ private:
             } else {
                 // Query failed - send error to all jobs
                 std::string error_msg = PQresultErrorMessage(res);
-                spdlog::error("[libqueen] Query failed: {}", error_msg);
+                spdlog::error("[Worker {}] [libqueen] Query failed: {}", _worker_id, error_msg);
                 
                 nlohmann::json error_result = {
                     {"success", false},
@@ -783,6 +853,7 @@ private:
                 
                 for (auto& job : slot.jobs) {
                     job->callback(error_result.dump());
+                    _jobs_done++;
                 }
                 slot.jobs.clear();
                 slot.job_idx_ranges.clear();
@@ -851,14 +922,14 @@ private:
                 nullptr, nullptr, 0);
 
             if (!sent) { 
-                spdlog::error("[libqueen] Failed to send jobs to the database: {}", PQerrorMessage(slot.conn));
+                spdlog::error("[Worker {}] [libqueen] Failed to send jobs to the database: {}", _worker_id, PQerrorMessage(slot.conn));
                 jobs_to_requeue.insert(jobs_to_requeue.end(), jobs.begin(), jobs.end());
                 slot.jobs.clear();  // Clear jobs from slot since we're requeuing them
                 
                 // Check if connection is dead - if so, disconnect it
                 // Reconnection thread will automatically reconnect it
                 if (PQstatus(slot.conn) != CONNECTION_OK) {
-                    spdlog::warn("[libqueen] Connection dead, marking for reconnection");
+                    spdlog::warn("[Worker {}] [libqueen] Connection dead, marking for reconnection", _worker_id);
                     _disconnect_slot(slot);
                 } else {
                     // Connection still OK, return slot to pool
@@ -942,6 +1013,7 @@ private:
         // Send result to the single job (CUSTOM queries are not batched)
         if (!slot.jobs.empty()) {
             slot.jobs[0]->callback(result.dump());
+            _jobs_done++;
         }
         slot.jobs.clear();
         slot.job_idx_ranges.clear();
@@ -977,12 +1049,12 @@ private:
             0);       // Text result format
         
         if (!sent) {
-            spdlog::error("[libqueen] Failed to send custom query: {}", PQerrorMessage(slot.conn));
+            spdlog::error("[Worker {}] [libqueen] Failed to send custom query: {}", _worker_id, PQerrorMessage(slot.conn));
             jobs_to_requeue.push_back(job);
             slot.jobs.clear();
             
             if (PQstatus(slot.conn) != CONNECTION_OK) {
-                spdlog::warn("[libqueen] Connection dead, marking for reconnection");
+                spdlog::warn("[Worker {}] [libqueen] Connection dead, marking for reconnection", _worker_id);
                 _disconnect_slot(slot);
             } else {
                 _free_slot(slot);
@@ -1096,7 +1168,7 @@ private:
         slot.conn = PQconnectdb(_conn_str.c_str());
     
         if (PQstatus(slot.conn) != CONNECTION_OK) {
-            spdlog::error("[libqueen] Connection failed: {}", PQerrorMessage(slot.conn));
+            spdlog::error("[Worker {}] [libqueen] Connection failed: {}", _worker_id, PQerrorMessage(slot.conn));
             PQfinish(slot.conn);
             slot.conn = nullptr;
             return false;
@@ -1104,7 +1176,7 @@ private:
         
         // Set non-blocking mode
         if (PQsetnonblocking(slot.conn, 1) != 0) {
-            spdlog::error("[libqueen] Failed to set non-blocking: {}", PQerrorMessage(slot.conn));
+            spdlog::error("[Worker {}] [libqueen] Failed to set non-blocking: {}", _worker_id, PQerrorMessage(slot.conn));
             PQfinish(slot.conn);
             slot.conn = nullptr;
             return false;
@@ -1114,7 +1186,7 @@ private:
         std::string timeout_sql = "SET statement_timeout = " + std::to_string(_statement_timeout_ms);
         PGresult* res = PQexec(slot.conn, timeout_sql.c_str());
         if (PQresultStatus(res) != PGRES_COMMAND_OK) {
-            spdlog::warn("[libqueen] Failed to set statement timeout: {}", PQerrorMessage(slot.conn));
+            spdlog::warn("[Worker {}] [libqueen] Failed to set statement timeout: {}", _worker_id, PQerrorMessage(slot.conn));
         }
         PQclear(res);
         
@@ -1126,7 +1198,7 @@ private:
                 slot.poll_handle.data = &slot;
                 slot.poll_initialized = true;
             } else {
-                spdlog::warn("[libqueen] Failed to initialize uv_poll for slot");
+                spdlog::warn("[Worker {}] [libqueen] Failed to initialize uv_poll for slot", _worker_id);
                 slot.poll_initialized = false;
             }
         }
@@ -1136,7 +1208,7 @@ private:
 
     void
     _handle_slot_error(DBConnection& slot, const std::string& error_msg) noexcept(false) {
-        spdlog::error("[libqueen] Slot error: {}", error_msg);
+        spdlog::error("[Worker {}] [libqueen] Slot error: {}", _worker_id, error_msg);
         _disconnect_slot(slot);
         _requeue_jobs(slot.jobs);
         slot.jobs.clear();
@@ -1172,7 +1244,7 @@ private:
     // Background thread that reconnects dead database connections
     void
     _reconnect_loop() noexcept(true) {
-        spdlog::info("[libqueen] Reconnection thread started");
+        spdlog::info("[Worker {}] [libqueen] Reconnection thread started", _worker_id);
         
         while (_reconnect_running.load()) {
             // Sleep for 1 second between reconnection attempts
@@ -1189,16 +1261,16 @@ private:
                     continue;
                 }
                 
-                spdlog::info("[libqueen] Reconnecting dead slot {}", i);
+                spdlog::info("[Worker {}] [libqueen] Reconnecting dead slot {}", _worker_id, i);
                 
                 // Reconnect (blocking - OK in this thread)
                 if (_reconnect_slot_db(slot)) {
                     // Signal event loop to initialize poll handle
                     slot.needs_poll_init.store(true, std::memory_order_release);
                     uv_async_send(&_reconnect_signal);
-                    spdlog::info("[libqueen] Slot {} reconnected, signaling event loop", i);
+                    spdlog::info("[Worker {}] [libqueen] Slot {} reconnected, signaling event loop", _worker_id, i);
                 } else {
-                    spdlog::warn("[libqueen] Failed to reconnect slot {}", i);
+                    spdlog::warn("[Worker {}] [libqueen] Failed to reconnect slot {}", _worker_id, i);
                 }
                 
                 // Only try ONE slot per cycle to avoid overwhelming
@@ -1206,7 +1278,7 @@ private:
             }
         }
         
-        spdlog::info("[libqueen] Reconnection thread stopped");
+        spdlog::info("[Worker {}] [libqueen] Reconnection thread stopped", _worker_id);
     }
     
     // Reconnect slot - DB connection only (called from reconnect thread)
@@ -1216,7 +1288,7 @@ private:
         slot.conn = PQconnectdb(_conn_str.c_str());
         
         if (PQstatus(slot.conn) != CONNECTION_OK) {
-            spdlog::error("[libqueen] Reconnection failed: {}", PQerrorMessage(slot.conn));
+            spdlog::error("[Worker {}] [libqueen] Reconnection failed: {}", _worker_id, PQerrorMessage(slot.conn));
             PQfinish(slot.conn);
             slot.conn = nullptr;
             return false;
@@ -1224,7 +1296,7 @@ private:
         
         // Set non-blocking mode
         if (PQsetnonblocking(slot.conn, 1) != 0) {
-            spdlog::error("[libqueen] Failed to set non-blocking on reconnect: {}", PQerrorMessage(slot.conn));
+            spdlog::error("[Worker {}] [libqueen] Failed to set non-blocking on reconnect: {}", _worker_id, PQerrorMessage(slot.conn));
             PQfinish(slot.conn);
             slot.conn = nullptr;
             return false;
@@ -1234,7 +1306,7 @@ private:
         std::string timeout_sql = "SET statement_timeout = " + std::to_string(_statement_timeout_ms);
         PGresult* res = PQexec(slot.conn, timeout_sql.c_str());
         if (PQresultStatus(res) != PGRES_COMMAND_OK) {
-            spdlog::warn("[libqueen] Failed to set statement timeout on reconnect: {}", PQerrorMessage(slot.conn));
+            spdlog::warn("[Worker {}] [libqueen] Failed to set statement timeout on reconnect: {}", _worker_id, PQerrorMessage(slot.conn));
         }
         PQclear(res);
         
