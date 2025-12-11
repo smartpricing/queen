@@ -26,9 +26,12 @@
 
 /**
 X when consumer disconnect, invalidated queen lib
-- logs, with atomic counters every second?
-- udp on push - shared state 
-- improve metrics analtyics query
+X logs, with atomic counters every second?
+- in push, trigger or query to update partition consumers?
+- udp on push - shared state only for push
+- backoff push per partition, not queue
+X improve metrics analtyics query
+- maintenace mode pop and reset pt
 - readme libqueen
 - backoff light query, not necessary?
 - sc test

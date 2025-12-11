@@ -86,6 +86,7 @@ static std::string build_filters_json(
 
 void setup_status_routes(uWS::App* app, const RouteContext& ctx) {
     // GET /api/v1/status - Dashboard overview (async via stored procedure)
+    // Uses V2 optimized procedure with pre-computed stats and history for throughput
     app->get("/api/v1/status", [ctx](auto* res, auto* req) {
         try {
             std::string filters_json = build_filters_json(
@@ -96,7 +97,7 @@ void setup_status_routes(uWS::App* app, const RouteContext& ctx) {
                 get_query_param(req, "task")
             );
             submit_sp_call(ctx, res, 
-                "SELECT queen.get_status_v1($1::jsonb)",
+                "SELECT queen.get_status_v2($1::jsonb)",
                 {filters_json});
         } catch (const std::exception& e) {
             send_error_response(res, e.what(), 500);
@@ -104,6 +105,7 @@ void setup_status_routes(uWS::App* app, const RouteContext& ctx) {
     });
     
     // GET /api/v1/status/queues - Queues list (async via stored procedure)
+    // Uses V2 optimized procedure with pre-computed stats
     app->get("/api/v1/status/queues", [ctx](auto* res, auto* req) {
         try {
             std::string filters_json = build_filters_json(
@@ -117,7 +119,7 @@ void setup_status_routes(uWS::App* app, const RouteContext& ctx) {
             int offset = get_query_param_int(req, "offset", 0);
             
             submit_sp_call(ctx, res, 
-                "SELECT queen.get_status_queues_v1($1::jsonb, $2::integer, $3::integer)",
+                "SELECT queen.get_status_queues_v2($1::jsonb, $2::integer, $3::integer)",
                 {filters_json, std::to_string(limit), std::to_string(offset)});
         } catch (const std::exception& e) {
             send_error_response(res, e.what(), 500);
@@ -125,11 +127,12 @@ void setup_status_routes(uWS::App* app, const RouteContext& ctx) {
     });
     
     // GET /api/v1/status/queues/:queue - Queue detail (async via stored procedure)
+    // Uses V2 optimized procedure with pre-computed stats
     app->get("/api/v1/status/queues/:queue", [ctx](auto* res, auto* req) {
         try {
             std::string queue_name = std::string(req->getParameter(0));
             submit_sp_call(ctx, res, 
-                "SELECT queen.get_queue_detail_v1($1)",
+                "SELECT queen.get_queue_detail_v2($1)",
                 {queue_name});
         } catch (const std::exception& e) {
             send_error_response(res, e.what(), 500);

@@ -4,9 +4,9 @@ import axios from 'axios';
 const SERVER_URL = process.env.SERVER_URL || 'http://localhost:6632';
 const QUEUE_NAME = 'queen-long-running';
 const workers = 2;
-const connections = 100;
+const connections = 500;
 const maxPartition = 500;
-const duration = 60 * 1; // 10 minutes
+const duration = 60 * 10; // 10 minutes
 
 async function createQueue() {
   await axios.post(`${SERVER_URL}/api/v1/configure`, {

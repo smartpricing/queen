@@ -65,20 +65,22 @@ static void submit_sp_call(
 
 void setup_resource_routes(uWS::App* app, const RouteContext& ctx) {
     // GET /api/v1/resources/queues - List all queues (async via stored procedure)
+    // Uses V2 optimized procedure with pre-computed stats
     app->get("/api/v1/resources/queues", [ctx](auto* res, auto* req) {
         (void)req;
         try {
-            submit_sp_call(ctx, res, "SELECT queen.get_queues_v1()");
+            submit_sp_call(ctx, res, "SELECT queen.get_queues_v2()");
         } catch (const std::exception& e) {
             send_error_response(res, e.what(), 500);
         }
     });
     
     // GET /api/v1/resources/queues/:queue - Get single queue detail (async via stored procedure)
+    // Uses V2 optimized procedure with pre-computed stats
     app->get("/api/v1/resources/queues/:queue", [ctx](auto* res, auto* req) {
         try {
             std::string queue_name = std::string(req->getParameter(0));
-            submit_sp_call(ctx, res, "SELECT queen.get_queue_v1($1)", {queue_name});
+            submit_sp_call(ctx, res, "SELECT queen.get_queue_v2($1)", {queue_name});
         } catch (const std::exception& e) {
             send_error_response(res, e.what(), 500);
         }
@@ -135,30 +137,33 @@ void setup_resource_routes(uWS::App* app, const RouteContext& ctx) {
     });
     
     // GET /api/v1/resources/namespaces - List all namespaces (async via stored procedure)
+    // Uses V2 optimized procedure with pre-computed stats
     app->get("/api/v1/resources/namespaces", [ctx](auto* res, auto* req) {
         (void)req;
         try {
-            submit_sp_call(ctx, res, "SELECT queen.get_namespaces_v1()");
+            submit_sp_call(ctx, res, "SELECT queen.get_namespaces_v2()");
         } catch (const std::exception& e) {
             send_error_response(res, e.what(), 500);
         }
     });
     
     // GET /api/v1/resources/tasks - List all tasks (async via stored procedure)
+    // Uses V2 optimized procedure with pre-computed stats
     app->get("/api/v1/resources/tasks", [ctx](auto* res, auto* req) {
         (void)req;
         try {
-            submit_sp_call(ctx, res, "SELECT queen.get_tasks_v1()");
+            submit_sp_call(ctx, res, "SELECT queen.get_tasks_v2()");
         } catch (const std::exception& e) {
             send_error_response(res, e.what(), 500);
         }
     });
     
     // GET /api/v1/resources/overview - System overview (async via stored procedure)
+    // Uses V2 optimized procedure with pre-computed stats (O(1) instead of full message scan)
     app->get("/api/v1/resources/overview", [ctx](auto* res, auto* req) {
         (void)req;
         try {
-            submit_sp_call(ctx, res, "SELECT queen.get_system_overview_v1()");
+            submit_sp_call(ctx, res, "SELECT queen.get_system_overview_v2()");
         } catch (const std::exception& e) {
             send_error_response(res, e.what(), 500);
         }

@@ -7,6 +7,7 @@
 #include "queen/metrics_collector.hpp"
 #include "queen/retention_service.hpp"
 #include "queen/eviction_service.hpp"
+#include "queen/stats_service.hpp"
 #include "queen/shared_state_manager.hpp"
 #include "queen.hpp"
 #include "threadpool.hpp"
@@ -37,6 +38,7 @@ static std::vector<std::shared_ptr<queen::ResponseQueue>> worker_response_queues
 static std::shared_ptr<queen::MetricsCollector> global_metrics_collector;
 static std::shared_ptr<queen::RetentionService> global_retention_service;
 static std::shared_ptr<queen::EvictionService> global_eviction_service;
+static std::shared_ptr<queen::StatsService> global_stats_service;
 
 // These globals need to be accessible from route files (non-static, in queen namespace)
 namespace queen {
@@ -431,6 +433,19 @@ static void worker_thread(const Config& config, int worker_id, int num_workers,
                     config.jobs.eviction_batch_size
                 );
                 global_eviction_service->start();
+                
+                // Start stats service (pre-compute analytics for O(1) queries)
+                spdlog::info("[Worker 0] Starting background stats service...");
+                global_stats_service = std::make_shared<queen::StatsService>(
+                    global_async_db_pool,
+                    global_db_thread_pool,
+                    global_system_thread_pool,
+                    config.jobs.stats_interval_ms,
+                    config.jobs.stats_reconcile_interval_ms,
+                    config.jobs.stats_history_bucket_minutes,
+                    config.jobs.stats_history_retention_days
+                );
+                global_stats_service->start();
             }
         } else {
             spdlog::warn("[Worker {}] Database connection: UNAVAILABLE (Pool: 0/{}) - Will use file buffer for failover", 

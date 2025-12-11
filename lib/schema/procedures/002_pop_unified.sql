@@ -790,6 +790,7 @@ BEGIN
             -- =====================================================================
             -- AUTO-ACK: Advance cursor to last message AND release lease immediately
             -- This combines POP + ACK in a single atomic operation (QoS 0)
+            -- Also updates consumption counters (same as explicit ACK would do)
             -- =====================================================================
             -- Extract last message ID from JSON (messages are ordered by created_at, id)
             v_last_msg := v_messages->(v_msg_count - 1);
@@ -799,7 +800,7 @@ BEGIN
             -- This avoids precision loss from JSON string formatting
             SELECT created_at INTO v_last_msg_ts FROM queen.messages WHERE id = v_last_msg_id;
             
-            -- Update cursor to last message AND release lease
+            -- Update cursor to last message AND release lease AND increment consumption counter
             UPDATE queen.partition_consumers
             SET 
                 last_consumed_id = v_last_msg_id,
@@ -809,10 +810,17 @@ BEGIN
                 lease_acquired_at = NULL,
                 worker_id = NULL,
                 batch_size = 0,
-                acked_count = 0
+                acked_count = 0,
+                -- INCREMENT consumption counter (same as ACK does)
+                total_messages_consumed = COALESCE(total_messages_consumed, 0) + v_msg_count,
+                total_batches_consumed = COALESCE(total_batches_consumed, 0) + 1
             WHERE partition_id = v_partition_id
               AND consumer_group = v_req.consumer_group
               AND worker_id = v_req.worker_id;
+            
+            -- Record consumption for throughput tracking (same as ACK does)
+            INSERT INTO queen.messages_consumed (partition_id, consumer_group, messages_completed, acked_at)
+            VALUES (v_partition_id, v_req.consumer_group, v_msg_count, v_now);
         ELSIF v_msg_count = 0 THEN
             -- No messages: release lease immediately
             UPDATE queen.partition_consumers

@@ -203,6 +203,12 @@ struct JobsConfig {
     int eviction_interval = 60000;       // 1 minute
     int eviction_batch_size = 1000;
     
+    // Stats service - pre-computed analytics
+    int stats_interval_ms = 10000;            // 10 seconds - Fast aggregation interval
+    int stats_reconcile_interval_ms = 60000;  // 60 seconds - Full reconciliation interval
+    int stats_history_bucket_minutes = 1;     // 1 minute - History snapshot bucket size
+    int stats_history_retention_days = 7;     // 7 days - How long to keep stats history
+    
     static JobsConfig from_env() {
         JobsConfig config;
         
@@ -217,6 +223,12 @@ struct JobsConfig {
         
         config.eviction_interval = get_env_int("EVICTION_INTERVAL", 60000);
         config.eviction_batch_size = get_env_int("EVICTION_BATCH_SIZE", 1000);
+        
+        // Stats service
+        config.stats_interval_ms = get_env_int("STATS_INTERVAL_MS", 10000);
+        config.stats_reconcile_interval_ms = get_env_int("STATS_RECONCILE_INTERVAL_MS", 60000);
+        config.stats_history_bucket_minutes = get_env_int("STATS_HISTORY_BUCKET_MINUTES", 1);
+        config.stats_history_retention_days = get_env_int("STATS_HISTORY_RETENTION_DAYS", 7);
         
         return config;
     }
