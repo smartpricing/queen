@@ -94,89 +94,159 @@ void RetentionService::cleanup_cycle() {
 }
 
 int RetentionService::cleanup_expired_messages() {
+    int total_deleted = 0;
+    
     try {
         auto conn = db_pool_->acquire();
         
-        // Delete messages older than retention_seconds (for queues with retention enabled)
-        std::string sql = R"(
-DELETE FROM queen.messages 
+        // Step 1: Get all partitions with retention enabled and their cutoff times
+        std::string partitions_sql = R"(
+            SELECT p.id as partition_id, 
+                   NOW() - (q.retention_seconds || ' seconds')::INTERVAL as cutoff
+            FROM queen.partitions p
+            JOIN queen.queues q ON p.queue_id = q.id
+            WHERE q.retention_enabled = true
+              AND q.retention_seconds > 0
+        )";
+        
+        sendQueryParamsAsync(conn.get(), partitions_sql, {});
+        auto partitions_result = getTuplesResult(conn.get());
+        
+        int num_partitions = PQntuples(partitions_result.get());
+        if (num_partitions == 0) {
+            return 0;
+        }
+        
+        int partition_id_col = PQfnumber(partitions_result.get(), "partition_id");
+        int cutoff_col = PQfnumber(partitions_result.get(), "cutoff");
+        
+        // Step 2: For each partition, delete expired messages in batches until done
+        std::string delete_sql = R"(
+            DELETE FROM queen.messages
             WHERE id IN (
-                SELECT m.id 
-                FROM queen.messages m
-                JOIN queen.partitions p ON m.partition_id = p.id
-                JOIN queen.queues q ON p.queue_id = q.id
-                WHERE q.retention_enabled = true
-                  AND q.retention_seconds > 0
-                  AND m.created_at < NOW() - (q.retention_seconds || ' seconds')::INTERVAL
-                LIMIT $1
+                SELECT id FROM queen.messages
+                WHERE partition_id = $1::uuid
+                  AND created_at < $2::timestamptz
+                LIMIT $3
             )
         )";
         
-        sendQueryParamsAsync(conn.get(), sql, {std::to_string(retention_batch_size_)});
-        auto result = getCommandResultPtr(conn.get());
-        
-        char* affected_str = PQcmdTuples(result.get());
-        return (affected_str && *affected_str) ? std::stoi(affected_str) : 0;
+        for (int i = 0; i < num_partitions && running_; i++) {
+            std::string partition_id = PQgetvalue(partitions_result.get(), i, partition_id_col);
+            std::string cutoff = PQgetvalue(partitions_result.get(), i, cutoff_col);
+            
+            // Delete in batches until no more messages to delete for this partition
+            int batch_deleted;
+            do {
+                sendQueryParamsAsync(conn.get(), delete_sql, 
+                    {partition_id, cutoff, std::to_string(retention_batch_size_)});
+                auto result = getCommandResultPtr(conn.get());
+                
+                char* affected_str = PQcmdTuples(result.get());
+                batch_deleted = (affected_str && *affected_str) ? std::stoi(affected_str) : 0;
+                total_deleted += batch_deleted;
+                
+            } while (batch_deleted == retention_batch_size_ && running_);
+        }
         
     } catch (const std::exception& e) {
         spdlog::error("cleanup_expired_messages error: {}", e.what());
     }
     
-    return 0;
+    return total_deleted;
 }
 
 int RetentionService::cleanup_completed_messages() {
+    int total_deleted = 0;
+    
     try {
         auto conn = db_pool_->acquire();
         
-        // Delete completed messages older than completed_retention_seconds
-        // Only delete messages that have been consumed (id <= last_consumed_id)
-        std::string sql = R"(
-            WITH messages_to_delete AS (
-                SELECT DISTINCT m.id, p.id as partition_id
-                FROM queen.messages m
-                JOIN queen.partitions p ON m.partition_id = p.id
-                JOIN queen.partition_consumers pc ON p.id = pc.partition_id
-                JOIN queen.queues q ON p.queue_id = q.id
-                WHERE q.retention_enabled = true
-                  AND q.completed_retention_seconds > 0
-                  AND m.id <= pc.last_consumed_id
-                  AND m.created_at < NOW() - (q.completed_retention_seconds || ' seconds')::INTERVAL
-                LIMIT $1
-            ) DELETE FROM queen.messages 
-            WHERE id IN (SELECT id FROM messages_to_delete)
-            RETURNING (SELECT partition_id FROM messages_to_delete LIMIT 1) as partition_id
+        // Step 1: Get partitions with completed_retention enabled, their cutoff times,
+        // and the MINIMUM last_consumed_id across ALL consumer groups.
+        // This ensures we only delete messages that ALL consumer groups have processed.
+        // Note: PostgreSQL doesn't have MIN() for UUID, so we cast to text and back.
+        std::string partitions_sql = R"(
+            SELECT p.id as partition_id,
+                   NOW() - (q.completed_retention_seconds || ' seconds')::INTERVAL as cutoff,
+                   MIN(pc.last_consumed_id::text)::uuid as safe_consumed_id
+            FROM queen.partitions p
+            JOIN queen.queues q ON p.queue_id = q.id
+            JOIN queen.partition_consumers pc ON pc.partition_id = p.id
+            WHERE q.retention_enabled = true
+              AND q.completed_retention_seconds > 0
+            GROUP BY p.id, q.completed_retention_seconds
+            HAVING MIN(pc.last_consumed_id::text)::uuid != '00000000-0000-0000-0000-000000000000'
         )";
         
-        sendQueryParamsAsync(conn.get(), sql, {std::to_string(retention_batch_size_)});
-        auto result = getTuplesResult(conn.get());
+        sendQueryParamsAsync(conn.get(), partitions_sql, {});
+        auto partitions_result = getTuplesResult(conn.get());
         
-        // Get affected rows count
-        char* affected_str = PQcmdTuples(result.get());
-        int deleted = (affected_str && *affected_str) ? std::stoi(affected_str) : 0;
+        int num_partitions = PQntuples(partitions_result.get());
+        if (num_partitions == 0) {
+            return 0;
+        }
+        
+        int partition_id_col = PQfnumber(partitions_result.get(), "partition_id");
+        int cutoff_col = PQfnumber(partitions_result.get(), "cutoff");
+        int safe_consumed_id_col = PQfnumber(partitions_result.get(), "safe_consumed_id");
+        
+        // Step 2: For each partition, delete completed messages in batches
+        // Only delete messages where id <= MIN(last_consumed_id) across all consumer groups
+        std::string delete_sql = R"(
+            DELETE FROM queen.messages
+            WHERE id IN (
+                SELECT id FROM queen.messages
+                WHERE partition_id = $1::uuid
+                  AND id <= $2::uuid
+                  AND created_at < $3::timestamptz
+                LIMIT $4
+            )
+        )";
+        
+        std::string insert_history_sql = R"(
+            INSERT INTO queen.retention_history (partition_id, messages_deleted, retention_type)
+            VALUES ($1::uuid, $2, 'completed_retention')
+        )";
+        
+        for (int i = 0; i < num_partitions && running_; i++) {
+            std::string partition_id = PQgetvalue(partitions_result.get(), i, partition_id_col);
+            std::string cutoff = PQgetvalue(partitions_result.get(), i, cutoff_col);
+            std::string safe_consumed_id = PQgetvalue(partitions_result.get(), i, safe_consumed_id_col);
             
-            // Record in retention_history if messages were deleted
-        if (deleted > 0 && PQntuples(result.get()) > 0) {
+            int partition_deleted = 0;
+            int batch_deleted;
+            
+            // Delete in batches until no more messages to delete for this partition
+            do {
+                sendQueryParamsAsync(conn.get(), delete_sql, 
+                    {partition_id, safe_consumed_id, cutoff, std::to_string(retention_batch_size_)});
+                auto result = getCommandResultPtr(conn.get());
+                
+                char* affected_str = PQcmdTuples(result.get());
+                batch_deleted = (affected_str && *affected_str) ? std::stoi(affected_str) : 0;
+                partition_deleted += batch_deleted;
+                total_deleted += batch_deleted;
+                
+            } while (batch_deleted == retention_batch_size_ && running_);
+            
+            // Record in retention_history if messages were deleted from this partition
+            if (partition_deleted > 0) {
                 try {
-                std::string partition_id = PQgetvalue(result.get(), 0, PQfnumber(result.get(), "partition_id"));
-                    std::string insert_history = R"(
-                        INSERT INTO queen.retention_history (partition_id, messages_deleted, retention_type)
-                        VALUES ($1::uuid, $2, 'completed_retention')
-                    )";
-                sendQueryParamsAsync(conn.get(), insert_history, {partition_id, std::to_string(deleted)});
-                getCommandResult(conn.get());
+                    sendQueryParamsAsync(conn.get(), insert_history_sql, 
+                        {partition_id, std::to_string(partition_deleted)});
+                    getCommandResult(conn.get());
                 } catch (const std::exception& e) {
                     spdlog::warn("Failed to record retention_history: {}", e.what());
                 }
             }
-            
-            return deleted;
+        }
         
     } catch (const std::exception& e) {
         spdlog::error("cleanup_completed_messages error: {}", e.what());
     }
     
-    return 0;
+    return total_deleted;
 }
 
 int RetentionService::cleanup_inactive_partitions() {
