@@ -107,7 +107,7 @@ export async function testLoadPartition(client) {
 
 export async function testLoadConsumerGroup(client) { 
     const queue = await client
-    .queue('test-queue-v2-load-consumer-group')
+    .queue('')
     .create()
     if (!queue.configured) {
         return { success: false, message: 'Queue not created' }
@@ -131,7 +131,7 @@ export async function testLoadConsumerGroup(client) {
     await client
     .queue('test-queue-v2-load-consumer-group')
     .group('test-consumer-group-a')
-    .subscriptionMode('from_beginning')
+    .subscriptionMode('all')
     .concurrency(10)
     .batch(100)
     .wait(false)
@@ -156,7 +156,7 @@ export async function testLoadConsumerGroup(client) {
     await client
     .queue('test-queue-v2-load-consumer-group')
     .group('test-consumer-group-b')
-    .subscriptionMode('from_beginning')
+    .subscriptionMode('all')
     .concurrency(10)
     .batch(100)
     .wait(false)

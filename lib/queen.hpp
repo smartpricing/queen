@@ -29,13 +29,16 @@ X when consumer disconnect, invalidated queen lib
 X logs, with atomic counters every second?
 - in push, trigger or query to update partition consumers?
 - udp on push - shared state only for push
-- backoff push per partition, not queue
+- retnetion cleanup improve
+X backoff push per partition, not queue
 X improve metrics analtyics query
+- only one worker shodul write analtyics
 - maintenace mode pop and reset pt
 - readme libqueen
 - backoff light query, not necessary?
 - sc test
 - deploy to stage
+- article about libqueen/async io
 */
 
 namespace queen {
@@ -468,7 +471,18 @@ private:
     uint16_t _worker_id;
 
     // Pop backoff tracker - stores shared_ptr to same jobs in _job_queue
+    // Key format: "queue_name/partition_name" for specific partition, "queue_name/*" for wildcard
     std::unordered_map<std::string, std::map<std::string, std::shared_ptr<PendingJob>>> _pop_backoff_tracker;
+
+    // Helper to generate backoff key from queue and partition names
+    // Specific partition: "myqueue/5", Wildcard: "myqueue/*"
+    static std::string 
+    _get_backoff_key(const std::string& queue_name, const std::string& partition_name) noexcept(true) {
+        if (partition_name.empty()) {
+            return queue_name + "/*";
+        }
+        return queue_name + "/" + partition_name;
+    }
 
     // Reconnection thread (runs in background, reconnects dead DB connections)
     std::thread _reconnect_thread;
@@ -797,10 +811,11 @@ private:
                                 _requeue_jobs({job});
                             } else {
                                 // Remove the job from the pop backoff tracker
-                                auto& queue_map = _pop_backoff_tracker[job->job.queue_name];
+                                std::string backoff_key = _get_backoff_key(job->job.queue_name, job->job.partition_name);
+                                auto& queue_map = _pop_backoff_tracker[backoff_key];
                                 queue_map.erase(job->job.request_id);
                                 if (queue_map.empty()) {
-                                    _pop_backoff_tracker.erase(job->job.queue_name);
+                                    _pop_backoff_tracker.erase(backoff_key);
                                 }
                                 
                                 // Inject partitionId into each message for client compatibility
@@ -828,7 +843,8 @@ private:
                         }
                         case JobType::PUSH: {
                             // Signal backoff tracker that the push is successful
-                            _update_pop_backoff_tracker(job->job.queue_name);
+                            // Wakes both specific partition consumers and wildcard consumers
+                            _update_pop_backoff_tracker(job->job.queue_name, job->job.partition_name);
                             // Return all results for this job (may have multiple messages)
                             _jobs_done++;
                             job->callback(job_results.dump());
@@ -1094,15 +1110,33 @@ private:
             job->job.next_check = std::chrono::steady_clock::now() + std::chrono::milliseconds(_pop_wait_initial_interval_ms);
         }
         // Store the SAME shared_ptr in tracker (not a copy!) - now updates propagate to queued job
-        _pop_backoff_tracker[job->job.queue_name][job->job.request_id] = job;
+        // Key is "queue/partition" for specific or "queue/*" for wildcard
+        std::string backoff_key = _get_backoff_key(job->job.queue_name, job->job.partition_name);
+        _pop_backoff_tracker[backoff_key][job->job.request_id] = job;
     }
 
+    // Wake up backoff consumers when a PUSH arrives
+    // Wakes both specific partition consumers AND wildcard consumers
     void 
-    _update_pop_backoff_tracker (const std::string& queue_name) noexcept(true) {
-        auto it = _pop_backoff_tracker.find(queue_name);
+    _update_pop_backoff_tracker(const std::string& queue_name, const std::string& partition_name) noexcept(true) {
+        auto now = std::chrono::steady_clock::now();
+        
+        // 1. Wake up consumers waiting for this specific partition (queue/partition)
+        std::string specific_key = _get_backoff_key(queue_name, partition_name);
+        auto it = _pop_backoff_tracker.find(specific_key);
         if (it != _pop_backoff_tracker.end()) {
             for (auto& [request_id, job_ptr] : it->second) {
-                job_ptr->job.next_check = std::chrono::steady_clock::now();
+                job_ptr->job.next_check = now;
+                job_ptr->job.backoff_count = 0;  // Reset backoff on activity
+            }
+        }
+        
+        // 2. Also wake up wildcard consumers (queue/*) who could pop from any partition
+        std::string wildcard_key = queue_name + "/*";
+        it = _pop_backoff_tracker.find(wildcard_key);
+        if (it != _pop_backoff_tracker.end()) {
+            for (auto& [request_id, job_ptr] : it->second) {
+                job_ptr->job.next_check = now;
                 job_ptr->job.backoff_count = 0;  // Reset backoff on activity
             }
         }
