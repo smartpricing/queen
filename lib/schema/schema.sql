@@ -264,6 +264,16 @@ END;
 $$ LANGUAGE plpgsql;
 
 
+ALTER TABLE queen.partition_lookup SET (
+    autovacuum_vacuum_scale_factor = 0.01,
+    autovacuum_vacuum_threshold = 50
+);
+
+ALTER TABLE queen.partition_consumers SET (
+    autovacuum_vacuum_scale_factor = 0.01,
+    autovacuum_vacuum_threshold = 50
+);
+
 -- ============================================================================
 -- Triggers
 -- ============================================================================
@@ -277,7 +287,7 @@ CREATE OR REPLACE TRIGGER trg_update_partition_lookup
     FOR EACH STATEMENT
     EXECUTE FUNCTION queen.update_partition_lookup_trigger();
 
-
+    
 -- ============================================================================
 -- Queen Schema Migration: Master → Tasync (Cleanup)
 -- Run this AFTER deploying tasync to production

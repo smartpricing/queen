@@ -58,6 +58,7 @@ void RetentionService::schedule_next_run() {
 }
 
 void RetentionService::cleanup_cycle() {
+    spdlog::info("RetentionService: Running cleanup cycle");
     auto cycle_start = std::chrono::steady_clock::now();
     
     // Advisory lock ID shared between retention and eviction services
@@ -123,7 +124,7 @@ void RetentionService::cleanup_cycle() {
         auto cycle_duration = std::chrono::duration_cast<std::chrono::milliseconds>(
             cycle_end - cycle_start
         );
-        
+        spdlog::info("RetentionService: cycle completed in {}ms", cycle_duration.count());
         auto sleep_time = retention_interval_ms_ - cycle_duration.count();
         if (sleep_time < 0) sleep_time = 0;
         
@@ -306,10 +307,10 @@ int RetentionService::cleanup_inactive_partitions() {
             FROM queen.partitions p
             JOIN queen.queues q ON p.queue_id = q.id
             LEFT JOIN queen.partition_consumers pc ON pc.partition_id = p.id
-            WHERE p.id NOT IN (
-                SELECT DISTINCT partition_id 
-                FROM queen.messages 
-                WHERE partition_id IS NOT NULL
+            WHERE NOT EXISTS (
+                SELECT 1 FROM queen.messages m 
+                WHERE m.partition_id = p.id 
+                LIMIT 1
             )
             GROUP BY p.id, q.name, p.name, p.created_at
             HAVING GREATEST(

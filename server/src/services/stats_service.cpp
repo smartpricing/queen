@@ -74,7 +74,7 @@ void StatsService::stats_cycle() {
         
         if (since_reconcile >= reconcile_interval_ms_) {
             // Full reconciliation: recompute partition stats from messages
-            spdlog::debug("StatsService: Running full reconciliation for queue/partition counts");
+            spdlog::debug("StatsService: Running full reconciliationz for queue/partition counts");
             run_full_reconciliation();
             last_reconcile_ = now;
         } else {
@@ -98,7 +98,7 @@ void StatsService::stats_cycle() {
     auto cycle_duration = std::chrono::duration_cast<std::chrono::milliseconds>(
         cycle_end - cycle_start
     );
-    spdlog::trace("StatsService: cycle completed in {}ms", cycle_duration.count());
+    spdlog::info("StatsService: cycle completed in {}ms", cycle_duration.count());
     
     // Calculate sleep time and reschedule
     if (running_) {

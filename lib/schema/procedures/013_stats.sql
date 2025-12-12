@@ -1079,11 +1079,9 @@ BEGIN
     SELECT queen.aggregate_system_stats_v1() INTO v_step;
     v_result := v_result || jsonb_build_object('system', v_step);
     
-    -- Step 6: Write history
-    SELECT queen.write_stats_history_v1() INTO v_step;
-    v_result := v_result || jsonb_build_object('history', v_step);
+    -- NOTE: Step 6 (write_stats_history_v1) REMOVED - handled by worker_metrics
     
-    -- Step 7: Cleanup orphaned
+    -- Step 6: Cleanup orphaned
     SELECT queen.cleanup_orphaned_stats_v1() INTO v_step;
     v_result := v_result || jsonb_build_object('cleanup', v_step);
     

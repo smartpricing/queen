@@ -75,6 +75,41 @@ Latency p90: 106ms
 Latency p99: 531ms
 
 
+## Beanchmark
+
+docker run -d --ulimit nofile=65535:65535 --name postgres --network queen -e POSTGRES_PASSWORD=postgres -p 5432:5432 postgres -c shared_buffers=4GB -c max_connections=300 -c temp_buffers=128MB -c work_mem=64MB -c max_parallel_workers=18 -c max_worker_processes=18 -c checkpoint_timeout=30min -c checkpoint_completion_target=0.9 -c max_wal_size=16GB -c min_wal_size=4GB -c wal_buffers=64MB -c wal_compression=on -c synchronous_commit=off -c autovacuum_vacuum_cost_limit=2000 -c autovacuum_vacuum_cost_delay=2ms -c autovacuum_max_workers=4 -c maintenance_work_mem=2GB -c effective_io_concurrency=200 -c random_page_cost=1.1 -c effective_cache_size=32GB -c huge_pages=try
+
+
+docker stop queen && docker rm queen
+docker run -d --ulimit nofile=65535:65535 --name queen -p 6632:6632 --network queen -e PG_HOST=postgres -e PG_PASSWORD=postgres -e NUM_WORKERS=10  -e DB_POOL_SIZE=50  -e SIDECAR_POOL_SIZE=250  -e SIDECAR_MICRO_BATCH_WAIT_MS=20  -e POP_WAIT_INITIAL_INTERVAL_MS=10  -e POP_WAIT_BACKOFF_THRESHOLD=3  -e POP_WAIT_BACKOFF_MULTIPLIER=2.0  -e POP_WAIT_MAX_INTERVAL_MS=1000  -e DEFAULT_SUBSCRIPTION_MODE=new  -e RETENTION_INTERVAL=300000  -e RETENTION_BATCH_SIZE=500000 -e LOG_LEVEL=info -e DB_STATEMENT_TIMEOUT=300000 -e STATS_RECONCILE_INTERVAL_MS=8640000  smartnessai/queen-mq:0.11.0-dev-7
+
+docker stop queen postgres && docker rm queen postgres && docker volume prune --all
+
+SELECT pid, now() - query_start AS duration, state, query 
+FROM pg_stat_activity                                                          
+WHERE state != 'idle' 
+ORDER BY duration DESC;
+
+SELECT schemaname, relname, n_dead_tup, n_live_tup, 
+       round(n_dead_tup::numeric / nullif(n_live_tup, 0) * 100, 2) as dead_pct,
+       last_vacuum, last_autovacuum
+FROM pg_stat_user_tables
+ORDER BY n_dead_tup DESC
+LIMIT 10;
+
+-- Check for any slow queries
+SELECT pid, now() - query_start AS duration, left(query, 80) 
+FROM pg_stat_activity 
+WHERE state = 'active' AND query_start < now() - interval '1 second'
+ORDER BY duration DESC;
+
+-- Check autovacuum isn't stuck
+SELECT relname, last_autovacuum, n_dead_tup 
+FROM pg_stat_user_tables 
+WHERE n_dead_tup > 1000 
+ORDER BY n_dead_tup DESC;
+
+
 ## Quick Start
 
 Run PostgreSQL and Queen server in Docker:
