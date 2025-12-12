@@ -159,11 +159,11 @@ void setup_resource_routes(uWS::App* app, const RouteContext& ctx) {
     });
     
     // GET /api/v1/resources/overview - System overview (async via stored procedure)
-    // Uses V2 optimized procedure with pre-computed stats (O(1) instead of full message scan)
+    // Uses V3 procedure with worker_metrics for real-time throughput and lag
     app->get("/api/v1/resources/overview", [ctx](auto* res, auto* req) {
         (void)req;
         try {
-            submit_sp_call(ctx, res, "SELECT queen.get_system_overview_v2()");
+            submit_sp_call(ctx, res, "SELECT queen.get_system_overview_v3()");
         } catch (const std::exception& e) {
             send_error_response(res, e.what(), 500);
         }

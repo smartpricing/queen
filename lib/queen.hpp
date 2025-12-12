@@ -22,13 +22,17 @@
 #include <fstream>
 #include <filesystem>
 #include <algorithm>
+#include "worker_metrics.hpp"
 
 
 /**
+- more partitions for beanchmark?
+- messages route return encryped data
+- use multiple slots for each tick
 X when consumer disconnect, invalidated queen lib
 X logs, with atomic counters every second?
 - in push, trigger or query to update partition consumers?
-- udp on push - shared state only for push
+X udp on push - shared state only for push
 X retnetion cleanup improve
 X backoff push per partition, not queue
 X improve metrics analtyics query
@@ -37,7 +41,7 @@ X only one worker shodul write analtyics
 - readme libqueen
 - backoff light query, not necessary?
 - sc test
-- deploy to stage
+X deploy to stage
 - article about libqueen/async io
 */
 
@@ -365,7 +369,9 @@ public:
         uint16_t pop_wait_backoff_threshold = 3,
         double pop_wait_backoff_multiplier = 3.0,
         uint16_t pop_wait_max_interval_ms = 5000,
-        uint16_t worker_id = 0) noexcept(false) : 
+        uint16_t worker_id = 0,
+        const std::string& hostname = "localhost") noexcept(false) : 
+        _hostname(hostname),
         _loop(nullptr), 
         _loop_initialized(false),
         _queue_interval_ms(queue_interval_ms),
@@ -380,6 +386,17 @@ public:
         // Initialize libuv mutexes
         uv_mutex_init(&_mutex_job_queue);
         uv_mutex_init(&_mutex_backoff_signal);
+        
+        // Initialize metrics collector
+        _metrics = std::make_unique<WorkerMetrics>(
+            _hostname,
+            _worker_id,
+            [this](const std::string& sql, const std::vector<std::string>& params) {
+                // Submit metrics write as internal job
+                _submit_metrics_write(sql, params);
+            }
+        );
+        
         // Start the event loop thread
         _init();
     }
@@ -451,11 +468,17 @@ public:
     }
 
 private:
+    // Worker identity (must be first for initializer order)
+    std::string _hostname;
+    
     // Performance stats 
     std::chrono::steady_clock::time_point _last_timer_expected;
     uint64_t _event_loop_lag; 
     uint64_t _jobs_done = 0;
     uint16_t _stats_interval_ms = 1000;
+    
+    // Metrics collector
+    std::unique_ptr<WorkerMetrics> _metrics;
 
     // libuv event loop and handles
     uv_loop_t* _loop;
@@ -703,26 +726,39 @@ private:
         // Entries are stale if their next_check time is more than 5 minutes old
         self->_cleanup_stale_backoff_entries();
         
-        if (self->_jobs_done == 0) {
-            return;
-        }
-
-        // Get backoff size 
-        int backoff_size = self->_pop_backoff_tracker.size();
-        // Get free slot indexes size
-        int free_slot_indexes_size = self->_free_slot_indexes.size();
-        // Get db connections size
-        int db_connections_size = self->_db_connections.size();
-        // Get job queue size
-        int job_queue_size = self->_job_queue.size();
-        // Get event loop lag
-        int event_loop_lag = self->_event_loop_lag - self->_queue_interval_ms;
+        // Get metrics values
+        size_t backoff_size = self->_pop_backoff_tracker.size();
+        size_t free_slot_indexes_size = self->_free_slot_indexes.size();
+        size_t db_connections_size = self->_db_connections.size();
+        size_t job_queue_size = self->_job_queue.size();
+        int64_t event_loop_lag = static_cast<int64_t>(self->_event_loop_lag) - static_cast<int64_t>(self->_queue_interval_ms);
         if (event_loop_lag < 0) {
             event_loop_lag = 0;
         }
+        
+        // Record stats sample for metrics (always, even if no jobs done)
+        if (self->_metrics) {
+            self->_metrics->record_stats_sample(
+                static_cast<uint64_t>(event_loop_lag),
+                static_cast<uint16_t>(free_slot_indexes_size),
+                static_cast<uint16_t>(db_connections_size),
+                job_queue_size,
+                backoff_size,
+                self->_jobs_done
+            );
+            
+            // Check minute boundary and flush if needed
+            self->_metrics->check_and_flush();
+        }
+        
+        // Log only if there was activity (avoid log noise)
+        if (self->_jobs_done > 0) {
         auto jobs_per_second = self->_jobs_done / (self->_stats_interval_ms / 1000.0);
-        // Get last timer expected
-        spdlog::info("[Worker {}] [libqueen] EVL: {}ms, Slots: {}/{}, Queue: {}, Backoff: {}, JobsDone: {}, jobs/s: {}", self->_worker_id, event_loop_lag, free_slot_indexes_size, db_connections_size, job_queue_size, backoff_size, self->_jobs_done, jobs_per_second);
+            spdlog::info("[Worker {}] [libqueen] EVL: {}ms, Slots: {}/{}, Queue: {}, Backoff: {}, JobsDone: {}, jobs/s: {}", 
+                self->_worker_id, event_loop_lag, free_slot_indexes_size, db_connections_size, 
+                job_queue_size, backoff_size, self->_jobs_done, jobs_per_second);
+        }
+        
         self->_jobs_done = 0;
     }
     
@@ -764,6 +800,20 @@ private:
         if (removed > 0) {
             spdlog::info("[Worker {}] [libqueen] Cleaned up {} stale backoff entries", _worker_id, removed);
         }
+    }
+    
+    // Submit metrics write as an internal CUSTOM job
+    // This is called from WorkerMetrics::flush_to_database via callback
+    void 
+    _submit_metrics_write(const std::string& sql, const std::vector<std::string>& params) {
+        JobRequest job_req;
+        job_req.op_type = JobType::CUSTOM;
+        job_req.request_id = "metrics_" + generate_uuidv7();
+        job_req.sql = sql;
+        job_req.params = params;
+        
+        // Submit with empty callback (fire and forget)
+        submit(std::move(job_req), [](std::string) {});
     }
 
     static void
@@ -933,6 +983,52 @@ private:
                                     }
                                 }
                                 
+                                // Record pop metrics
+                                if (_metrics) {
+                                    _metrics->record_pop_request();  // One request
+                                    
+                                    // Record each message with lag (from DB result, not item_count)
+                                    if (has_messages) {
+                                        auto now_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+                                            std::chrono::system_clock::now().time_since_epoch()
+                                        ).count();
+                                        
+                                        size_t message_count = result_item["result"]["messages"].size();
+                                        
+                                        for (const auto& msg : result_item["result"]["messages"]) {
+                                            uint64_t lag_ms = 0;
+                                            // Try to compute lag from createdAt timestamp
+                                            if (msg.contains("createdAt") && msg["createdAt"].is_string()) {
+                                                try {
+                                                    // Parse ISO timestamp (e.g., "2024-01-15T10:30:00.123Z")
+                                                    std::string created_str = msg["createdAt"].get<std::string>();
+                                                    std::tm tm = {};
+                                                    int ms = 0;
+                                                    // Parse up to seconds
+                                                    if (sscanf(created_str.c_str(), "%d-%d-%dT%d:%d:%d.%d",
+                                                              &tm.tm_year, &tm.tm_mon, &tm.tm_mday,
+                                                              &tm.tm_hour, &tm.tm_min, &tm.tm_sec, &ms) >= 6) {
+                                                        tm.tm_year -= 1900;
+                                                        tm.tm_mon -= 1;
+                                                        auto created_time = timegm(&tm);
+                                                        auto created_ms = static_cast<int64_t>(created_time) * 1000 + ms;
+                                                        lag_ms = static_cast<uint64_t>(std::max(0LL, static_cast<long long>(now_ms - created_ms)));
+                                                    }
+                                                } catch (...) {
+                                                    // If parsing fails, use 0 lag
+                                                }
+                                            }
+                                            _metrics->record_pop_with_lag(job->job.queue_name, lag_ms);
+                                        }
+                                        
+                                        // If auto_ack, also record acks (all succeed since pop succeeded)
+                                        if (job->job.auto_ack) {
+                                            _metrics->record_ack_request();
+                                            _metrics->record_ack_messages(message_count, message_count, 0);
+                                        }
+                                    }
+                                }
+                                
                                 // Wrap result in array for callback compatibility
                                 nlohmann::json wrapped = nlohmann::json::array();
                                 wrapped.push_back(result_item);
@@ -945,13 +1041,79 @@ private:
                             // Signal backoff tracker that the push is successful
                             // Wakes both specific partition consumers and wildcard consumers
                             _update_pop_backoff_tracker(job->job.queue_name, job->job.partition_name);
+                            
+                            // Record push metrics
+                            if (_metrics) {
+                                _metrics->record_push_request();  // One request
+                                if (job->job.item_count > 0) {
+                                    _metrics->record_push_messages(job->job.item_count);  // N messages
+                                }
+                            }
+                            
                             // Return all results for this job (may have multiple messages)
                             _jobs_done++;
                             job->callback(job_results.dump());
                             break;
                         }
-                        default: {
+                        case JobType::ACK: {
+                            // Record ack metrics
+                            if (_metrics) {
+                                _metrics->record_ack_request();  // One request
+                                
+                                // Count success/failed from results
+                                size_t total = job->job.item_count > 0 ? job->job.item_count : job_results.size();
+                                size_t success = 0;
+                                size_t failed = 0;
+                                size_t dlq = 0;
+                                
+                                for (const auto& result : job_results) {
+                                    bool is_success = result.contains("result") && 
+                                                     result["result"].contains("success") &&
+                                                     result["result"]["success"].get<bool>();
+                                    if (is_success) {
+                                        success++;
+                                    } else {
+                                        failed++;
+                                    }
+                                    
+                                    // Check for DLQ
+                                    if (result.contains("result") && 
+                                        result["result"].contains("dlq") &&
+                                        result["result"]["dlq"].get<bool>()) {
+                                        dlq++;
+                                    }
+                                }
+                                
+                                _metrics->record_ack_messages(total, success, failed);
+                                for (size_t i = 0; i < dlq; ++i) {
+                                    _metrics->record_dlq();
+                                }
+                            }
                             // Return all results for this job
+                            _jobs_done++;
+                            job->callback(job_results.dump());
+                            break;
+                        }
+                        case JobType::TRANSACTION: {
+                            // Record transaction metrics
+                            if (_metrics) {
+                                _metrics->record_transaction();
+                                // Check for any DLQ operations in transaction results
+                                for (const auto& result : job_results) {
+                                    if (result.contains("result") && 
+                                        result["result"].contains("dlq") &&
+                                        result["result"]["dlq"].get<bool>()) {
+                                        _metrics->record_dlq();
+                                    }
+                                }
+                            }
+                            // Return all results for this job
+                            _jobs_done++;
+                            job->callback(job_results.dump());
+                            break;
+                        }
+                        default: {
+                            // Return all results for this job (RENEW_LEASE, CUSTOM, etc.)
                             _jobs_done++;
                             job->callback(job_results.dump());
                             break;
@@ -964,6 +1126,11 @@ private:
                 // Query failed - send error to all jobs
                 std::string error_msg = PQresultErrorMessage(res);
                 spdlog::error("[Worker {}] [libqueen] Query failed: {}", _worker_id, error_msg);
+                
+                // Record DB error metric
+                if (_metrics) {
+                    _metrics->record_db_error();
+                }
                 
                 nlohmann::json error_result = {
                     {"success", false},

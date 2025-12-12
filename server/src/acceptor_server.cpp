@@ -456,7 +456,6 @@ static void worker_thread(const Config& config, int worker_id, int num_workers,
                     global_system_thread_pool,
                     config.jobs.stats_interval_ms,
                     config.jobs.stats_reconcile_interval_ms,
-                    config.jobs.stats_history_bucket_minutes,
                     config.jobs.stats_history_retention_days
                 );
                 global_stats_service->start();
@@ -572,7 +571,8 @@ static void worker_thread(const Config& config, int worker_id, int num_workers,
             config.queue.pop_wait_backoff_threshold,
             config.queue.pop_wait_backoff_multiplier,
             config.queue.pop_wait_max_interval_ms,
-            worker_id
+            worker_id,
+            global_system_info.hostname  // For worker metrics identification
         );
         
         // Allow time for connections to be established

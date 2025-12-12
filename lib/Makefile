@@ -52,8 +52,9 @@ BUILD_DIR = build
 # Test executables
 TEST_TARGET = $(BUILD_DIR)/test_queen
 TEST_SUITE_TARGET = $(BUILD_DIR)/test_suite
+TEST_CONTENTION_TARGET = $(BUILD_DIR)/test_contention
 
-.PHONY: all test test-suite clean help
+.PHONY: all test test-suite test-contention clean help
 
 all: test
 
@@ -81,6 +82,18 @@ $(TEST_SUITE_TARGET): test_suite.cpp queen.hpp
 	$(CXX) $(CXXFLAGS) $(INCLUDES) test_suite.cpp -o $@ $(LIBS)
 	@echo "✅ Test suite build complete!"
 
+# Build and run contention benchmark
+test-contention: $(TEST_CONTENTION_TARGET)
+	@echo "Running PUSH/POP contention benchmark..."
+	@./$(TEST_CONTENTION_TARGET)
+
+# Compile test_contention.cpp (contention benchmark)
+$(TEST_CONTENTION_TARGET): test_contention.cpp queen.hpp
+	@mkdir -p $(BUILD_DIR)
+	@echo "Compiling test_contention.cpp..."
+	$(CXX) $(CXXFLAGS) $(INCLUDES) test_contention.cpp -o $@ $(LIBS)
+	@echo "✅ Contention benchmark build complete!"
+
 # Clean build artifacts
 clean:
 	@rm -rf $(BUILD_DIR)
@@ -105,11 +118,12 @@ help:
 	@echo "libqueen - Header-only Queen core library"
 	@echo ""
 	@echo "Targets:"
-	@echo "  all        - Build basic test executable (default)"
-	@echo "  test       - Build and run basic test"
-	@echo "  test-suite - Build and run comprehensive test suite"
-	@echo "  clean      - Remove build artifacts"
-	@echo "  debug      - Show build configuration paths"
+	@echo "  all            - Build basic test executable (default)"
+	@echo "  test           - Build and run basic test"
+	@echo "  test-suite     - Build and run comprehensive test suite"
+	@echo "  test-contention - Build and run PUSH/POP contention benchmark"
+	@echo "  clean          - Remove build artifacts"
+	@echo "  debug          - Show build configuration paths"
 	@echo ""
 	@echo "Test Suite:"
 	@echo "  The comprehensive test suite (test_suite.cpp) tests:"
@@ -119,6 +133,13 @@ help:
 	@echo "  - TRANSACTIONS: push+ack atomic, multiple ops, partitions"
 	@echo "  - RENEW_LEASE: manual, batch, expired lease, multiple renewals"
 	@echo "  - MESSAGE ORDERING: FIFO ordering verification"
+	@echo ""
+	@echo "Contention Benchmark:"
+	@echo "  The contention benchmark (test_contention.cpp) measures:"
+	@echo "  - PUSH-only throughput (baseline)"
+	@echo "  - POP-only throughput (baseline)"
+	@echo "  - Mixed PUSH+POP throughput (shows contention)"
+	@echo "  - Wildcard POP + PUSH (worst case partition_lookup contention)"
 	@echo ""
 	@echo "Dependencies (from ../server/vendor/):"
 	@echo "  - libuv (static library)"

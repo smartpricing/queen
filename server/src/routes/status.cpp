@@ -86,7 +86,7 @@ static std::string build_filters_json(
 
 void setup_status_routes(uWS::App* app, const RouteContext& ctx) {
     // GET /api/v1/status - Dashboard overview (async via stored procedure)
-    // Uses V2 optimized procedure with pre-computed stats and history for throughput
+    // Uses V3 procedure with worker_metrics for real-time throughput and lag
     app->get("/api/v1/status", [ctx](auto* res, auto* req) {
         try {
             std::string filters_json = build_filters_json(
@@ -97,7 +97,7 @@ void setup_status_routes(uWS::App* app, const RouteContext& ctx) {
                 get_query_param(req, "task")
             );
             submit_sp_call(ctx, res, 
-                "SELECT queen.get_status_v2($1::jsonb)",
+                "SELECT queen.get_status_v3($1::jsonb)",
                 {filters_json});
         } catch (const std::exception& e) {
             send_error_response(res, e.what(), 500);

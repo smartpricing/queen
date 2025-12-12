@@ -224,6 +224,22 @@
             </div>
           </div>
 
+          <!-- Worker Health Chart (NEW) -->
+          <div class="chart-card">
+            <div class="chart-header">
+              <div class="flex items-center gap-2">
+                <h3 class="chart-title">Worker Health</h3>
+              </div>
+              <span class="chart-badge">Last Hour</span>
+            </div>
+            <div class="chart-body">
+              <WorkerHealthChart :data="status" />
+            </div>
+          </div>
+        </div>
+
+        <!-- Second Charts Row -->
+        <div class="charts-grid">
           <!-- Resource Usage Chart -->
           <div class="chart-card chart-card-clickable" @click="navigateToSystemMetrics">
             <div class="chart-header">
@@ -237,6 +253,84 @@
             </div>
             <div class="chart-body">
               <ResourceUsageChart :data="systemMetrics" />
+            </div>
+          </div>
+
+          <!-- Batch Efficiency Card (NEW) -->
+          <div class="chart-card" v-if="status?.messages?.batchEfficiency">
+            <div class="chart-header">
+              <h3 class="chart-title">Batch Efficiency</h3>
+              <span class="chart-badge">Lifetime</span>
+            </div>
+            <div class="chart-body flex flex-col items-center justify-center">
+              <div class="batch-efficiency-grid">
+                <div class="batch-metric">
+                  <div class="batch-metric-label">PUSH</div>
+                  <div class="batch-metric-value">{{ status.messages.batchEfficiency.push?.toFixed(1) || '0' }}</div>
+                  <div class="batch-metric-detail">msgs/request</div>
+                </div>
+                <div class="batch-metric">
+                  <div class="batch-metric-label">POP</div>
+                  <div class="batch-metric-value text-indigo-600 dark:text-indigo-400">{{ status.messages.batchEfficiency.pop?.toFixed(1) || '0' }}</div>
+                  <div class="batch-metric-detail">msgs/request</div>
+                </div>
+                <div class="batch-metric">
+                  <div class="batch-metric-label">ACK</div>
+                  <div class="batch-metric-value text-green-600 dark:text-green-400">{{ status.messages.batchEfficiency.ack?.toFixed(1) || '0' }}</div>
+                  <div class="batch-metric-detail">msgs/request</div>
+                </div>
+              </div>
+              <div class="batch-summary" v-if="status?.errors">
+                <div class="batch-summary-item" :class="{ 'text-red-500': status.errors.dbErrors > 0 }">
+                  <span class="batch-summary-label">DB Errors:</span>
+                  <span class="batch-summary-value">{{ formatNumber(status.errors.dbErrors) }}</span>
+                </div>
+                <div class="batch-summary-item" :class="{ 'text-red-500': status.errors.ackFailed > 0 }">
+                  <span class="batch-summary-label">Ack Failed:</span>
+                  <span class="batch-summary-value">{{ formatNumber(status.errors.ackFailed) }}</span>
+                </div>
+                <div class="batch-summary-item" :class="{ 'text-yellow-500': status.errors.dlqMessages > 0 }">
+                  <span class="batch-summary-label">DLQ:</span>
+                  <span class="batch-summary-value">{{ formatNumber(status.errors.dlqMessages) }}</span>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Workers Status Card -->
+        <div class="chart-card" v-if="status?.workers?.length">
+          <div class="chart-header">
+            <div class="flex items-center gap-2">
+              <h3 class="chart-title">{{ status.workers.length }} Workers</h3>
+            </div>
+            <span :class="['health-badge', getOverallWorkerHealthClass(status.workers)]">
+              {{ getOverallWorkerHealthStatus(status.workers) }}
+            </span>
+          </div>
+          <div class="chart-body">
+            <div class="workers-summary-grid">
+              <div class="worker-summary-metric">
+                <div class="worker-summary-label">AVG EVENT LOOP</div>
+                <div :class="['worker-summary-value', getEventLoopColorClass(getAvgEventLoopLag(status.workers))]">
+                  {{ getAvgEventLoopLag(status.workers) }}ms
+                </div>
+                <div class="worker-summary-detail">max {{ getMaxEventLoopLag(status.workers) }}ms</div>
+              </div>
+              <div class="worker-summary-metric">
+                <div class="worker-summary-label">CONNECTION POOL</div>
+                <div :class="['worker-summary-value', getPoolColorClass(getTotalFreeSlots(status.workers), getTotalConnections(status.workers))]">
+                  {{ getTotalFreeSlots(status.workers) }}/{{ getTotalConnections(status.workers) }}
+                </div>
+                <div class="worker-summary-detail">{{ getPoolUtilization(status.workers) }}% utilized</div>
+              </div>
+              <div class="worker-summary-metric">
+                <div class="worker-summary-label">JOB QUEUE</div>
+                <div :class="['worker-summary-value', getQueueColorClass(getMaxJobQueue(status.workers))]">
+                  {{ getMaxJobQueue(status.workers) }}
+                </div>
+                <div class="worker-summary-detail">max pending</div>
+              </div>
             </div>
           </div>
         </div>
@@ -269,6 +363,7 @@ import LoadingSpinner from '../components/common/LoadingSpinner.vue';
 import MaintenanceCard from '../components/MaintenanceCard.vue';
 import ThroughputChart from '../components/dashboard/ThroughputChart.vue';
 import ResourceUsageChart from '../components/dashboard/ResourceUsageChart.vue';
+import WorkerHealthChart from '../components/dashboard/WorkerHealthChart.vue';
 import TopQueuesTable from '../components/dashboard/TopQueuesTable.vue';
 
 const router = useRouter();
@@ -466,6 +561,72 @@ function navigateToAnalytics() {
 
 function navigateToSystemMetrics() {
   router.push('/system-metrics');
+}
+
+// Worker metrics helpers
+function getAvgEventLoopLag(workers) {
+  if (!workers?.length) return 0;
+  return Math.round(workers.reduce((sum, w) => sum + (w.avgEventLoopLagMs || 0), 0) / workers.length);
+}
+
+function getMaxEventLoopLag(workers) {
+  if (!workers?.length) return 0;
+  return Math.max(...workers.map(w => w.maxEventLoopLagMs || 0));
+}
+
+function getTotalFreeSlots(workers) {
+  if (!workers?.length) return 0;
+  return workers.reduce((sum, w) => sum + (w.freeSlots || 0), 0);
+}
+
+function getTotalConnections(workers) {
+  if (!workers?.length) return 0;
+  return workers.reduce((sum, w) => sum + (w.dbConnections || 0), 0);
+}
+
+function getMaxJobQueue(workers) {
+  if (!workers?.length) return 0;
+  return Math.max(...workers.map(w => w.jobQueueSize || 0));
+}
+
+function getPoolUtilization(workers) {
+  const free = getTotalFreeSlots(workers);
+  const total = getTotalConnections(workers);
+  if (!total) return 0;
+  return Math.round((1 - free / total) * 100);
+}
+
+function getOverallWorkerHealthClass(workers) {
+  const maxLag = getMaxEventLoopLag(workers);
+  if (maxLag > 1000) return 'health-badge-danger';
+  if (maxLag > 100) return 'health-badge-warning';
+  return 'health-badge-good';
+}
+
+function getOverallWorkerHealthStatus(workers) {
+  const maxLag = getMaxEventLoopLag(workers);
+  if (maxLag > 1000) return 'Degraded';
+  if (maxLag > 100) return 'Warning';
+  return 'Healthy';
+}
+
+function getEventLoopColorClass(lag) {
+  if (!lag || lag < 50) return 'text-green-600 dark:text-green-400';
+  if (lag < 500) return 'text-yellow-600 dark:text-yellow-400';
+  return 'text-red-600 dark:text-red-400';
+}
+
+function getPoolColorClass(free, total) {
+  const ratio = free / (total || 1);
+  if (ratio > 0.5) return 'text-green-600 dark:text-green-400';
+  if (ratio > 0.2) return 'text-yellow-600 dark:text-yellow-400';
+  return 'text-red-600 dark:text-red-400';
+}
+
+function getQueueColorClass(queueSize) {
+  if (!queueSize || queueSize < 10) return 'text-green-600 dark:text-green-400';
+  if (queueSize < 50) return 'text-yellow-600 dark:text-yellow-400';
+  return 'text-red-600 dark:text-red-400';
 }
 </script>
 
@@ -885,6 +1046,124 @@ function navigateToSystemMetrics() {
   @apply bg-red-50 dark:bg-red-900/10 border border-red-200/60 dark:border-red-800/60;
   @apply rounded-xl p-4 text-sm text-red-800 dark:text-red-400;
   box-shadow: 0 1px 3px 0 rgba(239, 68, 68, 0.1);
+}
+
+/* Health Badge */
+.health-badge {
+  @apply text-[10px] font-bold px-2.5 py-1 rounded-full uppercase tracking-wide;
+}
+
+.health-badge-good {
+  @apply bg-green-500/15 text-green-600 dark:text-green-400;
+}
+
+.health-badge-warning {
+  @apply bg-yellow-500/15 text-yellow-600 dark:text-yellow-400;
+}
+
+.health-badge-danger {
+  @apply bg-red-500/15 text-red-600 dark:text-red-400;
+}
+
+/* Workers Summary Grid */
+.workers-summary-grid {
+  @apply grid grid-cols-3 gap-4;
+}
+
+.dashboard-dense .workers-summary-grid {
+  @apply gap-2;
+}
+
+.worker-summary-metric {
+  @apply text-center p-4 rounded-lg;
+  @apply bg-gray-50/80 dark:bg-gray-900/40;
+  @apply border border-gray-200/50 dark:border-gray-800/50;
+}
+
+.dashboard-dense .worker-summary-metric {
+  @apply p-2;
+}
+
+.worker-summary-label {
+  @apply text-[9px] font-bold uppercase tracking-wider;
+  @apply text-gray-500 dark:text-gray-500 mb-2;
+  letter-spacing: 0.08em;
+}
+
+.worker-summary-value {
+  @apply text-2xl font-bold tracking-tight;
+  letter-spacing: -0.025em;
+}
+
+.dashboard-dense .worker-summary-value {
+  @apply text-lg;
+}
+
+.worker-summary-detail {
+  @apply text-[10px] text-gray-500 dark:text-gray-500 font-medium mt-1;
+}
+
+/* Batch Efficiency Grid */
+.batch-efficiency-grid {
+  @apply grid grid-cols-3 gap-4;
+  @apply w-full max-w-lg;
+}
+
+.dashboard-dense .batch-efficiency-grid {
+  @apply gap-2;
+}
+
+.batch-metric {
+  @apply text-center p-4 rounded-lg;
+  @apply bg-gray-50/80 dark:bg-gray-900/40;
+  @apply border border-gray-200/50 dark:border-gray-800/50;
+}
+
+.dashboard-dense .batch-metric {
+  @apply p-2;
+}
+
+.batch-metric-label {
+  @apply text-[9px] font-bold uppercase tracking-wider;
+  @apply text-gray-500 dark:text-gray-500 mb-2;
+  letter-spacing: 0.08em;
+}
+
+.batch-metric-value {
+  @apply text-2xl font-bold tracking-tight;
+  @apply text-gray-900 dark:text-gray-100;
+  letter-spacing: -0.025em;
+}
+
+.dashboard-dense .batch-metric-value {
+  @apply text-lg;
+}
+
+.batch-metric-detail {
+  @apply text-[10px] text-gray-500 dark:text-gray-500 font-medium mt-1;
+}
+
+.batch-summary {
+  @apply flex justify-center gap-6 mt-4 pt-4;
+  @apply border-t border-gray-200/50 dark:border-gray-800/50;
+  @apply w-full max-w-lg;
+}
+
+.dashboard-dense .batch-summary {
+  @apply gap-4 mt-2 pt-2;
+}
+
+.batch-summary-item {
+  @apply text-xs font-medium text-gray-600 dark:text-gray-400;
+  @apply flex items-center gap-1;
+}
+
+.batch-summary-label {
+  @apply text-gray-500 dark:text-gray-500;
+}
+
+.batch-summary-value {
+  @apply font-bold;
 }
 
 /* Table styles inherited from professional.css */

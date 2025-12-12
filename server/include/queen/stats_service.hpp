@@ -34,8 +34,7 @@ private:
     
     // Configuration
     int stats_interval_ms_;           // Fast aggregation interval (default: 10s)
-    int reconcile_interval_ms_;       // Full reconciliation interval (default: 60s)
-    int history_bucket_minutes_;      // History bucket size (default: 1 min)
+    int reconcile_interval_ms_;       // Full reconciliation interval (default: 2 min)
     int history_retention_days_;      // How long to keep history (default: 7 days)
     
     // Tracking
@@ -48,8 +47,7 @@ public:
         std::shared_ptr<astp::ThreadPool> db_thread_pool,
         std::shared_ptr<astp::ThreadPool> system_thread_pool,
         int stats_interval_ms = 10000,
-        int reconcile_interval_ms = 60000,
-        int history_bucket_minutes = 1,
+        int reconcile_interval_ms = 120000,
         int history_retention_days = 7
     );
     
@@ -70,6 +68,7 @@ private:
     void run_full_reconciliation();
     void run_fast_aggregation();
     void write_history_snapshot();
+    void catch_up_history();  // Backfill history gap on startup
     void cleanup_old_history();
     void cleanup_orphaned_stats();
 };
