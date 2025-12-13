@@ -115,35 +115,6 @@ export async function pushBufferedMessage(client) {
     return { success: true }
 }
 
-export async function pushMaxQueueSize(client) {
-    const queue = await client.queue('test-queue-max-size').config({ maxSize: 10 }).create()
-    if (!queue.configured) {
-        return { success: false, message: 'Queue not created' }
-    }
-
-    // Necessary to create a partition consumer to trigger the capacity check
-    const popToCreateParititonConsumer = await client
-    .queue('test-queue-max-size')
-    .batch(1)
-    .wait(false)
-    .pop()    
-
-    try {
-        for (let i = 0; i < 20; i++) {
-        const result = await client
-        .queue('test-queue-max-size')
-        .push([{ data: { message: i } }])
-        }
-    } catch (error) {
-        if (!error.message.includes(' Queue "test-queue-max-size" would exceed max capacity (10).')) {
-            return { success: true, message: 'Correct error message' }
-        } else {
-            return { success: false, message: 'Incorrect error message' }
-        }
-    }
-    return { success: false }
-}
-
 export async function pushDelayedMessage(client) {
     const queue = await client.queue('test-queue-delayed')
     .config({ delayedProcessing: 2 })

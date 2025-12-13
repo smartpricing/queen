@@ -1181,7 +1181,11 @@ private:
                 if (!pending->job.params.empty()) {
                     auto arr = nlohmann::json::parse(pending->job.params[0]);
                     for (auto& item : arr) {
-                        item["idx"] = sequential_idx++;  // Renumber idx for correct dispatch
+                        // Renumber idx/index for correct dispatch when batching multiple jobs
+                        // POP uses "idx", ACK/PUSH use "index" - set both to be safe
+                        item["idx"] = sequential_idx;
+                        item["index"] = sequential_idx;
+                        sequential_idx++;
                         combined.push_back(std::move(item));
                         count++;
                     }
