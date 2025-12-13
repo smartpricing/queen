@@ -6,10 +6,30 @@
         <div class="filter-card">
           <div class="flex flex-col gap-2">
             <div class="flex items-center justify-between flex-wrap gap-3">
-              <!-- Left side: View Mode & Aggregation -->
+              <!-- Left side: Data Source Toggle -->
               <div class="flex items-center gap-4 flex-wrap">
-                <!-- View Mode Selector -->
+                <!-- Data Source Selector -->
                 <div class="flex items-center gap-1.5">
+                  <svg class="w-3.5 h-3.5 text-gray-400 dark:text-gray-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 7v10c0 2.21 3.582 4 8 4s8-1.79 8-4V7M4 7c0 2.21 3.582 4 8 4s8-1.79 8-4M4 7c0-2.21 3.582-4 8-4s8 1.79 8 4m0 5c0 2.21-3.582 4-8 4s-8-1.79-8-4" />
+                  </svg>
+                  <div class="flex items-center gap-1">
+                    <button
+                      v-for="source in dataSources"
+                      :key="source.value"
+                      @click="selectedDataSource = source.value"
+                      :class="[
+                        'data-source-btn',
+                        selectedDataSource === source.value ? 'data-source-active' : 'data-source-inactive'
+                      ]"
+                    >
+                      {{ source.label }}
+                    </button>
+                  </div>
+                </div>
+
+                <!-- View Mode (only for System) -->
+                <div v-if="selectedDataSource === 'system'" class="flex items-center gap-1.5">
                   <svg class="w-3.5 h-3.5 text-gray-400 dark:text-gray-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2H6a2 2 0 01-2-2V6zM14 6a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2h-2a2 2 0 01-2-2V6zM4 16a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2H6a2 2 0 01-2-2v-2zM14 16a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2h-2a2 2 0 01-2-2v-2z" />
                   </svg>
@@ -28,8 +48,8 @@
                   </div>
                 </div>
 
-                <!-- Aggregation Type Selector -->
-                <div class="flex items-center gap-1.5">
+                <!-- Aggregation Type (only for System) -->
+                <div v-if="selectedDataSource === 'system'" class="flex items-center gap-1.5">
                   <svg class="w-3.5 h-3.5 text-gray-400 dark:text-gray-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 6V4m0 2a2 2 0 100 4m0-4a2 2 0 110 4m-6 8a2 2 0 100-4m0 4a2 2 0 110-4m0 4v2m0-6V4m6 6v10m6-2a2 2 0 100-4m0 4a2 2 0 110-4m0 4v2m0-6V4" />
                   </svg>
@@ -109,50 +129,175 @@
           </div>
         </div>
 
-        <LoadingSpinner v-if="loading && !data" />
+        <LoadingSpinner v-if="loading && !data && !workerData" />
 
         <div v-else-if="error" class="error-card">
           <p><strong>Error loading metrics:</strong> {{ error }}</p>
         </div>
 
-        <template v-else>
-
-          <!-- Row 1: CPU & Memory Charts -->
-          <div class="grid grid-cols-1 lg:grid-cols-2 gap-3">
-            <div class="chart-card-compact">
-              <div class="chart-header-compact">
-                <h3 class="chart-title-compact">CPU Usage</h3>
+        <!-- WORKER METRICS VIEW -->
+        <template v-else-if="selectedDataSource === 'worker'">
+          <!-- Section: Message Throughput -->
+          <div class="section-container">
+            <div class="section-header-bar">
+              <div class="section-icon bg-orange-500/10 text-orange-500">
+                <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 7h8m0 0v8m0-8l-8 8-4-4-6 6" />
+                </svg>
               </div>
-              <div class="chart-body-compact">
-                <DetailedCpuChart :data="data" :aggregation="selectedAggregation" :viewMode="selectedViewMode" />
-              </div>
+              <h2 class="section-title">Message Throughput</h2>
+              <span class="section-badge">{{ workerData?.pointCount || 0 }} points</span>
             </div>
             <div class="chart-card-compact">
-              <div class="chart-header-compact">
-                <h3 class="chart-title-compact">Memory Usage</h3>
-              </div>
               <div class="chart-body-compact">
-                <DetailedMemoryChart :data="data" :aggregation="selectedAggregation" :viewMode="selectedViewMode" />
+                <ThroughputTimeSeriesChart :data="workerData" />
+              </div>
+            </div>
+          </div>
+
+          <!-- Section: Message Latency -->
+          <div class="section-container">
+            <div class="section-header-bar">
+              <div class="section-icon bg-purple-500/10 text-purple-500">
+                <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
+                </svg>
+              </div>
+              <h2 class="section-title">Message Latency</h2>
+              <span class="section-subtitle">Time from push to pop</span>
+            </div>
+            <div class="chart-card-compact">
+              <div class="chart-body-compact">
+                <MessageLagChart :data="workerData" />
+              </div>
+            </div>
+          </div>
+
+          <!-- Section: Worker Health -->
+          <div class="section-container">
+            <div class="section-header-bar">
+              <div class="section-icon bg-blue-500/10 text-blue-500">
+                <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z" />
+                </svg>
+              </div>
+              <h2 class="section-title">Worker Health</h2>
+            </div>
+            <div class="grid grid-cols-1 lg:grid-cols-2 gap-3">
+              <div class="chart-card-compact">
+                <div class="chart-header-compact">
+                  <h3 class="chart-title-compact">Event Loop Latency</h3>
+                </div>
+                <div class="chart-body-compact">
+                  <EventLoopLagChart :data="workerData" />
+                </div>
+              </div>
+              <div class="chart-card-compact">
+                <div class="chart-header-compact">
+                  <h3 class="chart-title-compact">Connection Pool</h3>
+                </div>
+                <div class="chart-body-compact">
+                  <ConnectionPoolChart :data="workerData" />
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Section: Errors -->
+          <div class="section-container">
+            <div class="section-header-bar">
+              <div class="section-icon bg-red-500/10 text-red-500">
+                <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+                </svg>
+              </div>
+              <h2 class="section-title">Errors</h2>
+              <span v-if="totalErrorsInPeriod > 0" class="section-badge-error">{{ totalErrorsInPeriod }} in period</span>
+            </div>
+            <div class="chart-card-compact">
+              <div class="chart-body-compact">
+                <ErrorsChart :data="workerData" />
+              </div>
+            </div>
+          </div>
+
+          <!-- Section: Workers & Queues -->
+          <div class="section-container">
+            <div class="section-header-bar">
+              <div class="section-icon bg-cyan-500/10 text-cyan-500">
+                <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 12h14M5 12a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v4a2 2 0 01-2 2M5 12a2 2 0 00-2 2v4a2 2 0 002 2h14a2 2 0 002-2v-4a2 2 0 00-2-2m-2-4h.01M17 16h.01" />
+                </svg>
+              </div>
+              <h2 class="section-title">Workers & Queues</h2>
+            </div>
+            <div class="chart-card-compact">
+              <div class="p-3">
+                <WorkerStatusPanel :data="workerData" />
+              </div>
+            </div>
+          </div>
+        </template>
+
+        <!-- SYSTEM METRICS VIEW -->
+        <template v-else>
+          <!-- Row 1: CPU & Memory Charts -->
+          <div class="section-container">
+            <div class="section-header-bar">
+              <div class="section-icon bg-rose-500/10 text-rose-500">
+                <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 3v2m6-2v2M9 19v2m6-2v2M5 9H3m2 6H3m18-6h-2m2 6h-2M7 19h10a2 2 0 002-2V7a2 2 0 00-2-2H7a2 2 0 00-2 2v10a2 2 0 002 2zM9 9h6v6H9V9z" />
+                </svg>
+              </div>
+              <h2 class="section-title">System Resources</h2>
+              <span class="section-badge">{{ data?.replicaCount || 0 }} replicas</span>
+            </div>
+            <div class="grid grid-cols-1 lg:grid-cols-2 gap-3">
+              <div class="chart-card-compact">
+                <div class="chart-header-compact">
+                  <h3 class="chart-title-compact">CPU Usage</h3>
+                </div>
+                <div class="chart-body-compact">
+                  <DetailedCpuChart :data="data" :aggregation="selectedAggregation" :viewMode="selectedViewMode" />
+                </div>
+              </div>
+              <div class="chart-card-compact">
+                <div class="chart-header-compact">
+                  <h3 class="chart-title-compact">Memory Usage</h3>
+                </div>
+                <div class="chart-body-compact">
+                  <DetailedMemoryChart :data="data" :aggregation="selectedAggregation" :viewMode="selectedViewMode" />
+                </div>
               </div>
             </div>
           </div>
 
           <!-- Row 2: Database Pool & Registries -->
-          <div class="grid grid-cols-1 lg:grid-cols-2 gap-3">
-            <div class="chart-card-compact">
-              <div class="chart-header-compact">
-                <h3 class="chart-title-compact">Database Pool</h3>
+          <div class="section-container">
+            <div class="section-header-bar">
+              <div class="section-icon bg-indigo-500/10 text-indigo-500">
+                <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 7v10c0 2.21 3.582 4 8 4s8-1.79 8-4V7M4 7c0 2.21 3.582 4 8 4s8-1.79 8-4M4 7c0-2.21 3.582-4 8-4s8 1.79 8 4m0 5c0 2.21-3.582 4-8 4s-8-1.79-8-4" />
+                </svg>
               </div>
-              <div class="chart-body-compact">
-                <DetailedDatabaseChart :data="data" :aggregation="selectedAggregation" :viewMode="selectedViewMode" />
-              </div>
+              <h2 class="section-title">Database & Registries</h2>
             </div>
-            <div class="chart-card-compact">
-              <div class="chart-header-compact">
-                <h3 class="chart-title-compact">Registries</h3>
+            <div class="grid grid-cols-1 lg:grid-cols-2 gap-3">
+              <div class="chart-card-compact">
+                <div class="chart-header-compact">
+                  <h3 class="chart-title-compact">Database Pool</h3>
+                </div>
+                <div class="chart-body-compact">
+                  <DetailedDatabaseChart :data="data" :aggregation="selectedAggregation" :viewMode="selectedViewMode" />
+                </div>
               </div>
-              <div class="chart-body-compact">
-                <DetailedRegistryChart :data="data" :aggregation="selectedAggregation" :viewMode="selectedViewMode" />
+              <div class="chart-card-compact">
+                <div class="chart-header-compact">
+                  <h3 class="chart-title-compact">Registries</h3>
+                </div>
+                <div class="chart-body-compact">
+                  <DetailedRegistryChart :data="data" :aggregation="selectedAggregation" :viewMode="selectedViewMode" />
+                </div>
               </div>
             </div>
           </div>
@@ -161,64 +306,71 @@
           <SharedStatePanel :data="lastSharedState" :timeSeriesData="data" :loading="loading" />
 
           <!-- Row 4: Thread Pool & Status -->
-          <div class="grid grid-cols-1 lg:grid-cols-3 gap-3">
-            <div class="chart-card-compact lg:col-span-2">
-              <div class="chart-header-compact">
-                <h3 class="chart-title-compact">Thread Pool</h3>
+          <div class="section-container">
+            <div class="section-header-bar">
+              <div class="section-icon bg-amber-500/10 text-amber-500">
+                <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10" />
+                </svg>
               </div>
-              <div class="chart-body-compact">
-                <DetailedThreadPoolChart :data="data" :aggregation="selectedAggregation" :viewMode="selectedViewMode" />
-              </div>
+              <h2 class="section-title">Thread Pool</h2>
             </div>
-            <div class="stats-compact-card">
-              <div class="stats-section">
-                <h4 class="stats-section-title">Status</h4>
-                <div class="stats-grid">
-                  <div class="stat-item">
-                    <span class="stat-label">Replicas</span>
-                    <span class="stat-value">{{ data?.replicaCount || 0 }}</span>
-                  </div>
-                  <div class="stat-item">
-                    <span class="stat-label">Points</span>
-                    <span class="stat-value">{{ data?.pointCount || 0 }}</span>
-                  </div>
-                  <div class="stat-item">
-                    <span class="stat-label">Bucket</span>
-                    <span class="stat-value">{{ formatBucketSize() }}</span>
-                  </div>
+            <div class="grid grid-cols-1 lg:grid-cols-3 gap-3">
+              <div class="chart-card-compact lg:col-span-2">
+                <div class="chart-body-compact">
+                  <DetailedThreadPoolChart :data="data" :aggregation="selectedAggregation" :viewMode="selectedViewMode" />
                 </div>
               </div>
-              <div class="stats-section" v-if="lastMetrics">
-                <h4 class="stats-section-title">Latest</h4>
-                <div class="stats-grid">
-                  <div class="stat-item">
-                    <span class="stat-label">CPU</span>
-                    <span class="stat-value text-rose-600 dark:text-rose-400">{{ formatCPU(lastMetrics.cpu?.user_us?.last) }}</span>
-                  </div>
-                  <div class="stat-item">
-                    <span class="stat-label">Memory</span>
-                    <span class="stat-value text-purple-600 dark:text-purple-400">{{ formatMemory(lastMetrics.memory?.rss_bytes?.last) }}</span>
-                  </div>
-                  <div class="stat-item">
-                    <span class="stat-label">DB Active</span>
-                    <span class="stat-value">{{ lastMetrics.database?.pool_active?.last || 0 }}</span>
+              <div class="stats-compact-card">
+                <div class="stats-section">
+                  <h4 class="stats-section-title">Status</h4>
+                  <div class="stats-grid">
+                    <div class="stat-item">
+                      <span class="stat-label">Replicas</span>
+                      <span class="stat-value">{{ data?.replicaCount || 0 }}</span>
+                    </div>
+                    <div class="stat-item">
+                      <span class="stat-label">Points</span>
+                      <span class="stat-value">{{ data?.pointCount || 0 }}</span>
+                    </div>
+                    <div class="stat-item">
+                      <span class="stat-label">Bucket</span>
+                      <span class="stat-value">{{ formatBucketSize() }}</span>
+                    </div>
                   </div>
                 </div>
-              </div>
-              <div class="stats-section" v-if="lastMetrics">
-                <h4 class="stats-section-title">Peak</h4>
-                <div class="stats-grid">
-                  <div class="stat-item">
-                    <span class="stat-label">CPU</span>
-                    <span class="stat-value text-rose-600 dark:text-rose-400">{{ formatCPU(lastMetrics.cpu?.user_us?.max) }}</span>
+                <div class="stats-section" v-if="lastMetrics">
+                  <h4 class="stats-section-title">Latest</h4>
+                  <div class="stats-grid">
+                    <div class="stat-item">
+                      <span class="stat-label">CPU</span>
+                      <span class="stat-value text-rose-600 dark:text-rose-400">{{ formatCPU(lastMetrics.cpu?.user_us?.last) }}</span>
+                    </div>
+                    <div class="stat-item">
+                      <span class="stat-label">Memory</span>
+                      <span class="stat-value text-purple-600 dark:text-purple-400">{{ formatMemory(lastMetrics.memory?.rss_bytes?.last) }}</span>
+                    </div>
+                    <div class="stat-item">
+                      <span class="stat-label">DB Active</span>
+                      <span class="stat-value">{{ lastMetrics.database?.pool_active?.last || 0 }}</span>
+                    </div>
                   </div>
-                  <div class="stat-item">
-                    <span class="stat-label">Memory</span>
-                    <span class="stat-value text-purple-600 dark:text-purple-400">{{ formatMemory(lastMetrics.memory?.rss_bytes?.max) }}</span>
-                  </div>
-                  <div class="stat-item">
-                    <span class="stat-label">DB Queue</span>
-                    <span class="stat-value text-amber-600 dark:text-amber-400">{{ lastMetrics.threadpool?.db?.queue_size?.max || 0 }}</span>
+                </div>
+                <div class="stats-section" v-if="lastMetrics">
+                  <h4 class="stats-section-title">Peak</h4>
+                  <div class="stats-grid">
+                    <div class="stat-item">
+                      <span class="stat-label">CPU</span>
+                      <span class="stat-value text-rose-600 dark:text-rose-400">{{ formatCPU(lastMetrics.cpu?.user_us?.max) }}</span>
+                    </div>
+                    <div class="stat-item">
+                      <span class="stat-label">Memory</span>
+                      <span class="stat-value text-purple-600 dark:text-purple-400">{{ formatMemory(lastMetrics.memory?.rss_bytes?.max) }}</span>
+                    </div>
+                    <div class="stat-item">
+                      <span class="stat-label">DB Queue</span>
+                      <span class="stat-value text-amber-600 dark:text-amber-400">{{ lastMetrics.threadpool?.db?.queue_size?.max || 0 }}</span>
+                    </div>
                   </div>
                 </div>
               </div>
@@ -233,6 +385,7 @@
 <script setup>
 import { ref, computed, onMounted, onUnmounted, watch } from 'vue';
 import { systemMetricsApi } from '../api/system-metrics';
+import { useAutoRefresh } from '../composables/useAutoRefresh';
 
 import LoadingSpinner from '../components/common/LoadingSpinner.vue';
 import DateTimePicker from '../components/common/DateTimePicker.vue';
@@ -243,9 +396,25 @@ import DetailedThreadPoolChart from '../components/system-metrics/DetailedThread
 import DetailedRegistryChart from '../components/system-metrics/DetailedRegistryChart.vue';
 import SharedStatePanel from '../components/system-metrics/SharedStatePanel.vue';
 
+// Worker metrics components
+import ThroughputTimeSeriesChart from '../components/worker-metrics/ThroughputTimeSeriesChart.vue';
+import EventLoopLagChart from '../components/worker-metrics/EventLoopLagChart.vue';
+import MessageLagChart from '../components/worker-metrics/MessageLagChart.vue';
+import ConnectionPoolChart from '../components/worker-metrics/ConnectionPoolChart.vue';
+import ErrorsChart from '../components/worker-metrics/ErrorsChart.vue';
+import WorkerStatusPanel from '../components/worker-metrics/WorkerStatusPanel.vue';
+
 const loading = ref(false);
 const error = ref(null);
 const data = ref(null);
+const workerData = ref(null);
+
+const dataSources = [
+  { label: 'Queue Operations', value: 'worker' },
+  { label: 'System Resources', value: 'system' },
+];
+
+const selectedDataSource = ref('worker');
 
 const timeRanges = [
   { label: '15m', value: 15 },
@@ -278,23 +447,24 @@ const selectedViewMode = ref('aggregate');
 
 const lastMetrics = computed(() => {
   if (!data.value?.replicas?.length) return null;
-  // Get the last data point from the first replica
   const firstReplica = data.value.replicas[0];
   if (!firstReplica?.timeSeries?.length) return null;
   return firstReplica.timeSeries[firstReplica.timeSeries.length - 1]?.metrics;
 });
 
-// Get the latest shared_state from system metrics
 const lastSharedState = computed(() => {
   if (!data.value?.replicas?.length) return null;
-  
-  // Aggregate shared_state from all replicas (get the latest from each and combine)
-  // For now, just get from first replica
   const firstReplica = data.value.replicas[0];
   if (!firstReplica?.timeSeries?.length) return null;
-  
   const lastPoint = firstReplica.timeSeries[firstReplica.timeSeries.length - 1];
   return lastPoint?.metrics?.shared_state || null;
+});
+
+const totalErrorsInPeriod = computed(() => {
+  if (!workerData.value?.timeSeries?.length) return 0;
+  return workerData.value.timeSeries.reduce((sum, t) => {
+    return sum + (t.dbErrors || 0) + (t.ackFailed || 0) + (t.dlqCount || 0);
+  }, 0);
 });
 
 function formatTimeRange() {
@@ -334,7 +504,6 @@ function selectQuickRange(minutes) {
 function toggleCustomMode() {
   customMode.value = !customMode.value;
   if (customMode.value) {
-    // Initialize with current range
     const now = new Date();
     const from = new Date(now.getTime() - selectedTimeRange.value * 60 * 1000);
     customTo.value = formatDateTimeLocal(now);
@@ -345,7 +514,6 @@ function toggleCustomMode() {
 }
 
 function formatDateTimeLocal(date) {
-  // Format: yyyy-MM-ddTHH:mm
   const year = date.getFullYear();
   const month = String(date.getMonth() + 1).padStart(2, '0');
   const day = String(date.getDate()).padStart(2, '0');
@@ -387,30 +555,38 @@ function applyCustomRange() {
   loadData();
 }
 
-async function loadData() {
-  loading.value = true;
+async function loadData(isAutoRefresh = false) {
+  // Only show loading spinner on initial load, not during auto-refresh
+  if (!isAutoRefresh) {
+    loading.value = true;
+  }
   error.value = null;
 
   try {
     let from, to;
     
     if (customMode.value && customFromISO.value && customToISO.value) {
-      // Use custom range
       from = new Date(customFromISO.value);
       to = new Date(customToISO.value);
     } else {
-      // Use quick range
       const now = new Date();
       from = new Date(now.getTime() - selectedTimeRange.value * 60 * 1000);
       to = now;
     }
 
-    const response = await systemMetricsApi.getSystemMetrics({
+    const params = {
       from: from.toISOString(),
       to: to.toISOString(),
-    });
+    };
 
-    data.value = response.data;
+    // Load both data sources in parallel
+    const [systemResponse, workerResponse] = await Promise.all([
+      systemMetricsApi.getSystemMetrics(params),
+      systemMetricsApi.getWorkerMetrics(params),
+    ]);
+
+    data.value = systemResponse.data;
+    workerData.value = workerResponse.data;
   } catch (err) {
     error.value = err.message;
     console.error('System metrics error:', err);
@@ -418,6 +594,13 @@ async function loadData() {
     loading.value = false;
   }
 }
+
+// Set up auto-refresh (every 30 seconds)
+const autoRefresh = useAutoRefresh(() => loadData(true), {
+  interval: 30000, // 30 seconds
+  immediate: false, // We call loadData() manually in onMounted
+  enabled: true,
+});
 
 // Watch for time range changes (only when not in custom mode)
 watch(selectedTimeRange, () => {
@@ -429,7 +612,6 @@ watch(selectedTimeRange, () => {
 onMounted(() => {
   loadData();
   
-  // Register refresh callback
   if (window.registerRefreshCallback) {
     window.registerRefreshCallback('/system-metrics', loadData);
   }
@@ -450,12 +632,80 @@ onUnmounted(() => {
 }
 
 .page-inner-compact {
-  @apply px-2 lg:px-3 space-y-3;
+  @apply px-2 lg:px-3 space-y-4;
+}
+
+/* Section styling */
+.section-container {
+  @apply space-y-2;
+}
+
+.section-header-bar {
+  @apply flex items-center gap-2;
+}
+
+.section-icon {
+  @apply w-7 h-7 rounded-lg flex items-center justify-center;
+}
+
+.section-title {
+  @apply text-sm font-semibold text-gray-800 dark:text-gray-200;
+}
+
+.section-subtitle {
+  @apply text-xs text-gray-500 dark:text-gray-400;
+}
+
+.section-badge {
+  @apply ml-auto text-[10px] font-mono text-gray-500 dark:text-gray-400 bg-gray-100 dark:bg-gray-800 px-1.5 py-0.5 rounded;
+}
+
+.section-badge-error {
+  @apply ml-auto text-[10px] font-mono text-red-600 dark:text-red-400 bg-red-50 dark:bg-red-900/20 px-1.5 py-0.5 rounded;
 }
 
 /* Compact filter card */
 .metrics-dense .filter-card {
   @apply p-2 px-3;
+}
+
+/* Data source buttons */
+.data-source-btn {
+  padding: 0.25rem 0.625rem;
+  border-radius: 0.375rem;
+  font-size: 0.6875rem;
+  font-weight: 600;
+  transition: all 0.15s ease;
+  cursor: pointer;
+}
+
+.data-source-active {
+  background: rgba(255, 107, 0, 0.12);
+  color: #FF6B00;
+  border: 1px solid rgba(255, 107, 0, 0.3);
+}
+
+.data-source-inactive {
+  background: transparent;
+  color: #6b7280;
+  border: 1px solid rgba(0, 0, 0, 0.1);
+}
+
+.dark .data-source-inactive {
+  border-color: rgba(255, 255, 255, 0.1);
+  color: #9ca3af;
+}
+
+.data-source-active:hover {
+  background: rgba(255, 107, 0, 0.18);
+}
+
+.data-source-inactive:hover {
+  background: rgba(0, 0, 0, 0.03);
+}
+
+.dark .data-source-inactive:hover {
+  background: rgba(255, 255, 255, 0.05);
 }
 
 .time-range-btn {
@@ -693,4 +943,3 @@ onUnmounted(() => {
   @apply text-xs font-semibold font-mono text-gray-900 dark:text-gray-100;
 }
 </style>
-

@@ -59,5 +59,30 @@ export const consumersApi = {
       throw error;
     }
   },
+  
+  // Delete a consumer group for a specific queue only
+  deleteConsumerGroupForQueue: async (consumerGroup, queueName, deleteMetadata = true) => {
+    try {
+      const url = `/api/v1/consumer-groups/${encodeURIComponent(consumerGroup)}/queues/${encodeURIComponent(queueName)}?deleteMetadata=${deleteMetadata}`;
+      const response = await apiClient.delete(url);
+      return response.data;
+    } catch (error) {
+      console.error('Error deleting consumer group for queue:', error);
+      throw error;
+    }
+  },
+  
+  // Seek consumer group cursor to end (skip all) or specific timestamp
+  seekConsumerGroup: async (consumerGroup, queueName, { toEnd = false, timestamp = null } = {}) => {
+    try {
+      const url = `/api/v1/consumer-groups/${encodeURIComponent(consumerGroup)}/queues/${encodeURIComponent(queueName)}/seek`;
+      const body = toEnd ? { toEnd: true } : { timestamp };
+      const response = await apiClient.post(url, body);
+      return response.data;
+    } catch (error) {
+      console.error('Error seeking consumer group:', error);
+      throw error;
+    }
+  },
 };
 

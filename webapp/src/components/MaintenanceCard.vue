@@ -15,10 +15,22 @@
         <div class="flex items-center gap-2">
           <span class="text-sm font-semibold text-gray-900 dark:text-white">System Status:</span>
           <span 
-            v-if="maintenanceMode" 
+            v-if="maintenanceMode && popMaintenanceMode" 
+            class="inline-flex items-center px-2 py-1 rounded text-xs font-medium bg-red-100 text-red-800 dark:bg-red-900/30 dark:text-red-400"
+          >
+            Full Maintenance
+          </span>
+          <span 
+            v-else-if="maintenanceMode" 
             class="inline-flex items-center px-2 py-1 rounded text-xs font-medium bg-yellow-100 text-yellow-800 dark:bg-yellow-900/30 dark:text-yellow-400"
           >
-            Maintenance Mode
+            Push Maintenance
+          </span>
+          <span 
+            v-else-if="popMaintenanceMode" 
+            class="inline-flex items-center px-2 py-1 rounded text-xs font-medium bg-orange-100 text-orange-800 dark:bg-orange-900/30 dark:text-orange-400"
+          >
+            Pop Maintenance
           </span>
           <span 
             v-else
@@ -75,6 +87,7 @@ import LoadingSpinner from './common/LoadingSpinner.vue';
 const loading = ref(true);
 const error = ref(null);
 const maintenanceMode = ref(false);
+const popMaintenanceMode = ref(false);
 const bufferedMessages = ref(0);
 const bufferHealthy = ref(true);
 const bufferStats = ref(null);
@@ -120,6 +133,7 @@ async function loadData() {
     ]);
     
     maintenanceMode.value = maintenanceRes.data.maintenanceMode;
+    popMaintenanceMode.value = maintenanceRes.data.popMaintenanceMode || false;
     bufferedMessages.value = maintenanceRes.data.bufferedMessages || 0;
     bufferHealthy.value = maintenanceRes.data.bufferHealthy !== false;
     bufferStats.value = maintenanceRes.data.bufferStats || null;

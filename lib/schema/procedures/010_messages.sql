@@ -48,7 +48,7 @@ BEGIN
     WHERE m.created_at >= v_from_ts AND m.created_at <= v_to_ts
       AND (v_queue IS NULL OR q.name = v_queue);
     
-    -- Get messages
+    -- Get messages with computed status, then filter by status if specified
     WITH message_data AS (
         SELECT 
             m.id,
@@ -103,7 +103,18 @@ BEGIN
           AND (v_namespace IS NULL OR q.namespace = v_namespace)
           AND (v_task IS NULL OR q.task = v_task)
         ORDER BY m.created_at DESC, m.id DESC
-        LIMIT v_limit OFFSET v_offset
+    ),
+    -- Compute final status and filter
+    filtered_messages AS (
+        SELECT 
+            *,
+            CASE
+                WHEN queue_status = 'dead_letter' THEN 'dead_letter'
+                WHEN NOT partition_has_queue_mode AND partition_bus_groups_count > 0 THEN
+                    CASE WHEN consumed_by_groups_count = partition_bus_groups_count THEN 'completed' ELSE 'pending' END
+                ELSE queue_status
+            END as final_status
+        FROM message_data
     )
     SELECT jsonb_build_object(
         'messages', COALESCE(jsonb_agg(
@@ -116,12 +127,7 @@ BEGIN
                 'partition', partition_name,
                 'namespace', namespace,
                 'task', task,
-                'status', CASE
-                    WHEN queue_status = 'dead_letter' THEN 'dead_letter'
-                    WHEN NOT partition_has_queue_mode AND partition_bus_groups_count > 0 THEN
-                        CASE WHEN consumed_by_groups_count = partition_bus_groups_count THEN 'completed' ELSE 'pending' END
-                    ELSE queue_status
-                END,
+                'status', final_status,
                 'queueStatus', queue_status,
                 'busStatus', jsonb_build_object(
                     'consumedBy', consumed_by_groups_count,
@@ -145,7 +151,11 @@ BEGIN
             END
         )
     ) INTO v_result
-    FROM message_data;
+    FROM (
+        SELECT * FROM filtered_messages
+        WHERE (v_status IS NULL OR final_status = v_status)
+        LIMIT v_limit OFFSET v_offset
+    ) sub;
     
     RETURN v_result;
 END;
@@ -161,7 +171,24 @@ LANGUAGE plpgsql
 AS $$
 DECLARE
     v_result JSONB;
+    v_has_queue_mode BOOLEAN;
+    v_bus_groups_count INTEGER;
+    v_consumed_by_groups INTEGER;
+    v_queue_status TEXT;
+    v_final_status TEXT;
 BEGIN
+    -- First, get mode info for this partition
+    SELECT 
+        bool_or(pc.consumer_group = '__QUEUE_MODE__'),
+        COUNT(CASE WHEN pc.consumer_group != '__QUEUE_MODE__' THEN 1 END)::integer
+    INTO v_has_queue_mode, v_bus_groups_count
+    FROM queen.partition_consumers pc
+    WHERE pc.partition_id = p_partition_id;
+    
+    v_has_queue_mode := COALESCE(v_has_queue_mode, false);
+    v_bus_groups_count := COALESCE(v_bus_groups_count, 0);
+    
+    -- Get message with computed status
     SELECT jsonb_build_object(
         'id', m.id,
         'transactionId', m.transaction_id,
@@ -172,13 +199,27 @@ BEGIN
         'namespace', q.namespace,
         'task', q.task,
         'status', CASE
+            -- Dead letter takes priority
             WHEN dlq.message_id IS NOT NULL THEN 'dead_letter'
-            WHEN pc.last_consumed_created_at IS NOT NULL AND (
-                m.created_at < pc.last_consumed_created_at OR 
-                (DATE_TRUNC('milliseconds', m.created_at) = DATE_TRUNC('milliseconds', pc.last_consumed_created_at) 
-                 AND m.id <= pc.last_consumed_id)
+            -- If bus mode only (no queue mode), check if all consumer groups consumed it
+            WHEN NOT v_has_queue_mode AND v_bus_groups_count > 0 THEN
+                CASE WHEN (
+                    SELECT COUNT(*)::integer
+                    FROM queen.partition_consumers pc
+                    WHERE pc.partition_id = m.partition_id
+                      AND pc.consumer_group != '__QUEUE_MODE__'
+                      AND pc.last_consumed_created_at IS NOT NULL
+                      AND (m.created_at < pc.last_consumed_created_at OR 
+                           (DATE_TRUNC('milliseconds', m.created_at) = DATE_TRUNC('milliseconds', pc.last_consumed_created_at) 
+                            AND m.id <= pc.last_consumed_id))
+                ) = v_bus_groups_count THEN 'completed' ELSE 'pending' END
+            -- Queue mode: check __QUEUE_MODE__ consumer
+            WHEN pc_queue.last_consumed_created_at IS NOT NULL AND (
+                m.created_at < pc_queue.last_consumed_created_at OR 
+                (DATE_TRUNC('milliseconds', m.created_at) = DATE_TRUNC('milliseconds', pc_queue.last_consumed_created_at) 
+                 AND m.id <= pc_queue.last_consumed_id)
             ) THEN 'completed'
-            WHEN pc.lease_expires_at IS NOT NULL AND pc.lease_expires_at > NOW() THEN 'processing'
+            WHEN pc_queue.lease_expires_at IS NOT NULL AND pc_queue.lease_expires_at > NOW() THEN 'processing'
             ELSE 'pending'
         END,
         'payload', m.payload,
@@ -187,8 +228,8 @@ BEGIN
         'createdAt', to_char(m.created_at, 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"'),
         'errorMessage', dlq.error_message,
         'retryCount', dlq.retry_count,
-        'leaseExpiresAt', CASE WHEN pc.lease_expires_at IS NOT NULL 
-            THEN to_char(pc.lease_expires_at, 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"') ELSE NULL END,
+        'leaseExpiresAt', CASE WHEN pc_queue.lease_expires_at IS NOT NULL 
+            THEN to_char(pc_queue.lease_expires_at, 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"') ELSE NULL END,
         'queueConfig', jsonb_build_object(
             'leaseTime', q.lease_time,
             'retryLimit', q.retry_limit,
@@ -197,31 +238,44 @@ BEGIN
             'priority', q.priority
         ),
         'mode', jsonb_build_object(
-            'hasQueueMode', (pc.consumer_group IS NOT NULL),
-            'busGroupsCount', (
+            'hasQueueMode', v_has_queue_mode,
+            'busGroupsCount', v_bus_groups_count,
+            'consumedByGroups', (
                 SELECT COUNT(*)::integer
-                FROM queen.partition_consumers pc2
-                WHERE pc2.partition_id = m.partition_id
-                  AND pc2.consumer_group != '__QUEUE_MODE__'
+                FROM queen.partition_consumers pc
+                WHERE pc.partition_id = m.partition_id
+                  AND pc.consumer_group != '__QUEUE_MODE__'
+                  AND pc.last_consumed_created_at IS NOT NULL
+                  AND (m.created_at < pc.last_consumed_created_at OR 
+                       (DATE_TRUNC('milliseconds', m.created_at) = DATE_TRUNC('milliseconds', pc.last_consumed_created_at) 
+                        AND m.id <= pc.last_consumed_id))
             ),
             'type', CASE 
-                WHEN pc.consumer_group IS NULL AND (
-                    SELECT COUNT(*) FROM queen.partition_consumers pc2 
-                    WHERE pc2.partition_id = m.partition_id AND pc2.consumer_group != '__QUEUE_MODE__'
-                ) > 0 THEN 'bus'
-                WHEN pc.consumer_group IS NOT NULL AND (
-                    SELECT COUNT(*) FROM queen.partition_consumers pc2 
-                    WHERE pc2.partition_id = m.partition_id AND pc2.consumer_group != '__QUEUE_MODE__'
-                ) = 0 THEN 'queue'
-                WHEN pc.consumer_group IS NOT NULL THEN 'hybrid'
+                WHEN NOT v_has_queue_mode AND v_bus_groups_count > 0 THEN 'bus'
+                WHEN v_has_queue_mode AND v_bus_groups_count = 0 THEN 'queue'
+                WHEN v_has_queue_mode AND v_bus_groups_count > 0 THEN 'hybrid'
                 ELSE 'none'
             END
+        ),
+        'consumerGroups', (
+            SELECT COALESCE(jsonb_agg(jsonb_build_object(
+                'name', pc.consumer_group,
+                'consumed', pc.last_consumed_created_at IS NOT NULL AND (
+                    m.created_at < pc.last_consumed_created_at OR 
+                    (DATE_TRUNC('milliseconds', m.created_at) = DATE_TRUNC('milliseconds', pc.last_consumed_created_at) 
+                     AND m.id <= pc.last_consumed_id)
+                ),
+                'leaseExpiresAt', CASE WHEN pc.lease_expires_at IS NOT NULL 
+                    THEN to_char(pc.lease_expires_at, 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"') ELSE NULL END
+            )), '[]'::jsonb)
+            FROM queen.partition_consumers pc
+            WHERE pc.partition_id = m.partition_id
         )
     ) INTO v_result
     FROM queen.messages m
     JOIN queen.partitions p ON p.id = m.partition_id
     JOIN queen.queues q ON q.id = p.queue_id
-    LEFT JOIN queen.partition_consumers pc ON pc.partition_id = p.id AND pc.consumer_group = '__QUEUE_MODE__'
+    LEFT JOIN queen.partition_consumers pc_queue ON pc_queue.partition_id = p.id AND pc_queue.consumer_group = '__QUEUE_MODE__'
     LEFT JOIN queen.dead_letter_queue dlq ON dlq.message_id = m.id
     WHERE m.partition_id = p_partition_id AND m.transaction_id = p_transaction_id;
     

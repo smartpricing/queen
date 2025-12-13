@@ -44,11 +44,12 @@ SharedStateManager::~SharedStateManager() {
 }
 
 void SharedStateManager::start() {
-    // Always load queue configs and maintenance mode on startup
+    // Always load queue configs and maintenance modes on startup
     if (db_pool_) {
-        spdlog::info("SharedStateManager: Loading queue configs and maintenance mode from database...");
+        spdlog::info("SharedStateManager: Loading queue configs and maintenance modes from database...");
         refresh_queue_configs_from_db();
         refresh_maintenance_mode_from_db();
+        refresh_pop_maintenance_mode_from_db();
     }
     
     if (!enabled_ || running_) {
@@ -219,6 +220,10 @@ void SharedStateManager::setup_message_handlers() {
     transport_->on_message(Type::MAINTENANCE_MODE_SET, [this](Type, const std::string& sender, const nlohmann::json& p) {
         handle_maintenance_mode_set(sender, p);
     });
+    
+    transport_->on_message(Type::POP_MAINTENANCE_MODE_SET, [this](Type, const std::string& sender, const nlohmann::json& p) {
+        handle_pop_maintenance_mode_set(sender, p);
+    });
 }
 
 void SharedStateManager::handle_message_available(const std::string& sender, const nlohmann::json& payload) {
@@ -298,6 +303,16 @@ void SharedStateManager::handle_maintenance_mode_set(const std::string& sender, 
     }
 }
 
+void SharedStateManager::handle_pop_maintenance_mode_set(const std::string& sender, const nlohmann::json& payload) {
+    bool enabled = payload.value("enabled", false);
+    
+    bool prev = pop_maintenance_mode_.exchange(enabled);
+    if (prev != enabled) {
+        spdlog::info("SharedState: POP_MAINTENANCE_MODE_SET from {} -> {} (from peer {})", 
+                    prev ? "ON" : "OFF", enabled ? "ON" : "OFF", sender);
+    }
+}
+
 // ============================================================
 // Background Tasks
 // ============================================================
@@ -348,6 +363,12 @@ void SharedStateManager::refresh_loop() {
             refresh_maintenance_mode_from_db();
         } catch (const std::exception& e) {
             spdlog::warn("SharedStateManager: Failed to refresh maintenance mode: {}", e.what());
+        }
+        
+        try {
+            refresh_pop_maintenance_mode_from_db();
+        } catch (const std::exception& e) {
+            spdlog::warn("SharedStateManager: Failed to refresh pop maintenance mode: {}", e.what());
         }
         
         std::this_thread::sleep_for(
@@ -510,8 +531,44 @@ void SharedStateManager::refresh_maintenance_mode_from_db() {
     }
 }
 
+void SharedStateManager::refresh_pop_maintenance_mode_from_db() {
+    if (!db_pool_) return;
+    
+    try {
+        auto conn = db_pool_->acquire();
+        if (!conn) {
+            spdlog::warn("SharedStateManager: Failed to acquire DB connection for pop maintenance mode refresh");
+            return;
+        }
+        
+        std::string sql = R"(
+            SELECT value->>'enabled' as enabled
+            FROM queen.system_state
+            WHERE key = 'pop_maintenance_mode'
+        )";
+        
+        sendAndWait(conn.get(), sql.c_str());
+        auto result = getTuplesResult(conn.get());
+        
+        bool enabled = false;
+        if (PQntuples(result.get()) > 0) {
+            const char* val = PQgetvalue(result.get(), 0, 0);
+            enabled = (val && std::string(val) == "true");
+        }
+        
+        bool prev = pop_maintenance_mode_.exchange(enabled);
+        if (prev != enabled) {
+            spdlog::info("SharedStateManager: Pop maintenance mode changed {} -> {} (from DB refresh)", 
+                        prev ? "ON" : "OFF", enabled ? "ON" : "OFF");
+        }
+        
+    } catch (const std::exception& e) {
+        spdlog::warn("SharedStateManager: Failed to refresh pop maintenance mode from DB: {}", e.what());
+    }
+}
+
 // ============================================================
-// Maintenance Mode
+// Maintenance Mode (PUSH)
 // ============================================================
 
 void SharedStateManager::set_maintenance_mode(bool enabled) {
@@ -555,6 +612,47 @@ void SharedStateManager::set_maintenance_mode(bool enabled) {
     }
 }
 
+void SharedStateManager::set_pop_maintenance_mode(bool enabled) {
+    bool prev = pop_maintenance_mode_.exchange(enabled);
+    
+    if (prev != enabled) {
+        spdlog::info("SharedStateManager: Pop maintenance mode set {} -> {}", 
+                    prev ? "ON" : "OFF", enabled ? "ON" : "OFF");
+    }
+    
+    // Persist to database
+    if (db_pool_) {
+        try {
+            auto conn = db_pool_->acquire();
+            if (conn) {
+                std::string sql = R"(
+                    INSERT INTO queen.system_state (key, value, updated_at)
+                    VALUES ('pop_maintenance_mode', $1::jsonb, NOW())
+                    ON CONFLICT (key) DO UPDATE SET 
+                        value = EXCLUDED.value,
+                        updated_at = NOW()
+                )";
+                
+                std::string value_json = enabled ? R"({"enabled": true})" : R"({"enabled": false})";
+                
+                sendQueryParamsAsync(conn.get(), sql, {value_json});
+                getCommandResult(conn.get());
+            }
+        } catch (const std::exception& e) {
+            spdlog::warn("SharedStateManager: Failed to persist pop maintenance mode to DB: {}", e.what());
+        }
+    }
+    
+    // Broadcast to other instances
+    if (running_ && transport_) {
+        nlohmann::json payload = {
+            {"enabled", enabled},
+            {"ts", now_ms()}
+        };
+        transport_->broadcast(UDPSyncMessageType::POP_MAINTENANCE_MODE_SET, payload);
+    }
+}
+
 // ============================================================
 // Stats
 // ============================================================
@@ -586,6 +684,7 @@ nlohmann::json SharedStateManager::get_stats() const {
     };
     
     stats["maintenance_mode"] = maintenance_mode_.load();
+    stats["pop_maintenance_mode"] = pop_maintenance_mode_.load();
     
     return stats;
 }

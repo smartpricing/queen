@@ -1,29 +1,5 @@
 <template>
   <div class="registry-chart">
-    <!-- Metric Toggles -->
-    <div class="flex items-center gap-1.5 flex-wrap mb-2">
-      <button
-        @click="selectedMetrics.streamPollIntention = !selectedMetrics.streamPollIntention"
-        :class="[
-          'metric-toggle',
-          selectedMetrics.streamPollIntention ? 'metric-toggle-active-purple' : 'metric-toggle-inactive'
-        ]"
-      >
-        <div :class="['metric-dot', selectedMetrics.streamPollIntention ? 'bg-purple-500' : 'bg-gray-400']"></div>
-        Stream Poll Intentions
-      </button>
-      <button
-        @click="selectedMetrics.response = !selectedMetrics.response"
-        :class="[
-          'metric-toggle',
-          selectedMetrics.response ? 'metric-toggle-active-rose' : 'metric-toggle-inactive'
-        ]"
-      >
-        <div :class="['metric-dot', selectedMetrics.response ? 'bg-rose-500' : 'bg-gray-400']"></div>
-        Response Registry
-      </button>
-    </div>
-
     <!-- Chart -->
     <div class="chart-container">
       <Line v-if="chartData" :data="chartData" :options="chartOptions" />
@@ -73,7 +49,6 @@ const props = defineProps({
 });
 
 const selectedMetrics = ref({
-  streamPollIntention: true,
   response: true,
 });
 
@@ -83,9 +58,9 @@ function getNestedValue(obj, path) {
 
 // Colors for different replicas
 const replicaColors = [
-  { streamPollIntention: 'rgba(168, 85, 247, 1)', response: 'rgba(244, 63, 94, 1)' },
-  { streamPollIntention: 'rgba(216, 180, 254, 1)', response: 'rgba(251, 113, 133, 1)' },
-  { streamPollIntention: 'rgba(192, 132, 252, 1)', response: 'rgba(248, 113, 113, 1)' },
+  { response: 'rgba(244, 63, 94, 1)' },
+  { response: 'rgba(251, 113, 133, 1)' },
+  { response: 'rgba(248, 113, 113, 1)' },
 ];
 
 // Helper function to aggregate values across replicas
@@ -121,37 +96,8 @@ const chartData = computed(() => {
   if (props.viewMode === 'aggregate') {
     // Aggregate mode: combine all replicas into single lines per metric
     const aggregateColors = {
-      streamPollIntention: 'rgba(168, 85, 247, 1)',
       response: 'rgba(244, 63, 94, 1)',
     };
-
-    if (selectedMetrics.value.streamPollIntention) {
-      const aggregatedData = sortedTimestamps.map(ts => {
-        const values = [];
-        replicas.forEach(replica => {
-          const point = replica.timeSeries.find(p => p.timestamp === ts);
-          if (point) {
-            const value = getNestedValue(point.metrics, 'registries.stream_poll_intention');
-            const rawValue = value?.[props.aggregation];
-            if (rawValue !== undefined && rawValue !== null) values.push(rawValue);
-          }
-        });
-        return aggregateValues(values, props.aggregation);
-      });
-
-      datasets.push({
-        label: `Stream Poll Intentions (${props.aggregation})`,
-        data: aggregatedData,
-        borderColor: aggregateColors.streamPollIntention,
-        backgroundColor: 'rgba(168, 85, 247, 0.1)',
-        borderWidth: 2,
-        fill: true,
-        tension: 0.2,
-        pointRadius: 0,
-        pointHoverRadius: 5,
-        pointHoverBackgroundColor: aggregateColors.streamPollIntention,
-      });
-    }
 
     if (selectedMetrics.value.response) {
       const aggregatedData = sortedTimestamps.map(ts => {
@@ -185,27 +131,6 @@ const chartData = computed(() => {
     replicas.forEach((replica, replicaIndex) => {
       const colorScheme = replicaColors[replicaIndex % replicaColors.length];
       const replicaLabel = `${replica.hostname}`;
-
-      if (selectedMetrics.value.streamPollIntention) {
-        const dataMap = new Map();
-        replica.timeSeries.forEach(point => {
-          const value = getNestedValue(point.metrics, 'registries.stream_poll_intention');
-          dataMap.set(point.timestamp, value?.[props.aggregation] ?? null);
-        });
-
-        datasets.push({
-          label: `${replicaLabel} - Stream Poll Intentions`,
-          data: sortedTimestamps.map(ts => dataMap.get(ts) ?? null),
-          borderColor: colorScheme.streamPollIntention,
-          backgroundColor: 'transparent',
-          borderWidth: 2,
-          fill: false,
-          tension: 0,
-          pointRadius: 0,
-          pointHoverRadius: 5,
-          pointHoverBackgroundColor: colorScheme.streamPollIntention,
-        });
-      }
 
       if (selectedMetrics.value.response) {
         const dataMap = new Map();
@@ -358,61 +283,5 @@ const chartOptions = {
   position: relative;
 }
 
-.metric-toggle {
-  display: flex;
-  align-items: center;
-  gap: 0.5rem;
-  padding: 0.375rem 0.75rem;
-  border-radius: 0.5rem;
-  font-size: 0.75rem;
-  font-weight: 500;
-  transition: all 0.2s ease;
-  cursor: pointer;
-}
-
-.metric-toggle-active-purple {
-  background: rgba(168, 85, 247, 0.1);
-  color: #a855f7;
-  border: 1px solid rgba(168, 85, 247, 0.2);
-}
-
-.metric-toggle-active-rose {
-  background: rgba(244, 63, 94, 0.1);
-  color: #f43f5e;
-  border: 1px solid rgba(244, 63, 94, 0.2);
-}
-
-.metric-toggle-inactive {
-  background: transparent;
-  color: #9ca3af;
-  border: 1px solid rgba(0, 0, 0, 0.1);
-}
-
-.dark .metric-toggle-inactive {
-  border-color: rgba(255, 255, 255, 0.1);
-}
-
-.metric-toggle:hover {
-  transform: translateY(-1px);
-}
-
-.metric-toggle-active-purple:hover,
-.metric-toggle-active-rose:hover {
-  opacity: 0.9;
-}
-
-.metric-toggle-inactive:hover {
-  background: rgba(0, 0, 0, 0.03);
-}
-
-.dark .metric-toggle-inactive:hover {
-  background: rgba(255, 255, 255, 0.05);
-}
-
-.metric-dot {
-  width: 0.5rem;
-  height: 0.5rem;
-  border-radius: 50%;
-}
 </style>
 

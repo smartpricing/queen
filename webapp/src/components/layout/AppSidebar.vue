@@ -105,11 +105,11 @@
           </div>
         </button>
         
-        <!-- Maintenance Mode Toggle -->
+        <!-- Push Maintenance Mode Toggle -->
         <button
           @click="toggleMaintenance"
           :disabled="maintenanceLoading"
-          :title="isCollapsed ? (maintenanceMode ? 'Maintenance ON' : 'Maintenance OFF') : ''"
+          :title="isCollapsed ? (maintenanceMode ? 'Push Maint. ON' : 'Push Maint. OFF') : ''"
           class="utility-btn group"
           :class="[
             maintenanceMode ? 'bg-yellow-50 dark:bg-yellow-900/20 text-yellow-700 dark:text-yellow-400' : '',
@@ -120,12 +120,35 @@
             <path stroke-linecap="round" stroke-linejoin="round" d="M11.42 15.17L17.25 21A2.652 2.652 0 0021 17.25l-5.877-5.877M11.42 15.17l2.496-3.03c.317-.384.74-.626 1.208-.766M11.42 15.17l-4.655 5.653a2.548 2.548 0 11-3.586-3.586l6.837-5.63m5.108-.233c.55-.164 1.163-.188 1.743-.14a4.5 4.5 0 004.486-6.336l-3.276 3.277a3.004 3.004 0 01-2.25-2.25l3.276-3.276a4.5 4.5 0 00-6.336 4.486c.091 1.076-.071 2.264-.904 2.95l-.102.085m-1.745 1.437L5.909 7.5H4.5L2.25 3.75l1.5-1.5L7.5 4.5v1.409l4.26 4.26m-1.745 1.437l1.745-1.437m6.615 8.206L15.75 15.75M4.867 19.125h.008v.008h-.008v-.008z" />
           </svg>
           <span v-if="!isCollapsed" class="utility-label font-medium">
-            {{ maintenanceMode ? 'Maintenance ON' : 'Maintenance' }}
+            {{ maintenanceMode ? 'Push ON' : 'Push Maint.' }}
             <span v-if="maintenanceMode && bufferedMessages > 0" class="text-xs ml-1">({{ formatNumber(bufferedMessages) }})</span>
           </span>
           
           <div v-if="isCollapsed" class="nav-tooltip">
-            {{ maintenanceMode ? `Maintenance ON (${formatNumber(bufferedMessages)} buffered)` : 'Maintenance OFF' }}
+            {{ maintenanceMode ? `Push Maint. ON (${formatNumber(bufferedMessages)} buffered)` : 'Push Maint. OFF' }}
+          </div>
+        </button>
+        
+        <!-- Pop Maintenance Mode Toggle -->
+        <button
+          @click="togglePopMaintenance"
+          :disabled="popMaintenanceLoading"
+          :title="isCollapsed ? (popMaintenanceMode ? 'Pop Maint. ON' : 'Pop Maint. OFF') : ''"
+          class="utility-btn group"
+          :class="[
+            popMaintenanceMode ? 'bg-orange-50 dark:bg-orange-900/20 text-orange-700 dark:text-orange-400' : '',
+            isCollapsed ? 'utility-btn-collapsed' : 'utility-btn-expanded'
+          ]"
+        >
+          <svg class="utility-icon" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="1.5">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M18.364 18.364A9 9 0 005.636 5.636m12.728 12.728A9 9 0 015.636 5.636m12.728 12.728L5.636 5.636" />
+          </svg>
+          <span v-if="!isCollapsed" class="utility-label font-medium">
+            {{ popMaintenanceMode ? 'Pop ON' : 'Pop Maint.' }}
+          </span>
+          
+          <div v-if="isCollapsed" class="nav-tooltip">
+            {{ popMaintenanceMode ? 'Pop Maint. ON (consumers paused)' : 'Pop Maint. OFF' }}
           </div>
         </button>
         
@@ -249,16 +272,21 @@ async function checkHealth() {
   }
 }
 
-// Maintenance mode
+// Push Maintenance mode
 const maintenanceMode = ref(false);
 const bufferedMessages = ref(0);
 const bufferHealthy = ref(true);
 const maintenanceLoading = ref(false);
 
+// Pop Maintenance mode
+const popMaintenanceMode = ref(false);
+const popMaintenanceLoading = ref(false);
+
 async function checkMaintenance() {
   try {
     const response = await systemApi.getMaintenanceStatus();
     maintenanceMode.value = response.data.maintenanceMode;
+    popMaintenanceMode.value = response.data.popMaintenanceMode || false;
     bufferedMessages.value = response.data.bufferedMessages || 0;
     bufferHealthy.value = response.data.bufferHealthy !== false;
   } catch (error) {
@@ -273,13 +301,13 @@ async function toggleMaintenance() {
   
   // Confirm if enabling maintenance mode
   if (enable) {
-    if (!confirm('Enable maintenance mode?\n\nAll PUSH operations will be routed to file buffer until maintenance is disabled.')) {
+    if (!confirm('Enable PUSH maintenance mode?\n\nAll PUSH operations will be routed to file buffer until maintenance is disabled.')) {
       return;
     }
   } else {
     // Confirm if there are buffered messages
     if (bufferedMessages.value > 0) {
-      if (!confirm(`Disable maintenance mode?\n\n${formatNumber(bufferedMessages.value)} buffered messages will be drained to the database.`)) {
+      if (!confirm(`Disable PUSH maintenance mode?\n\n${formatNumber(bufferedMessages.value)} buffered messages will be drained to the database.`)) {
         return;
       }
     }
@@ -295,14 +323,49 @@ async function toggleMaintenance() {
     
     // Show notification
     if (enable) {
-      alert('✅ Maintenance mode enabled.\n\nAll PUSH operations are now routing to file buffer.');
+      alert('✅ PUSH maintenance mode enabled.\n\nAll PUSH operations are now routing to file buffer.');
     } else {
-      alert(`✅ Maintenance mode disabled.\n\n${bufferedMessages.value > 0 ? 'File buffer is draining to database.' : 'No buffered messages.'}`);
+      alert(`✅ PUSH maintenance mode disabled.\n\n${bufferedMessages.value > 0 ? 'File buffer is draining to database.' : 'No buffered messages.'}`);
     }
   } catch (error) {
-    alert(`❌ Failed to ${enable ? 'enable' : 'disable'} maintenance mode:\n\n${error.message}`);
+    alert(`❌ Failed to ${enable ? 'enable' : 'disable'} PUSH maintenance mode:\n\n${error.message}`);
   } finally {
     maintenanceLoading.value = false;
+  }
+}
+
+async function togglePopMaintenance() {
+  if (popMaintenanceLoading.value) return;
+  
+  const enable = !popMaintenanceMode.value;
+  
+  // Confirm action
+  if (enable) {
+    if (!confirm('Enable POP maintenance mode?\n\nAll POP operations will return empty arrays.\nConsumers will receive no messages until disabled.')) {
+      return;
+    }
+  } else {
+    if (!confirm('Disable POP maintenance mode?\n\nConsumers will start receiving messages again.')) {
+      return;
+    }
+  }
+  
+  popMaintenanceLoading.value = true;
+  
+  try {
+    const response = await systemApi.setPopMaintenanceMode(enable);
+    popMaintenanceMode.value = response.data.popMaintenanceMode;
+    
+    // Show notification
+    if (enable) {
+      alert('✅ POP maintenance mode enabled.\n\nAll consumers are now receiving empty responses.');
+    } else {
+      alert('✅ POP maintenance mode disabled.\n\nConsumers will resume receiving messages.');
+    }
+  } catch (error) {
+    alert(`❌ Failed to ${enable ? 'enable' : 'disable'} POP maintenance mode:\n\n${error.message}`);
+  } finally {
+    popMaintenanceLoading.value = false;
   }
 }
 

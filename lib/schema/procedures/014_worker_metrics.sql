@@ -656,6 +656,206 @@ BEGIN
 END;
 $$;
 
+-- ============================================================================
+-- WORKER METRICS TIME SERIES API (for System Metrics view)
+-- ============================================================================
+
+-- queen.get_worker_metrics_timeseries_v1: Returns time series data for charts
+CREATE OR REPLACE FUNCTION queen.get_worker_metrics_timeseries_v1(p_filters JSONB DEFAULT '{}'::jsonb)
+RETURNS JSONB
+LANGUAGE plpgsql
+AS $$
+DECLARE
+    v_from_ts TIMESTAMPTZ;
+    v_to_ts TIMESTAMPTZ;
+    v_hostname TEXT;
+    v_worker_id INTEGER;
+    v_duration_minutes INTEGER;
+    v_bucket_minutes INTEGER;
+    v_timeseries JSONB;
+    v_workers JSONB;
+    v_queues JSONB;
+    v_summary JSONB;
+    v_point_count INTEGER;
+BEGIN
+    -- Parse filters
+    v_from_ts := COALESCE((p_filters->>'from')::timestamptz, NOW() - INTERVAL '1 hour');
+    v_to_ts := COALESCE((p_filters->>'to')::timestamptz, NOW());
+    v_hostname := p_filters->>'hostname';
+    v_worker_id := (p_filters->>'workerId')::integer;
+    
+    -- Calculate bucket size based on duration
+    v_duration_minutes := EXTRACT(EPOCH FROM (v_to_ts - v_from_ts)) / 60;
+    v_bucket_minutes := CASE
+        WHEN v_duration_minutes <= 60 THEN 1
+        WHEN v_duration_minutes <= 360 THEN 5
+        WHEN v_duration_minutes <= 1440 THEN 15
+        WHEN v_duration_minutes <= 10080 THEN 60
+        ELSE 360
+    END;
+    
+    -- Get aggregated time series data
+    SELECT 
+        COALESCE(jsonb_agg(
+            jsonb_build_object(
+                'timestamp', to_char(bucket, 'YYYY-MM-DD"T"HH24:MI:SS"Z"'),
+                -- Throughput
+                'pushMessages', push_msg,
+                'popMessages', pop_msg,
+                'ackMessages', ack_msg,
+                'pushRequests', push_req,
+                'popRequests', pop_req,
+                'ackRequests', ack_req,
+                'jobsDone', jobs,
+                -- Throughput per second
+                'pushPerSecond', ROUND(push_msg::numeric / (v_bucket_minutes * 60), 2),
+                'popPerSecond', ROUND(pop_msg::numeric / (v_bucket_minutes * 60), 2),
+                'ackPerSecond', ROUND(ack_msg::numeric / (v_bucket_minutes * 60), 2),
+                -- Worker health
+                'avgEventLoopLagMs', avg_el,
+                'maxEventLoopLagMs', max_el,
+                'avgFreeSlots', avg_slots,
+                'minFreeSlots', min_slots,
+                'dbConnections', db_conns,
+                'avgJobQueueSize', avg_queue,
+                'maxJobQueueSize', max_queue,
+                'backoffSize', backoff,
+                -- Lag
+                'avgLagMs', avg_lag,
+                'maxLagMs', max_lag,
+                'lagCount', lag_cnt,
+                -- Errors
+                'dbErrors', db_errs,
+                'ackSuccess', ack_ok,
+                'ackFailed', ack_fail,
+                'dlqCount', dlq
+            ) ORDER BY bucket DESC
+        ), '[]'::jsonb),
+        COUNT(*)
+    INTO v_timeseries, v_point_count
+    FROM (
+        SELECT 
+            date_trunc('minute', bucket_time) as bucket,
+            -- Throughput sums
+            SUM(push_message_count) as push_msg,
+            SUM(pop_message_count) as pop_msg,
+            SUM(ack_message_count) as ack_msg,
+            SUM(push_request_count) as push_req,
+            SUM(pop_request_count) as pop_req,
+            SUM(ack_request_count) as ack_req,
+            SUM(jobs_done) as jobs,
+            -- Worker health averages
+            ROUND(AVG(avg_event_loop_lag_ms)) as avg_el,
+            MAX(max_event_loop_lag_ms) as max_el,
+            ROUND(AVG(avg_free_slots)) as avg_slots,
+            MIN(min_free_slots) as min_slots,
+            MAX(db_connections) as db_conns,
+            ROUND(AVG(avg_job_queue_size)) as avg_queue,
+            MAX(max_job_queue_size) as max_queue,
+            MAX(backoff_size) as backoff,
+            -- Lag (weighted average)
+            CASE WHEN SUM(lag_count) > 0 
+                 THEN ROUND(SUM(avg_lag_ms::numeric * lag_count) / SUM(lag_count))
+                 ELSE 0 END as avg_lag,
+            MAX(max_lag_ms) as max_lag,
+            SUM(lag_count) as lag_cnt,
+            -- Errors
+            SUM(db_error_count) as db_errs,
+            SUM(ack_success_count) as ack_ok,
+            SUM(ack_failed_count) as ack_fail,
+            SUM(dlq_count) as dlq
+        FROM queen.worker_metrics
+        WHERE bucket_time >= v_from_ts 
+          AND bucket_time <= v_to_ts
+          AND (v_hostname IS NULL OR hostname = v_hostname)
+          AND (v_worker_id IS NULL OR worker_id = v_worker_id)
+        GROUP BY 1
+    ) t;
+    
+    -- Get per-worker current status
+    SELECT COALESCE(jsonb_agg(
+        jsonb_build_object(
+            'hostname', hostname,
+            'workerId', worker_id,
+            'avgEventLoopLagMs', avg_el,
+            'maxEventLoopLagMs', max_el,
+            'freeSlots', free_slots,
+            'dbConnections', db_conns,
+            'jobQueueSize', job_queue,
+            'backoffSize', backoff,
+            'messagesProcessed', msgs,
+            'lastSeen', last_seen
+        ) ORDER BY hostname, worker_id
+    ), '[]'::jsonb) INTO v_workers
+    FROM (
+        SELECT 
+            hostname, worker_id,
+            ROUND(AVG(avg_event_loop_lag_ms)) as avg_el,
+            MAX(max_event_loop_lag_ms) as max_el,
+            MIN(min_free_slots) as free_slots,
+            MAX(db_connections) as db_conns,
+            MAX(max_job_queue_size) as job_queue,
+            MAX(backoff_size) as backoff,
+            SUM(push_message_count + ack_message_count) as msgs,
+            to_char(MAX(bucket_time), 'YYYY-MM-DD"T"HH24:MI:SS"Z"') as last_seen
+        FROM queen.worker_metrics
+        WHERE bucket_time >= NOW() - INTERVAL '5 minutes'
+        GROUP BY hostname, worker_id
+    ) t;
+    
+    -- Get per-queue lag metrics
+    SELECT COALESCE(jsonb_agg(
+        jsonb_build_object(
+            'queueName', queue_name,
+            'popCount', pop_cnt,
+            'avgLagMs', avg_lag,
+            'maxLagMs', max_lag
+        ) ORDER BY pop_cnt DESC
+    ), '[]'::jsonb) INTO v_queues
+    FROM (
+        SELECT 
+            queue_name,
+            SUM(pop_count) as pop_cnt,
+            CASE WHEN SUM(pop_count) > 0 
+                 THEN ROUND(SUM(avg_lag_ms::numeric * pop_count) / SUM(pop_count))
+                 ELSE 0 END as avg_lag,
+            MAX(max_lag_ms) as max_lag
+        FROM queen.queue_lag_metrics
+        WHERE bucket_time >= v_from_ts AND bucket_time <= v_to_ts
+        GROUP BY queue_name
+    ) t;
+    
+    -- Get summary totals
+    SELECT jsonb_build_object(
+        'totalPushMessages', total_push_messages,
+        'totalPopMessages', total_pop_messages,
+        'totalAckMessages', total_ack_messages,
+        'totalPushRequests', total_push_requests,
+        'totalPopRequests', total_pop_requests,
+        'totalAckRequests', total_ack_requests,
+        'totalDbErrors', total_db_errors,
+        'totalAckFailed', total_ack_failed,
+        'totalDlq', total_dlq,
+        'pendingMessages', total_push_messages - total_pop_messages
+    ) INTO v_summary
+    FROM queen.worker_metrics_summary
+    WHERE id = 1;
+    
+    RETURN jsonb_build_object(
+        'timeRange', jsonb_build_object(
+            'from', to_char(v_from_ts, 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"'),
+            'to', to_char(v_to_ts, 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"')
+        ),
+        'bucketMinutes', v_bucket_minutes,
+        'pointCount', COALESCE(v_point_count, 0),
+        'timeSeries', COALESCE(v_timeseries, '[]'::jsonb),
+        'workers', COALESCE(v_workers, '[]'::jsonb),
+        'queues', COALESCE(v_queues, '[]'::jsonb),
+        'summary', COALESCE(v_summary, '{}'::jsonb)
+    );
+END;
+$$;
+
 -- Grant permissions
 GRANT EXECUTE ON FUNCTION queen.get_worker_throughput_v1(TIMESTAMPTZ, TIMESTAMPTZ, INTEGER) TO PUBLIC;
 GRANT EXECUTE ON FUNCTION queen.get_queue_lag_v1(TIMESTAMPTZ, TIMESTAMPTZ, TEXT) TO PUBLIC;
@@ -663,5 +863,6 @@ GRANT EXECUTE ON FUNCTION queen.get_worker_health_v1(TIMESTAMPTZ, TIMESTAMPTZ) T
 GRANT EXECUTE ON FUNCTION queen.get_system_totals_v1() TO PUBLIC;
 GRANT EXECUTE ON FUNCTION queen.get_system_overview_v3() TO PUBLIC;
 GRANT EXECUTE ON FUNCTION queen.get_status_v3(JSONB) TO PUBLIC;
+GRANT EXECUTE ON FUNCTION queen.get_worker_metrics_timeseries_v1(JSONB) TO PUBLIC;
 GRANT EXECUTE ON FUNCTION queen.cleanup_worker_metrics_v1(INTEGER) TO PUBLIC;
 

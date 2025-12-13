@@ -23,6 +23,17 @@ void setup_pop_routes(uWS::App* app, const RouteContext& ctx) {
     // SPECIFIC POP from queue/partition
     app->get("/api/v1/pop/queue/:queue/partition/:partition", [ctx](auto* res, auto* req) {
         try {
+            // POP MAINTENANCE MODE: Return empty immediately if enabled
+            // Zero-cost check: just reads an atomic bool, no DB hit
+            if (global_shared_state && global_shared_state->get_pop_maintenance_mode()) {
+                nlohmann::json response = {
+                    {"messages", nlohmann::json::array()},
+                    {"paused", true}
+                };
+                send_json_response(res, response, 204);
+                return;
+            }
+            
             std::string queue_name = std::string(req->getParameter(0));
             std::string partition_name = std::string(req->getParameter(1));
             std::string consumer_group = get_query_param(req, "consumerGroup", "__QUEUE_MODE__");
@@ -168,6 +179,17 @@ void setup_pop_routes(uWS::App* app, const RouteContext& ctx) {
     // POP from queue (any partition)
     app->get("/api/v1/pop/queue/:queue", [ctx](auto* res, auto* req) {
         try {
+            // POP MAINTENANCE MODE: Return empty immediately if enabled
+            // Zero-cost check: just reads an atomic bool, no DB hit
+            if (global_shared_state && global_shared_state->get_pop_maintenance_mode()) {
+                nlohmann::json response = {
+                    {"messages", nlohmann::json::array()},
+                    {"paused", true}
+                };
+                send_json_response(res, response, 204);
+                return;
+            }
+            
             std::string queue_name = std::string(req->getParameter(0));
             std::string consumer_group = get_query_param(req, "consumerGroup", "__QUEUE_MODE__");
             

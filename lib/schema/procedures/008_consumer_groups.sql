@@ -302,10 +302,165 @@ BEGIN
 END;
 $$;
 
+-- ============================================================================
+-- queen.delete_consumer_group_for_queue_v1: Delete consumer group for specific queue only
+-- ============================================================================
+CREATE OR REPLACE FUNCTION queen.delete_consumer_group_for_queue_v1(
+    p_consumer_group TEXT,
+    p_queue_name TEXT,
+    p_delete_metadata BOOLEAN DEFAULT TRUE
+)
+RETURNS JSONB
+LANGUAGE plpgsql
+AS $$
+DECLARE
+    v_deleted_count INTEGER;
+BEGIN
+    -- Delete partition consumers only for this specific queue
+    DELETE FROM queen.partition_consumers pc
+    USING queen.partitions p
+    JOIN queen.queues q ON q.id = p.queue_id
+    WHERE pc.partition_id = p.id
+      AND pc.consumer_group = p_consumer_group
+      AND q.name = p_queue_name;
+    
+    GET DIAGNOSTICS v_deleted_count = ROW_COUNT;
+    
+    -- Delete metadata if requested (only for this queue)
+    IF p_delete_metadata THEN
+        DELETE FROM queen.consumer_groups_metadata
+        WHERE consumer_group = p_consumer_group
+          AND queue_name = p_queue_name;
+    END IF;
+    
+    RETURN jsonb_build_object(
+        'success', true,
+        'consumerGroup', p_consumer_group,
+        'queueName', p_queue_name,
+        'deletedPartitions', v_deleted_count,
+        'metadataDeleted', p_delete_metadata
+    );
+END;
+$$;
+
+-- ============================================================================
+-- queen.seek_consumer_group_v1: Move cursor to end (skip all) or specific timestamp
+-- ============================================================================
+-- Usage:
+--   seek_to_end = true: Move cursor to latest message (skip all pending)
+--   seek_to_end = false + target_timestamp: Move cursor to message at/before timestamp
+-- ============================================================================
+CREATE OR REPLACE FUNCTION queen.seek_consumer_group_v1(
+    p_consumer_group TEXT,
+    p_queue_name TEXT,
+    p_target_timestamp TIMESTAMPTZ DEFAULT NULL,
+    p_seek_to_end BOOLEAN DEFAULT FALSE
+)
+RETURNS JSONB
+LANGUAGE plpgsql
+AS $$
+DECLARE
+    v_partition RECORD;
+    v_updated_count INTEGER := 0;
+    v_target_msg RECORD;
+BEGIN
+    -- Validate parameters
+    IF NOT p_seek_to_end AND p_target_timestamp IS NULL THEN
+        RETURN jsonb_build_object(
+            'success', false,
+            'error', 'Must specify either seek_to_end=true or a target_timestamp'
+        );
+    END IF;
+    
+    -- Process each partition for this queue/consumer_group
+    FOR v_partition IN
+        SELECT pc.id as pc_id, pc.partition_id, p.name as partition_name
+        FROM queen.partition_consumers pc
+        JOIN queen.partitions p ON p.id = pc.partition_id
+        JOIN queen.queues q ON q.id = p.queue_id
+        WHERE pc.consumer_group = p_consumer_group
+          AND q.name = p_queue_name
+    LOOP
+        IF p_seek_to_end THEN
+            -- Move to end: use partition_lookup for latest message
+            SELECT pl.last_message_id, pl.last_message_created_at
+            INTO v_target_msg
+            FROM queen.partition_lookup pl
+            WHERE pl.partition_id = v_partition.partition_id;
+            
+            IF v_target_msg.last_message_id IS NOT NULL THEN
+                UPDATE queen.partition_consumers
+                SET last_consumed_id = v_target_msg.last_message_id,
+                    last_consumed_created_at = v_target_msg.last_message_created_at,
+                    last_consumed_at = NOW(),
+                    -- Release any active lease
+                    lease_expires_at = NULL,
+                    lease_acquired_at = NULL,
+                    worker_id = NULL,
+                    batch_size = 0,
+                    acked_count = 0
+                WHERE id = v_partition.pc_id;
+                v_updated_count := v_updated_count + 1;
+            END IF;
+        ELSE
+            -- Move to specific timestamp: find the last message at or before timestamp
+            SELECT m.id, m.created_at
+            INTO v_target_msg
+            FROM queen.messages m
+            WHERE m.partition_id = v_partition.partition_id
+              AND m.created_at <= p_target_timestamp
+            ORDER BY m.created_at DESC, m.id DESC
+            LIMIT 1;
+            
+            IF v_target_msg.id IS NOT NULL THEN
+                -- Move cursor to this message (consumer will start AFTER this message)
+                UPDATE queen.partition_consumers
+                SET last_consumed_id = v_target_msg.id,
+                    last_consumed_created_at = v_target_msg.created_at,
+                    last_consumed_at = NOW(),
+                    -- Release any active lease
+                    lease_expires_at = NULL,
+                    lease_acquired_at = NULL,
+                    worker_id = NULL,
+                    batch_size = 0,
+                    acked_count = 0
+                WHERE id = v_partition.pc_id;
+                v_updated_count := v_updated_count + 1;
+            ELSE
+                -- No message at or before timestamp - reset to beginning
+                UPDATE queen.partition_consumers
+                SET last_consumed_id = '00000000-0000-0000-0000-000000000000',
+                    last_consumed_created_at = NULL,
+                    last_consumed_at = NOW(),
+                    lease_expires_at = NULL,
+                    lease_acquired_at = NULL,
+                    worker_id = NULL,
+                    batch_size = 0,
+                    acked_count = 0
+                WHERE id = v_partition.pc_id;
+                v_updated_count := v_updated_count + 1;
+            END IF;
+        END IF;
+    END LOOP;
+    
+    RETURN jsonb_build_object(
+        'success', true,
+        'consumerGroup', p_consumer_group,
+        'queueName', p_queue_name,
+        'seekToEnd', p_seek_to_end,
+        'targetTimestamp', CASE WHEN p_target_timestamp IS NOT NULL 
+            THEN to_char(p_target_timestamp, 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"') ELSE NULL END,
+        'partitionsUpdated', v_updated_count
+    );
+END;
+$$;
+
 -- Grant execute permissions
 GRANT EXECUTE ON FUNCTION queen.get_consumer_groups_v1() TO PUBLIC;
 GRANT EXECUTE ON FUNCTION queen.get_consumer_group_details_v1(TEXT) TO PUBLIC;
 GRANT EXECUTE ON FUNCTION queen.get_lagging_partitions_v1(INTEGER) TO PUBLIC;
 GRANT EXECUTE ON FUNCTION queen.delete_consumer_group_v1(TEXT, BOOLEAN) TO PUBLIC;
 GRANT EXECUTE ON FUNCTION queen.update_consumer_group_subscription_v1(TEXT, TEXT) TO PUBLIC;
+GRANT EXECUTE ON FUNCTION queen.delete_consumer_group_for_queue_v1(TEXT, TEXT, BOOLEAN) TO PUBLIC;
+GRANT EXECUTE ON FUNCTION queen.seek_consumer_group_v1(TEXT, TEXT, TIMESTAMPTZ, BOOLEAN) TO PUBLIC;
 

@@ -42,7 +42,8 @@ enum class UDPSyncMessageType : uint8_t {
     LEASE_HINT_RELEASED = 31,   // Hint: server released lease
     
     // === System State (Tier 5) ===
-    MAINTENANCE_MODE_SET = 40,  // Maintenance mode changed
+    MAINTENANCE_MODE_SET = 40,      // Push maintenance mode changed
+    POP_MAINTENANCE_MODE_SET = 41,  // Pop maintenance mode changed (consumers receive empty)
 };
 
 /**
@@ -61,6 +62,7 @@ inline const char* message_type_to_string(UDPSyncMessageType type) {
         case UDPSyncMessageType::LEASE_HINT_ACQUIRED: return "LEASE_HINT_ACQUIRED";
         case UDPSyncMessageType::LEASE_HINT_RELEASED: return "LEASE_HINT_RELEASED";
         case UDPSyncMessageType::MAINTENANCE_MODE_SET: return "MAINTENANCE_MODE_SET";
+        case UDPSyncMessageType::POP_MAINTENANCE_MODE_SET: return "POP_MAINTENANCE_MODE_SET";
         default: return "UNKNOWN";
     }
 }

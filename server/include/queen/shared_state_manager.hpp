@@ -81,21 +81,39 @@ public:
     void delete_queue_config(const std::string& queue);
     
     // ============================================================
-    // Maintenance Mode
+    // Maintenance Mode (PUSH - buffers writes to file)
     // ============================================================
     
     /**
-     * Get maintenance mode status (cached, never hits DB)
-     * @return true if maintenance mode is enabled
+     * Get push maintenance mode status (cached, never hits DB)
+     * @return true if push maintenance mode is enabled
      */
     bool get_maintenance_mode() const { return maintenance_mode_.load(); }
     
     /**
-     * Set maintenance mode and persist to DB
+     * Set push maintenance mode and persist to DB
      * Also broadcasts to other instances via UDP
      * @param enabled New maintenance mode status
      */
     void set_maintenance_mode(bool enabled);
+    
+    // ============================================================
+    // Pop Maintenance Mode (POP - returns empty to consumers)
+    // ============================================================
+    
+    /**
+     * Get pop maintenance mode status (cached, never hits DB)
+     * @return true if pop maintenance mode is enabled
+     */
+    bool get_pop_maintenance_mode() const { return pop_maintenance_mode_.load(); }
+    
+    /**
+     * Set pop maintenance mode and persist to DB
+     * Also broadcasts to other instances via UDP
+     * When enabled, all POP operations return empty arrays
+     * @param enabled New pop maintenance mode status
+     */
+    void set_pop_maintenance_mode(bool enabled);
     
     // ============================================================
     // Message Available Notification
@@ -157,6 +175,9 @@ private:
     // Maintenance mode (global atomic cache)
     std::atomic<bool> maintenance_mode_{false};
     
+    // Pop maintenance mode (global atomic cache)
+    std::atomic<bool> pop_maintenance_mode_{false};
+    
     // Message available callback (called from UDP thread)
     MessageAvailableCallback message_available_callback_;
     std::mutex callback_mutex_;
@@ -177,6 +198,7 @@ private:
     void handle_queue_config_set(const std::string& sender, const nlohmann::json& payload);
     void handle_queue_config_delete(const std::string& sender, const nlohmann::json& payload);
     void handle_maintenance_mode_set(const std::string& sender, const nlohmann::json& payload);
+    void handle_pop_maintenance_mode_set(const std::string& sender, const nlohmann::json& payload);
     
     // ============================================================
     // Background Tasks
@@ -188,6 +210,7 @@ private:
     
     void refresh_queue_configs_from_db();
     void refresh_maintenance_mode_from_db();
+    void refresh_pop_maintenance_mode_from_db();
 };
 
 // Global instance

@@ -514,13 +514,39 @@
 
           <!-- Per-Queue Details -->
           <div v-else-if="selectedGroupDetails" v-for="(queueData, queueName) in selectedGroupDetails" :key="queueName" class="queue-section">
-            <h3 class="queue-title">
-              <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10" />
-              </svg>
-              {{ queueName }}
-              <span class="partition-count">{{ queueData.partitions.length }} partition{{ queueData.partitions.length !== 1 ? 's' : '' }}</span>
-            </h3>
+            <div class="queue-header">
+              <h3 class="queue-title">
+                <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10" />
+                </svg>
+                {{ queueName }}
+                <span class="partition-count">{{ queueData.partitions.length }} partition{{ queueData.partitions.length !== 1 ? 's' : '' }}</span>
+              </h3>
+              <div class="queue-actions">
+                <button
+                  @click="handleMoveToNow(queueName)"
+                  class="btn btn-sm btn-secondary"
+                  :disabled="actionLoading"
+                  title="Skip all pending messages"
+                >
+                  <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 5l7 7-7 7M5 5l7 7-7 7" />
+                  </svg>
+                  Move to Now
+                </button>
+                <button
+                  @click="openSeekTimestamp(queueName)"
+                  class="btn btn-sm btn-secondary"
+                  :disabled="actionLoading"
+                  title="Seek cursor to a specific timestamp"
+                >
+                  <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
+                  </svg>
+                  Seek
+                </button>
+              </div>
+            </div>
 
             <div class="partitions-table">
               <table class="detail-table">
@@ -658,6 +684,63 @@
         </div>
       </div>
     </div>
+
+    <!-- Seek Cursor Modal -->
+    <div v-if="showSeekModal" class="modal-overlay" @click="showSeekModal = false">
+      <div class="modal-content-small" @click.stop>
+        <div class="modal-header">
+          <div>
+            <h2 class="text-xl font-bold text-gray-900 dark:text-gray-100">
+              Seek Cursor Position
+            </h2>
+            <p class="text-sm text-gray-500 dark:text-gray-400 mt-1">
+              {{ selectedGroup?.name }} / {{ seekQueueName }}
+            </p>
+          </div>
+          <button @click="showSeekModal = false" class="close-btn">
+            <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" />
+            </svg>
+          </button>
+        </div>
+
+        <div class="modal-body">
+          <div class="mb-4">
+            <label class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+              Target Timestamp
+            </label>
+            <DateTimePicker
+              v-model="seekTimestampISO"
+              placeholder="Select target timestamp"
+              :show-presets="true"
+              :clearable="false"
+            />
+            <p class="text-xs text-gray-500 dark:text-gray-400 mt-2">
+              ⚠️ The cursor will move to the last message at or before this timestamp.
+              Messages after this point will be re-consumed.
+            </p>
+          </div>
+
+          <div class="flex gap-3 justify-end">
+            <button
+              @click="showSeekModal = false"
+              class="btn btn-secondary"
+              :disabled="actionLoading"
+            >
+              Cancel
+            </button>
+            <button
+              @click="handleSeekToTimestamp"
+              class="btn btn-primary"
+              :disabled="actionLoading || !seekTimestampISO"
+            >
+              <span v-if="actionLoading">Seeking...</span>
+              <span v-else>Seek to Timestamp</span>
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
   </div>
 </template>
 
@@ -684,6 +767,9 @@ const newTimestamp = ref('');
 const newTimestampISO = ref('');
 const deleteMetadata = ref(true);
 const actionLoading = ref(false);
+const showSeekModal = ref(false);
+const seekQueueName = ref('');
+const seekTimestampISO = ref('');
 
 const statusOptions = [
   { value: '', label: 'All States' },
@@ -885,9 +971,10 @@ function formatDurationSince(timestamp) {
 }
 
 function confirmDelete() {
+  const queueName = selectedGroup.value.queueName;
   const message = deleteMetadata.value
-    ? `Delete consumer group "${selectedGroup.value.name}" and all its subscription metadata?\n\nThis will:\n- Remove all partition consumer state\n- Delete subscription metadata\n- Cannot be undone`
-    : `Delete consumer group "${selectedGroup.value.name}" (keeping metadata)?\n\nThis will:\n- Remove all partition consumer state\n- Preserve subscription metadata for future use\n- Cannot be undone`;
+    ? `Delete consumer group "${selectedGroup.value.name}" for queue "${queueName}" and its subscription metadata?\n\nThis will:\n- Remove partition consumer state for this queue only\n- Delete subscription metadata for this queue\n- Cannot be undone`
+    : `Delete consumer group "${selectedGroup.value.name}" for queue "${queueName}" (keeping metadata)?\n\nThis will:\n- Remove partition consumer state for this queue only\n- Preserve subscription metadata for future use\n- Cannot be undone`;
   
   if (confirm(message)) {
     handleDelete();
@@ -895,15 +982,88 @@ function confirmDelete() {
 }
 
 async function handleDelete() {
-  if (!selectedGroup.value) return;
+  if (!selectedGroup.value || !selectedGroup.value.queueName) return;
   
   actionLoading.value = true;
   try {
-    await consumersApi.deleteConsumerGroup(selectedGroup.value.name, deleteMetadata.value);
+    // Delete only for the specific queue
+    await consumersApi.deleteConsumerGroupForQueue(
+      selectedGroup.value.name, 
+      selectedGroup.value.queueName, 
+      deleteMetadata.value
+    );
     closeDetail();
     await loadData(); // Refresh the list
   } catch (err) {
     alert(`Failed to delete consumer group: ${err.message}`);
+  } finally {
+    actionLoading.value = false;
+  }
+}
+
+async function handleMoveToNow(queueName) {
+  if (!selectedGroup.value) return;
+  
+  const message = `Move cursor to now for "${selectedGroup.value.name}" on queue "${queueName}"?\n\nThis will skip all pending messages and start consuming from the latest message.`;
+  
+  if (!confirm(message)) return;
+  
+  actionLoading.value = true;
+  try {
+    await consumersApi.seekConsumerGroup(selectedGroup.value.name, queueName, { toEnd: true });
+    // Refresh details
+    const details = await consumersApi.getConsumerGroupDetails(selectedGroup.value.name);
+    if (selectedGroup.value.queueName && details) {
+      const filteredDetails = {};
+      if (details[selectedGroup.value.queueName]) {
+        filteredDetails[selectedGroup.value.queueName] = details[selectedGroup.value.queueName];
+      }
+      selectedGroupDetails.value = filteredDetails;
+    } else {
+      selectedGroupDetails.value = details;
+    }
+    await loadData(); // Refresh the list
+  } catch (err) {
+    alert(`Failed to move cursor: ${err.message}`);
+  } finally {
+    actionLoading.value = false;
+  }
+}
+
+function openSeekTimestamp(queueName) {
+  seekQueueName.value = queueName;
+  // Default to 1 hour ago
+  const oneHourAgo = new Date(Date.now() - 60 * 60 * 1000).toISOString();
+  seekTimestampISO.value = oneHourAgo;
+  showSeekModal.value = true;
+}
+
+async function handleSeekToTimestamp() {
+  if (!selectedGroup.value || !seekQueueName.value || !seekTimestampISO.value) return;
+  
+  actionLoading.value = true;
+  try {
+    await consumersApi.seekConsumerGroup(
+      selectedGroup.value.name, 
+      seekQueueName.value, 
+      { timestamp: seekTimestampISO.value }
+    );
+    showSeekModal.value = false;
+    seekTimestampISO.value = '';
+    // Refresh details
+    const details = await consumersApi.getConsumerGroupDetails(selectedGroup.value.name);
+    if (selectedGroup.value.queueName && details) {
+      const filteredDetails = {};
+      if (details[selectedGroup.value.queueName]) {
+        filteredDetails[selectedGroup.value.queueName] = details[selectedGroup.value.queueName];
+      }
+      selectedGroupDetails.value = filteredDetails;
+    } else {
+      selectedGroupDetails.value = details;
+    }
+    await loadData(); // Refresh the list
+  } catch (err) {
+    alert(`Failed to seek cursor: ${err.message}`);
   } finally {
     actionLoading.value = false;
   }
@@ -1080,13 +1240,25 @@ onUnmounted(() => {
   @apply mb-4;
 }
 
-.queue-title {
-  @apply flex items-center gap-2 text-base font-semibold text-gray-900 dark:text-white mb-3;
+.queue-header {
+  @apply flex items-center justify-between gap-4 mb-3;
   @apply p-3 bg-gray-50/80 dark:bg-gray-800/30 rounded-lg border-l-2 border-orange-500;
 }
 
+.queue-title {
+  @apply flex items-center gap-2 text-base font-semibold text-gray-900 dark:text-white;
+}
+
+.queue-actions {
+  @apply flex items-center gap-2;
+}
+
+.btn-sm {
+  @apply px-2.5 py-1.5 text-xs font-medium rounded-md flex items-center gap-1.5;
+}
+
 .partition-count {
-  @apply text-xs font-medium text-gray-500 dark:text-gray-400 ml-auto;
+  @apply text-xs font-medium text-gray-500 dark:text-gray-400 ml-2;
 }
 
 .partitions-table {

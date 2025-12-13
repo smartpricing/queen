@@ -190,7 +190,7 @@ CREATE TABLE IF NOT EXISTS queen.partition_lookup (
 -- ============================================================================
 
 CREATE INDEX IF NOT EXISTS idx_queues_name ON queen.queues(name);
-CREATE INDEX IF NOT EXISTS idx_messages_partition_created_id ON queen.messages(partition_id, created_at, id);
+-- NOTE: idx_messages_partition_created_id removed - duplicate of idx_messages_partition_created
 CREATE INDEX IF NOT EXISTS idx_messages_transaction_id ON queen.messages(transaction_id);
 
 
@@ -279,8 +279,16 @@ ALTER TABLE queen.partition_consumers SET (
     fillfactor = 50
 );
 
--- Drop legacy index that prevented HOT updates (for existing deployments)
-DROP INDEX IF EXISTS queen.idx_partition_lookup_queue_message_ts;
+ALTER TABLE queen.stats SET (
+    autovacuum_vacuum_scale_factor = 0.01,
+    autovacuum_vacuum_threshold = 50,
+    autovacuum_vacuum_cost_delay = 0,
+    fillfactor = 50
+);
+
+-- Drop legacy indexes (for existing deployments)
+DROP INDEX IF EXISTS queen.idx_partition_lookup_queue_message_ts;  -- Prevented HOT updates
+DROP INDEX IF EXISTS queen.idx_messages_partition_created_id;      -- Duplicate of idx_messages_partition_created
 
 -- ============================================================================
 -- Triggers

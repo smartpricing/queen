@@ -387,15 +387,44 @@ void AsyncQueueManager::push_single_message(
         sequence = seq_str ? std::stoll(seq_str) : 1;
     }
     
-    // Serialize payload
+    // Check if queue has encryption enabled
+    bool encryption_enabled = false;
+    if (global_shared_state) {
+        auto cached_config = global_shared_state->get_queue_config(queue_name);
+        if (cached_config) {
+            encryption_enabled = cached_config->encryption_enabled;
+        }
+    }
+    
+    // Encrypt payload if needed
+    nlohmann::json payload_to_store = payload;
+    bool is_encrypted = false;
+    
+    if (encryption_enabled) {
+        EncryptionService* enc_service = get_encryption_service();
+        if (enc_service && enc_service->is_enabled()) {
     std::string payload_str = payload.dump();
+            auto encrypted = enc_service->encrypt_payload(payload_str);
+            if (encrypted.has_value()) {
+                payload_to_store = {
+                    {"encrypted", encrypted->encrypted},
+                    {"iv", encrypted->iv},
+                    {"authTag", encrypted->auth_tag}
+                };
+                is_encrypted = true;
+            }
+        }
+    }
+    
+    // Serialize payload (now potentially encrypted)
+    std::string payload_str = payload_to_store.dump();
     
     // Insert message
     std::string insert_sql = R"(
         INSERT INTO queen.messages 
         (queue_name, partition_name, payload, transaction_id, trace_id, 
-         namespace, task, status, sequence, created_at)
-        VALUES ($1, $2, $3, $4, $5, $6, $7, 'pending', $8, NOW())
+         namespace, task, status, sequence, is_encrypted, created_at)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, 'pending', $8, $9, NOW())
     )";
     
     sendQueryParamsAsync(conn.get(), insert_sql, {
@@ -406,7 +435,8 @@ void AsyncQueueManager::push_single_message(
         trace_id,
         namespace_name,
         task,
-        std::to_string(sequence)
+        std::to_string(sequence),
+        is_encrypted ? "true" : "false"
     });
     
     getCommandResult(conn.get());
@@ -734,29 +764,33 @@ std::vector<PushResult> AsyncQueueManager::push_messages_internal(const std::vec
                 std::string msg_id = generate_uuid();
                 std::string txn_id = item.transaction_id.value_or(generate_transaction_id());
                 
-                // Check encryption
+                // Check if queue has encryption enabled
+                // Note: Check SharedStateManager cache even when UDP sync is disabled
+                // (queue configs are loaded from DB on startup regardless of sync status)
         bool encryption_enabled = false;
-                std::string payload_str = item.payload.dump();
-        
-        if (global_shared_state && global_shared_state->is_enabled()) {
+                if (global_shared_state) {
                     auto cached_config = global_shared_state->get_queue_config(item.queue);
             if (cached_config) {
                 encryption_enabled = cached_config->encryption_enabled;
                     }
             }
                 
+                // Encrypt payload if needed - store as JSON object, not string!
+                nlohmann::json payload_to_store = item.payload;
                 bool is_encrypted = false;
+                
                 if (encryption_enabled) {
                     EncryptionService* enc_service = get_encryption_service();
                 if (enc_service && enc_service->is_enabled()) {
+                        std::string payload_str = item.payload.dump();
                         auto encrypted = enc_service->encrypt_payload(payload_str);
                     if (encrypted.has_value()) {
-                        nlohmann::json encrypted_json = {
+                            // Store as JSON object (matching normal push.cpp behavior)
+                            payload_to_store = {
                             {"encrypted", encrypted->encrypted},
                             {"iv", encrypted->iv},
                             {"authTag", encrypted->auth_tag}
                         };
-                            payload_str = encrypted_json.dump();
                         is_encrypted = true;
                         }
                     }
@@ -767,7 +801,7 @@ std::vector<PushResult> AsyncQueueManager::push_messages_internal(const std::vec
                 msg_obj["transactionId"] = txn_id;
                 msg_obj["queue"] = item.queue;
                 msg_obj["partition"] = item.partition;
-                msg_obj["payload"] = payload_str;
+                msg_obj["payload"] = payload_to_store;  // JSON object, not string!
                 msg_obj["is_encrypted"] = is_encrypted;
                 if (item.trace_id.has_value() && !item.trace_id->empty()) {
                     msg_obj["traceId"] = *item.trace_id;

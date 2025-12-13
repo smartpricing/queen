@@ -191,6 +191,24 @@ void setup_status_routes(uWS::App* app, const RouteContext& ctx) {
         }
     });
     
+    // GET /api/v1/analytics/worker-metrics - Worker metrics time series (from libqueen)
+    app->get("/api/v1/analytics/worker-metrics", [ctx](auto* res, auto* req) {
+        try {
+            std::string filters_json = build_filters_json(
+                get_query_param(req, "from"),
+                get_query_param(req, "to"),
+                "", "", "", "",
+                get_query_param(req, "hostname"),
+                get_query_param(req, "workerId")
+            );
+            submit_sp_call(ctx, res, 
+                "SELECT queen.get_worker_metrics_timeseries_v1($1::jsonb)",
+                {filters_json});
+        } catch (const std::exception& e) {
+            send_error_response(res, e.what(), 500);
+        }
+    });
+    
     // GET /api/v1/status/buffers - File buffer stats (local, not async)
     app->get("/api/v1/status/buffers", [ctx](auto* res, auto* req) {
         (void)req;

@@ -26,8 +26,7 @@
 
 
 /**
-- more partitions for beanchmark?
-- messages route return encryped data
+X messages route return encryped data
 - use multiple slots for each tick
 X when consumer disconnect, invalidated queen lib
 X logs, with atomic counters every second?
@@ -37,7 +36,7 @@ X retnetion cleanup improve
 X backoff push per partition, not queue
 X improve metrics analtyics query
 X only one worker shodul write analtyics
-- maintenace mode pop and reset pt
+X maintenace mode pop and reset pt
 - readme libqueen
 - backoff light query, not necessary?
 - sc test
