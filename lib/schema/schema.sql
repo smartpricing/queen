@@ -218,7 +218,8 @@ CREATE INDEX IF NOT EXISTS idx_system_state_key ON queen.system_state(key);
 -- Stored procedure indexes
 CREATE INDEX IF NOT EXISTS idx_messages_txn_partition ON queen.messages(transaction_id, partition_id);
 CREATE INDEX IF NOT EXISTS idx_messages_partition_created ON queen.messages (partition_id, created_at, id);
-CREATE INDEX IF NOT EXISTS idx_partition_lookup_queue_message_ts ON queen.partition_lookup(queue_name, last_message_created_at DESC);
+-- NOTE: idx_partition_lookup_queue_message_ts removed - it prevented HOT updates
+-- causing severe bloat on this high-update table (600x bloat in 10 hours)
 
 -- ============================================================================
 -- Trigger Functions
@@ -266,13 +267,20 @@ $$ LANGUAGE plpgsql;
 
 ALTER TABLE queen.partition_lookup SET (
     autovacuum_vacuum_scale_factor = 0.01,
-    autovacuum_vacuum_threshold = 50
+    autovacuum_vacuum_threshold = 50,
+    autovacuum_vacuum_cost_delay = 0,
+    fillfactor = 50
 );
 
 ALTER TABLE queen.partition_consumers SET (
     autovacuum_vacuum_scale_factor = 0.01,
-    autovacuum_vacuum_threshold = 50
+    autovacuum_vacuum_threshold = 50,
+    autovacuum_vacuum_cost_delay = 0,
+    fillfactor = 50
 );
+
+-- Drop legacy index that prevented HOT updates (for existing deployments)
+DROP INDEX IF EXISTS queen.idx_partition_lookup_queue_message_ts;
 
 -- ============================================================================
 -- Triggers
@@ -344,3 +352,10 @@ DROP FUNCTION IF EXISTS update_pending_on_push() CASCADE;
 DROP FUNCTION IF EXISTS update_queue_watermark() CASCADE;
 
 COMMIT;
+
+-- ============================================================================
+-- NOTE: After first deployment with fillfactor=50, run MANUALLY (one-time only):
+--   VACUUM FULL queen.partition_lookup;
+--   VACUUM FULL queen.partition_consumers;
+-- This rebuilds tables with free space for HOT updates. Don't include in schema
+-- as VACUUM FULL takes exclusive locks and blocks all operations.

@@ -77,6 +77,8 @@ Latency p99: 531ms
 
 ## Beanchmark
 
+16.27
+
 docker run -d --ulimit nofile=65535:65535 --name postgres --network queen -e POSTGRES_PASSWORD=postgres -p 5432:5432 postgres -c shared_buffers=4GB -c max_connections=300 -c temp_buffers=128MB -c work_mem=64MB -c max_parallel_workers=18 -c max_worker_processes=18 -c checkpoint_timeout=30min -c checkpoint_completion_target=0.9 -c max_wal_size=16GB -c min_wal_size=4GB -c wal_buffers=64MB -c wal_compression=on -c synchronous_commit=off -c autovacuum_vacuum_cost_limit=2000 -c autovacuum_vacuum_cost_delay=2ms -c autovacuum_max_workers=4 -c maintenance_work_mem=2GB -c effective_io_concurrency=200 -c random_page_cost=1.1 -c effective_cache_size=32GB -c huge_pages=try
 
 
@@ -108,6 +110,14 @@ SELECT relname, last_autovacuum, n_dead_tup
 FROM pg_stat_user_tables 
 WHERE n_dead_tup > 1000 
 ORDER BY n_dead_tup DESC;
+
+-- HOT check
+SELECT 
+    n_tup_upd,
+    n_tup_hot_upd,
+    round(n_tup_hot_upd::numeric / nullif(n_tup_upd, 0) * 100, 2) as hot_update_pct
+FROM pg_stat_user_tables 
+WHERE relname = 'partition_lookup';
 
 
 ## Quick Start
