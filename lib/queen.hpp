@@ -1066,19 +1066,17 @@ private:
                                 size_t dlq = 0;
                                 
                                 for (const auto& result : job_results) {
-                                    bool is_success = result.contains("result") && 
-                                                     result["result"].contains("success") &&
-                                                     result["result"]["success"].get<bool>();
+                                    // ACK stored procedure returns success directly (not wrapped in "result")
+                                    bool is_success = result.contains("success") && 
+                                                     result["success"].get<bool>();
                                     if (is_success) {
                                         success++;
                                     } else {
                                         failed++;
                                     }
                                     
-                                    // Check for DLQ
-                                    if (result.contains("result") && 
-                                        result["result"].contains("dlq") &&
-                                        result["result"]["dlq"].get<bool>()) {
+                                    // Check for DLQ (also direct, not wrapped)
+                                    if (result.contains("dlq") && result["dlq"].get<bool>()) {
                                         dlq++;
                                     }
                                 }

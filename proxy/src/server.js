@@ -135,6 +135,14 @@ app.use('/',
       // Add user info for Queen server
       proxyReq.setHeader('X-Proxy-User', req.user.username);
       proxyReq.setHeader('X-Proxy-Role', req.user.role);
+      
+      // Re-stream body if it was consumed by express.json()
+      if (req.body && Object.keys(req.body).length > 0) {
+        const bodyData = JSON.stringify(req.body);
+        proxyReq.setHeader('Content-Type', 'application/json');
+        proxyReq.setHeader('Content-Length', Buffer.byteLength(bodyData));
+        proxyReq.write(bodyData);
+      }
     },
     onError: (err, req, res) => {
       console.error('Proxy error:', err);
