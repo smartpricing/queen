@@ -6,7 +6,7 @@ const QUEUE_NAME = 'queen-long-running';
 const workers = 2;
 const connections = 500;
 const maxPartition = 500;
-const duration = 60 * 10; // 10 minutes
+const duration = 60 * 1; // 10 minutes
 
 async function createQueue() {
   await axios.post(`${SERVER_URL}/api/v1/configure`, {
@@ -26,6 +26,17 @@ await createQueue();
 // Pre-generate requests array with different partitions
 const requests = [];
 for (let i = 0; i <= maxPartition; i++) {
+  let items = []
+  for (let j = 0; j < 10; j++) {
+    items.push({
+      queue: QUEUE_NAME,
+      partition: `${i}`,
+      payload: { 
+        message: "Hello World",
+        partition_id: i
+      }
+    })
+  }
   requests.push({
     method: 'POST',
     path: '/api/v1/push',
@@ -33,14 +44,7 @@ for (let i = 0; i <= maxPartition; i++) {
       'Content-Type': 'application/json'
     },
     body: JSON.stringify({
-      items: [{
-        queue: QUEUE_NAME,
-        partition: `${i}`,
-        payload: { 
-          message: "Hello World",
-          partition_id: i
-        }
-      }]
+      items: items
     })
   });
 }
