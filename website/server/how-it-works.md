@@ -1,59 +1,61 @@
-# How Queen Works
+# How It Works
 
-This page provides a deep dive into Queen's internal architecture, explaining how the core technologies work together: **uWebSockets**, **libuv**, **the Sidecar pattern**, and **PostgreSQL stored procedures**.
+This page provides a deep dive into Queen's internals — the asynchronous architecture, libuv integration, PostgreSQL stored procedures, and the microbatching strategy that enables 130K+ msg/s throughput.
 
-## Technology Stack
+## Overview
 
-```
-┌────────────────────────────────────────────────────────────────┐
-│                    uWebSockets (HTTP Layer)                    │
-│          Ultra-fast C++ web server with event loops            │
-└────────────────────────────────────────────────────────────────┘
-                              ↓
-┌────────────────────────────────────────────────────────────────┐
-│                  Sidecar Pattern (libuv + libpq)               │
-│     Per-worker async DB: PUSH, POP, ACK, TRANSACTION, LEASE    │
-└────────────────────────────────────────────────────────────────┘
-                              ↓
-┌────────────────────────────────────────────────────────────────┐
-│           PostgreSQL Stored Procedures (Data Layer)            │
-│     Atomic, optimized PL/pgSQL functions for all operations    │
-└────────────────────────────────────────────────────────────────┘
+Queen is built on three core principles:
 
-Secondary operations (queue config, tracing, consumer groups) use AsyncQueueManager
-via a traditional connection pool, keeping the hot path (Sidecar) lean.
-```
+1. **Non-blocking I/O everywhere** — No thread ever blocks waiting for a database response
+2. **Microbatching** — Multiple HTTP requests are combined into single PostgreSQL calls
+3. **Stored procedures** — Complex logic runs in PostgreSQL, minimizing round-trips
 
-## 1. uWebSockets: The Network Layer
+The result is a system that can handle tens of thousands of concurrent connections with minimal latency and maximum throughput.
 
-Queen uses [uWebSockets](https://github.com/uNetworking/uWebSockets) - one of the fastest HTTP libraries available. It's written in C++ and provides an event-driven, non-blocking architecture.
+## The Acceptor/Worker Pattern
 
-### Acceptor/Worker Pattern
+Queen uses a multi-threaded architecture where each component has a specific responsibility:
 
 ```
-Client Connections
-        │
-        ↓
-┌───────────────┐
-│   Acceptor    │  Single thread listening on port 6632
-│    Thread     │  Accepts all incoming connections
-└───────┬───────┘
-        │ Round-robin distribution
-        ↓
-┌───────────────┬───────────────┐
-│   Worker 0    │   Worker 1    │  (default: 2 workers)
-│  Event Loop   │  Event Loop   │
-│   (libuv)     │   (libuv)     │
-│   [Sidecar]   │   [Sidecar]   │
-└───────────────┴───────────────┘
+                              ┌─────────────────────────────────────────┐
+                              │            QUEEN SERVER                  │
+                              └─────────────────────────────────────────┘
+                                                │
+                                                ▼
+                              ┌─────────────────────────────────────────┐
+                              │     ACCEPTOR (port 6632, round-robin)   │
+                              │          uWebSockets event loop         │
+                              └──────┬──────────┬──────────┬────────────┘
+                                     │          │          │
+          ┌──────────────────────────┼──────────┼──────────┼─────────────────────────┐
+          │                          │          │          │                         │
+          ▼                          ▼          ▼          ▼                         ▼
+┌──────────────────┐      ┌──────────────────┐      ┌──────────────────┐      ┌──────────────────┐
+│   UWS WORKER 0   │      │   UWS WORKER 1   │      │   UWS WORKER 2   │      │   UWS WORKER N   │
+│   (event loop)   │      │   (event loop)   │      │   (event loop)   │      │   (event loop)   │
+│        │         │      │        │         │      │        │         │      │        │         │
+│        ▼         │      │        ▼         │      │        ▼         │      │        ▼         │
+│  ┌────────────┐  │      │  ┌────────────┐  │      │  ┌────────────┐  │      │  ┌────────────┐  │
+│  │ libqueen 0 │  │      │  │ libqueen 1 │  │      │  │ libqueen 2 │  │      │  │ libqueen N │  │
+│  │ (libuv)    │  │      │  │ (libuv)    │  │      │  │ (libuv)    │  │      │  │ (libuv)    │  │
+│  │     │      │  │      │  │     │      │  │      │  │     │      │  │      │  │     │      │  │
+│  │     ▼      │  │      │  │     ▼      │  │      │  │     ▼      │  │      │  │     ▼      │  │
+│  │ PG Pool    │  │      │  │ PG Pool    │  │      │  │ PG Pool    │  │      │  │ PG Pool    │  │
+│  └────────────┘  │      │  └────────────┘  │      │  └────────────┘  │      │  └────────────┘  │
+└──────────────────┘      └──────────────────┘      └──────────────────┘      └──────────────────┘
+          │                          │                        │                        │
+          └──────────────────────────┴────────────────────────┴────────────────────────┘
+                                                │
+                                                ▼
+                                    ┌──────────────────────┐
+                                    │      PostgreSQL      │
+                                    │   (N×M connections)  │
+                                    └──────────────────────┘
 ```
 
-**How it works:**
+### 1. Acceptor Thread
 
-1. **Acceptor Thread** - Listens on port 6632, accepts all TCP connections
-2. **Socket Distribution** - Hands off accepted sockets to workers via `adoptSocket()`
-3. **Worker Threads** - Each runs its own event loop with a dedicated sidecar
-4. **No Locking** - Each worker has its own resources, no thread contention
+A single thread that listens on port 6632 and distributes connections to workers in round-robin fashion. It performs pure routing with no processing logic:
 
 ```cpp
 // Acceptor distributes connections round-robin
@@ -63,701 +65,442 @@ acceptor->listen(host, port, [](auto* listen_socket) {
 });
 ```
 
-### Why uWebSockets?
+### 2. uWebSockets Workers
 
-- **Speed**: Handles 100K+ HTTP requests/second
-- **Memory**: Minimal allocations, zero-copy where possible
-- **Event-driven**: Non-blocking I/O throughout
-- **WebSocket support**: Native streaming support
+Each worker is a thread with its own [uWebSockets](https://github.com/uNetworking/uWebSockets) event loop. When an HTTP request arrives:
 
-## 2. The Sidecar Pattern: Async Database Layer
+1. Parse the request
+2. Register in ResponseRegistry (maps `request_id` → HTTP response)
+3. Push the operation onto a mutex-protected queue for libqueen
+4. **Return immediately** — the HTTP response will be sent when PostgreSQL responds
 
-Each worker has a "sidecar" - a dedicated component that handles all PostgreSQL operations asynchronously using [libuv](https://libuv.org/) (the same event loop library that powers Node.js).
+Workers never block on I/O. They hand off work and continue processing other requests.
 
-### Sidecar Architecture
+### 3. libqueen — The Async Database Layer
+
+This is where the magic happens. Each uWS worker has its own **libqueen** instance running in a separate thread with its own [libuv](https://libuv.org/) event loop.
 
 ```
 ┌─────────────────────────────────────────────────────────────────────┐
-│                        Worker Thread                                 │
-│  ┌───────────────────────────────────────────────────────────────┐  │
-│  │                    uWS Event Loop                              │  │
-│  │   HTTP Request → Parse → Register → Queue to Sidecar → Wait    │  │
-│  └───────────────────────────────────────────────────────────────┘  │
-│                              ↕                                       │
-│                     ResponseRegistry                                 │
-│              (maps request_id → HTTP response)                       │
-│                              ↕                                       │
-│  ┌───────────────────────────────────────────────────────────────┐  │
-│  │                   SidecarDbPool (libuv)                        │  │
-│  │                                                                 │  │
-│  │   ┌──────────────┐   ┌──────────────┐   ┌──────────────────┐   │  │
-│  │   │ submit_signal│   │ batch_timer  │   │  waiting_timer   │   │  │
-│  │   │  (uv_async)  │   │  (uv_timer)  │   │   (uv_timer)     │   │  │
-│  │   │              │   │   5ms cycle  │   │  100ms-1000ms    │   │  │
-│  │   └──────┬───────┘   └──────┬───────┘   └────────┬─────────┘   │  │
-│  │          │                  │                    │              │  │
-│  │          └────────┬─────────┴────────────────────┘              │  │
-│  │                   ↓                                              │  │
-│  │   ┌───────────────────────────────────────────────────────┐     │  │
-│  │   │              pending_requests_ queue                   │     │  │
-│  │   │   [PUSH] [PUSH] [ACK] [PUSH] [POP] [ACK] [PUSH]       │     │  │
-│  │   └───────────────────────────────────────────────────────┘     │  │
-│  │                   ↓ drain_pending_to_slots()                     │  │
-│  │   ┌─────────┐ ┌─────────┐ ┌─────────┐ ┌─────────┐              │  │
-│  │   │ Slot 0  │ │ Slot 1  │ │ Slot 2  │ │ Slot N  │              │  │
-│  │   │  PGconn │ │  PGconn │ │  PGconn │ │  PGconn │              │  │
-│  │   │uv_poll_t│ │uv_poll_t│ │uv_poll_t│ │uv_poll_t│              │  │
-│  │   └────┬────┘ └────┬────┘ └────┬────┘ └────┬────┘              │  │
-│  │        └───────────┴───────────┴───────────┘                    │  │
-│  │                         ↓                                        │  │
-│  └─────────────────────────────────────────────────────────────────┘  │
+│                        libqueen instance                             │
+│                                                                      │
+│   ┌──────────────┐   ┌──────────────┐   ┌──────────────────┐        │
+│   │ submit_signal│   │ batch_timer  │   │  waiting_timer   │        │
+│   │  (uv_async)  │   │  (uv_timer)  │   │   (uv_timer)     │        │
+│   │              │   │   5ms cycle  │   │  100ms-5000ms    │        │
+│   └──────┬───────┘   └──────┬───────┘   └────────┬─────────┘        │
+│          │                  │                    │                   │
+│          └────────┬─────────┴────────────────────┘                   │
+│                   ↓                                                  │
+│   ┌───────────────────────────────────────────────────────┐         │
+│   │              pending_requests_ queue                   │         │
+│   │   [PUSH] [PUSH] [ACK] [PUSH] [POP] [ACK] [PUSH]       │         │
+│   └───────────────────────────────────────────────────────┘         │
+│                   ↓ drain_pending_to_slots()                         │
+│   ┌─────────┐ ┌─────────┐ ┌─────────┐ ┌─────────┐                   │
+│   │ Slot 0  │ │ Slot 1  │ │ Slot 2  │ │ Slot N  │                   │
+│   │  PGconn │ │  PGconn │ │  PGconn │ │  PGconn │                   │
+│   │uv_poll_t│ │uv_poll_t│ │uv_poll_t│ │uv_poll_t│                   │
+│   └─────────┘ └─────────┘ └─────────┘ └─────────┘                   │
 └─────────────────────────────────────────────────────────────────────┘
-                              ↓
-                        PostgreSQL
 ```
 
-### libuv Components
+**How libqueen processes requests:**
 
-#### 1. Async Signal (`submit_signal_`)
-Cross-thread wakeup from HTTP thread to sidecar:
+1. **Timer fires every 5ms** — Collects all pending operations from the queue
+2. **Groups operations by type** — PUSH, POP, ACK, TRANSACTION, RENEW_LEASE
+3. **Combines each group into a single JSONB array** — Microbatching: 1000 HTTP requests → 1 PostgreSQL call
+4. **Sends one query per type** — Each stored procedure accepts the batched array
+5. **Monitors PostgreSQL sockets with `uv_poll`** — Non-blocking read/write
+6. **Dispatches results by index** — Each result has an `idx` field matching the original request
+7. **Invokes callbacks when PostgreSQL responds** — Delivers results to HTTP thread via `uWS::Loop::defer()`
 
-```cpp
-// When HTTP thread receives a request:
-void SidecarDbPool::submit(SidecarRequest request) {
-    // Add to pending queue
-    {
-        std::lock_guard<std::mutex> lock(pending_mutex_);
-        pending_requests_.push_back(std::move(request));
-    }
-    
-    // Wake up the sidecar (for latency-sensitive ops)
-    // PUSH operations skip this - they rely on batch timer
-    if (loop_initialized_ && !is_push) {
-        uv_async_send(&submit_signal_);  // Thread-safe, coalescing
-    }
-}
+### libuv Primitives Used
 
-// Sidecar receives the signal:
-void SidecarDbPool::on_submit_signal(uv_async_t* handle) {
-    auto* pool = static_cast<SidecarDbPool*>(handle->data);
-    if (pool && pool->running_) {
-        pool->drain_pending_to_slots();
-        uv_timer_again(&pool->batch_timer_);  // Reset timer
-    }
-}
+| Component | Purpose |
+|-----------|---------|
+| `uv_poll` | Monitor PostgreSQL connection sockets for read/write events |
+| `uv_timer` (batch) | Accumulate requests for 5ms before sending (microbatching) |
+| `uv_timer` (stats) | Periodic metrics collection and stale backoff cleanup |
+| `uv_async` (reconnect) | Signal event loop when background thread reconnects a connection |
+| `uv_async` (backoff) | Wake waiting consumers when UDP notifications arrive |
+
+### Why 1 libqueen per 1 uWS Worker?
+
+The alternative would be a single shared libqueen instance for all workers. But this would create:
+
+- **Lock contention** on the shared queue
+- **Single libuv loop** becoming the bottleneck
+- **More complexity** in callback management
+
+With the 1:1 approach, each worker is **completely independent**. If you have 12 workers, you have 12 libuv loops running in parallel, each with its own pool of PostgreSQL connections. **Workers never talk to each other.**
+
+```bash
+# 12 workers = 12 libqueen instances = 12 × 50 = 600 PostgreSQL connections
+export NUM_WORKERS=12
+export SIDECAR_POOL_SIZE=50
 ```
 
-#### 2. Batch Timer (`batch_timer_`)
-Micro-batching for throughput:
+## Microbatching: The Performance Secret
 
-```cpp
-// Timer fires every 5ms
-uv_timer_start(&batch_timer_, on_batch_timer, 
-               tuning_.micro_batch_wait_ms,   // Initial: 5ms
-               tuning_.micro_batch_wait_ms);  // Repeat: 5ms
-
-void SidecarDbPool::on_batch_timer(uv_timer_t* handle) {
-    auto* pool = static_cast<SidecarDbPool*>(handle->data);
-    if (pool && pool->running_) {
-        pool->drain_pending_to_slots();  // Process accumulated requests
-    }
-}
-```
-
-#### 3. Waiting Timer (`waiting_timer_`)
-Long-polling for POP_WAIT operations:
-
-```cpp
-// Check waiting queue every 10ms
-uv_timer_start(&waiting_timer_, on_waiting_timer,
-               10,   // Initial: 10ms
-               10);  // Repeat: 10ms
-
-void SidecarDbPool::on_waiting_timer(uv_timer_t* handle) {
-    auto* pool = static_cast<SidecarDbPool*>(handle->data);
-    if (pool && pool->running_) {
-        pool->process_waiting_queue();
-    }
-}
-```
-
-#### 4. Poll Handles (`uv_poll`)
-Monitor PostgreSQL sockets for read/write events:
-
-```cpp
-// Initialize poll handle for PostgreSQL connection socket
-uv_poll_init(loop_, &slot.poll_handle, PQsocket(conn));
-
-// Start watching for events
-void start_watching_slot(ConnectionSlot& slot, int events) {
-    uv_poll_start(&slot.poll_handle, events, on_socket_event);
-}
-
-// Handle socket events
-void SidecarDbPool::on_socket_event(uv_poll_t* handle, int status, int events) {
-    auto* slot = static_cast<ConnectionSlot*>(handle->data);
-    
-    if (events & UV_WRITABLE) {
-        // Flush pending data to PostgreSQL
-        PQflush(slot->conn);
-    }
-    
-    if (events & UV_READABLE) {
-        // Read response from PostgreSQL
-        PQconsumeInput(slot->conn);
-        if (PQisBusy(slot->conn) == 0) {
-            // Query complete - process result
-            PGresult* result = PQgetResult(slot->conn);
-            process_result(slot, result);
-        }
-    }
-}
-```
-
-### Operation-Specific Signal Behavior
-
-The sidecar handles different operations differently for optimal performance:
-
-```cpp
-void SidecarDbPool::submit(SidecarRequest request) {
-    // PUSH ops should buffer without immediate wakeup
-    bool is_push = (request.op_type == SidecarOpType::PUSH);
-    
-    {
-        std::lock_guard<std::mutex> lock(pending_mutex_);
-        pending_requests_.push_back(std::move(request));
-    }
-    
-    // PUSH: rely on batch timer (maximizes batching)
-    // Others: wake immediately (minimizes latency)
-    if (loop_initialized_ && !is_push) {
-        uv_async_send(&submit_signal_);
-    }
-}
-```
-
-| Operation | Signal Sent? | Why |
-|-----------|--------------|-----|
-| **PUSH** | ❌ No | Allows requests to accumulate for batching |
-| **POP** | ✅ Yes | Latency-sensitive, immediate processing |
-| **ACK** | ✅ Yes | Consumers waiting for acknowledgment |
-| **POP_WAIT** | ✅ Yes | Goes to waiting queue for processing |
-
-This design means PUSH operations naturally batch together (5ms window), while POP/ACK get immediate attention.
-
-### Micro-Batching Deep Dive
-
-When `drain_pending_to_slots()` runs, it batches requests of the same type:
-
-```cpp
-void SidecarDbPool::drain_pending_to_slots() {
-    while (!pending_requests_.empty()) {
-        // Find a free connection slot
-        ConnectionSlot* free_slot = find_free_slot();
-        if (!free_slot) break;
-        
-        // Get the operation type of the first request
-        SidecarOpType batch_op_type = pending_requests_.front().op_type;
-        
-        // Non-batchable ops (like individual POP) - send one at a time
-        if (!is_batchable_op(batch_op_type)) {
-            send_single_request(free_slot, pending_requests_.front());
-            continue;
-        }
-        
-        // Batch requests of the SAME type together
-        std::vector<SidecarRequest> batch;
-        size_t total_items = 0;
-        
-        while (!pending_requests_.empty() && 
-               batch.size() < MAX_BATCH_SIZE &&
-               total_items < MAX_ITEMS_PER_TX) {
-            
-            auto& next = pending_requests_.front();
-            if (next.op_type != batch_op_type) break;
-            
-            batch.push_back(std::move(next));
-            total_items += next.item_count;
-            pending_requests_.pop_front();
-        }
-        
-        // Send batch as single query
-        send_batch(free_slot, batch);
-    }
-}
-```
-
-**Batching limits:**
-- `MAX_BATCH_SIZE` = 100 requests per batch
-- `MAX_ITEMS_PER_TX` = 1000 items per transaction
-
-## 3. Unified POP Batch Processing
-
-POP operations use a **unified batch procedure** that handles everything in a single database round-trip:
-- Lease acquisition
-- Message fetching  
-- Automatic cleanup of empty leases
-
-### Single Round-Trip Design
-
-```
-┌──────────────────────────────────────────────────────────────────────┐
-│                      Sidecar POP Batch                                │
-│                                                                       │
-│   requests: [                                                         │
-│     { idx: 0, queue: "orders", partition: "p-0" },                   │
-│     { idx: 1, queue: "orders", partition: "p-1" },                   │
-│     { idx: 2, queue: "orders", partition: null },  // wildcard       │
-│   ]                                                                   │
-│                                                                       │
-│   → Single call to pop_unified_batch()                                │
-│   ← Results for all requests in one response                          │
-│                                                                       │
-└──────────────────────────────────────────────────────────────────────┘
-```
+The key to Queen's performance is **microbatching** — combining multiple client requests into a single database call.
 
 ### How It Works
 
-```sql
--- Single procedure handles everything atomically
-SELECT queen.pop_unified_batch('[
-    {"idx": 0, "queue_name": "orders", "partition_name": "p-0", ...},
-    {"idx": 1, "queue_name": "orders", "partition_name": "p-1", ...},
-    {"idx": 2, "queue_name": "orders", "partition_name": null, ...}
-]'::jsonb);
-```
+When any request arrives (PUSH, POP, ACK, etc.), it doesn't go to the database immediately. Instead:
 
-**Inside the procedure:**
+1. Request is added to the pending queue
+2. libqueen's 5ms timer fires
+3. All pending requests are grouped by operation type
+4. Each group is combined into a single JSONB array
+5. One stored procedure call is made per operation type
 
-1. **Specific partitions** - Direct lookup and lease acquisition
-2. **Wildcard partitions** - Use `FOR UPDATE SKIP LOCKED` to find available partition
-3. **Lease acquisition** - Atomic `UPDATE ... WHERE lease_expires_at IS NULL`
-4. **Message fetch** - Query messages after cursor position
-5. **Auto cleanup** - Release lease immediately if no messages found
+**Example:** 1000 clients each push 1 message in a 5ms window:
+- Without batching: 1000 database round-trips
+- With batching: 1 database round-trip with 1000 messages
 
-### SKIP LOCKED for Wildcards
+**Example:** 100 POP requests + 50 ACK requests arrive in a 5ms window:
+- Without batching: 150 database round-trips
+- With batching: 2 database round-trips (1 for POPs, 1 for ACKs)
 
-When partition is not specified, the procedure uses `SKIP LOCKED` to avoid contention:
+### All Operations Are Batched
 
-```sql
-SELECT partition_id, partition_name, ...
-FROM queen.partition_lookup pl
-LEFT JOIN queen.partition_consumers pc ON ...
-WHERE pl.queue_name = v_queue_name
-  AND (pc.lease_expires_at IS NULL OR pc.lease_expires_at <= NOW())
-  AND (has unconsumed messages)
-ORDER BY pc.last_consumed_at ASC NULLS FIRST
-LIMIT 1
-FOR UPDATE OF pl SKIP LOCKED;  -- Critical: don't block on contested partitions
-```
+Every operation type is batched the same way — combined into a single JSONB array and sent to PostgreSQL:
 
-**Benefits:**
-- Multiple concurrent wildcards get different partitions
-- No blocking on contested partitions
-- Fair distribution via `ORDER BY last_consumed_at`
+| Operation | Stored Procedure | Batchable |
+|-----------|------------------|-----------|
+| **PUSH** | `queen.push_messages_v2($1::jsonb)` | ✅ Yes |
+| **POP** | `queen.pop_unified_batch($1::jsonb)` | ✅ Yes |
+| **ACK** | `queen.ack_messages_v2($1::jsonb)` | ✅ Yes |
+| **TRANSACTION** | `queen.execute_transaction_v2($1::jsonb)` | ✅ Yes |
+| **RENEW_LEASE** | `queen.renew_lease_v2($1::jsonb)` | ✅ Yes |
+| **CUSTOM** | User-provided SQL | ❌ No (one per slot) |
 
-### Performance
+All operations are queued and processed when the 5ms timer fires. The timer drains the queue, groups jobs by type, and sends each group as a single batched call to PostgreSQL.
 
-| Metric | Value |
-|--------|-------|
-| POP throughput | 50,000+ ops/s |
-| Round-trips per POP | 1 |
-| p50 latency | 3-10ms |
-| p99 latency | 15-30ms |
+## PostgreSQL Stored Procedures
 
-## 4. PostgreSQL Stored Procedures
+Queen pushes complex logic into PostgreSQL stored procedures, reducing round-trips and leveraging PostgreSQL's transactional guarantees.
 
-All Queen operations are implemented as PostgreSQL **PL/pgSQL functions**. This moves complex logic to the database, providing atomicity and reducing round-trips.
+### Push Messages
 
-### Core Procedures
-
-| Procedure | Purpose | Key Features |
-|-----------|---------|--------------|
-| `push_messages_v2` | Insert messages | Batch insert, duplicate detection, partition auto-creation |
-| `pop_unified_batch` | Pop messages | Single round-trip: lease + fetch + cleanup, SKIP LOCKED for wildcards |
-| `ack_messages_v2` | Acknowledge | Batch ACK, lease release, DLQ support |
-
-### How PUSH Works
+The `queen.push_messages_v2` procedure handles batch inserts with automatic queue/partition creation and duplicate detection:
 
 ```sql
-CREATE OR REPLACE FUNCTION queen.push_messages_v2(
-    p_items jsonb,
-    p_check_duplicates boolean DEFAULT true
-) RETURNS jsonb
+CREATE OR REPLACE FUNCTION queen.push_messages_v2(p_items jsonb)
+RETURNS jsonb
+LANGUAGE plpgsql
+AS $$
+BEGIN
+    -- Create temp table from input JSON (single pass)
+    CREATE TEMP TABLE tmp_items ON COMMIT DROP AS
+    SELECT 
+        idx,
+        COALESCE((item->>'messageId')::uuid, gen_random_uuid()) as message_id,
+        COALESCE(item->>'transactionId', gen_random_uuid()::text) as transaction_id,
+        item->>'queue' as queue_name,
+        -- ... more fields
+    FROM jsonb_array_elements(p_items) WITH ORDINALITY AS t(item, idx);
+
+    -- Ensure queues exist (batch upsert)
+    INSERT INTO queen.queues (name, namespace, task)
+    SELECT DISTINCT queue_name, namespace, task FROM tmp_items
+    ON CONFLICT (name) DO NOTHING;
+
+    -- Ensure partitions exist (batch upsert)
+    INSERT INTO queen.partitions (queue_id, name)
+    SELECT DISTINCT q.id, t.partition_name
+    FROM tmp_items t
+    JOIN queen.queues q ON q.name = t.queue_name
+    ON CONFLICT (queue_id, name) DO NOTHING;
+
+    -- Handle duplicates, insert messages, return results...
+END;
+$$;
 ```
 
-**Internal flow:**
+Key benefits:
+- **Single round-trip** for any number of messages
+- **Automatic queue/partition creation** with upserts
+- **Duplicate detection** using transaction IDs
+- **All-or-nothing semantics** within a transaction
 
-```sql
-1. Create temp table from JSON input (single pass)
-   CREATE TEMP TABLE tmp_items AS SELECT ... FROM jsonb_array_elements(p_items)
+### Pop Messages (Unified Batch)
 
-2. Auto-create queues (batch upsert)
-   INSERT INTO queen.queues ... ON CONFLICT DO NOTHING
-
-3. Auto-create partitions (batch upsert)
-   INSERT INTO queen.partitions ... ON CONFLICT DO NOTHING
-
-4. Check duplicates (if enabled)
-   UPDATE tmp_items SET is_duplicate = true WHERE EXISTS (
-       SELECT 1 FROM queen.messages WHERE transaction_id = ...
-   )
-
-5. Insert non-duplicate messages (bulk)
-   INSERT INTO queen.messages SELECT ... FROM tmp_items WHERE NOT is_duplicate
-
-6. Return results as JSON array
-   RETURN jsonb_agg(jsonb_build_object('status', 'queued', ...))
-```
-
-**Why it's fast:**
-
-- ✅ Single function call (1 round-trip)
-- ✅ Bulk operations (no row-by-row loops)
-- ✅ ON CONFLICT for upserts (no SELECT + INSERT)
-- ✅ Temp table for working data (efficient)
-
-### How POP Unified Batch Works
-
-#### `pop_unified_batch`: Complete POP in One Call
+The `queen.pop_unified_batch` procedure handles both specific partition pops and wildcard discovery in a single call:
 
 ```sql
 CREATE OR REPLACE FUNCTION queen.pop_unified_batch(p_requests JSONB)
 RETURNS JSONB
-```
-
-**Input format:**
-```json
-[
-    {"idx": 0, "queue_name": "orders", "partition_name": "p-0", 
-     "consumer_group": "worker", "batch_size": 10, "worker_id": "uuid"},
-    {"idx": 1, "queue_name": "orders", "partition_name": null,
-     "consumer_group": "worker", "batch_size": 10, "worker_id": "uuid2"}
-]
-```
-
-**What it does (single transaction):**
-
-1. **Specific partitions**: Direct lookup, atomic lease acquisition
-2. **Wildcard partitions**: Use `FOR UPDATE SKIP LOCKED` to find available partition
-3. **Lease acquisition**: Atomic `UPDATE ... WHERE lease_expires_at IS NULL OR <= NOW()`
-4. **Message fetch**: Query messages after cursor position with window_buffer support
-5. **Auto cleanup**: Release lease if no messages found
-
-**Output format:**
-```json
-[
-    {"idx": 0, "result": {"success": true, "partition": "p-0", 
-     "leaseId": "uuid", "messages": [...]}},
-    {"idx": 1, "result": {"success": true, "partition": "p-5",
-     "leaseId": "uuid2", "messages": [...]}}
-]
-```
-
-**Key features:**
-- **Single round-trip**: Everything in one procedure call
-- **SKIP LOCKED**: Wildcards don't block each other
-- **Atomic lease**: No race conditions
-- **Auto cleanup**: Empty leases released immediately
-
-### How ACK Works
-
-```sql
-CREATE OR REPLACE FUNCTION queen.ack_messages_v2(
-    p_acknowledgments JSONB
-) RETURNS JSONB
-```
-
-**Batch processing with deadlock prevention:**
-
-```sql
--- Sort by partitionId + transactionId to prevent deadlocks
-FOR v_ack IN (
-    SELECT * FROM jsonb_array_elements(p_acknowledgments)
-    ORDER BY partition_id, txn_id
-)
-LOOP
-    -- Validate lease
-    IF lease_id IS VALID THEN
-        -- Update consumer cursor
-        UPDATE queen.partition_consumers
-        SET last_consumed_id = v_message_id,
-            acked_count = acked_count + 1,
-            -- Release lease when batch complete
-            lease_expires_at = CASE 
-                WHEN acked_count + 1 >= batch_size THEN NULL 
-                ELSE lease_expires_at 
-            END;
+LANGUAGE plpgsql
+AS $$
+BEGIN
+    FOR v_req IN SELECT * FROM jsonb_array_elements(p_requests)
+    LOOP
+        IF v_is_wildcard THEN
+            -- WILDCARD: Discover available partition with SKIP LOCKED
+            SELECT pl.partition_id, p.name, ...
+            INTO v_partition_id, v_partition_name, ...
+            FROM queen.partition_lookup pl
+            JOIN queen.partitions p ON p.id = pl.partition_id
+            LEFT JOIN queen.partition_consumers pc ON pc.partition_id = pl.partition_id
+            WHERE pl.queue_name = v_req.queue_name
+              AND (pc.lease_expires_at IS NULL OR pc.lease_expires_at <= v_now)
+            ORDER BY pc.last_consumed_at ASC NULLS FIRST
+            LIMIT 1
+            FOR UPDATE OF pl SKIP LOCKED;  -- Critical for concurrent access
+        ELSE
+            -- SPECIFIC: Direct partition lookup
+            SELECT p.id, ... FROM queen.partitions p WHERE ...;
+        END IF;
         
-        -- Delete message (or move to DLQ if failed)
-        DELETE FROM queen.messages WHERE id = v_message_id;
-    END IF;
-END LOOP;
+        -- Acquire lease, fetch messages, cleanup...
+    END LOOP;
+    RETURN v_results;
+END;
+$$;
 ```
 
-**Key features:**
+Key features:
+- **SKIP LOCKED** for wildcard discovery prevents race conditions
+- **Lease management** integrated into the same call
+- **Fair distribution** via ordering by `last_consumed_at`
+- **Auto-acknowledge** option for QoS 0 delivery
 
-- ✅ **Deadlock prevention**: Sorted processing order
-- ✅ **Auto lease release**: When batch complete
-- ✅ **DLQ support**: Failed messages moved to dead letter queue
-- ✅ **Progress tracking**: Consumer cursor updated atomically
+## Long Polling with Exponential Backoff
 
-### Why Stored Procedures?
+When a client calls `POP` with `wait=true`, Queen uses intelligent polling with exponential backoff:
 
-| Benefit | Explanation |
-|---------|-------------|
-| **Atomicity** | Entire operation in single transaction |
-| **Reduced round-trips** | 1 call vs multiple queries |
-| **Server-side logic** | Complex operations without network overhead |
-| **Consistency** | All clients use same logic |
-| **Performance** | Query plans cached, optimized execution |
+```
+Initial:    100ms wait
+Attempt 2:  100ms wait  
+Attempt 3:  100ms wait
+Attempt 4:  300ms wait (backoff kicks in)
+Attempt 5:  900ms wait
+Attempt 6:  2700ms wait
+...
+Maximum:    5000ms wait
+```
 
-## 5. AsyncQueueManager: Secondary Operations
+### How Backoff Works
 
-While the Sidecar handles high-performance primary operations (PUSH, POP, ACK), the **AsyncQueueManager** handles secondary operations that don't need the optimized hot path.
-
-### What AsyncQueueManager Handles
-
-| Operation | Description |
-|-----------|-------------|
-| **Schema initialization** | Create tables, load stored procedures on startup |
-| **Queue configuration** | Create/update queue settings (`/api/v1/configure`) |
-| **Consumer group management** | Subscription metadata, delete consumer groups |
-| **Message tracing** | Record and query trace events |
-| **Maintenance mode** | Toggle and status for file buffer routing |
-| **File buffer replay** | Push buffered messages back to database |
-| **Health checks** | Database connectivity verification |
-
-### Why Separate from Sidecar?
-
-1. **Keep hot path lean** - Sidecar focuses only on message operations
-2. **Different access patterns** - Config changes are infrequent, don't need micro-batching
-3. **Simpler code** - Admin operations use straightforward query patterns
-4. **Resource isolation** - Slow admin queries don't impact message throughput
-
-### Connection Pool
-
-AsyncQueueManager uses a traditional connection pool (AsyncDbPool):
+1. **First few attempts** — Poll at initial interval (100ms)
+2. **After threshold** — Backoff multiplier kicks in (3×)
+3. **Cap at maximum** — Never wait more than 5 seconds
+4. **Reset on activity** — When messages arrive or push happens, backoff resets
 
 ```cpp
-// Acquire connection from pool
-auto conn = async_db_pool_->acquire();
-
-// Execute query
-sendQueryParamsAsync(conn.get(), sql, params);
-auto result = getTuplesResult(conn.get());
-
-// Connection automatically returned on scope exit
+// Backoff calculation in libqueen
+if (job.backoff_count > _pop_wait_backoff_threshold) {
+    next_interval = initial_interval * backoff_count * backoff_multiplier;
+    if (next_interval > max_interval) {
+        next_interval = max_interval;
+    }
+} else {
+    next_interval = initial_interval;
+}
 ```
 
-This is simpler than the Sidecar's libuv-based approach, but sufficient for secondary operations that run infrequently.
+### Wake-Up on Push
 
-## 6. Putting It All Together
+When a PUSH completes, libqueen wakes up waiting consumers for that queue/partition:
 
-### Complete PUSH Flow
-
-```
-┌─────────────────────────────────────────────────────────────────────┐
-│                        CLIENT REQUEST                               │
-│                POST /api/v1/push { items: [...] }                   │
-└─────────────────────────────────────────────────────────────────────┘
-                                │
-                                ↓
-┌─────────────────────────────────────────────────────────────────────┐
-│                     1. ACCEPTOR (uWebSockets)                       │
-│                Accept TCP connection, route to worker               │
-└─────────────────────────────────────────────────────────────────────┘
-                                │ adoptSocket()
-                                ↓
-┌─────────────────────────────────────────────────────────────────────┐
-│                     2. WORKER (uWebSockets)                         │
-│             Parse HTTP request, extract JSON body                   │
-│             Register request in ResponseRegistry                    │
-│             Queue operation to Sidecar                              │
-│             (NO uv_async_send for PUSH - relies on timer)           │
-└─────────────────────────────────────────────────────────────────────┘
-                                │ pending_requests_.push_back()
-                                ↓
-┌─────────────────────────────────────────────────────────────────────┐
-│                     3. SIDECAR (libuv)                              │
-│             batch_timer_ fires (every 5ms)                          │
-│             drain_pending_to_slots() collects PUSH requests         │
-│             Batch same-type requests together                       │
-│             Prepare SQL: SELECT queen.push_messages_v2($1)          │
-│             Send query: PQsendQueryParams() (non-blocking)          │
-│             Poll socket: uv_poll_start(UV_READABLE)                 │
-└─────────────────────────────────────────────────────────────────────┘
-                                │
-                                ↓
-┌─────────────────────────────────────────────────────────────────────┐
-│                  4. POSTGRESQL (Stored Procedure)                   │
-│             BEGIN transaction                                        │
-│             Execute push_messages_v2():                              │
-│               - Create temp table from JSON                          │
-│               - Upsert queues + partitions                           │
-│               - Check duplicates                                     │
-│               - Bulk insert messages                                 │
-│             COMMIT transaction                                       │
-│             Return JSONB result                                      │
-└─────────────────────────────────────────────────────────────────────┘
-                                │
-                                ↓
-┌─────────────────────────────────────────────────────────────────────┐
-│                     5. SIDECAR (libuv)                              │
-│             Socket readable: uv_poll callback fires                 │
-│             Read result: PQgetResult()                              │
-│             Parse JSONB response                                    │
-│             Deliver to worker: uWS::Loop::defer()                   │
-└─────────────────────────────────────────────────────────────────────┘
-                                │ defer()
-                                ↓
-┌─────────────────────────────────────────────────────────────────────┐
-│                     6. WORKER (uWebSockets)                         │
-│             Look up request in ResponseRegistry                     │
-│             Send HTTP response with JSON body                       │
-│             Status: 201 Created                                     │
-└─────────────────────────────────────────────────────────────────────┘
-                                │
-                                ↓
-┌─────────────────────────────────────────────────────────────────────┐
-│                        CLIENT RESPONSE                              │
-│            HTTP 201 { results: [{ status: "queued", ... }] }        │
-└─────────────────────────────────────────────────────────────────────┘
-
-Total latency: 5-20ms typical (batched)
+```cpp
+// After successful PUSH
+_update_pop_backoff_tracker(queue_name, partition_name);
 ```
 
-### Complete POP Flow
+This resets the backoff timer and immediately checks for messages, providing low-latency delivery.
+
+## Request Flow Examples
+
+### PUSH Flow
 
 ```
-┌─────────────────────────────────────────────────────────────────────┐
-│                        CLIENT REQUEST                               │
-│           GET /api/v1/pop?queue=orders&partition=p-123              │
-└─────────────────────────────────────────────────────────────────────┘
-                                │
-                                ↓
-┌─────────────────────────────────────────────────────────────────────┐
-│                     1. WORKER (uWebSockets)                         │
-│             Parse request, register in ResponseRegistry             │
-│             Queue POP_BATCH operation to Sidecar                    │
-│             uv_async_send() wakes sidecar immediately               │
-└─────────────────────────────────────────────────────────────────────┘
-                                │
-                                ↓
-┌─────────────────────────────────────────────────────────────────────┐
-│                     2. SIDECAR (libuv)                              │
-│             on_submit_signal() fires                                │
-│             drain_pending_to_slots() processes request              │
-│             Batches POP requests together                           │
-│             Sends unified batch query                               │
-└─────────────────────────────────────────────────────────────────────┘
-                                │
-                                ↓
-┌─────────────────────────────────────────────────────────────────────┐
-│                  3. POSTGRESQL: pop_unified_batch                   │
-│             Single transaction handles all:                         │
-│               - Acquire leases (SKIP LOCKED for wildcards)          │
-│               - Fetch messages after cursor                         │
-│               - Release empty leases                                │
-│             Return: JSONB array of results                          │
-└─────────────────────────────────────────────────────────────────────┘
-                                │
-                                ↓
-┌─────────────────────────────────────────────────────────────────────┐
-│                     4. SIDECAR (libuv)                              │
-│             Socket readable: uv_poll callback fires                 │
-│             Read result: PQgetResult()                              │
-│             Parse JSONB, distribute to requests                     │
-│             Deliver to worker: uWS::Loop::defer()                   │
-└─────────────────────────────────────────────────────────────────────┘
-                                │
-                                ↓
-┌─────────────────────────────────────────────────────────────────────┐
-│                     5. WORKER (uWebSockets)                         │
-│             Look up request in ResponseRegistry                     │
-│             Send HTTP 200 with messages                             │
-└─────────────────────────────────────────────────────────────────────┘
-                                │
-                                ↓
-┌─────────────────────────────────────────────────────────────────────┐
-│                        CLIENT RESPONSE                              │
-│            HTTP 200 { messages: [...], leaseId: "..." }             │
-└─────────────────────────────────────────────────────────────────────┘
+1. Client sends HTTP POST to /api/v1/push
+        ↓
+2. Acceptor routes to Worker (round-robin)
+        ↓
+3. Worker parses JSON, registers in ResponseRegistry
+        ↓
+4. Worker queues request to libqueen
+        ↓
+5. libqueen batch timer fires (every 5ms)
+   Groups all pending PUSH requests into single JSONB
+        ↓
+6. libqueen calls: SELECT queen.push_messages_v2($1::jsonb)
+   PQsendQueryParams() (non-blocking)
+        ↓
+7. uv_poll monitors socket for response
+        ↓
+8. Result ready → parse JSONB → dispatch by idx → deliver to workers
+   uWS::Loop::defer() (thread-safe)
+        ↓
+9. Worker sends HTTP 201 response
 
-Total latency: 3-10ms typical (single DB round-trip)
+Total time: 5-15ms (typical)
 ```
 
-## Performance Benefits
+### POP Flow
 
-| Component | Contribution |
-|-----------|--------------|
-| **uWebSockets** | 100K+ req/s HTTP handling |
-| **Sidecar (libuv)** | Non-blocking I/O, operation-specific optimization |
-| **PUSH buffering** | Maximum batching, 130K+ msg/s throughput |
-| **Unified POP Batch** | Single round-trip, 50K+ ops/s |
-| **Stored Procedures** | Atomic operations, minimal round-trips |
-| **Connection pooling** | Reuse PostgreSQL connections |
+```
+1. Client sends GET to /api/v1/pop?queue=orders
+        ↓
+2. Worker registers in ResponseRegistry
+        ↓
+3. Worker queues request to libqueen
+        ↓
+4. libqueen batch timer fires (every 5ms)
+   Groups all pending POP requests into single JSONB
+        ↓
+5. Single call: SELECT queen.pop_unified_batch($1::jsonb)
+   PostgreSQL handles atomically:
+     - Acquire leases (SKIP LOCKED for wildcards)
+     - Fetch messages after cursor
+     - Release lease if empty
+        ↓
+6. Results returned as JSONB array with idx for each request
+        ↓
+7. libqueen dispatches each result to matching callback
+   uWS::Loop::defer() (thread-safe)
+        ↓
+8. Worker sends HTTP response
 
-## Configuration Impact
+Total time: 3-10ms (typical)
+```
 
-### Tuning the Components
+## Connection Management
+
+### Connection Pools
+
+Each libqueen instance maintains its own pool of PostgreSQL connections:
+
+```cpp
+// DBConnection structure
+struct DBConnection {
+    PGconn* conn = nullptr;      // PostgreSQL connection
+    int socket_fd = -1;          // Socket file descriptor
+    uv_poll_t poll_handle;       // libuv poll handle
+    std::vector<PendingJob> jobs; // Jobs using this connection
+};
+```
+
+### Automatic Reconnection
+
+libqueen runs a background reconnection thread that:
+
+1. Checks for dead connections every second
+2. Reconnects in the background (non-blocking)
+3. Signals the event loop to initialize poll handles
+4. Returns the connection to the pool
+
+```cpp
+void _reconnect_loop() {
+    while (_reconnect_running) {
+        std::this_thread::sleep_for(std::chrono::seconds(1));
+        
+        for (auto& slot : _db_connections) {
+            if (slot.conn == nullptr) {
+                if (_reconnect_slot_db(slot)) {
+                    slot.needs_poll_init = true;
+                    uv_async_send(&_reconnect_signal);
+                }
+            }
+        }
+    }
+}
+```
+
+## Inter-Instance Communication (UDP)
+
+In clustered deployments, Queen servers notify each other when messages are pushed or partitions become free:
+
+| Event | Notification | Effect |
+|-------|--------------|--------|
+| PUSH (message queued) | `MESSAGE_AVAILABLE` | Wake waiting consumers |
+| ACK (partition freed) | `PARTITION_FREE` | Wake consumers for partition |
 
 ```bash
-# uWebSockets (HTTP layer)
-export NUM_WORKERS=2           # Event loop threads (default: 2)
-export PORT=6632               # Listening port
-
-# libuv (Sidecar) - Primary operations
-export SIDECAR_POOL_SIZE=50    # PostgreSQL connections (split among workers)
-export SIDECAR_MICRO_BATCH_WAIT_MS=5    # Batching window
-export SIDECAR_MAX_ITEMS_PER_TX=1000    # Max items per transaction
-
-# AsyncDbPool (Secondary operations)
-export DB_POOL_SIZE=50         # Connections for queue config, tracing, etc.
-export DB_STATEMENT_TIMEOUT=30000       # Query timeout
+export QUEEN_UDP_PEERS="queen-b:6633,queen-c:6633"
+export QUEEN_UDP_NOTIFY_PORT=6633
 ```
 
-### Scaling Guidelines
+When Server A pushes a message, it sends a UDP notification to Servers B and C. Those servers immediately wake up any consumers waiting for that queue, resetting their backoff timers.
 
-| Workload | NUM_WORKERS | SIDECAR_POOL_SIZE | DB_POOL_SIZE |
-|----------|-------------|-------------------|--------------|
-| Light | 2 | 20 | 20 |
-| Medium | 4 | 50 | 50 |
-| Heavy | 8 | 100 | 100 |
-| Very Heavy | 16 | 200 | 150 |
 
-**Note:** SIDECAR_POOL_SIZE is the primary scaling knob for throughput. DB_POOL_SIZE only affects secondary operations.
+## Database Schema Highlights
 
-## Summary
+### Partition Consumers Table
 
-Queen's architecture combines key innovations:
+Tracks the consumption state for each partition/consumer-group combination:
 
-1. **uWebSockets** - Handles HTTP with minimal overhead using an acceptor/worker pattern
+```sql
+CREATE TABLE queen.partition_consumers (
+    partition_id UUID,
+    consumer_group VARCHAR(255),
+    last_consumed_id UUID,           -- Cursor: last message ID
+    last_consumed_created_at TIMESTAMPTZ,  -- Cursor: last message timestamp
+    lease_expires_at TIMESTAMPTZ,    -- When current lease expires
+    worker_id VARCHAR(255),          -- Which worker holds the lease
+    batch_size INTEGER,              -- Expected batch size
+    acked_count INTEGER,             -- Messages acknowledged so far
+    UNIQUE(partition_id, consumer_group)
+);
+```
 
-2. **Sidecar Pattern** - Per-worker libuv event loops for primary operations (PUSH, POP, ACK):
-   - PUSH: buffered for maximum batching (relies on timer, no immediate wakeup)
-   - POP/ACK: immediate processing for low latency
-   - POP_WAIT: separate timer-based polling with exponential backoff
+### Partition Lookup Table
 
-3. **Unified POP Batch** - Single database round-trip for POP operations:
-   - Lease + fetch + cleanup in one call
-   - SKIP LOCKED for concurrent wildcard POPs
-   - 50K+ ops/s throughput
+Maintains a fast lookup for partition discovery:
 
-4. **PostgreSQL Stored Procedures** - Execute complex operations atomically with single round-trips
+```sql
+CREATE TABLE queen.partition_lookup (
+    queue_name VARCHAR(255),
+    partition_id UUID,
+    last_message_id UUID,            -- Latest message in partition
+    last_message_created_at TIMESTAMPTZ,
+    UNIQUE(queue_name, partition_id)
+);
+```
 
-5. **AsyncQueueManager** - Handles secondary operations (queue config, tracing, consumer groups) via traditional connection pool, keeping the hot path lean
+This table is updated by a trigger on message inserts, enabling O(1) partition discovery.
 
-This combination delivers:
+## Performance Characteristics
 
-- ✅ **Low latency**: 3-20ms typical
-- ✅ **High throughput**: 130K+ msg/s PUSH, 50K+ ops/s POP
-- ✅ **Reliability**: Atomic operations, file buffer failover
-- ✅ **Scalability**: Horizontal and vertical scaling
-- ✅ **Simplicity**: PostgreSQL as the single source of truth
+| Metric | Value |
+|--------|-------|
+| PUSH sustained | 130K+ msg/s (batched) |
+| POP sustained | 50K+ ops/s |
+| Single message | 10K+ msg/s (no client batching) |
+| PUSH latency | 5-15ms |
+| POP latency | 3-10ms |
+
+## Configuration Reference
+
+```bash
+# Server
+export PORT=6632
+export NUM_WORKERS=2
+
+# libqueen (primary operations)
+export SIDECAR_POOL_SIZE=50              # Connections per worker
+export SIDECAR_MICRO_BATCH_WAIT_MS=5     # Batching window
+export SIDECAR_MAX_ITEMS_PER_TX=1000     # Max items per transaction
+
+# Long polling
+export SIDECAR_POP_WAIT_INITIAL_MS=100   # Initial poll interval
+export SIDECAR_POP_WAIT_BACKOFF_THRESHOLD=3  # Attempts before backoff
+export SIDECAR_POP_WAIT_BACKOFF_MULTIPLIER=3.0
+export SIDECAR_POP_WAIT_MAX_MS=5000      # Maximum poll interval
+
+# Inter-instance (clustered)
+export QUEEN_UDP_PEERS="queen-b:6633,queen-c:6633"
+export QUEEN_UDP_NOTIFY_PORT=6633
+```
 
 ## See Also
 
-- [Architecture Overview](/server/architecture) - High-level system design
-- [Environment Variables](/server/environment-variables) - Configuration reference
-- [Performance Tuning](/server/tuning) - Optimization guide
+- [Architecture](/server/architecture) — System overview diagram
+- [Environment Variables](/server/environment-variables) — Complete configuration reference
+- [Performance Tuning](/server/tuning) — Optimization guide
+- [Failover & Recovery](/guide/failover) — Zero message loss guarantees
+
