@@ -68,6 +68,15 @@ public:
     std::optional<caches::CachedQueueConfig> get_queue_config(const std::string& queue);
     
     /**
+     * Get queue config from cache, falling back to DB on cache miss
+     * This is a lazy-loading pattern: only hits DB when cache doesn't have the entry.
+     * On DB hit, the cache is populated for subsequent calls.
+     * @param queue Queue name
+     * @return Config if found in cache or DB, nullopt if queue doesn't exist
+     */
+    std::optional<caches::CachedQueueConfig> get_or_fetch_queue_config(const std::string& queue);
+    
+    /**
      * Set queue config and broadcast to peers
      * @param queue Queue name
      * @param config Configuration

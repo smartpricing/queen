@@ -24,26 +24,6 @@
 #include <algorithm>
 #include "worker_metrics.hpp"
 
-
-/**
-X messages route return encryped data
-- use multiple slots for each tick
-X when consumer disconnect, invalidated queen lib
-X logs, with atomic counters every second?
-- in push, trigger or query to update partition consumers?
-X udp on push - shared state only for push
-X retnetion cleanup improve
-X backoff push per partition, not queue
-X improve metrics analtyics query
-X only one worker shodul write analtyics
-X maintenace mode pop and reset pt
-- readme libqueen
-- backoff light query, not necessary?
-- sc test
-X deploy to stage
-- article about libqueen/async io
-*/
-
 namespace queen {
 
 // UUIDv7 generator - time-ordered UUIDs for proper message ordering
@@ -418,11 +398,9 @@ public:
     void 
     submit(JobRequest&& job, std::function<void(std::string result)> cb) {
         auto pending = std::make_shared<PendingJob>(PendingJob{std::move(job), std::move(cb)});
-        
         uv_mutex_lock(&_mutex_job_queue);
         _job_queue.push_back(pending);
         uv_mutex_unlock(&_mutex_job_queue);
-        // uv_async_send(&_queue_signal);
     }
 
     bool 
@@ -432,7 +410,7 @@ public:
         try {
             // Here we need to find and delete the request from the job queue 
             // and from the pop backoff tracker
-            _job_queue.erase(std::remove_if(_job_queue.begin(), _job_queue.end(), [&request_id, this](const std::shared_ptr<PendingJob>& job) {
+            _job_queue.erase(std::remove_if(_job_queue.begin(), _job_queue.end(), [&request_id](const std::shared_ptr<PendingJob>& job) {
                 return job->job.request_id == request_id;
             }), _job_queue.end());
             

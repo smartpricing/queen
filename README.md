@@ -88,7 +88,7 @@ docker run -d --ulimit nofile=65535:65535 --name queen -p 6632:6632 --network qu
 docker stop queen postgres && docker rm queen postgres && docker volume prune --all
 
 SELECT pid, now() - query_start AS duration, state, query 
-FROM pg_stat_activity                                                          
+FROM pg_stat_activity                                          
 WHERE state != 'idle' 
 ORDER BY duration DESC;
 

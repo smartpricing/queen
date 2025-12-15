@@ -110,6 +110,118 @@ std::optional<caches::CachedQueueConfig> SharedStateManager::get_queue_config(co
     return queue_configs_.get(queue);
 }
 
+std::optional<caches::CachedQueueConfig> SharedStateManager::get_or_fetch_queue_config(const std::string& queue) {
+    // First, check the cache
+    auto cached = queue_configs_.get(queue);
+    if (cached) {
+        return cached;
+    }
+    
+    // Cache miss - try to fetch from DB
+    if (!db_pool_) {
+        spdlog::debug("SharedStateManager: Cache miss for queue '{}', no DB pool available", queue);
+        return std::nullopt;
+    }
+    
+    try {
+        auto conn = db_pool_->acquire();
+        if (!conn) {
+            spdlog::warn("SharedStateManager: Cache miss for queue '{}', failed to acquire DB connection", queue);
+            return std::nullopt;
+        }
+        
+        // Query for this specific queue
+        std::string sql = R"(
+            SELECT 
+                id, name, namespace, task, priority,
+                lease_time, retry_limit, retry_delay, 
+                max_queue_size, ttl, dead_letter_queue, 
+                dlq_after_max_retries, delayed_processing,
+                window_buffer, retention_seconds, completed_retention_seconds,
+                encryption_enabled
+            FROM queen.queues
+            WHERE name = $1
+        )";
+        
+        const char* params[] = { queue.c_str() };
+        PGresult* raw_result = PQexecParams(conn.get(), sql.c_str(), 1, nullptr, params, nullptr, nullptr, 0);
+        auto result = std::unique_ptr<PGresult, decltype(&PQclear)>(raw_result, PQclear);
+        
+        if (PQresultStatus(result.get()) != PGRES_TUPLES_OK) {
+            spdlog::warn("SharedStateManager: DB query failed for queue '{}': {}", 
+                        queue, PQerrorMessage(conn.get()));
+            return std::nullopt;
+        }
+        
+        int num_rows = PQntuples(result.get());
+        if (num_rows == 0) {
+            // Queue doesn't exist in DB (might be auto-created later)
+            spdlog::debug("SharedStateManager: Queue '{}' not found in DB", queue);
+            return std::nullopt;
+        }
+        
+        // Parse the result and populate cache
+        caches::CachedQueueConfig cfg;
+        cfg.id = PQgetvalue(result.get(), 0, PQfnumber(result.get(), "id"));
+        cfg.name = PQgetvalue(result.get(), 0, PQfnumber(result.get(), "name"));
+        
+        const char* ns = PQgetvalue(result.get(), 0, PQfnumber(result.get(), "namespace"));
+        cfg.namespace_name = (ns && strlen(ns) > 0) ? ns : "";
+        
+        const char* task = PQgetvalue(result.get(), 0, PQfnumber(result.get(), "task"));
+        cfg.task = (task && strlen(task) > 0) ? task : "";
+        
+        const char* priority = PQgetvalue(result.get(), 0, PQfnumber(result.get(), "priority"));
+        cfg.priority = (priority && strlen(priority) > 0) ? std::stoi(priority) : 0;
+        
+        const char* lease_time = PQgetvalue(result.get(), 0, PQfnumber(result.get(), "lease_time"));
+        cfg.lease_time = (lease_time && strlen(lease_time) > 0) ? std::stoi(lease_time) : 300;
+        
+        const char* retry_limit = PQgetvalue(result.get(), 0, PQfnumber(result.get(), "retry_limit"));
+        cfg.retry_limit = (retry_limit && strlen(retry_limit) > 0) ? std::stoi(retry_limit) : 3;
+        
+        const char* retry_delay = PQgetvalue(result.get(), 0, PQfnumber(result.get(), "retry_delay"));
+        cfg.retry_delay = (retry_delay && strlen(retry_delay) > 0) ? std::stoi(retry_delay) : 1000;
+        
+        const char* max_size = PQgetvalue(result.get(), 0, PQfnumber(result.get(), "max_queue_size"));
+        cfg.max_size = (max_size && strlen(max_size) > 0) ? std::stoi(max_size) : 10000;
+        
+        const char* ttl = PQgetvalue(result.get(), 0, PQfnumber(result.get(), "ttl"));
+        cfg.ttl = (ttl && strlen(ttl) > 0) ? std::stoi(ttl) : 3600;
+        
+        const char* dlq = PQgetvalue(result.get(), 0, PQfnumber(result.get(), "dead_letter_queue"));
+        cfg.dlq_enabled = (dlq && (strcmp(dlq, "t") == 0 || strcmp(dlq, "true") == 0));
+        
+        const char* dlq_max = PQgetvalue(result.get(), 0, PQfnumber(result.get(), "dlq_after_max_retries"));
+        cfg.dlq_after_max_retries = (dlq_max && (strcmp(dlq_max, "t") == 0 || strcmp(dlq_max, "true") == 0));
+        
+        const char* delayed = PQgetvalue(result.get(), 0, PQfnumber(result.get(), "delayed_processing"));
+        cfg.delayed_processing = (delayed && strlen(delayed) > 0) ? std::stoi(delayed) : 0;
+        
+        const char* window = PQgetvalue(result.get(), 0, PQfnumber(result.get(), "window_buffer"));
+        cfg.window_buffer = (window && strlen(window) > 0) ? std::stoi(window) : 0;
+        
+        const char* retention = PQgetvalue(result.get(), 0, PQfnumber(result.get(), "retention_seconds"));
+        cfg.retention_seconds = (retention && strlen(retention) > 0) ? std::stoi(retention) : 0;
+        
+        const char* completed_retention = PQgetvalue(result.get(), 0, PQfnumber(result.get(), "completed_retention_seconds"));
+        cfg.completed_retention_seconds = (completed_retention && strlen(completed_retention) > 0) ? std::stoi(completed_retention) : 0;
+        
+        const char* encrypted = PQgetvalue(result.get(), 0, PQfnumber(result.get(), "encryption_enabled"));
+        cfg.encryption_enabled = (encrypted && (strcmp(encrypted, "t") == 0 || strcmp(encrypted, "true") == 0));
+        
+        // Populate cache for future calls
+        queue_configs_.set(queue, cfg);
+        spdlog::debug("SharedStateManager: Fetched and cached config for queue '{}'", queue);
+        
+        return cfg;
+        
+    } catch (const std::exception& e) {
+        spdlog::warn("SharedStateManager: Failed to fetch queue config for '{}': {}", queue, e.what());
+        return std::nullopt;
+    }
+}
+
 void SharedStateManager::set_queue_config(const std::string& queue, const caches::CachedQueueConfig& config) {
     queue_configs_.set(queue, config);
     

@@ -111,7 +111,15 @@ void RetentionService::cleanup_cycle() {
             sendQueryParamsAsync(lock_conn.get(), 
                 "SELECT pg_advisory_unlock($1::bigint)", 
                 {std::to_string(CLEANUP_LOCK_ID)});
-            getCommandResult(lock_conn.get());
+            auto unlock_result = getTuplesResult(lock_conn.get());
+            
+            // Check if unlock succeeded (returns false if we didn't own the lock)
+            if (PQntuples(unlock_result.get()) > 0) {
+                std::string result_str = PQgetvalue(unlock_result.get(), 0, 0);
+                if (result_str != "t") {
+                    spdlog::warn("RetentionService: Advisory unlock returned false - lock was not held (connection may have been reset)");
+                }
+            }
         } catch (const std::exception& e) {
             // Lock will be released when connection closes anyway
             spdlog::debug("RetentionService: Failed to release lock explicitly: {}", e.what());

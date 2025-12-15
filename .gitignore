@@ -20,6 +20,8 @@ client-cpp/bin
 
 lib/build
 
+dd
+
 helm
 upgrade.sh
 start.sh

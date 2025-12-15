@@ -150,16 +150,15 @@ void setup_push_routes(uWS::App* app, const RouteContext& ctx) {
                     nlohmann::json items_json = nlohmann::json::array();
                     for (const auto& item : items) {
                         // Check if queue has encryption enabled
-                        // Note: SharedStateManager caches queue configs even when inter-instance sync is disabled
+                        // Uses lazy-loading: checks cache first, falls back to DB on miss
                         bool queue_encryption_enabled = false;
                         if (global_shared_state) {
-                            auto cached_config = global_shared_state->get_queue_config(item.queue);
-                            if (cached_config) {
-                                queue_encryption_enabled = cached_config->encryption_enabled;
-                            } else {
-                                spdlog::warn("[Worker {}] PUSH: Queue '{}' config NOT in cache!", 
-                                            ctx.worker_id, item.queue);
+                            auto config = global_shared_state->get_or_fetch_queue_config(item.queue);
+                            if (config) {
+                                queue_encryption_enabled = config->encryption_enabled;
                             }
+                            // If config is nullopt, queue doesn't exist yet (will be auto-created)
+                            // Auto-created queues have encryption_enabled=false by default
                         } else {
                             spdlog::warn("[Worker {}] PUSH: global_shared_state is NULL!", ctx.worker_id);
                         }
