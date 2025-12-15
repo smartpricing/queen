@@ -30,11 +30,13 @@ using PGConnPtr = std::unique_ptr<PGconn, PGConnDeleter>;
 // --- Helper Functions ---
 
 /**
- * @brief Waits for socket to be ready for reading or writing using select().
+ * @brief Waits for socket to be ready for reading or writing using poll().
+ * 
+ * Uses poll() instead of select() to avoid FD_SETSIZE (1024) limitation.
  * 
  * @param conn Active PostgreSQL connection
  * @param for_reading True to wait for read, false to wait for write
- * @throws std::runtime_error if socket is invalid or select() fails
+ * @throws std::runtime_error if socket is invalid or poll() fails
  */
 void waitForSocket(PGconn* conn, bool for_reading);
 

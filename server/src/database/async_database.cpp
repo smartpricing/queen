@@ -6,8 +6,8 @@
 #include <thread>
 #include <chrono>
 
-// For select() system call (POSIX)
-#include <sys/select.h>
+// For poll() system call (POSIX) - no FD_SETSIZE limitation unlike select()
+#include <poll.h>
 
 namespace queen {
 
@@ -19,19 +19,15 @@ void waitForSocket(PGconn* conn, bool for_reading) {
         throw std::runtime_error("PQsocket returned invalid file descriptor.");
     }
 
-    fd_set fds;
-    FD_ZERO(&fds);
-    FD_SET(sock_fd, &fds);
+    struct pollfd pfd;
+    pfd.fd = sock_fd;
+    pfd.events = for_reading ? POLLIN : POLLOUT;
+    pfd.revents = 0;
 
-    int ret;
-    if (for_reading) {
-        ret = select(sock_fd + 1, &fds, nullptr, nullptr, nullptr);
-    } else {
-        ret = select(sock_fd + 1, nullptr, &fds, nullptr, nullptr);
-    }
+    int ret = poll(&pfd, 1, -1);  // -1 = wait indefinitely
 
     if (ret < 0) {
-        throw std::runtime_error("select() failed: " + std::string(strerror(errno)));
+        throw std::runtime_error("poll() failed: " + std::string(strerror(errno)));
     }
 }
 
@@ -583,7 +579,7 @@ bool AsyncDbPool::ensureConnectionHealthy(PGconn* conn) {
 
     // Wait for response with a timeout
     try {
-        // Use select with a short timeout to check if the connection is responsive
+        // Use poll with a short timeout to check if the connection is responsive
         int sock_fd = PQsocket(conn);
         if (sock_fd < 0) {
             spdlog::warn("[AsyncDbPool] Invalid socket during health check, attempting reset...");
@@ -596,19 +592,16 @@ bool AsyncDbPool::ensureConnectionHealthy(PGconn* conn) {
                             idle_in_transaction_timeout_ms_, schema_);
         }
 
-        fd_set fds;
-        FD_ZERO(&fds);
-        FD_SET(sock_fd, &fds);
+        struct pollfd pfd;
+        pfd.fd = sock_fd;
+        pfd.events = POLLIN;
+        pfd.revents = 0;
         
         // 2s timeout for health check - generous to avoid false positives under high load
-        struct timeval tv;
-        tv.tv_sec = 2;
-        tv.tv_usec = 0;
-        
-        int ret = select(sock_fd + 1, &fds, nullptr, nullptr, &tv);
+        int ret = poll(&pfd, 1, 2000);  // 2000ms timeout
             
             if (ret < 0) {
-                spdlog::warn("[AsyncDbPool] Health check select failed, attempting reset...");
+                spdlog::warn("[AsyncDbPool] Health check poll failed, attempting reset...");
                 // Drain the query
                 PGresult* drain;
                 while ((drain = PQgetResult(conn)) != nullptr) {

@@ -7,24 +7,31 @@ const SERVER_URL = process.env.SERVER_URL || 'http://localhost:6632';
 const QUEUE_NAME = 'queen-long-running';
 const NUM_WORKERS = 10;
 const CONNECTIONS_PER_WORKER = 100;
-const DURATION = parseInt(process.env.DURATION) || 30;
-const MAX_PARTITION = 500;
+const DURATION = 60 * 60 * 24 * 7;
+const MAX_PARTITION = 1000;
+const NUMBER_OF_MESSAGES_PER_PER_PUSH = 10;
 
 // Pre-generate requests array
 function generateRequests() {
   const requests = [];
   for (let i = 0; i <= MAX_PARTITION; i++) {
+    let items = []
+    for (let j = 0; j < NUMBER_OF_MESSAGES_PER_PER_PUSH; j++) {
+      items.push({
+        queue: QUEUE_NAME,
+        partition: `${i}`,
+        payload: { 
+          message: "Hello World",
+          partition_id: i
+        }
+      })
+    }    
     requests.push({
       method: 'POST',
       path: '/api/v1/push',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        items: [{
-          queue: QUEUE_NAME,
-          partition: `${i}`,
-          payload: { message: "Hello World", partition_id: i }
-        }         
-        ]
+        items: items
       })
     });
   }
@@ -32,19 +39,19 @@ function generateRequests() {
 }
 
 async function resetQueue() {
-  try {
+  /*try {
     console.log('Deleting queue...');
     await axios.delete(`${SERVER_URL}/api/v1/resources/queues/${QUEUE_NAME}`);
     console.log('✅ Queue deleted');
   } catch (error) {
     // Queue might not exist, that's fine
-  }
+  }*/
 
   try {
     console.log('Creating queue...');
     await axios.post(`${SERVER_URL}/api/v1/configure`, {
       queue: QUEUE_NAME,
-      options: { leaseTime: 300, retryLimit: 3 }
+      options: { leaseTime: 60, retryLimit: 3, retentionEnabled: true, retentionSeconds: 1800, completedRetentionSeconds: 1800 }
     });
     console.log('✅ Queue created');
   } catch (error) {
@@ -60,6 +67,8 @@ if (cluster.isPrimary) {
   console.log(`   Total connections: ${NUM_WORKERS * CONNECTIONS_PER_WORKER}`);
   console.log(`   Duration: ${DURATION}s\n`);
 
+  // Reset queue before starting
+  await resetQueue()
   const workerResults = [];
   let workersReady = 0;
   let workersFinished = 0;
