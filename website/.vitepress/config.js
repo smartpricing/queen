@@ -88,7 +88,8 @@ export default defineConfig({
             { text: 'Lease Management', link: '/guide/lease-management' },
             { text: 'Message Retention', link: '/guide/retention' },
             { text: 'Failover & Recovery', link: '/guide/failover' },
-            { text: 'Message Tracing', link: '/guide/tracing' }
+            { text: 'Message Tracing', link: '/guide/tracing' },
+            { text: 'Maintenance Operations', link: '/guide/maintenance-operations' }
           ]
         }
       ],
