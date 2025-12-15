@@ -56,15 +56,24 @@ void EvictionService::eviction_cycle() {
     constexpr int64_t CLEANUP_LOCK_ID = 737001;
     
     // Connection used to hold the advisory lock for the duration of eviction
+    // Uses transaction-level lock (pg_advisory_xact_lock) for PgBouncer compatibility
     AsyncDbPool::PooledConnection lock_conn;
     bool has_lock = false;
+    bool in_transaction = false;
     
     try {
         lock_conn = db_pool_->acquire();
         
-        // Try to acquire advisory lock (non-blocking)
+        // Start transaction to hold the advisory lock
+        // Transaction-level locks auto-release on COMMIT/ROLLBACK, avoiding
+        // "you don't own this lock" errors with PgBouncer transaction pooling
+        sendQueryParamsAsync(lock_conn.get(), "BEGIN", {});
+        getCommandResult(lock_conn.get());
+        in_transaction = true;
+        
+        // Try to acquire transaction-level advisory lock (non-blocking)
         sendQueryParamsAsync(lock_conn.get(), 
-            "SELECT pg_try_advisory_lock($1::bigint)", 
+            "SELECT pg_try_advisory_xact_lock($1::bigint)", 
             {std::to_string(CLEANUP_LOCK_ID)});
         auto lock_result = getTuplesResult(lock_conn.get());
         
@@ -90,24 +99,14 @@ void EvictionService::eviction_cycle() {
         spdlog::error("EvictionService cycle error: {}", e.what());
     }
     
-    // Always release the lock if we acquired it
-    if (has_lock && lock_conn) {
+    // End transaction to release the lock (COMMIT releases xact-level advisory lock)
+    if (in_transaction && lock_conn) {
         try {
-            sendQueryParamsAsync(lock_conn.get(), 
-                "SELECT pg_advisory_unlock($1::bigint)", 
-                {std::to_string(CLEANUP_LOCK_ID)});
-            auto unlock_result = getTuplesResult(lock_conn.get());
-            
-            // Check if unlock succeeded (returns false if we didn't own the lock)
-            if (PQntuples(unlock_result.get()) > 0) {
-                std::string result_str = PQgetvalue(unlock_result.get(), 0, 0);
-                if (result_str != "t") {
-                    spdlog::warn("EvictionService: Advisory unlock returned false - lock was not held (connection may have been reset)");
-                }
-            }
+            sendQueryParamsAsync(lock_conn.get(), "COMMIT", {});
+            getCommandResult(lock_conn.get());
         } catch (const std::exception& e) {
-            // Lock will be released when connection closes anyway
-            spdlog::debug("EvictionService: Failed to release lock explicitly: {}", e.what());
+            // Transaction will be rolled back when connection returns to pool anyway
+            spdlog::debug("EvictionService: Failed to commit lock transaction: {}", e.what());
         }
     }
     

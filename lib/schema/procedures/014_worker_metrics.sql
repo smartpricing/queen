@@ -473,25 +473,36 @@ BEGIN
     
     -- Get throughput from worker_metrics (system-wide or per-queue)
     IF v_queue IS NOT NULL THEN
-        -- Per-queue throughput from queue_lag_metrics
+        -- Per-queue throughput from queue_lag_metrics (with proper bucketing)
         SELECT 
             COALESCE(jsonb_agg(
                 jsonb_build_object(
-                    'timestamp', to_char(bucket_time, 'YYYY-MM-DD"T"HH24:MI:SS"Z"'),
+                    'timestamp', to_char(bucket, 'YYYY-MM-DD"T"HH24:MI:SS"Z"'),
                     'ingested', 0,
                     'processed', pop_count,
                     'ingestedPerSecond', 0,
-                    'processedPerSecond', ROUND(pop_count::numeric / 60, 2),
+                    'processedPerSecond', ROUND(pop_count::numeric / (v_bucket_minutes * 60), 2),
                     'avgLagMs', avg_lag_ms,
                     'maxLagMs', max_lag_ms
-                ) ORDER BY bucket_time DESC
+                ) ORDER BY bucket DESC
             ), '[]'::jsonb),
             COUNT(*)
         INTO v_throughput, v_point_count
-        FROM queen.queue_lag_metrics
-        WHERE queue_name = v_queue
-          AND bucket_time >= v_from_ts
-          AND bucket_time <= v_to_ts;
+        FROM (
+            SELECT
+                date_trunc('minute', bucket_time) - 
+                    (EXTRACT(minute FROM bucket_time)::integer % v_bucket_minutes) * INTERVAL '1 minute' AS bucket,
+                SUM(pop_count) as pop_count,
+                CASE WHEN SUM(pop_count) > 0 
+                     THEN SUM(avg_lag_ms * pop_count) / SUM(pop_count)
+                     ELSE 0 END as avg_lag_ms,
+                MAX(max_lag_ms) as max_lag_ms
+            FROM queen.queue_lag_metrics
+            WHERE queue_name = v_queue
+              AND bucket_time >= v_from_ts
+              AND bucket_time <= v_to_ts
+            GROUP BY 1
+        ) t;
     ELSE
         -- System-wide throughput from worker_metrics (aggregated with worker health)
         SELECT 
@@ -500,8 +511,8 @@ BEGIN
                     'timestamp', to_char(bucket, 'YYYY-MM-DD"T"HH24:MI:SS"Z"'),
                     'ingested', push_msg,
                     'processed', ack_msg,
-                    'ingestedPerSecond', ROUND(push_msg::numeric / 60, 2),
-                    'processedPerSecond', ROUND(ack_msg::numeric / 60, 2),
+                    'ingestedPerSecond', ROUND(push_msg::numeric / (v_bucket_minutes * 60), 2),
+                    'processedPerSecond', ROUND(ack_msg::numeric / (v_bucket_minutes * 60), 2),
                     'avgLagMs', avg_lag,
                     'maxLagMs', max_lag,
                     -- NEW: Worker health per bucket
@@ -515,7 +526,8 @@ BEGIN
         INTO v_throughput, v_point_count
         FROM (
             SELECT 
-                date_trunc('minute', bucket_time) as bucket,
+                date_trunc('minute', bucket_time) - 
+                    (EXTRACT(minute FROM bucket_time)::integer % v_bucket_minutes) * INTERVAL '1 minute' AS bucket,
                 SUM(push_message_count) as push_msg,
                 SUM(ack_message_count) as ack_msg,
                 CASE WHEN SUM(lag_count) > 0 
@@ -694,7 +706,7 @@ BEGIN
         ELSE 360
     END;
     
-    -- Get aggregated time series data
+    -- Get aggregated time series data (with proper bucketing based on time range)
     SELECT 
         COALESCE(jsonb_agg(
             jsonb_build_object(
@@ -735,7 +747,8 @@ BEGIN
     INTO v_timeseries, v_point_count
     FROM (
         SELECT 
-            date_trunc('minute', bucket_time) as bucket,
+            date_trunc('minute', bucket_time) - 
+                (EXTRACT(minute FROM bucket_time)::integer % v_bucket_minutes) * INTERVAL '1 minute' AS bucket,
             -- Throughput sums
             SUM(push_message_count) as push_msg,
             SUM(pop_message_count) as pop_msg,

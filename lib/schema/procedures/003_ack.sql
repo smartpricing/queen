@@ -19,6 +19,7 @@ DECLARE
     v_success BOOLEAN;
     v_error TEXT;
     v_lease_released BOOLEAN;
+    v_dlq BOOLEAN;
     v_batch_retry_count INT;
     v_retry_limit INT;
     v_result_rows JSONB[] := ARRAY[]::JSONB[];
@@ -70,6 +71,7 @@ BEGIN
         v_success := false;
         v_error := v_ack.validation_error;
         v_lease_released := false;
+        v_dlq := false;
         
         -- Acquire advisory lock to prevent cross-transaction deadlocks
         -- This serializes access to each (partition_id, consumer_group) across all concurrent batches
@@ -184,6 +186,7 @@ BEGIN
                     ON CONFLICT DO NOTHING;
                     
                     v_success := true;
+                    v_dlq := true;
                 END IF;
                 
             ELSIF v_ack.status = 'retry' THEN
@@ -207,7 +210,8 @@ BEGIN
             'error', v_error,
             'queueName', v_ack.queue_name,
             'partitionName', v_ack.partition_name,
-            'leaseReleased', v_lease_released
+            'leaseReleased', v_lease_released,
+            'dlq', v_dlq
         ));
     END LOOP;
     

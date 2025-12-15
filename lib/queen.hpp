@@ -1075,9 +1075,7 @@ private:
                                 _metrics->record_transaction();
                                 // Check for any DLQ operations in transaction results
                                 for (const auto& result : job_results) {
-                                    if (result.contains("result") && 
-                                        result["result"].contains("dlq") &&
-                                        result["result"]["dlq"].get<bool>()) {
+                                    if (result.contains("dlq") && result["dlq"].get<bool>()) {
                                         _metrics->record_dlq();
                                     }
                                 }

@@ -30,6 +30,7 @@ DECLARE
     v_message_created_at TIMESTAMPTZ;
     v_lease_id TEXT;
     v_status TEXT;
+    v_op_dlq BOOLEAN;
 BEGIN
     v_transaction_id := gen_random_uuid()::text;
     
@@ -37,6 +38,7 @@ BEGIN
     LOOP
         v_op_success := false;
         v_op_error := NULL;
+        v_op_dlq := false;
         
         CASE v_op->>'type'
             WHEN 'push' THEN
@@ -184,6 +186,7 @@ BEGIN
                             END IF;
                             
                             v_op_success := true;
+                            v_op_dlq := true;
                         END IF;
                     END IF;
                 END IF;
@@ -193,7 +196,8 @@ BEGIN
                     'type', 'ack',
                     'success', v_op_success,
                     'transactionId', v_op->>'transactionId',
-                    'error', v_op_error
+                    'error', v_op_error,
+                    'dlq', v_op_dlq
                 );
                 
                 IF NOT v_op_success THEN
