@@ -82,89 +82,73 @@
         </div>
 
         <!-- Trace Events -->
-        <div v-if="traceEvents && traceEvents.length > 0" class="mb-4">
+        <div v-if="traceEvents && traceEvents.length > 0" class="mb-6">
           <h4 class="text-sm font-semibold mb-3 text-gray-900 dark:text-white tracking-tight">
-            Processing Timeline
+            Processing Timeline ({{ traceEvents.length }} trace{{ traceEvents.length !== 1 ? 's' : '' }})
           </h4>
-          <div class="table-container scrollbar-thin">
-            <table class="table">
-              <thead>
-                <tr>
-                  <th>Event</th>
-                  <th>Time</th>
-                  <th>Trace Names</th>
-                  <th>Data</th>
-                  <th class="hidden sm:table-cell">Worker / Group</th>
-                </tr>
-              </thead>
-              <tbody>
-                <tr 
-                  v-for="trace in traceEvents" 
-                  :key="trace.id"
-                  class="hover:bg-gray-50 dark:hover:bg-gray-800/50"
-                >
-                  <!-- Event Type -->
-                  <td>
+          
+          <!-- Timeline -->
+          <div class="relative">
+            <!-- Timeline line -->
+            <div class="absolute left-3 top-3 bottom-3 w-0.5 bg-gray-200 dark:bg-gray-700"></div>
+            
+            <!-- Trace cards -->
+            <div class="space-y-3">
+              <div 
+                v-for="(trace, index) in traceEvents" 
+                :key="trace.id"
+                class="relative pl-8"
+              >
+                <!-- Timeline dot -->
+                <div 
+                  class="absolute left-1.5 top-3 w-3 h-3 rounded-full border-2 border-white dark:border-gray-900"
+                  :class="getEventColorDot(trace.event_type)"
+                ></div>
+                
+                <!-- Card -->
+                <div class="bg-white dark:bg-gray-800/50 border border-gray-200 dark:border-gray-700 rounded-lg p-3 shadow-sm">
+                  <!-- Header -->
+                  <div class="flex items-start justify-between gap-2 mb-2">
                     <div class="flex items-center gap-2">
-                      <div 
-                        class="w-2.5 h-2.5 rounded-full flex-shrink-0"
-                        :class="getEventColorDot(trace.event_type)"
-                      ></div>
-                      <span class="text-xs font-semibold uppercase tracking-wide text-gray-700 dark:text-gray-300">
+                      <span 
+                        class="text-xs font-semibold uppercase tracking-wide px-2 py-0.5 rounded"
+                        :class="getEventBadgeClass(trace.event_type)"
+                      >
                         {{ trace.event_type }}
                       </span>
-                    </div>
-                  </td>
-                  
-                  <!-- Time -->
-                  <td>
-                    <span class="text-xs text-gray-600 dark:text-gray-400 whitespace-nowrap">
-                      {{ formatTime(trace.created_at) }}
-                    </span>
-                  </td>
-                  
-                  <!-- Trace Names -->
-                  <td>
-                    <div v-if="trace.trace_names && trace.trace_names.length > 0" class="flex flex-wrap gap-1">
-                      <span 
-                        v-for="name in trace.trace_names"
-                        :key="name"
-                        class="inline-block px-2 py-0.5 text-xs rounded-full whitespace-nowrap bg-orange-100 dark:bg-orange-900 text-orange-700 dark:text-emerald-300"
-                      >
-                        {{ name }}
+                      <span class="text-xs text-gray-500 dark:text-gray-400">
+                        {{ formatTime(trace.created_at) }}
                       </span>
                     </div>
-                    <span v-else class="text-xs text-gray-400">-</span>
-                  </td>
-                  
-                  <!-- Data -->
-                  <td class="max-w-xs">
-                    <div class="text-xs text-gray-700 dark:text-gray-300">
-                      <div v-if="trace.data && trace.data.text" class="truncate" :title="trace.data.text">
-                        {{ trace.data.text }}
-                      </div>
-                      <div v-else-if="hasAdditionalData(trace.data)" class="text-gray-500 dark:text-gray-400 italic">
-                        JSON data
-                      </div>
-                      <span v-else class="text-gray-400">-</span>
+                    <div v-if="trace.worker_id || (trace.consumer_group && trace.consumer_group !== '__QUEUE_MODE__')" class="text-xs text-gray-400 dark:text-gray-500 text-right">
+                      <div v-if="trace.worker_id">worker: {{ trace.worker_id }}</div>
+                      <div v-if="trace.consumer_group && trace.consumer_group !== '__QUEUE_MODE__'">group: {{ trace.consumer_group }}</div>
                     </div>
-                  </td>
+                  </div>
                   
-                  <!-- Worker / Group -->
-                  <td class="hidden sm:table-cell">
-                    <div class="text-xs text-gray-600 dark:text-gray-400 space-y-0.5">
-                      <div v-if="trace.worker_id" class="truncate" :title="trace.worker_id">
-                        {{ trace.worker_id }}
-                      </div>
-                      <div v-if="trace.consumer_group && trace.consumer_group !== '__QUEUE_MODE__'" class="text-gray-500 dark:text-gray-500">
-                        {{ trace.consumer_group }}
-                      </div>
-                      <span v-if="!trace.worker_id && (!trace.consumer_group || trace.consumer_group === '__QUEUE_MODE__')" class="text-gray-400">-</span>
-                    </div>
-                  </td>
-                </tr>
-              </tbody>
-            </table>
+                  <!-- Trace Names -->
+                  <div v-if="trace.trace_names && trace.trace_names.length > 0" class="flex flex-wrap gap-1 mb-2">
+                    <span 
+                      v-for="name in trace.trace_names"
+                      :key="name"
+                      class="inline-block px-2 py-0.5 text-xs rounded-full whitespace-nowrap bg-orange-100 dark:bg-orange-900/50 text-orange-700 dark:text-orange-300 border border-orange-200 dark:border-orange-800"
+                    >
+                      {{ name }}
+                    </span>
+                  </div>
+                  
+                  <!-- Text summary if present -->
+                  <div v-if="trace.data && trace.data.text" class="text-sm text-gray-700 dark:text-gray-300 mb-2">
+                    {{ trace.data.text }}
+                  </div>
+                  
+                  <!-- Full data (excluding text which is already shown above) -->
+                  <div v-if="hasAdditionalData(trace.data)">
+                    <JsonViewer :data="getTraceDataWithoutText(trace.data)" :compact="true" />
+                  </div>
+                </div>
+              </div>
+            </div>
           </div>
         </div>
 
@@ -372,13 +356,24 @@ function getTraceColorClass(eventType) {
 
 function getEventColorDot(eventType) {
   const colors = {
-    info: 'bg-orange-500',
+    info: 'bg-blue-500',
     processing: 'bg-green-500',
     step: 'bg-purple-500',
     error: 'bg-red-500',
     warning: 'bg-yellow-500',
   };
   return colors[eventType] || 'bg-gray-500';
+}
+
+function getEventBadgeClass(eventType) {
+  const classes = {
+    info: 'bg-blue-100 dark:bg-blue-900/50 text-blue-700 dark:text-blue-300',
+    processing: 'bg-green-100 dark:bg-green-900/50 text-green-700 dark:text-green-300',
+    step: 'bg-purple-100 dark:bg-purple-900/50 text-purple-700 dark:text-purple-300',
+    error: 'bg-red-100 dark:bg-red-900/50 text-red-700 dark:text-red-300',
+    warning: 'bg-yellow-100 dark:bg-yellow-900/50 text-yellow-700 dark:text-yellow-300',
+  };
+  return classes[eventType] || 'bg-gray-100 dark:bg-gray-800 text-gray-700 dark:text-gray-300';
 }
 
 function hasAdditionalData(data) {

@@ -80,26 +80,28 @@ CREATE OR REPLACE FUNCTION queen.get_message_traces_v1(p_partition_id UUID, p_tr
 RETURNS JSONB
 LANGUAGE plpgsql
 AS $$
+DECLARE
+    v_traces JSONB;
 BEGIN
-    RETURN (
-        SELECT COALESCE(jsonb_agg(
-            jsonb_build_object(
-                'id', mt.id,
-                'eventType', mt.event_type,
-                'data', mt.data,
-                'consumerGroup', mt.consumer_group,
-                'workerId', mt.worker_id,
-                'createdAt', to_char(mt.created_at, 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"'),
-                'traceNames', COALESCE(
-                    (SELECT jsonb_agg(mtn.trace_name ORDER BY mtn.trace_name) 
-                     FROM queen.message_trace_names mtn WHERE mtn.trace_id = mt.id),
-                    '[]'::jsonb
-                )
-            ) ORDER BY mt.created_at ASC
-        ), '[]'::jsonb)
-        FROM queen.message_traces mt
-        WHERE mt.partition_id = p_partition_id AND mt.transaction_id = p_transaction_id
-    );
+    SELECT COALESCE(jsonb_agg(
+        jsonb_build_object(
+            'id', mt.id,
+            'event_type', mt.event_type,
+            'data', mt.data,
+            'consumer_group', mt.consumer_group,
+            'worker_id', mt.worker_id,
+            'created_at', to_char(mt.created_at, 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"'),
+            'trace_names', COALESCE(
+                (SELECT jsonb_agg(mtn.trace_name ORDER BY mtn.trace_name) 
+                 FROM queen.message_trace_names mtn WHERE mtn.trace_id = mt.id),
+                '[]'::jsonb
+            )
+        ) ORDER BY mt.created_at ASC
+    ), '[]'::jsonb) INTO v_traces
+    FROM queen.message_traces mt
+    WHERE mt.partition_id = p_partition_id AND mt.transaction_id = p_transaction_id;
+    
+    RETURN jsonb_build_object('traces', v_traces);
 END;
 $$;
 
@@ -114,35 +116,51 @@ CREATE OR REPLACE FUNCTION queen.get_traces_by_name_v1(
 RETURNS JSONB
 LANGUAGE plpgsql
 AS $$
+DECLARE
+    v_traces JSONB;
+    v_total INTEGER;
 BEGIN
-    RETURN (
-        SELECT COALESCE(jsonb_agg(
-            jsonb_build_object(
-                'id', mt.id,
-                'transactionId', mt.transaction_id,
-                'partitionId', mt.partition_id,
-                'eventType', mt.event_type,
-                'data', mt.data,
-                'consumerGroup', mt.consumer_group,
-                'workerId', mt.worker_id,
-                'createdAt', to_char(mt.created_at, 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"'),
-                'queueName', q.name,
-                'partitionName', p.name,
-                'messagePayload', m.payload,
-                'traceNames', COALESCE(
-                    (SELECT jsonb_agg(mtn2.trace_name ORDER BY mtn2.trace_name) 
-                     FROM queen.message_trace_names mtn2 WHERE mtn2.trace_id = mt.id),
-                    '[]'::jsonb
-                )
-            ) ORDER BY mt.created_at ASC
-        ), '[]'::jsonb)
-        FROM queen.message_trace_names mtn
-        JOIN queen.message_traces mt ON mtn.trace_id = mt.id
-        LEFT JOIN queen.messages m ON mt.message_id = m.id
-        LEFT JOIN queen.partitions p ON mt.partition_id = p.id
-        LEFT JOIN queen.queues q ON p.queue_id = q.id
-        WHERE mtn.trace_name = p_trace_name
-        LIMIT p_limit OFFSET p_offset
+    -- Get total count first
+    SELECT COUNT(*) INTO v_total
+    FROM queen.message_trace_names mtn
+    WHERE mtn.trace_name = p_trace_name;
+    
+    -- Get traces with pagination
+    SELECT COALESCE(jsonb_agg(
+        jsonb_build_object(
+            'id', mt.id,
+            'transaction_id', mt.transaction_id,
+            'partition_id', mt.partition_id,
+            'event_type', mt.event_type,
+            'data', mt.data,
+            'consumer_group', mt.consumer_group,
+            'worker_id', mt.worker_id,
+            'created_at', to_char(mt.created_at, 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"'),
+            'queue_name', q.name,
+            'partition_name', p.name,
+            'message_payload', m.payload,
+            'trace_names', COALESCE(
+                (SELECT jsonb_agg(mtn2.trace_name ORDER BY mtn2.trace_name) 
+                 FROM queen.message_trace_names mtn2 WHERE mtn2.trace_id = mt.id),
+                '[]'::jsonb
+            )
+        ) ORDER BY mt.created_at ASC
+    ), '[]'::jsonb) INTO v_traces
+    FROM queen.message_trace_names mtn
+    JOIN queen.message_traces mt ON mtn.trace_id = mt.id
+    LEFT JOIN queen.messages m ON mt.message_id = m.id
+    LEFT JOIN queen.partitions p ON mt.partition_id = p.id
+    LEFT JOIN queen.queues q ON p.queue_id = q.id
+    WHERE mtn.trace_name = p_trace_name
+    LIMIT p_limit OFFSET p_offset;
+    
+    RETURN jsonb_build_object(
+        'traces', v_traces,
+        'total', v_total,
+        'pagination', jsonb_build_object(
+            'limit', p_limit,
+            'offset', p_offset
+        )
     );
 END;
 $$;
@@ -168,10 +186,10 @@ BEGIN
     -- Get trace names with stats
     SELECT COALESCE(jsonb_agg(
         jsonb_build_object(
-            'traceName', trace_name,
-            'traceCount', trace_count,
-            'messageCount', message_count,
-            'lastSeen', last_seen
+            'trace_name', trace_name,
+            'trace_count', trace_count,
+            'message_count', message_count,
+            'last_seen', last_seen
         ) ORDER BY last_seen DESC
     ), '[]'::jsonb) INTO v_names
     FROM (
@@ -188,7 +206,7 @@ BEGIN
     ) subq;
     
     RETURN jsonb_build_object(
-        'traceNames', v_names,
+        'trace_names', v_names,
         'total', v_total,
         'pagination', jsonb_build_object(
             'limit', p_limit,
