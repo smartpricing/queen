@@ -357,9 +357,8 @@ AggregatedMetrics MetricsCollector::aggregate(const std::vector<MetricsSample>& 
             // CPU percentage
             double cpu_percent = (delta_cpu_seconds / delta_wall_seconds) * 100.0;
             
-            // Clamp to reasonable range (0-100%)
+            // Clamp negative values only - values > 100% are valid for multi-core usage
             if (cpu_percent < 0) cpu_percent = 0;
-            if (cpu_percent > 100) cpu_percent = 100;
             
             percentages.push_back(cpu_percent);
         }
