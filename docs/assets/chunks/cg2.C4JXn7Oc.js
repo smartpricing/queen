@@ -1,0 +1,1 @@
+const n="/queen/learn/1billion.png",e="/queen/learn/operations-1.png",s="/queen/learn/10gb.png",o="/queen/learn/30k.png",a="/queen/learn/cg1.png",p="/queen/learn/cg2.png";export{n as _,e as a,s as b,o as c,a as d,p as e};

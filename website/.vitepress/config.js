@@ -45,7 +45,7 @@ export default defineConfig({
           { text: 'Configuration', link: '/server/configuration' },
           { text: 'Environment Variables', link: '/server/environment-variables' },
           { text: 'Deployment', link: '/server/deployment' },
-          { text: 'Benchmarks', link: '/server/benchmarks' }
+          { text: 'Production Benchmarks', link: '/server/benchmark-results' }
         ]
       },
       {
@@ -133,6 +133,7 @@ export default defineConfig({
         items: [
           { text: 'Monitoring', link: '/server/monitoring' },
           { text: 'Benchmarks', link: '/server/benchmarks' },
+          { text: 'Production Benchmark Results', link: '/server/benchmark-results' },
           { text: 'Benchmarking Tool', link: '/server/benchmarking' },
           { text: 'Troubleshooting', link: '/server/troubleshooting' },
           { text: 'Release History', link: '/server/releases' }

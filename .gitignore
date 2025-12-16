@@ -20,11 +20,6 @@ client-cpp/bin
 
 lib/build
 
-dd
-learn
-
-website/public/learn
-website/learn.md
 
 helm
 upgrade.sh
