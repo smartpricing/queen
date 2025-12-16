@@ -21,7 +21,7 @@ hero:
 
 features:
   - title: High Performance
-    details: Handle 200K+ messages/sec with proper batching. Built with C++17, uWebSockets, and async PostgreSQL for minimal latency.
+    details: Handle 50K+ messages/sec. Built with C++17, uWebSockets, and async PostgreSQL for minimal latency.
     link: /server/benchmark-results
   
   - title: Unlimited FIFO Partitions
