@@ -613,13 +613,19 @@ You can see that the NET Output of Postgres is 1.13TB, that is roughly ten times
 ![Final resource usage](/learn/cg-final.png)
 *After almost 16 hours I stopped the benchmark: we have produced 420M messages, and we have consumed them all from 11 consumer groups, for a total of 4.5B messages, at an average pop rate of 75k msgs/s*
 
+
+If we only pop with the same configuration, without pushing, we sustain 350k msg/s pop rate, using almost 14 cores and 5GB of RAM:
+
+![POP Only](/learn/cg-pop-only.png)
+
+
 ### 4. Results summary
 
 | Test | Producer Config | Consumer Config | Throughput | Resources |
 |------|-----------------|-----------------|------------|-----------|
 | **Sustained load** | 10 workers, 1000 connections, 1 msg/req | 1 worker, 50 connections, batch 50, autoAck | ~10k req/s (sustained for days) | Queen: 133 MB RAM, ~3 cores |
 | **Push batch** | 1 worker, 50 connections, 1000 msgs/request | 5 workers, 50 connections each, autoAck | ~31k msg/s | Disk: ~1 GB/s write |
-| **Consumer groups** | 1 producer, 100 connections, batch 10 | 11 consumer groups, 5 workers, 50 connections each, autoAck | 6.8k push / 75k pop msg/s | Queen: 1 GB RAM, ~3 cores |
+| **Consumer groups** | 1 producer, 100 connections, batch 10 | 11 consumer groups, 5 workers, 50 connections each, autoAck | 6.8k push / 75k pop msg/s (350k msg/s with only pop) | Queen: 1 GB RAM, ~3 cores |
 
 #### Considerations 
 
