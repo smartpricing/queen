@@ -1,6 +1,6 @@
 # What I learned developing Queen 
 
-*This document describe both the technical aspects of the development of Queen and the lessons learned, and some benchmarks I've made to test the scalability and performance of the system.*
+*This document describes both the technical aspects of the development of Queen and the lessons learned, and some benchmarks I've made to test the scalability and performance of the system.*
 
 <img src="/learn/queen_logo.png" alt="Queen" style="max-height: 200px;">
 
@@ -10,7 +10,7 @@ Queen was born from a simple idea to make queue management easier for Smartchat,
 The first working version with all the core features was developed in a few days in early October, in Node.js. Once I had the basic version running, I realized something good could come out of it and decided to rewrite the server in C++, a language I hold dear and consider the best for this kind of "system" application.
 
 
-I knew very well I was getting myself into a mess: it's hard to build a program that does mainly async I/O in C++ as fast as Node.js — with Node, speed comes for free. 
+I knew very well I was getting myself into a mess: **it's hard to build a program that does mainly I/O in C++ as fast as Node.js — with Node, speed comes for free.** 
 Those who've interviewed with me know I always ask "why is Node fast at I/O", and even though I knew the answer in theory (libuv), developing Queen allowed me to actually apply it. After 8 years developing mainly in Node, my C++ skills had dropped to a very low level, but with the help of AI and making a thousand mistakes, I somehow managed to get to something good.
 
 This document is an attempt to share what I learned developing Queen, so that if anyone else approaches something like this they can do it faster and with fewer mistakes, and to try to explain where Node's I/O speed comes from.
@@ -22,14 +22,16 @@ Structure:
 - [Queen's Architecture](#queens-architecture)
 - [Microbatching](#microbatching)
 - [Benchmarks](#benchmarks)
-  - [Sustained load test (billions of messages in 3 days at 10k req/s)](#1-sustained-load-test)
-  - [Additional benchmarks (push batch and consumer group consumption)](#2-additional-benchmarks)
-  - [Benchmark Results](#3-benchmark-results)
+  - [Sustained load test](#1-sustained-load-test) — 2B+ messages over 3 days at 10k req/s
+  - [Push batch test](#2-push-batch-test) — 31k msg/s with 1GB/s disk write
+  - [Consumer groups test](#3-consumer-group-test) — 4B+ messages at 75k msg/s with pub-sub pattern
+  - [Results summary](#4-results-summary)
 - [Conclusions](#conclusions)
 
 ## The problem
 
 Both the Node and C++ versions of Queen use uWebSockets as the HTTP server, an ultra-fast C++ library for handling HTTP and WebSocket connections: uWebSockets is the HTTP engine behind Bun. 
+
 When I chose to use it, in my ignorance I thought everything would be easy and fast, and indeed with Node.js it was.
 When I started building the C++ version, I realized pretty quickly there was a problem: uWebSockets works by spinning up an event loop that handles all HTTP and WebSocket connections, using mechanisms we'll see later, and this is very fast, but with one fundamental rule: **the event loop must be free to run, it must not be blocked by I/O operations.**
 
@@ -216,7 +218,7 @@ int main() {
 }
 ```
 
-This is how Queen talsk to Postgres. We register it with libuv, and when the response arrives, libuv wakes us up and we call `PQconsumeInput()` — which never blocks because we already know the data is ready.
+This is how Queen talks to Postgres. We register it with libuv, and when the response arrives, libuv wakes us up and we call `PQconsumeInput()` — which never blocks because we already know the data is ready.
 
 ## Queen's Architecture
 
@@ -334,8 +336,8 @@ Queen has three main operations: PUSH, POP and ACK. PUSH and POP are the most im
 5. The client receives the message, processes it and sends an ACK request to the server
 6. Server acknowledges the message
 
-For the benchmark, I used a special POP request that ACK the message automatically, moving down the quality of service to "at most once". This due the fact the Queen clients are not designed to be a benchmark tools, so I needed to use some other tool to create a decent load. Those third party tools usually do not allow to implement logic like "do pop and then ack it".
-Due the fact that Queen uses HTTP, I had a plethora of tools to choose from, and I used *autocannon* with this configuration: 
+For the benchmark, I used a special POP request that ACKs the message automatically, moving down the quality of service to "at most once". This is due to the fact that the Queen clients are not designed to be benchmark tools, so I needed to use some other tool to create a decent load. Those third-party tools usually do not allow implementing logic like "do pop and then ack it".
+Since Queen uses HTTP, I had a plethora of tools to choose from, and I used *autocannon* with this configuration: 
 
 Producer:
 
@@ -388,14 +390,14 @@ const instance = autocannon({
     });
 ```
 
-Also note that for POP we do not specify the partition, simulating a real consumer that usually do not know the partition of the message, but rather the queue name. This require the server to find available partitions for each POP request.
+Also note that for POP we do not specify the partition, simulating a real consumer that usually does not know the partition of the message, but rather the queue name. This requires the server to find available partitions for each POP request.
 
 So the benchmark setup is like this: 
 - 1 single machine with 32 cores and 64GB of RAM, 2TB disk 
 - Postgres and Queen as docker containers, without cpuset
 - 1 queue with 1000 partitions
 - 10 producers with total 1000 connections 
-- 1 consumer with 50 connections, batch size to 50 (so the POP calls usually return more than one message, if present)
+- 1 consumer with 50 connections, batch size of 50 (so the POP calls usually return more than one message, if present)
 
 The Queen and Postgres config were:
 
@@ -418,7 +420,7 @@ PostgreSQL has a mechanism called **HOT (Heap-Only Tuple) updates**: when you up
 
 ![Index bloat visualization](/learn/index_bloat_2.png)
 
-*You can see the situation in the screenshot above, where the index is bloated with dead tuples, 6k req/s, than full vacuum and finally index removed*
+*You can see the situation in the screenshot above, where the index is bloated with dead tuples at 6k req/s, then a full vacuum, and finally the index is removed*
 
 
 I had an index `(queue_name, last_message_created_at)` on a table that was updated on every push. Result: after 10 hours, a table with 1000 rows weighed **94MB** instead of ~100KB. 600x bloat!
@@ -474,7 +476,7 @@ It wasn't possible to increase the WAL size during the benchmark because it woul
 
 After these fixes, discoverable only through sustained effort, Queen and Postgres became steady as a clock, doing between 9500 and 10500 req/s every second. 
 
-Those are the useful queries we made to monitor the situation:
+Here are the useful queries we used to monitor the situation:
 
 ```sql
 SELECT pid, now() - query_start AS duration, state, query 
@@ -511,9 +513,21 @@ FROM pg_stat_user_tables
 WHERE relname = 'partition_lookup';
 ```
 
-Obviously it's not possible to keep all messages on disk for such a long period (we're talking about several TB of data), so I set the cleanup service very aggressively, so there were never more than half an hour of messages on disk (about 30 million). The performance figures above include the cleanup service that removes old messages.
+Obviously it's not possible to keep all messages on disk for such a long period (we're talking about several TB of data), so I set the cleanup service very aggressively, so there were never more than half an hour of messages on disk (about 30 million). The performance figures above include the cleanup service that removes old messages. Here is the example logs of the cleanup service:
 
-After almost three days of pushing and consuming with a steady load, I interrupted the benchmark: it was clear that there will be any issue in the next days, so I stopped, deployed a new version of Queen (with better charts) and resumed the benchmark. 
+```log
+...
+[2025-12-17 07:22:46.198] [info] RetentionService: Cleaned up expired_messages=88970, completed_messages=93680, inactive_partitions=0, old_metrics=0
+[2025-12-17 07:23:20.095] [info] RetentionService: Cleaned up expired_messages=97540, completed_messages=110750, inactive_partitions=0, old_metrics=0
+[2025-12-17 07:23:59.718] [info] RetentionService: Cleaned up expired_messages=109100, completed_messages=128650, inactive_partitions=0, old_metrics=0
+[2025-12-17 07:24:46.610] [info] RetentionService: Cleaned up expired_messages=136040, completed_messages=145270, inactive_partitions=0, old_metrics=0
+[2025-12-17 07:26:06.971] [info] RetentionService: Cleaned up expired_messages=307470, completed_messages=195230, inactive_partitions=0, old_metrics=0
+[2025-12-17 07:27:10.231] [info] RetentionService: Cleaned up expired_messages=203410, completed_messages=190060, inactive_partitions=0, old_metrics=0
+[2025-12-17 07:27:33.542] [info] RetentionService: Cleaned up expired_messages=227700, completed_messages=125920, inactive_partitions=0, old_metrics=0
+...
+```
+
+After almost three days of pushing and consuming with a steady load, I interrupted the benchmark: it was clear that there wouldn't be any issues in the following days, so I stopped, deployed a new version of Queen (with better charts) and resumed the benchmark. 
 
 **In the end the challenge was won: Queen is able to push and consume around 10000 messages per second for days straight, using only 80 GB of disk space.**
 
@@ -522,7 +536,7 @@ After almost three days of pushing and consuming with a steady load, I interrupt
 *The first billion (1.322B) messages*
 
 ![2Gb/s](/learn/do.png)
-*Writing 2Gb/s of "hello world" inside Postgres for days (of course this include a lot more that "hello world")*
+*Writing 2Gb/s of "hello world" inside Postgres for days (of course this includes a lot more than just "hello world")*
 
 
 After 2.5 days the situation was like this:
@@ -533,15 +547,13 @@ a78d0500a542   queen      324.78%    146.5MiB / 62.79GiB   0.23%     2.55TB / 6.
 673130dd43d8   postgres   1001.05%   46.82GiB / 62.79GiB   74.57%    456GB / 982GB     30.1GB / 43.3TB   307
 ```
 
-We have produced, consumed and also deleted more than 2 billion messages, at an average rate of 9500 req/s. In this time, Queen used 133 MB or RAM steadily.
+We have produced, consumed and also deleted more than 2 billion messages, at an average rate of 9500 req/s. In this time, Queen used 133 MB of RAM steadily.
 
 ![Final](/learn/operations-1.png)
 
-### 2. Additional benchmarks
+### 2. Push batch test
 
 Due to the fact that Queen was able to sustain the load for days, I've also made some other smaller benchmarks to test the scalability of the system and the performance of the different features.
-
-#### Push batch (1000 messages per request) and Pop
 
 Avg throughput: 31170 msg/s push and pop, disk writing at almost 1GB/s (10 Gb/s), > 2M messages per minute.
 I'm not sure but maybe here we are very close to the limit of WAL write speed.
@@ -575,30 +587,50 @@ ALTER TABLE queen.messages SET (
 
 ![Push batch and Pop](/learn/30k.png)
 
-#### Consumer group consumption 
+### 3. Consumer group test 
 
-In this test we have a producer that produce on a queue with 1000 partitions, 1 with 100 connections and batch size 10, and 10 consumers group on 5 worker with 50 connections each. This test aims to test the scalability of the consumer group feature, a pub-sub pattern, where each consumer group receives all the messages from the queue.
+In this test we have a producer that produces on a queue with 1000 partitions, with 100 connections and batch size 10, and 11 consumer groups (eleven because I used <= in the for loop) on 5 workers with 50 connections each. This test aims to test the scalability of the consumer group feature, a pub-sub pattern, where each consumer group receives all the messages from the queue.
 
 ![Consumer group consumption](/learn/cg1.png)
 *At the peak, Queen was using 10 cores, with a huge event loop lag, with 250k msg/s pop throughput*
 
-At the beginning, probably due to the fact that the benchmark did not warm up and started nuking Queen, the consumer pop rate was zero, accumulating messages in the queue. Then after some minutes, the consumer group started to pop messages at an initial rate of 250k msg/s, then stabilized at 6k push and (6k push × 10 consumers) 60k msg/s pop rate, using almost three cores and 1GB of RAM.
+At the beginning, probably due to the fact that the benchmark did not warm up and started nuking Queen, the consumer pop rate was zero, accumulating messages in the queue. Then after some minutes, the consumer group started to pop messages at an initial rate of 250k msg/s, then stabilized at 6.8k push and (6.8k push × 11 consumers) 75k msg/s pop rate, using almost three cores and 1GB of RAM.
 
 ![Consumer group consumption](/learn/cg2.png)
 *I was surprised about the pop performance in the consumer group mode. Queen is primarily designed to be a queue system, but it seems to be able to handle the pub-sub pattern with ease.*
 
-### 3. Benchmark Results
+
+Final resource usage:
+
+```sh
+CONTAINER ID   NAME       CPU %      MEM USAGE / LIMIT     MEM %     NET I/O           BLOCK I/O         PIDS 
+903ff045b42e   queen      357.59%    1.001GiB / 62.79GiB   1.59%     1.25TB / 1.72TB   606kB / 0B        43 
+f8e4164e0d92   postgres   1966.34%   32.29GiB / 62.79GiB   51.43%    113GB / 1.13TB    1.28MB / 13.4TB   957 
+```
+
+You can see that the NET Output of Postgres is 1.13TB, that is roughly ten times the input.
+
+![Final resource usage](/learn/cg-final.png)
+*After almost 16 hours I stopped the benchmark: we have produced 420M messages, and we have consumed them all from 11 consumer groups, for a total of 4.5B messages, at an average pop rate of 75k msgs/s*
+
+### 4. Results summary
 
 | Test | Producer Config | Consumer Config | Throughput | Resources |
 |------|-----------------|-----------------|------------|-----------|
 | **Sustained load** | 10 workers, 1000 connections, 1 msg/req | 1 worker, 50 connections, batch 50, autoAck | ~10k req/s (sustained for days) | Queen: 133 MB RAM, ~3 cores |
 | **Push batch** | 1 worker, 50 connections, 1000 msgs/request | 5 workers, 50 connections each, autoAck | ~31k msg/s | Disk: ~1 GB/s write |
-| **Consumer groups** | 1 producer, 100 connections, batch 10 | 10 consumer groups, 5 workers, 50 connections each, autoAck | 6k push / 60k pop msg/s | Queen: 1 GB RAM, ~3 cores |
+| **Consumer groups** | 1 producer, 100 connections, batch 10 | 11 consumer groups, 5 workers, 50 connections each, autoAck | 6.8k push / 75k pop msg/s | Queen: 1 GB RAM, ~3 cores |
+
+#### Considerations 
+
+As long as we don't write too much and Postgres can keep messages in memory, the system is very fast and stable. But if the pushed data is large and Postgres needs to read it from disk, high contention and slowdowns are inevitable.
+
+![Disk read and write](/learn/diskread.png)
+*Disk read and write during the benchmark, write is due WAL, and no reads due data are inside shared buffers*
 
 ## Conclusions
 
 This is not rocket science and mainly due to my own ignorance, developing Queen in C++ cost me a lot in terms of time and mental health, but now that the end is in sight, I feel I understand mechanisms that I used to know only in theory much better in practice. I hope this document can help someone else do the same. I'm sure Queen can push more than this (I've just discovered that I'm using the slowest JSON library in the C++ world, for instance), but I think this is a good starting point.
-
 
 ### References
  
