@@ -625,8 +625,34 @@ You can see that the NET Output of Postgres is 1.13TB, that is roughly ten times
 
 As long as we don't write too much and Postgres can keep messages in memory, the system is very fast and stable. But if the pushed data is large and Postgres needs to read it from disk, high contention and slowdowns are inevitable.
 
+**PostgreSQL Cache Analysis**
+
+During the consumer group benchmark, PostgreSQL cache performance was excellent:
+
+| Metric | Hit Ratio |
+|--------|-----------|
+| **Overall database** | 97.47% |
+| **Tables** | 97.97% |
+| **Indexes** | 95.71% |
+
+The critical hot-path tables achieved **100% cache hit ratio**:
+- `partition_consumers`: 95.6B cache hits (cursor positions for all consumer groups)
+- `partition_lookup`: 63B cache hits (partition routing)
+- `partitions` and `queues`: 100% cached
+
+The `messages` table had a lower hit ratio (62.55%) which is expected — messages are write-once, read-once, and the table is too large to fit entirely in the 1GB `shared_buffers`. However, the OS page cache (64GB RAM) handles sequential message reads efficiently.
+
+Buffer cache contents during the benchmark:
+```
+messages table + indexes: ~950 MB (93% of 1GB shared_buffers)
+partition_consumers:       29 MB  (2.8%)
+partition_lookup:           5 MB  (0.5%)
+```
+
+This explains why disk reads were nearly zero during steady-state operation: all random-access patterns (cursor lookups, partition routing) hit RAM, while sequential message reads were handled by the OS page cache.
+
 ![Disk read and write](/learn/diskread.png)
-*Disk read and write during the benchmark, write is due WAL, and no reads due data are inside shared buffers*
+*Disk read and write during the benchmark, write is due to WAL, and no reads because data is inside shared buffers*
 
 ## Conclusions
 
