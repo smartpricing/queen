@@ -63,26 +63,24 @@ BEGIN
             q.priority as queue_priority,
             pc_queue.lease_expires_at,
             -- Queue mode status
+            -- NOTE: Must use exact timestamp comparison (not DATE_TRUNC) to preserve microsecond precision
             CASE
                 WHEN dlq.message_id IS NOT NULL THEN 'dead_letter'
-                WHEN pc_queue.last_consumed_created_at IS NOT NULL AND (
-                    m.created_at < pc_queue.last_consumed_created_at OR 
-                    (DATE_TRUNC('milliseconds', m.created_at) = DATE_TRUNC('milliseconds', pc_queue.last_consumed_created_at) 
-                     AND m.id <= pc_queue.last_consumed_id)
-                ) THEN 'completed'
+                WHEN pc_queue.last_consumed_created_at IS NOT NULL AND 
+                    (m.created_at, m.id) <= (pc_queue.last_consumed_created_at, pc_queue.last_consumed_id)
+                THEN 'completed'
                 WHEN pc_queue.lease_expires_at IS NOT NULL AND pc_queue.lease_expires_at > NOW() THEN 'processing'
                 ELSE 'pending'
             END as queue_status,
             -- Bus mode: count of consumer groups that consumed this message
+            -- NOTE: Must use exact timestamp comparison (not DATE_TRUNC) to preserve microsecond precision
             (
                 SELECT COUNT(*)::integer
                 FROM queen.partition_consumers pc
                 WHERE pc.partition_id = m.partition_id
                   AND pc.consumer_group != '__QUEUE_MODE__'
                   AND pc.last_consumed_created_at IS NOT NULL
-                  AND (m.created_at < pc.last_consumed_created_at OR 
-                       (DATE_TRUNC('milliseconds', m.created_at) = DATE_TRUNC('milliseconds', pc.last_consumed_created_at) 
-                        AND m.id <= pc.last_consumed_id))
+                  AND (m.created_at, m.id) <= (pc.last_consumed_created_at, pc.last_consumed_id)
             ) as consumed_by_groups_count,
             -- Per-partition mode detection
             (pc_queue.consumer_group IS NOT NULL) as partition_has_queue_mode,
@@ -202,6 +200,7 @@ BEGIN
             -- Dead letter takes priority
             WHEN dlq.message_id IS NOT NULL THEN 'dead_letter'
             -- If bus mode only (no queue mode), check if all consumer groups consumed it
+            -- NOTE: Must use exact timestamp comparison (not DATE_TRUNC) to preserve microsecond precision
             WHEN NOT v_has_queue_mode AND v_bus_groups_count > 0 THEN
                 CASE WHEN (
                     SELECT COUNT(*)::integer
@@ -209,16 +208,13 @@ BEGIN
                     WHERE pc.partition_id = m.partition_id
                       AND pc.consumer_group != '__QUEUE_MODE__'
                       AND pc.last_consumed_created_at IS NOT NULL
-                      AND (m.created_at < pc.last_consumed_created_at OR 
-                           (DATE_TRUNC('milliseconds', m.created_at) = DATE_TRUNC('milliseconds', pc.last_consumed_created_at) 
-                            AND m.id <= pc.last_consumed_id))
+                      AND (m.created_at, m.id) <= (pc.last_consumed_created_at, pc.last_consumed_id)
                 ) = v_bus_groups_count THEN 'completed' ELSE 'pending' END
             -- Queue mode: check __QUEUE_MODE__ consumer
-            WHEN pc_queue.last_consumed_created_at IS NOT NULL AND (
-                m.created_at < pc_queue.last_consumed_created_at OR 
-                (DATE_TRUNC('milliseconds', m.created_at) = DATE_TRUNC('milliseconds', pc_queue.last_consumed_created_at) 
-                 AND m.id <= pc_queue.last_consumed_id)
-            ) THEN 'completed'
+            -- NOTE: Must use exact timestamp comparison (not DATE_TRUNC) to preserve microsecond precision
+            WHEN pc_queue.last_consumed_created_at IS NOT NULL AND 
+                (m.created_at, m.id) <= (pc_queue.last_consumed_created_at, pc_queue.last_consumed_id)
+            THEN 'completed'
             WHEN pc_queue.lease_expires_at IS NOT NULL AND pc_queue.lease_expires_at > NOW() THEN 'processing'
             ELSE 'pending'
         END,
@@ -240,15 +236,14 @@ BEGIN
         'mode', jsonb_build_object(
             'hasQueueMode', v_has_queue_mode,
             'busGroupsCount', v_bus_groups_count,
+            -- NOTE: Must use exact timestamp comparison (not DATE_TRUNC) to preserve microsecond precision
             'consumedByGroups', (
                 SELECT COUNT(*)::integer
                 FROM queen.partition_consumers pc
                 WHERE pc.partition_id = m.partition_id
                   AND pc.consumer_group != '__QUEUE_MODE__'
                   AND pc.last_consumed_created_at IS NOT NULL
-                  AND (m.created_at < pc.last_consumed_created_at OR 
-                       (DATE_TRUNC('milliseconds', m.created_at) = DATE_TRUNC('milliseconds', pc.last_consumed_created_at) 
-                        AND m.id <= pc.last_consumed_id))
+                  AND (m.created_at, m.id) <= (pc.last_consumed_created_at, pc.last_consumed_id)
             ),
             'type', CASE 
                 WHEN NOT v_has_queue_mode AND v_bus_groups_count > 0 THEN 'bus'
@@ -257,14 +252,12 @@ BEGIN
                 ELSE 'none'
             END
         ),
+        -- NOTE: Must use exact timestamp comparison (not DATE_TRUNC) to preserve microsecond precision
         'consumerGroups', (
             SELECT COALESCE(jsonb_agg(jsonb_build_object(
                 'name', pc.consumer_group,
-                'consumed', pc.last_consumed_created_at IS NOT NULL AND (
-                    m.created_at < pc.last_consumed_created_at OR 
-                    (DATE_TRUNC('milliseconds', m.created_at) = DATE_TRUNC('milliseconds', pc.last_consumed_created_at) 
-                     AND m.id <= pc.last_consumed_id)
-                ),
+                'consumed', pc.last_consumed_created_at IS NOT NULL AND 
+                    (m.created_at, m.id) <= (pc.last_consumed_created_at, pc.last_consumed_id),
                 'leaseExpiresAt', CASE WHEN pc.lease_expires_at IS NOT NULL 
                     THEN to_char(pc.lease_expires_at, 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"') ELSE NULL END
             )), '[]'::jsonb)

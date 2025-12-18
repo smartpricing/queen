@@ -28,27 +28,25 @@ BEGIN
             pc.lease_expires_at,
             pc.lease_acquired_at,
             -- Calculate lag: count messages after last consumed
+            -- NOTE: Must use exact timestamp comparison (not DATE_TRUNC) to preserve microsecond precision
             (
                 SELECT COUNT(*)
                 FROM queen.messages m
                 WHERE m.partition_id = pc.partition_id
                   AND (
                       pc.last_consumed_created_at IS NULL
-                      OR m.created_at > pc.last_consumed_created_at
-                      OR (DATE_TRUNC('milliseconds', m.created_at) = DATE_TRUNC('milliseconds', pc.last_consumed_created_at) 
-                          AND m.id > pc.last_consumed_id)
+                      OR (m.created_at, m.id) > (pc.last_consumed_created_at, pc.last_consumed_id)
                   )
             )::integer as offset_lag,
             -- Calculate time lag: age of oldest unprocessed message
+            -- NOTE: Must use exact timestamp comparison (not DATE_TRUNC) to preserve microsecond precision
             (
                 SELECT EXTRACT(EPOCH FROM (NOW() - m.created_at))::integer
                 FROM queen.messages m
                 WHERE m.partition_id = pc.partition_id
                   AND (
                       pc.last_consumed_created_at IS NULL
-                      OR m.created_at > pc.last_consumed_created_at
-                      OR (DATE_TRUNC('milliseconds', m.created_at) = DATE_TRUNC('milliseconds', pc.last_consumed_created_at) 
-                          AND m.id > pc.last_consumed_id)
+                      OR (m.created_at, m.id) > (pc.last_consumed_created_at, pc.last_consumed_id)
                   )
                 ORDER BY m.created_at ASC
                 LIMIT 1
@@ -129,27 +127,25 @@ BEGIN
             pc.total_messages_consumed,
             pc.lease_expires_at,
             -- Calculate lag
+            -- NOTE: Must use exact timestamp comparison (not DATE_TRUNC) to preserve microsecond precision
             (
                 SELECT COUNT(*)
                 FROM queen.messages m
                 WHERE m.partition_id = pc.partition_id
                   AND (
                       pc.last_consumed_created_at IS NULL
-                      OR m.created_at > pc.last_consumed_created_at
-                      OR (DATE_TRUNC('milliseconds', m.created_at) = DATE_TRUNC('milliseconds', pc.last_consumed_created_at) 
-                          AND m.id > pc.last_consumed_id)
+                      OR (m.created_at, m.id) > (pc.last_consumed_created_at, pc.last_consumed_id)
                   )
             )::integer as offset_lag,
             -- Calculate time lag
+            -- NOTE: Must use exact timestamp comparison (not DATE_TRUNC) to preserve microsecond precision
             (
                 SELECT EXTRACT(EPOCH FROM (NOW() - m.created_at))::integer
                 FROM queen.messages m
                 WHERE m.partition_id = pc.partition_id
                   AND (
                       pc.last_consumed_created_at IS NULL
-                      OR m.created_at > pc.last_consumed_created_at
-                      OR (DATE_TRUNC('milliseconds', m.created_at) = DATE_TRUNC('milliseconds', pc.last_consumed_created_at) 
-                          AND m.id > pc.last_consumed_id)
+                      OR (m.created_at, m.id) > (pc.last_consumed_created_at, pc.last_consumed_id)
                   )
                 ORDER BY m.created_at ASC
                 LIMIT 1
@@ -208,12 +204,11 @@ BEGIN
         FROM queen.partition_consumers pc
         JOIN queen.partitions p ON p.id = pc.partition_id
         JOIN queen.queues q ON q.id = p.queue_id
+        -- NOTE: Must use exact timestamp comparison (not DATE_TRUNC) to preserve microsecond precision
         LEFT JOIN queen.messages m ON m.partition_id = pc.partition_id
             AND (
                 pc.last_consumed_created_at IS NULL
-                OR m.created_at > pc.last_consumed_created_at
-                OR (DATE_TRUNC('milliseconds', m.created_at) = DATE_TRUNC('milliseconds', pc.last_consumed_created_at) 
-                    AND m.id > pc.last_consumed_id)
+                OR (m.created_at, m.id) > (pc.last_consumed_created_at, pc.last_consumed_id)
             )
         GROUP BY pc.consumer_group, q.name, p.name, p.id, pc.worker_id, pc.last_consumed_at
     )

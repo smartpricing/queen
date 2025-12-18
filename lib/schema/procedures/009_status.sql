@@ -27,13 +27,12 @@ BEGIN
                 'queuePath', q.name || '/' || p.name,
                 'queue', q.name,
                 'partition', p.name,
+                -- NOTE: Must use exact timestamp comparison (not DATE_TRUNC) to preserve microsecond precision
                 'status', CASE
                     WHEN dlq.message_id IS NOT NULL THEN 'dead_letter'
-                    WHEN pc.last_consumed_created_at IS NOT NULL AND (
-                        m.created_at < pc.last_consumed_created_at OR 
-                        (DATE_TRUNC('milliseconds', m.created_at) = DATE_TRUNC('milliseconds', pc.last_consumed_created_at) 
-                         AND m.id <= pc.last_consumed_id)
-                    ) THEN 'completed'
+                    WHEN pc.last_consumed_created_at IS NOT NULL AND 
+                        (m.created_at, m.id) <= (pc.last_consumed_created_at, pc.last_consumed_id)
+                    THEN 'completed'
                     WHEN pc.lease_expires_at IS NOT NULL AND pc.lease_expires_at > NOW() THEN 'processing'
                     ELSE 'pending'
                 END,

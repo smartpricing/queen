@@ -24,6 +24,12 @@
 #include <algorithm>
 #include "worker_metrics.hpp"
 
+// replace udp sync witch tcp with libuv
+// fix stats, both backend perfromance and frontend 
+// revisit frontend
+// deploy pipeline
+// revisit all website
+
 namespace queen {
 
 // UUIDv7 generator - time-ordered UUIDs for proper message ordering
@@ -655,7 +661,6 @@ private:
         if (batch.empty()) {
             return;
         }
-        //spdlog::info("[libqueen] Draining queue: {} jobs", batch.size());
 
         auto grouped_jobs = self->_group_jobs_by_type(batch);
         std::vector<std::shared_ptr<PendingJob>> jobs_to_requeue;
