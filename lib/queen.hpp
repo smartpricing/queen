@@ -25,6 +25,7 @@
 #include "worker_metrics.hpp"
 
 // replace udp sync witch tcp with libuv
+// fix this lib/schema/procedures/008_consumer_groups.sql 
 // fix stats, both backend perfromance and frontend 
 // revisit frontend
 // deploy pipeline

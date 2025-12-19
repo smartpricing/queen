@@ -55,6 +55,8 @@ DECLARE
     v_msg_count INT;
     v_result JSONB;
     v_sub_ts TIMESTAMPTZ;
+    v_last_msg_id UUID;
+    v_last_msg_ts TIMESTAMPTZ;
 BEGIN
     -- Process requests in partition_id order to prevent deadlocks
     -- We use a cursor over the sorted requests
@@ -219,11 +221,49 @@ BEGIN
         -- =====================================================================
         IF v_msg_count = 0 THEN
             -- No messages: release lease immediately
-            UPDATE queen.partition_consumers
-            SET lease_expires_at = NULL, lease_acquired_at = NULL, worker_id = NULL
-            WHERE partition_id = v_partition_id
-              AND consumer_group = v_req.consumer_group
-              AND worker_id = v_req.worker_id;
+            -- CRITICAL FIX: If a subscription timestamp was applied and there were no messages,
+            -- we need to update the cursor to prevent infinite re-selection of this partition.
+            IF v_cursor_ts IS NOT NULL AND v_cursor_id = '00000000-0000-0000-0000-000000000000'::uuid THEN
+                -- Find the last message at or before the subscription timestamp
+                SELECT m.id, m.created_at 
+                INTO v_last_msg_id, v_last_msg_ts
+                FROM queen.messages m
+                WHERE m.partition_id = v_partition_id
+                  AND m.created_at <= v_cursor_ts
+                ORDER BY m.created_at DESC, m.id DESC
+                LIMIT 1;
+                
+                IF v_last_msg_id IS NOT NULL THEN
+                    -- Found a message before the timestamp, set cursor to it
+                    UPDATE queen.partition_consumers
+                    SET lease_expires_at = NULL, 
+                        lease_acquired_at = NULL, 
+                        worker_id = NULL,
+                        last_consumed_id = v_last_msg_id,
+                        last_consumed_created_at = v_last_msg_ts,
+                        last_consumed_at = v_now
+                    WHERE partition_id = v_partition_id
+                      AND consumer_group = v_req.consumer_group
+                      AND worker_id = v_req.worker_id;
+                ELSE
+                    -- No messages before the timestamp, just update last_consumed_at
+                    UPDATE queen.partition_consumers
+                    SET lease_expires_at = NULL, 
+                        lease_acquired_at = NULL, 
+                        worker_id = NULL,
+                        last_consumed_at = v_now
+                    WHERE partition_id = v_partition_id
+                      AND consumer_group = v_req.consumer_group
+                      AND worker_id = v_req.worker_id;
+                END IF;
+            ELSE
+                -- No subscription timestamp applied, just release lease
+                UPDATE queen.partition_consumers
+                SET lease_expires_at = NULL, lease_acquired_at = NULL, worker_id = NULL
+                WHERE partition_id = v_partition_id
+                  AND consumer_group = v_req.consumer_group
+                  AND worker_id = v_req.worker_id;
+            END IF;
         ELSIF v_msg_count < v_req.batch_size THEN
             -- Partial batch: update batch_size so ACKing all messages releases lease
             UPDATE queen.partition_consumers
@@ -290,6 +330,8 @@ DECLARE
     v_result JSONB;
     v_sub_ts TIMESTAMPTZ;
     v_consumer_row_id UUID;
+    v_last_msg_id UUID;
+    v_last_msg_ts TIMESTAMPTZ;
 BEGIN
     -- Process each request - order doesn't matter for discovery since SKIP LOCKED
     FOR v_req IN 
@@ -480,11 +522,50 @@ BEGIN
         -- STEP 6: Cleanup
         -- =====================================================================
         IF v_msg_count = 0 THEN
-            UPDATE queen.partition_consumers
-            SET lease_expires_at = NULL, lease_acquired_at = NULL, worker_id = NULL
-            WHERE partition_id = v_partition_id
-              AND consumer_group = v_req.consumer_group
-              AND worker_id = v_req.worker_id;
+            -- No messages: release lease immediately
+            -- CRITICAL FIX: If a subscription timestamp was applied and there were no messages,
+            -- we need to update the cursor to prevent infinite re-selection of this partition.
+            IF v_cursor_ts IS NOT NULL AND v_cursor_id = '00000000-0000-0000-0000-000000000000'::uuid THEN
+                -- Find the last message at or before the subscription timestamp
+                SELECT m.id, m.created_at 
+                INTO v_last_msg_id, v_last_msg_ts
+                FROM queen.messages m
+                WHERE m.partition_id = v_partition_id
+                  AND m.created_at <= v_cursor_ts
+                ORDER BY m.created_at DESC, m.id DESC
+                LIMIT 1;
+                
+                IF v_last_msg_id IS NOT NULL THEN
+                    -- Found a message before the timestamp, set cursor to it
+                    UPDATE queen.partition_consumers
+                    SET lease_expires_at = NULL, 
+                        lease_acquired_at = NULL, 
+                        worker_id = NULL,
+                        last_consumed_id = v_last_msg_id,
+                        last_consumed_created_at = v_last_msg_ts,
+                        last_consumed_at = v_now
+                    WHERE partition_id = v_partition_id
+                      AND consumer_group = v_req.consumer_group
+                      AND worker_id = v_req.worker_id;
+                ELSE
+                    -- No messages before the timestamp, just update last_consumed_at
+                    UPDATE queen.partition_consumers
+                    SET lease_expires_at = NULL, 
+                        lease_acquired_at = NULL, 
+                        worker_id = NULL,
+                        last_consumed_at = v_now
+                    WHERE partition_id = v_partition_id
+                      AND consumer_group = v_req.consumer_group
+                      AND worker_id = v_req.worker_id;
+                END IF;
+            ELSE
+                -- No subscription timestamp applied, just release lease
+                UPDATE queen.partition_consumers
+                SET lease_expires_at = NULL, lease_acquired_at = NULL, worker_id = NULL
+                WHERE partition_id = v_partition_id
+                  AND consumer_group = v_req.consumer_group
+                  AND worker_id = v_req.worker_id;
+            END IF;
         ELSIF v_msg_count < v_req.batch_size THEN
             UPDATE queen.partition_consumers
             SET batch_size = v_msg_count, acked_count = 0
@@ -823,11 +904,51 @@ BEGIN
             VALUES (v_partition_id, v_req.consumer_group, v_msg_count, v_now);
         ELSIF v_msg_count = 0 THEN
             -- No messages: release lease immediately
-            UPDATE queen.partition_consumers
-            SET lease_expires_at = NULL, lease_acquired_at = NULL, worker_id = NULL
-            WHERE partition_id = v_partition_id
-              AND consumer_group = v_req.consumer_group
-              AND worker_id = v_req.worker_id;
+            -- CRITICAL FIX: If a subscription timestamp was applied and there were no messages,
+            -- we need to update the cursor to prevent infinite re-selection of this partition.
+            -- We find the last message AT or BEFORE the subscription timestamp and use that as cursor.
+            IF v_cursor_ts IS NOT NULL AND v_cursor_id = '00000000-0000-0000-0000-000000000000'::uuid THEN
+                -- Find the last message at or before the subscription timestamp
+                SELECT m.id, m.created_at 
+                INTO v_last_msg_id, v_last_msg_ts
+                FROM queen.messages m
+                WHERE m.partition_id = v_partition_id
+                  AND m.created_at <= v_cursor_ts
+                ORDER BY m.created_at DESC, m.id DESC
+                LIMIT 1;
+                
+                IF v_last_msg_id IS NOT NULL THEN
+                    -- Found a message before the timestamp, set cursor to it
+                    UPDATE queen.partition_consumers
+                    SET lease_expires_at = NULL, 
+                        lease_acquired_at = NULL, 
+                        worker_id = NULL,
+                        last_consumed_id = v_last_msg_id,
+                        last_consumed_created_at = v_last_msg_ts,
+                        last_consumed_at = v_now
+                    WHERE partition_id = v_partition_id
+                      AND consumer_group = v_req.consumer_group
+                      AND worker_id = v_req.worker_id;
+                ELSE
+                    -- No messages before the timestamp, just update last_consumed_at
+                    -- to move this partition to the back of the discovery queue
+                    UPDATE queen.partition_consumers
+                    SET lease_expires_at = NULL, 
+                        lease_acquired_at = NULL, 
+                        worker_id = NULL,
+                        last_consumed_at = v_now
+                    WHERE partition_id = v_partition_id
+                      AND consumer_group = v_req.consumer_group
+                      AND worker_id = v_req.worker_id;
+                END IF;
+            ELSE
+                -- No subscription timestamp applied, just release lease
+                UPDATE queen.partition_consumers
+                SET lease_expires_at = NULL, lease_acquired_at = NULL, worker_id = NULL
+                WHERE partition_id = v_partition_id
+                  AND consumer_group = v_req.consumer_group
+                  AND worker_id = v_req.worker_id;
+            END IF;
         ELSIF v_msg_count < v_req.batch_size THEN
             -- Partial batch: update batch_size so ACKing all messages releases lease
             UPDATE queen.partition_consumers
