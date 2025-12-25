@@ -25,13 +25,13 @@ FROM node:22-alpine AS frontend-builder
 WORKDIR /app/webapp
 
 # Copy frontend package files
-COPY webapp/package*.json ./
+COPY app/package*.json ./
 
 # Install dependencies
 RUN npm ci
 
 # Copy frontend source
-COPY webapp/ ./
+COPY app/ ./
 
 # Build frontend
 RUN npm run build

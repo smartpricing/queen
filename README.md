@@ -85,6 +85,16 @@ It push peaks for single request is around 45k req/s, with sustatined load (PUSH
 
 **[Full Release Notes →](https://smartpricing.github.io/queen/server/releases)**
 
+--- 
+
+## TODO
+
+- retention data on frontend
+- replace udp sync witch tcp with libuv
+- proxy new with auth
+- deploy pipeline
+- revisit all website
+
 ---
 
 ## License

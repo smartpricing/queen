@@ -24,15 +24,6 @@
 #include <algorithm>
 #include "worker_metrics.hpp"
 
-// pg data on frontend
-// retention data on frontend
-// replace udp sync witch tcp with libuv
-// fix this lib/schema/procedures/008_consumer_groups.sql 
-// fix stats, both backend perfromance and frontend 
-// revisit frontend
-// deploy pipeline
-// revisit all website
-
 namespace queen {
 
 // UUIDv7 generator - time-ordered UUIDs for proper message ordering

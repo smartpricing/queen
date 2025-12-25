@@ -27,6 +27,15 @@
               >
                 System Resources
               </button>
+              <button 
+                @click="dataSource = 'postgres'; fetchData()"
+                class="px-3 py-1.5 text-xs font-medium rounded-lg transition-colors"
+                :class="dataSource === 'postgres' 
+                  ? 'bg-queen-500 text-white' 
+                  : 'bg-light-100 dark:bg-dark-300 text-light-700 dark:text-light-300 hover:bg-light-200 dark:hover:bg-dark-200'"
+              >
+                Postgres Stats
+              </button>
             </div>
           </div>
 
@@ -73,8 +82,8 @@
             </div>
           </div>
           
-          <!-- Time Range -->
-          <div class="flex items-center gap-2 ml-auto">
+          <!-- Time Range (hide for postgres stats - point-in-time) -->
+          <div v-if="dataSource !== 'postgres'" class="flex items-center gap-2 ml-auto">
             <span class="text-xs font-medium text-light-500">Range:</span>
             <div class="flex items-center gap-1">
               <button 
@@ -501,6 +510,372 @@
         </div>
       </div>
     </template>
+
+    <!-- Postgres Stats View -->
+    <template v-else-if="dataSource === 'postgres' && postgresData">
+      <!-- Cache Hit Ratios Summary -->
+      <div class="card">
+        <div class="card-header flex items-center justify-between">
+          <h3 class="font-semibold text-light-900 dark:text-white">Cache Performance</h3>
+          <span class="text-xs text-light-500">{{ postgresData.database }}</span>
+        </div>
+        <div class="card-body">
+          <div class="grid grid-cols-2 sm:grid-cols-4 gap-4">
+            <!-- Database-level cache -->
+            <div class="p-4 bg-light-100 dark:bg-dark-300 rounded-lg">
+              <p class="text-xs text-light-500 uppercase tracking-wide">Database Hit Ratio</p>
+              <p class="text-2xl font-bold mt-1" :class="getCacheRatioClass(postgresData.databaseCache?.cacheHitRatio)">
+                {{ postgresData.databaseCache?.cacheHitRatio || 0 }}%
+              </p>
+            </div>
+            <!-- Table cache -->
+            <div class="p-4 bg-light-100 dark:bg-dark-300 rounded-lg">
+              <p class="text-xs text-light-500 uppercase tracking-wide">Table Hit Ratio</p>
+              <p class="text-2xl font-bold mt-1" :class="getCacheRatioClass(postgresData.cacheSummary?.tables?.hitRatio)">
+                {{ postgresData.cacheSummary?.tables?.hitRatio || 0 }}%
+              </p>
+            </div>
+            <!-- Index cache -->
+            <div class="p-4 bg-light-100 dark:bg-dark-300 rounded-lg">
+              <p class="text-xs text-light-500 uppercase tracking-wide">Index Hit Ratio</p>
+              <p class="text-2xl font-bold mt-1" :class="getCacheRatioClass(postgresData.cacheSummary?.indexes?.hitRatio)">
+                {{ postgresData.cacheSummary?.indexes?.hitRatio || 0 }}%
+              </p>
+            </div>
+            <!-- Shared buffers -->
+            <div class="p-4 bg-light-100 dark:bg-dark-300 rounded-lg">
+              <p class="text-xs text-light-500 uppercase tracking-wide">Shared Buffers</p>
+              <p class="text-2xl font-bold text-light-900 dark:text-light-100 mt-1">
+                {{ postgresData.bufferConfig?.sharedBuffersSize || 'N/A' }}
+              </p>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Table Cache Details -->
+      <div class="card">
+        <div class="card-header">
+          <h3 class="font-semibold text-light-900 dark:text-white">Table Cache Stats</h3>
+          <p class="text-xs text-light-500 mt-0.5">Cache hit ratios per table in queen schema</p>
+        </div>
+        <div class="card-body">
+          <div class="overflow-x-auto">
+            <table class="w-full text-sm">
+              <thead>
+                <tr class="border-b border-light-200 dark:border-dark-50">
+                  <th class="text-left px-3 py-2 text-xs font-semibold text-light-500 uppercase">Table</th>
+                  <th class="text-right px-3 py-2 text-xs font-semibold text-light-500 uppercase">Disk Reads</th>
+                  <th class="text-right px-3 py-2 text-xs font-semibold text-light-500 uppercase">Cache Hits</th>
+                  <th class="text-right px-3 py-2 text-xs font-semibold text-light-500 uppercase">Hit Ratio</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr 
+                  v-for="table in postgresData.tableCache" 
+                  :key="table.table"
+                  class="border-b border-light-100 dark:border-dark-100"
+                >
+                  <td class="px-3 py-2 font-medium font-mono text-sm">{{ table.table }}</td>
+                  <td class="px-3 py-2 text-right text-light-600 dark:text-light-400">{{ formatNumber(table.diskReads) }}</td>
+                  <td class="px-3 py-2 text-right text-light-600 dark:text-light-400">{{ formatNumber(table.cacheHits) }}</td>
+                  <td class="px-3 py-2 text-right">
+                    <span :class="getCacheRatioClass(table.cacheHitRatio)">
+                      {{ table.cacheHitRatio || 0 }}%
+                    </span>
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+
+      <!-- Index Cache Details -->
+      <div class="card">
+        <div class="card-header">
+          <h3 class="font-semibold text-light-900 dark:text-white">Index Cache Stats</h3>
+          <p class="text-xs text-light-500 mt-0.5">Cache hit ratios per index (top 20 by disk reads)</p>
+        </div>
+        <div class="card-body">
+          <div class="overflow-x-auto">
+            <table class="w-full text-sm">
+              <thead>
+                <tr class="border-b border-light-200 dark:border-dark-50">
+                  <th class="text-left px-3 py-2 text-xs font-semibold text-light-500 uppercase">Index</th>
+                  <th class="text-left px-3 py-2 text-xs font-semibold text-light-500 uppercase">Table</th>
+                  <th class="text-right px-3 py-2 text-xs font-semibold text-light-500 uppercase">Disk Reads</th>
+                  <th class="text-right px-3 py-2 text-xs font-semibold text-light-500 uppercase">Cache Hits</th>
+                  <th class="text-right px-3 py-2 text-xs font-semibold text-light-500 uppercase">Hit Ratio</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr 
+                  v-for="idx in postgresData.indexCache" 
+                  :key="idx.index"
+                  class="border-b border-light-100 dark:border-dark-100"
+                >
+                  <td class="px-3 py-2 font-mono text-xs">{{ idx.index }}</td>
+                  <td class="px-3 py-2 text-light-600 dark:text-light-400">{{ idx.table }}</td>
+                  <td class="px-3 py-2 text-right text-light-600 dark:text-light-400">{{ formatNumber(idx.diskReads) }}</td>
+                  <td class="px-3 py-2 text-right text-light-600 dark:text-light-400">{{ formatNumber(idx.cacheHits) }}</td>
+                  <td class="px-3 py-2 text-right">
+                    <span :class="getCacheRatioClass(idx.cacheHitRatio)">
+                      {{ idx.cacheHitRatio || 0 }}%
+                    </span>
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+
+      <!-- Buffer Usage -->
+      <div v-if="postgresData.bufferUsage?.length" class="card">
+        <div class="card-header">
+          <h3 class="font-semibold text-light-900 dark:text-white">Buffer Cache Contents</h3>
+          <p class="text-xs text-light-500 mt-0.5">What's currently cached in shared_buffers</p>
+        </div>
+        <div class="card-body">
+          <div class="overflow-x-auto">
+            <table class="w-full text-sm">
+              <thead>
+                <tr class="border-b border-light-200 dark:border-dark-50">
+                  <th class="text-left px-3 py-2 text-xs font-semibold text-light-500 uppercase">Object</th>
+                  <th class="text-right px-3 py-2 text-xs font-semibold text-light-500 uppercase">Buffered Size</th>
+                  <th class="text-right px-3 py-2 text-xs font-semibold text-light-500 uppercase">% of Cache</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr 
+                  v-for="buf in postgresData.bufferUsage" 
+                  :key="buf.object"
+                  class="border-b border-light-100 dark:border-dark-100"
+                >
+                  <td class="px-3 py-2 font-mono text-sm">{{ buf.object }}</td>
+                  <td class="px-3 py-2 text-right text-light-600 dark:text-light-400">{{ buf.bufferedSize }}</td>
+                  <td class="px-3 py-2 text-right">
+                    <div class="flex items-center justify-end gap-2">
+                      <div class="w-16 h-2 bg-light-200 dark:bg-dark-200 rounded-full overflow-hidden">
+                        <div 
+                          class="h-full bg-indigo-500 rounded-full" 
+                          :style="{ width: `${Math.min(buf.percentOfCache, 100)}%` }"
+                        />
+                      </div>
+                      <span class="text-xs text-light-600 dark:text-light-400 w-12 text-right">
+                        {{ buf.percentOfCache }}%
+                      </span>
+                    </div>
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+
+      <!-- Table Sizes -->
+      <div class="card">
+        <div class="card-header">
+          <h3 class="font-semibold text-light-900 dark:text-white">Table Sizes</h3>
+          <p class="text-xs text-light-500 mt-0.5">Storage usage per table</p>
+        </div>
+        <div class="card-body">
+          <div class="overflow-x-auto">
+            <table class="w-full text-sm">
+              <thead>
+                <tr class="border-b border-light-200 dark:border-dark-50">
+                  <th class="text-left px-3 py-2 text-xs font-semibold text-light-500 uppercase">Table</th>
+                  <th class="text-right px-3 py-2 text-xs font-semibold text-light-500 uppercase">Total Size</th>
+                  <th class="text-right px-3 py-2 text-xs font-semibold text-light-500 uppercase">Table Size</th>
+                  <th class="text-right px-3 py-2 text-xs font-semibold text-light-500 uppercase">Index Size</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr 
+                  v-for="tbl in postgresData.tableSizes" 
+                  :key="tbl.table"
+                  class="border-b border-light-100 dark:border-dark-100"
+                >
+                  <td class="px-3 py-2 font-mono text-sm font-medium">{{ tbl.table }}</td>
+                  <td class="px-3 py-2 text-right font-medium text-light-900 dark:text-light-100">{{ tbl.totalSize }}</td>
+                  <td class="px-3 py-2 text-right text-light-600 dark:text-light-400">{{ tbl.tableSize }}</td>
+                  <td class="px-3 py-2 text-right text-indigo-600 dark:text-indigo-400">{{ tbl.indexSize }}</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+
+      <!-- Dead Tuples & HOT Updates (side by side) -->
+      <div class="grid grid-cols-1 lg:grid-cols-2 gap-4 sm:gap-6">
+        <!-- Dead Tuples -->
+        <div class="card">
+          <div class="card-header flex items-center justify-between">
+            <div>
+              <h3 class="font-semibold text-light-900 dark:text-white">Dead Tuples</h3>
+              <p class="text-xs text-light-500 mt-0.5">Tables needing vacuum</p>
+            </div>
+            <span v-if="postgresData.deadTuples?.length" class="badge badge-warning">
+              {{ postgresData.deadTuples.length }} tables
+            </span>
+          </div>
+          <div class="card-body">
+            <div v-if="postgresData.deadTuples?.length" class="overflow-x-auto">
+              <table class="w-full text-sm">
+                <thead>
+                  <tr class="border-b border-light-200 dark:border-dark-50">
+                    <th class="text-left px-3 py-2 text-xs font-semibold text-light-500 uppercase">Table</th>
+                    <th class="text-right px-3 py-2 text-xs font-semibold text-light-500 uppercase">Dead</th>
+                    <th class="text-right px-3 py-2 text-xs font-semibold text-light-500 uppercase">Dead %</th>
+                    <th class="text-left px-3 py-2 text-xs font-semibold text-light-500 uppercase">Last Vacuum</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr 
+                    v-for="tbl in postgresData.deadTuples" 
+                    :key="tbl.table"
+                    class="border-b border-light-100 dark:border-dark-100"
+                  >
+                    <td class="px-3 py-2 font-mono text-xs">{{ tbl.table }}</td>
+                    <td class="px-3 py-2 text-right text-amber-600 dark:text-amber-400">{{ formatNumber(tbl.deadTuples) }}</td>
+                    <td class="px-3 py-2 text-right">
+                      <span :class="tbl.deadPercentage > 10 ? 'text-rose-600 dark:text-rose-400' : 'text-light-600 dark:text-light-400'">
+                        {{ tbl.deadPercentage || 0 }}%
+                      </span>
+                    </td>
+                    <td class="px-3 py-2 text-xs text-light-500">
+                      {{ formatTimestamp(tbl.lastAutovacuum || tbl.lastVacuum) }}
+                    </td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+            <div v-else class="text-center py-8 text-light-500">
+              No dead tuples - tables are clean! ✓
+            </div>
+          </div>
+        </div>
+
+        <!-- HOT Updates -->
+        <div class="card">
+          <div class="card-header">
+            <h3 class="font-semibold text-light-900 dark:text-white">HOT Update Efficiency</h3>
+            <p class="text-xs text-light-500 mt-0.5">Heap-Only Tuple updates (higher is better)</p>
+          </div>
+          <div class="card-body">
+            <div v-if="postgresData.hotUpdates?.length" class="overflow-x-auto">
+              <table class="w-full text-sm">
+                <thead>
+                  <tr class="border-b border-light-200 dark:border-dark-50">
+                    <th class="text-left px-3 py-2 text-xs font-semibold text-light-500 uppercase">Table</th>
+                    <th class="text-right px-3 py-2 text-xs font-semibold text-light-500 uppercase">Updates</th>
+                    <th class="text-right px-3 py-2 text-xs font-semibold text-light-500 uppercase">HOT %</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr 
+                    v-for="tbl in postgresData.hotUpdates" 
+                    :key="tbl.table"
+                    class="border-b border-light-100 dark:border-dark-100"
+                  >
+                    <td class="px-3 py-2 font-mono text-xs">{{ tbl.table }}</td>
+                    <td class="px-3 py-2 text-right text-light-600 dark:text-light-400">{{ formatNumber(tbl.totalUpdates) }}</td>
+                    <td class="px-3 py-2 text-right">
+                      <span :class="getHotRatioClass(tbl.hotUpdatePercentage)">
+                        {{ tbl.hotUpdatePercentage || 0 }}%
+                      </span>
+                    </td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+            <div v-else class="text-center py-8 text-light-500">
+              No updates recorded yet
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Active Queries -->
+      <div class="card">
+        <div class="card-header flex items-center justify-between">
+          <div>
+            <h3 class="font-semibold text-light-900 dark:text-white">Active Queries</h3>
+            <p class="text-xs text-light-500 mt-0.5">Queries running longer than 1 second</p>
+          </div>
+          <span v-if="postgresData.activeQueries?.length" class="badge badge-danger">
+            {{ postgresData.activeQueries.length }} slow
+          </span>
+        </div>
+        <div class="card-body">
+          <div v-if="postgresData.activeQueries?.length" class="space-y-3">
+            <div 
+              v-for="query in postgresData.activeQueries" 
+              :key="query.pid"
+              class="p-3 bg-light-100 dark:bg-dark-300 rounded-lg"
+            >
+              <div class="flex items-center justify-between mb-2">
+                <span class="text-xs font-medium text-light-600 dark:text-light-400">
+                  PID: {{ query.pid }} · {{ query.state }}
+                </span>
+                <span class="text-xs font-mono" :class="query.duration > 10 ? 'text-rose-600 dark:text-rose-400' : 'text-amber-600 dark:text-amber-400'">
+                  {{ formatDurationSeconds(query.duration) }}
+                </span>
+              </div>
+              <code class="text-xs text-light-700 dark:text-light-300 block break-all">
+                {{ query.query }}
+              </code>
+              <div v-if="query.waitEventType" class="mt-2 text-xs text-light-500">
+                Wait: {{ query.waitEventType }} / {{ query.waitEvent }}
+              </div>
+            </div>
+          </div>
+          <div v-else class="text-center py-8 text-emerald-600 dark:text-emerald-400">
+            No slow queries running ✓
+          </div>
+        </div>
+      </div>
+
+      <!-- Autovacuum Status -->
+      <div v-if="postgresData.autovacuumStatus?.length" class="card">
+        <div class="card-header flex items-center justify-between">
+          <div>
+            <h3 class="font-semibold text-light-900 dark:text-white">Autovacuum Status</h3>
+            <p class="text-xs text-light-500 mt-0.5">Tables with >1000 dead tuples</p>
+          </div>
+          <span class="badge badge-warning">{{ postgresData.autovacuumStatus.length }} pending</span>
+        </div>
+        <div class="card-body">
+          <div class="overflow-x-auto">
+            <table class="w-full text-sm">
+              <thead>
+                <tr class="border-b border-light-200 dark:border-dark-50">
+                  <th class="text-left px-3 py-2 text-xs font-semibold text-light-500 uppercase">Table</th>
+                  <th class="text-right px-3 py-2 text-xs font-semibold text-light-500 uppercase">Dead Tuples</th>
+                  <th class="text-right px-3 py-2 text-xs font-semibold text-light-500 uppercase">Vacuum Count</th>
+                  <th class="text-left px-3 py-2 text-xs font-semibold text-light-500 uppercase">Last Autovacuum</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr 
+                  v-for="tbl in postgresData.autovacuumStatus" 
+                  :key="tbl.table"
+                  class="border-b border-light-100 dark:border-dark-100"
+                >
+                  <td class="px-3 py-2 font-mono text-sm">{{ tbl.table }}</td>
+                  <td class="px-3 py-2 text-right text-amber-600 dark:text-amber-400">{{ formatNumber(tbl.deadTuples) }}</td>
+                  <td class="px-3 py-2 text-right text-light-600 dark:text-light-400">{{ tbl.autovacuumCount }}</td>
+                  <td class="px-3 py-2 text-xs text-light-500">{{ formatTimestamp(tbl.lastAutovacuum) }}</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+    </template>
   </div>
 </template>
 
@@ -521,6 +896,7 @@ const customFrom = ref('')
 const customTo = ref('')
 const workerData = ref(null)
 const systemData = ref(null)
+const postgresData = ref(null)
 
 const timeRanges = [
   { label: '15m', value: 15 },
@@ -1115,6 +1491,54 @@ const formatTime = (timestamp) => {
   })
 }
 
+// Postgres stats helpers
+const formatNumber = (num) => {
+  if (num === undefined || num === null) return '0'
+  if (num >= 1e12) return (num / 1e12).toFixed(2) + 'T'
+  if (num >= 1e9) return (num / 1e9).toFixed(2) + 'B'
+  if (num >= 1e6) return (num / 1e6).toFixed(2) + 'M'
+  if (num >= 1e3) return (num / 1e3).toFixed(1) + 'K'
+  return num.toString()
+}
+
+const formatTimestamp = (ts) => {
+  if (!ts) return 'Never'
+  const date = new Date(ts)
+  const now = new Date()
+  const diffMs = now - date
+  const diffMins = Math.floor(diffMs / 60000)
+  const diffHours = Math.floor(diffMs / 3600000)
+  const diffDays = Math.floor(diffMs / 86400000)
+  
+  if (diffMins < 1) return 'Just now'
+  if (diffMins < 60) return `${diffMins}m ago`
+  if (diffHours < 24) return `${diffHours}h ago`
+  if (diffDays < 7) return `${diffDays}d ago`
+  return date.toLocaleDateString()
+}
+
+const formatDurationSeconds = (seconds) => {
+  if (seconds < 60) return `${seconds.toFixed(1)}s`
+  if (seconds < 3600) return `${Math.floor(seconds / 60)}m ${Math.floor(seconds % 60)}s`
+  return `${Math.floor(seconds / 3600)}h ${Math.floor((seconds % 3600) / 60)}m`
+}
+
+const getCacheRatioClass = (ratio) => {
+  if (ratio === undefined || ratio === null) return 'text-light-500'
+  if (ratio >= 99) return 'text-emerald-600 dark:text-emerald-400'
+  if (ratio >= 95) return 'text-cyber-600 dark:text-cyber-400'
+  if (ratio >= 90) return 'text-amber-600 dark:text-amber-400'
+  return 'text-rose-600 dark:text-rose-400'
+}
+
+const getHotRatioClass = (ratio) => {
+  if (ratio === undefined || ratio === null) return 'text-light-500'
+  if (ratio >= 95) return 'text-emerald-600 dark:text-emerald-400'
+  if (ratio >= 80) return 'text-cyber-600 dark:text-cyber-400'
+  if (ratio >= 50) return 'text-amber-600 dark:text-amber-400'
+  return 'text-rose-600 dark:text-rose-400'
+}
+
 const getLastMetricForReplica = (replica) => {
   if (!replica?.timeSeries?.length) return null
   return replica.timeSeries[replica.timeSeries.length - 1]?.metrics
@@ -1124,31 +1548,38 @@ const fetchData = async () => {
   loading.value = true
   
   try {
-    let from, to
-    
-    if (customMode.value && customFrom.value && customTo.value) {
-      // Use custom range
-      from = new Date(customFrom.value)
-      to = new Date(customTo.value)
+    // For postgres stats, no time range needed
+    if (dataSource.value === 'postgres') {
+      const res = await system.getPostgresStats()
+      postgresData.value = res.data
     } else {
-      // Use quick range
-      const now = new Date()
-      from = new Date(now.getTime() - timeRange.value * 60 * 1000)
-      to = now
+      // Worker and system metrics need time range
+      let from, to
+      
+      if (customMode.value && customFrom.value && customTo.value) {
+        // Use custom range
+        from = new Date(customFrom.value)
+        to = new Date(customTo.value)
+      } else {
+        // Use quick range
+        const now = new Date()
+        from = new Date(now.getTime() - timeRange.value * 60 * 1000)
+        to = now
+      }
+      
+      const params = {
+        from: from.toISOString(),
+        to: to.toISOString()
+      }
+      
+      const [workerRes, systemRes] = await Promise.all([
+        system.getWorkerMetrics(params),
+        system.getSystemMetrics(params)
+      ])
+      
+      workerData.value = workerRes.data
+      systemData.value = systemRes.data
     }
-    
-    const params = {
-      from: from.toISOString(),
-      to: to.toISOString()
-    }
-    
-    const [workerRes, systemRes] = await Promise.all([
-      system.getWorkerMetrics(params),
-      system.getSystemMetrics(params)
-    ])
-    
-    workerData.value = workerRes.data
-    systemData.value = systemRes.data
   } catch (err) {
     console.error('Failed to fetch system metrics:', err)
   } finally {

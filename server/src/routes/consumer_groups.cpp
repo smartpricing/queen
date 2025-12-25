@@ -62,10 +62,11 @@ static void submit_sp_call(
 
 void setup_consumer_group_routes(uWS::App* app, const RouteContext& ctx) {
     // GET /api/v1/consumer-groups - Consumer groups summary (async via stored procedure)
+    // Uses v2 which leverages pre-computed stats (~45x faster than v1)
     app->get("/api/v1/consumer-groups", [ctx](auto* res, auto* req) {
         (void)req;
         try {
-            submit_sp_call(ctx, res, "SELECT queen.get_consumer_groups_v1()");
+            submit_sp_call(ctx, res, "SELECT queen.get_consumer_groups_v2()");
         } catch (const std::exception& e) {
             send_error_response(res, e.what(), 500);
         }

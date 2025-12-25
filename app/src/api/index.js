@@ -92,6 +92,8 @@ export const system = {
   // System Metrics
   getSystemMetrics: (params) => client.get('/api/v1/analytics/system-metrics', { params }),
   getWorkerMetrics: (params) => client.get('/api/v1/analytics/worker-metrics', { params }),
+  // PostgreSQL Stats
+  getPostgresStats: () => client.get('/api/v1/analytics/postgres-stats'),
 }
 
 // Export all APIs

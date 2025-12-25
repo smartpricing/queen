@@ -1,6 +1,6 @@
 {
   "name": "queen-mq-docs",
-  "version": "0.5.0",
+  "version": "0.6.0",
   "description": "Queen MQ - Modern PostgreSQL-backed Message Queue Documentation",
   "type": "module",
   "scripts": {

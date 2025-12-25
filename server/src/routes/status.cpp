@@ -209,6 +209,17 @@ void setup_status_routes(uWS::App* app, const RouteContext& ctx) {
         }
     });
     
+    // GET /api/v1/analytics/postgres-stats - PostgreSQL internal stats (async via stored procedure)
+    app->get("/api/v1/analytics/postgres-stats", [ctx](auto* res, auto* req) {
+        (void)req;
+        try {
+            submit_sp_call(ctx, res, 
+                "SELECT queen.get_postgres_stats_v1()");
+        } catch (const std::exception& e) {
+            send_error_response(res, e.what(), 500);
+        }
+    });
+    
     // GET /api/v1/status/buffers - File buffer stats (local, not async)
     app->get("/api/v1/status/buffers", [ctx](auto* res, auto* req) {
         (void)req;
