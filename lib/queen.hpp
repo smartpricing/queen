@@ -24,6 +24,8 @@
 #include <algorithm>
 #include "worker_metrics.hpp"
 
+// pg data on frontend
+// retention data on frontend
 // replace udp sync witch tcp with libuv
 // fix this lib/schema/procedures/008_consumer_groups.sql 
 // fix stats, both backend perfromance and frontend 

@@ -3,7 +3,7 @@ import axios from 'axios';
 // Use environment variable if set, otherwise use current origin (for same-server deployment)
 // Falls back to localhost:6632 only in development when not served from Queen server
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 
-  (typeof window !== 'undefined' && window.location.origin !== 'http://localhost:4000' 
+  (typeof window !== 'undefined' && window.location.origin !== 'http://localhost:4001' 
     ? window.location.origin 
     : 'http://localhost:6632');
 

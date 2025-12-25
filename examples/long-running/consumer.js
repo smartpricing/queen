@@ -6,7 +6,7 @@ const QUEUE_NAME = 'queen-long-running';
 const connections = 5;
 const batchSize = 1000;
 const maxPartition = 500;
-const workers = 2;
+const workers = 5;
 const duration = 10 * 60 ; // 10 minutes
 
 // Pre-generate requests array with different partitions
@@ -14,7 +14,7 @@ const requests = [];
 for (let i = 0; i <= maxPartition; i++) {
   requests.push({
     method: 'GET',
-    path: `/api/v1/pop/queue/${QUEUE_NAME}/partition/${i}?batch=${batchSize}&wait=true&autoAck=true`,
+    path: `/api/v1/pop/queue/${QUEUE_NAME}/partition/${i}?batch=${batchSize}&wait=false&autoAck=true`,
     headers: {
       'Content-Type': 'application/json'
     }
