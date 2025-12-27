@@ -311,106 +311,129 @@
       </div>
     </div>
 
-    <!-- Trace Detail Modal -->
-    <div 
-      v-if="selectedTrace"
-      class="fixed inset-0 z-50 flex items-center justify-center p-4 bg-dark-500/50 backdrop-blur-sm"
-      @click.self="selectedTrace = null"
-    >
-      <div class="bg-white dark:bg-dark-300 rounded-xl shadow-2xl w-full max-w-2xl max-h-[80vh] overflow-hidden">
-        <div class="px-6 py-4 border-b border-light-200 dark:border-dark-100 flex items-center justify-between">
-          <div class="flex items-center gap-3">
-            <span 
-              class="w-3 h-3 rounded-full"
-              :class="getEventColor(selectedTrace.event_type)"
-            />
-            <h3 class="font-semibold text-light-900 dark:text-white uppercase tracking-wide">
-              {{ selectedTrace.event_type }} Trace
-            </h3>
-          </div>
-          <button @click="selectedTrace = null" class="p-1 hover:bg-light-100 dark:hover:bg-dark-200 rounded-lg transition-colors">
-            <svg class="w-5 h-5 text-light-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" />
-            </svg>
-          </button>
-        </div>
-        <div class="p-6 overflow-y-auto max-h-[60vh] space-y-4">
-          <!-- Basic Info Grid -->
-          <div class="grid grid-cols-2 gap-4 text-sm">
-            <div>
-              <label class="text-xs text-light-500 uppercase tracking-wider">Time</label>
-              <p class="text-light-900 dark:text-light-100">{{ formatDateTime(selectedTrace.created_at) }}</p>
-            </div>
-            <div>
-              <label class="text-xs text-light-500 uppercase tracking-wider">Queue</label>
-              <p class="text-light-900 dark:text-light-100">{{ selectedTrace.queue_name || '-' }}</p>
-            </div>
-            <div>
-              <label class="text-xs text-light-500 uppercase tracking-wider">Partition</label>
-              <p class="text-light-900 dark:text-light-100">{{ selectedTrace.partition_name || '-' }}</p>
-            </div>
-            <div>
-              <label class="text-xs text-light-500 uppercase tracking-wider">Transaction ID</label>
-              <p class="font-mono text-light-900 dark:text-light-100 text-xs break-all">{{ selectedTrace.transaction_id }}</p>
-            </div>
-            <div v-if="selectedTrace.worker_id">
-              <label class="text-xs text-light-500 uppercase tracking-wider">Worker ID</label>
-              <p class="font-mono text-light-900 dark:text-light-100 text-xs break-all">{{ selectedTrace.worker_id }}</p>
-            </div>
-            <div v-if="selectedTrace.consumer_group && selectedTrace.consumer_group !== '__QUEUE_MODE__'">
-              <label class="text-xs text-light-500 uppercase tracking-wider">Consumer Group</label>
-              <p class="text-light-900 dark:text-light-100">{{ selectedTrace.consumer_group }}</p>
-            </div>
-          </div>
-
-          <!-- Trace Names -->
-          <div v-if="selectedTrace.trace_names?.length > 0">
-            <label class="text-xs text-light-500 uppercase tracking-wider block mb-2">Trace Names</label>
-            <div class="flex flex-wrap gap-2">
-              <span 
-                v-for="name in selectedTrace.trace_names"
-                :key="name"
-                class="badge"
-                :class="name === currentTraceName ? 'badge-queen' : 'badge-secondary'"
-              >
-                {{ name }}
-              </span>
-            </div>
-          </div>
-
-          <!-- Trace Data -->
-          <div v-if="selectedTrace.data">
-            <label class="text-xs text-light-500 uppercase tracking-wider block mb-2">Trace Data</label>
-            
-            <!-- Text content -->
-            <div v-if="selectedTrace.data.text" class="mb-3">
-              <p class="text-sm text-light-900 dark:text-light-100 bg-light-100 dark:bg-dark-200 rounded-lg p-3">
-                {{ selectedTrace.data.text }}
+    <!-- Trace Detail Panel (teleported to body to avoid transform issues) -->
+    <Teleport to="body">
+      <div 
+        v-if="selectedTrace"
+        class="fixed inset-0 sm:left-auto w-full sm:max-w-2xl bg-light-50 dark:bg-dark-400 shadow-2xl z-50 overflow-y-auto border-l border-light-200 dark:border-dark-50"
+      >
+        <div class="p-4 sm:p-6">
+          <!-- Header -->
+          <div class="flex items-start justify-between mb-5 pb-4 border-b border-light-200 dark:border-dark-50">
+            <div class="flex-1 min-w-0">
+              <div class="flex items-center gap-3 mb-1">
+                <span 
+                  class="w-3 h-3 rounded-full flex-shrink-0"
+                  :class="getEventColor(selectedTrace.event_type)"
+                />
+                <h3 class="text-base font-bold text-light-900 dark:text-white uppercase tracking-wide">
+                  {{ selectedTrace.event_type }} Trace
+                </h3>
+              </div>
+              <p class="text-xs font-mono text-light-500 break-all">
+                {{ selectedTrace.transaction_id }}
               </p>
             </div>
-            
-            <!-- JSON data (excluding text) -->
-            <div v-if="hasAdditionalData(selectedTrace.data)">
-              <pre class="text-xs font-mono bg-light-100 dark:bg-dark-200 rounded-lg p-3 overflow-x-auto text-light-800 dark:text-light-200">{{ formatTraceData(selectedTrace.data) }}</pre>
-            </div>
+            <button 
+              @click="selectedTrace = null"
+              class="text-light-400 hover:text-light-600 dark:hover:text-light-300 p-1.5 rounded-lg hover:bg-light-100 dark:hover:bg-dark-300 transition-colors"
+            >
+              <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" />
+              </svg>
+            </button>
           </div>
 
-          <!-- Link to Message -->
-          <div class="pt-4 border-t border-light-200 dark:border-dark-100">
-            <router-link 
-              :to="`/messages?partitionId=${selectedTrace.partition_id}&transactionId=${selectedTrace.transaction_id}`"
-              class="btn btn-secondary w-full text-sm"
-              @click="selectedTrace = null"
-            >
-              <svg class="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" />
-              </svg>
-              View Full Message
-            </router-link>
+          <!-- Content -->
+          <div class="space-y-6">
+            <!-- Basic Info -->
+            <div class="space-y-4">
+              <div>
+                <label class="text-xs font-medium text-light-500 block mb-1.5 uppercase tracking-wide">Time</label>
+                <p class="text-sm text-light-900 dark:text-light-100">{{ formatDateTime(selectedTrace.created_at) }}</p>
+              </div>
+              
+              <div>
+                <label class="text-xs font-medium text-light-500 block mb-1.5 uppercase tracking-wide">Queue / Partition</label>
+                <p class="text-sm font-medium text-light-900 dark:text-light-100">
+                  {{ selectedTrace.queue_name || '-' }} / {{ selectedTrace.partition_name || '-' }}
+                </p>
+              </div>
+              
+              <div>
+                <label class="text-xs font-medium text-light-500 block mb-1.5 uppercase tracking-wide">Transaction ID</label>
+                <p class="text-xs font-mono text-light-700 dark:text-light-300 break-all">{{ selectedTrace.transaction_id }}</p>
+              </div>
+              
+              <div v-if="selectedTrace.worker_id">
+                <label class="text-xs font-medium text-light-500 block mb-1.5 uppercase tracking-wide">Worker ID</label>
+                <p class="text-xs font-mono text-light-700 dark:text-light-300 break-all">{{ selectedTrace.worker_id }}</p>
+              </div>
+              
+              <div v-if="selectedTrace.consumer_group && selectedTrace.consumer_group !== '__QUEUE_MODE__'">
+                <label class="text-xs font-medium text-light-500 block mb-1.5 uppercase tracking-wide">Consumer Group</label>
+                <p class="text-sm text-light-700 dark:text-light-300">{{ selectedTrace.consumer_group }}</p>
+              </div>
+            </div>
+
+            <!-- Trace Names -->
+            <div v-if="selectedTrace.trace_names?.length > 0">
+              <label class="text-xs font-medium text-light-500 block mb-2 uppercase tracking-wide">Trace Names</label>
+              <div class="flex flex-wrap gap-2">
+                <span 
+                  v-for="name in selectedTrace.trace_names"
+                  :key="name"
+                  class="badge"
+                  :class="name === currentTraceName ? 'badge-queen' : 'badge-secondary'"
+                >
+                  {{ name }}
+                </span>
+              </div>
+            </div>
+
+            <!-- Trace Data -->
+            <div v-if="selectedTrace.data">
+              <label class="text-xs font-medium text-light-500 block mb-2 uppercase tracking-wide">Trace Data</label>
+              
+              <!-- Text content -->
+              <div v-if="selectedTrace.data.text" class="mb-3">
+                <p class="text-sm text-light-900 dark:text-light-100 bg-light-100 dark:bg-dark-200 rounded-lg p-3">
+                  {{ selectedTrace.data.text }}
+                </p>
+              </div>
+              
+              <!-- JSON data (excluding text) -->
+              <div v-if="hasAdditionalData(selectedTrace.data)">
+                <div class="bg-dark-400 dark:bg-dark-500 rounded-lg p-4 overflow-x-auto">
+                  <pre class="text-xs font-mono whitespace-pre-wrap text-light-200">{{ formatTraceData(selectedTrace.data) }}</pre>
+                </div>
+              </div>
+            </div>
+
+            <!-- Link to Message -->
+            <div class="pt-4 border-t border-light-200 dark:border-dark-50">
+              <router-link 
+                :to="`/messages?partitionId=${selectedTrace.partition_id}&transactionId=${selectedTrace.transaction_id}`"
+                class="btn btn-secondary w-full text-sm"
+                @click="selectedTrace = null"
+              >
+                <svg class="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" />
+                </svg>
+                View Full Message
+              </router-link>
+            </div>
           </div>
         </div>
       </div>
-    </div>
+      
+      <!-- Backdrop -->
+      <div 
+        v-if="selectedTrace"
+        class="fixed inset-0 bg-dark-500/50 backdrop-blur-sm z-40"
+        @click="selectedTrace = null"
+      ></div>
+    </Teleport>
   </div>
 </template>
 

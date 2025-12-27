@@ -1,50 +1,56 @@
 # Webapp Setup
 
-The web dashboard is bundled with the Queen server by default.
+The web dashboard is bundled with the Queen server - no separate setup required.
 
-## Access Dashboard
+## Default Access
 
-Simply open your browser:
+When Queen is running, access the dashboard at:
 
 ```
 http://localhost:6632
 ```
 
-## Development Mode
+## Development Setup
 
-To run the webapp separately for development:
+If you want to run the webapp separately for development:
 
 ```bash
-cd webapp
+cd app
 npm install
 npm run dev
 ```
 
-Dashboard available at `http://localhost:4000`.
+The dev server runs on port 5173 by default.
 
-## Configuration
+### Configuration
 
-Configure API endpoint in `src/api/config.js`:
+Create or edit `app/.env` to point to your Queen server:
 
-```javascript
-export const API_URL = 'http://localhost:6632'
+```env
+VITE_QUEEN_URL=http://localhost:6632
 ```
 
-## Build for Production
+### Building for Production
 
 ```bash
+cd app
 npm run build
 ```
 
-Output in `dist/` folder.
+The built files go to `app/dist/` and are automatically served by the Queen server.
 
-## Deploy Separately
+## Features
 
-If deploying webapp separately from server:
+The webapp provides:
 
-1. Build webapp: `npm run build`
-2. Serve `dist/` folder with nginx/apache
-3. Configure CORS on Queen server
-4. Set API_URL to Queen server address
+- **Messages** - Browse and inspect queue messages
+- **Consumer Groups** - Manage consumer group cursors
+- **Traces** - Search and view message traces
+- **System** - Monitor health and toggle maintenance modes
 
-[Complete guide](https://github.com/smartpricing/queen/tree/master/webapp)
+## Related
+
+- [Installation](/guide/installation) - Server installation
+- [Web Dashboard Overview](/webapp/overview) - Feature overview
+- [Maintenance Operations](/guide/maintenance-operations) - Emergency procedures
+

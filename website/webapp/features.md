@@ -1,64 +1,59 @@
 # Webapp Features
 
-Complete feature tour of the Queen MQ dashboard.
-
-## Dashboard
-
-Real-time metrics:
-- Messages per second
-- Requests per second
-- Active queues
-- Consumer groups
-- System health
-
-## Queues
-
-- List all queues
-- Create new queues
-- Configure queue settings
-- View queue statistics
-- Monitor queue depth
-- Delete queues
+The Queen MQ web dashboard provides real-time monitoring and management.
 
 ## Messages
 
-- Browse messages
-- Search by transaction ID
-- Filter by queue/partition
-- View message payload
-- See message status
-- Track message lifecycle
+Browse and inspect messages across all queues.
+
+- View message payload and metadata
+- See processing timeline with traces
+- Filter by queue, namespace, and status
+- Track message state (pending, processing, completed)
 
 ## Consumer Groups
 
-- List all groups
-- View group positions
-- Monitor lag
-- Reset group positions
-- Track consumer activity
+Manage consumer groups and their cursors.
+
+- View all consumer groups
+- Monitor partition assignments
+- Track lag per queue
+- **Move to Now** - Skip all pending messages
+- **Seek** - Move cursor to specific timestamp
+- **Delete** - Remove consumer group state
 
 ## Traces
 
-- Visual trace timelines
-- Message flow across queues
-- Performance analysis
-- Bottleneck identification
-- Debug workflows
+Debug distributed workflows with message tracing.
 
-## Analytics
+- Search traces by name
+- View cross-service timelines
+- See trace statistics
+- Drill into individual trace events
 
-- Historical charts
-- Throughput trends
-- Queue comparisons
-- Performance metrics
-- System insights
+## System Status
 
-## System
+Monitor Queen health and performance.
 
-- Server health
-- Database status
-- Connection pools
-- Thread usage
-- Memory metrics
+- Real-time throughput metrics
+- Active connections
+- Queue statistics
+- **Push Maintenance** - Buffer messages to disk
+- **Pop Maintenance** - Pause all consumption
 
-[Web Dashboard](/webapp/overview)
+## Maintenance Toggles
+
+Quick access to emergency maintenance modes:
+
+| Toggle | Effect |
+|--------|--------|
+| Push Maint. | Routes PUSH to file buffer |
+| Pop Maint. | Returns empty arrays for POP |
+
+## Related
+
+- [Maintenance Operations](/guide/maintenance-operations) - Emergency procedures
+- [Consumer Groups](/guide/consumer-groups) - Consumer group concepts
+- [Message Tracing](/guide/tracing) - Add traces to messages
+- [Monitoring](/server/monitoring) - Server metrics
+

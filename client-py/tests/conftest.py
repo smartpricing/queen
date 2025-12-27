@@ -70,6 +70,6 @@ async def cleanup_test_data(db_pool):
     
     yield
     
-    # Cleanup after tests
-    await cleanup()
+    # Cleanup after tests (commented out for debugging)
+    # await cleanup()
 

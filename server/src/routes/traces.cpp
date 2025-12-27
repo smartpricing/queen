@@ -136,7 +136,7 @@ void setup_trace_routes(uWS::App* app, const RouteContext& ctx) {
     // GET /api/v1/traces/by-name/:traceName - Get traces by any name (async via stored procedure)
     app->get("/api/v1/traces/by-name/:traceName", [ctx](auto* res, auto* req) {
         try {
-            std::string trace_name = std::string(req->getParameter(0));
+            std::string trace_name = url_decode(std::string(req->getParameter(0)));
             int limit = get_query_param_int(req, "limit", 100);
             int offset = get_query_param_int(req, "offset", 0);
             

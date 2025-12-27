@@ -1711,6 +1711,221 @@ stats = queen.get_buffer_stats()
 print(stats)
 ```
 
+## Admin API
+
+The Admin API provides administrative and observability operations typically used by dashboards, monitoring tools, and admin scripts. These endpoints are for inspecting the system, not for regular application message processing.
+
+### Accessing the Admin API
+
+```python
+from queen import Queen
+
+async with Queen('http://localhost:6632') as queen:
+    # Access via .admin property
+    overview = await queen.admin.get_overview()
+```
+
+### Resources
+
+```python
+# System overview (queue counts, message stats, etc.)
+overview = await queen.admin.get_overview()
+
+# List all namespaces
+namespaces = await queen.admin.get_namespaces()
+
+# List all tasks
+tasks = await queen.admin.get_tasks()
+```
+
+### Queue Management
+
+```python
+# List all queues
+queues = await queen.admin.list_queues(limit=100, offset=0)
+
+# Get specific queue details
+queue = await queen.admin.get_queue('my-queue')
+
+# List partitions
+partitions = await queen.admin.get_partitions(queue='my-queue')
+```
+
+### Message Inspection
+
+```python
+# List messages with filters
+messages = await queen.admin.list_messages(
+    queue='my-queue',
+    status='pending',  # pending, processing, completed, failed
+    limit=50,
+    offset=0
+)
+
+# Get specific message
+message = await queen.admin.get_message(partition_id, transaction_id)
+
+# Delete a message (DESTRUCTIVE!)
+await queen.admin.delete_message(partition_id, transaction_id)
+
+# Retry a failed message
+await queen.admin.retry_message(partition_id, transaction_id)
+
+# Move message to Dead Letter Queue
+await queen.admin.move_message_to_dlq(partition_id, transaction_id)
+```
+
+### Traces
+
+```python
+# Get available trace names
+trace_names = await queen.admin.get_trace_names(limit=100)
+
+# Get traces by name (cross-service correlation)
+traces = await queen.admin.get_traces_by_name(
+    'order-12345',
+    limit=100,
+    from_='2025-01-01T00:00:00Z',
+    to='2025-01-31T23:59:59Z'
+)
+
+# Get traces for a specific message
+message_traces = await queen.admin.get_traces_for_message(partition_id, transaction_id)
+```
+
+### Analytics & Status
+
+```python
+# System status
+status = await queen.admin.get_status()
+
+# Queue statistics
+queue_stats = await queen.admin.get_queue_stats(limit=100)
+
+# Detailed stats for specific queue
+detail = await queen.admin.get_queue_detail('my-queue')
+
+# Analytics data (throughput, latency, etc.)
+analytics = await queen.admin.get_analytics(
+    from_='2025-01-01T00:00:00Z',
+    to='2025-01-31T23:59:59Z'
+)
+```
+
+### Consumer Groups
+
+```python
+# List all consumer groups
+groups = await queen.admin.list_consumer_groups()
+
+# Get specific consumer group details
+group = await queen.admin.get_consumer_group('my-consumer-group')
+
+# Find lagging consumers (behind by > 60 seconds)
+lagging = await queen.admin.get_lagging_consumers(min_lag_seconds=60)
+
+# Refresh consumer statistics
+await queen.admin.refresh_consumer_stats()
+
+# Delete consumer group for a specific queue
+await queen.admin.delete_consumer_group_for_queue(
+    'my-group', 
+    'my-queue', 
+    delete_metadata=True
+)
+
+# Seek consumer group offset
+await queen.admin.seek_consumer_group(
+    'my-group',
+    'my-queue',
+    {'timestamp': '2025-01-15T10:00:00Z'}
+)
+```
+
+### System Operations
+
+```python
+# Health check
+health = await queen.admin.health()
+
+# Prometheus metrics (raw text)
+metrics = await queen.admin.metrics()
+
+# Maintenance mode (push operations)
+maintenance_status = await queen.admin.get_maintenance_mode()
+await queen.admin.set_maintenance_mode(True)   # Enable
+await queen.admin.set_maintenance_mode(False)  # Disable
+
+# Pop maintenance mode
+pop_maintenance = await queen.admin.get_pop_maintenance_mode()
+await queen.admin.set_pop_maintenance_mode(True)
+
+# System metrics (CPU, memory, connections)
+system_metrics = await queen.admin.get_system_metrics()
+
+# Worker metrics
+worker_metrics = await queen.admin.get_worker_metrics()
+
+# PostgreSQL statistics
+pg_stats = await queen.admin.get_postgres_stats()
+```
+
+### Admin API Reference
+
+| Method | Description |
+|--------|-------------|
+| **Resources** | |
+| `get_overview()` | System overview with counts |
+| `get_namespaces()` | List all namespaces |
+| `get_tasks()` | List all tasks |
+| **Queues** | |
+| `list_queues(**params)` | List queues with pagination |
+| `get_queue(name)` | Get queue details |
+| `clear_queue(name, partition?)` | Clear queue messages |
+| `get_partitions(**params)` | List partitions |
+| **Messages** | |
+| `list_messages(**params)` | List messages with filters |
+| `get_message(partition_id, tx_id)` | Get specific message |
+| `delete_message(partition_id, tx_id)` | Delete message |
+| `retry_message(partition_id, tx_id)` | Retry failed message |
+| `move_message_to_dlq(partition_id, tx_id)` | Move to DLQ |
+| **Traces** | |
+| `get_trace_names(**params)` | List available trace names |
+| `get_traces_by_name(name, **params)` | Get traces by name |
+| `get_traces_for_message(partition_id, tx_id)` | Get message traces |
+| **Analytics** | |
+| `get_status(**params)` | System status |
+| `get_queue_stats(**params)` | Queue statistics |
+| `get_queue_detail(name, **params)` | Detailed queue stats |
+| `get_analytics(**params)` | Analytics data |
+| **Consumer Groups** | |
+| `list_consumer_groups()` | List all consumer groups |
+| `get_consumer_group(name)` | Get consumer group details |
+| `get_lagging_consumers(min_lag_seconds)` | Find lagging consumers |
+| `refresh_consumer_stats()` | Refresh statistics |
+| `delete_consumer_group_for_queue(cg, queue, delete_meta)` | Delete CG for queue |
+| `seek_consumer_group(cg, queue, options)` | Seek offset |
+| **System** | |
+| `health()` | Health check |
+| `metrics()` | Prometheus metrics |
+| `get_maintenance_mode()` | Get push maintenance status |
+| `set_maintenance_mode(enabled)` | Set push maintenance |
+| `get_pop_maintenance_mode()` | Get pop maintenance status |
+| `set_pop_maintenance_mode(enabled)` | Set pop maintenance |
+| `get_system_metrics(**params)` | System metrics |
+| `get_worker_metrics(**params)` | Worker metrics |
+| `get_postgres_stats()` | PostgreSQL stats |
+
+::: tip When to Use Admin API
+Use the Admin API for:
+- **Dashboards** - Building monitoring UIs
+- **Scripts** - Maintenance and debugging scripts
+- **Monitoring** - Integration with alerting systems
+- **Operations** - Managing consumer groups and queues
+
+For normal message processing, use `queue().push()`, `queue().consume()`, and `ack()` instead.
+:::
+
 ## Links
 
 - [Python Client on GitHub](https://github.com/smartpricing/queen/tree/master/client-py)

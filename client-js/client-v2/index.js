@@ -3,5 +3,6 @@
  */
 
 export { Queen } from './Queen.js'
+export { Admin } from './admin/Admin.js'
 export { CLIENT_DEFAULTS, QUEUE_DEFAULTS, CONSUME_DEFAULTS, POP_DEFAULTS, BUFFER_DEFAULTS } from './utils/defaults.js'
 

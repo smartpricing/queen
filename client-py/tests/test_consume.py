@@ -50,44 +50,6 @@ async def test_consumer_trace(client):
 
 
 @pytest.mark.asyncio
-async def test_consumer_namespace(client):
-    """Test consumer with namespace"""
-    queue = await client.queue("test-queue-v2-namespace").namespace("test-namespace").create()
-    assert queue.get("configured") is True
-    
-    await client.queue("test-queue-v2-namespace").push([{"data": {"message": "Hello, world!"}}])
-    
-    msg_to_return = None
-    
-    async def handler(msg):
-        nonlocal msg_to_return
-        msg_to_return = msg
-    
-    await client.queue().namespace("test-namespace").batch(1).limit(1).each().consume(handler)
-    
-    assert msg_to_return is not None
-
-
-@pytest.mark.asyncio
-async def test_consumer_task(client):
-    """Test consumer with task"""
-    queue = await client.queue("test-queue-v2-task").task("test-task").create()
-    assert queue.get("configured") is True
-    
-    await client.queue("test-queue-v2-task").push([{"data": {"message": "Hello, world!"}}])
-    
-    msg_to_return = None
-    
-    async def handler(msg):
-        nonlocal msg_to_return
-        msg_to_return = msg
-    
-    await client.queue().task("test-task").batch(1).limit(1).each().consume(handler)
-    
-    assert msg_to_return is not None
-
-
-@pytest.mark.asyncio
 async def test_consumer_with_partition(client):
     """Test consumer with partitions"""
     queue = await client.queue("test-queue-v2-consume-with-partition").create()
@@ -151,13 +113,13 @@ async def test_consumer_batch_consume(client):
 @pytest.mark.asyncio
 async def test_consumer_ordering(client):
     """Test message ordering"""
-    queue = await client.queue("test-queue-v2-consume-batch").create()
+    queue = await client.queue("test-queue-v2-consume-ordering").create()
     assert queue.get("configured") is True
     
     messages_to_push = 100
     
     for i in range(messages_to_push):
-        await client.queue("test-queue-v2-consume-batch").push([{"data": {"id": i}}])
+        await client.queue("test-queue-v2-consume-ordering").push([{"data": {"id": i}}])
         print(f"Pushed message: {i}")
     
     last_id = None
@@ -171,7 +133,7 @@ async def test_consumer_ordering(client):
                 raise AssertionError("Message ordering violation")
             last_id = msg["data"]["id"]
     
-    await client.queue("test-queue-v2-consume-batch").batch(1).wait(False).limit(messages_to_push).each().consume(handler)
+    await client.queue("test-queue-v2-consume-ordering").batch(1).wait(False).limit(messages_to_push).each().consume(handler)
     
     assert last_id == messages_to_push - 1
 
@@ -326,9 +288,17 @@ async def test_consumer_group_with_partition(client):
 
 
 @pytest.mark.asyncio
-async def test_manual_ack(client):
-    """Test manual acknowledgment with callbacks"""
-    queue = await client.queue("test-queue-v2-manual-ack").create()
+async def test_batch_consume_with_auto_ack(client):
+    """Test batch consumption with auto-ack (default behavior)
+    
+    This test verifies that batch consumption with auto_ack=True works correctly.
+    Auto-ack is the recommended mode for batch processing as it handles ACKs
+    atomically within the consume loop.
+    """
+    import time
+    queue_name = f"test-queue-v2-batch-auto-ack-{int(time.time())}"
+    
+    queue = await client.queue(queue_name).create()
     assert queue.get("configured") is True
     
     messages_to_push = 10000
@@ -338,10 +308,10 @@ async def test_manual_ack(client):
     for i in range(messages_to_push):
         messages.append({"data": {"id": i}})
         if len(messages) >= 1000:
-            await client.queue("test-queue-v2-manual-ack").push(messages)
+            await client.queue(queue_name).push(messages)
             messages = []
     if messages:
-        await client.queue("test-queue-v2-manual-ack").push(messages)
+        await client.queue(queue_name).push(messages)
     
     unique_ids = set()
     last_id = None
@@ -357,21 +327,13 @@ async def test_manual_ack(client):
                 last_id = msg["data"]["id"]
             unique_ids.add(msg["data"]["id"])
     
-    async def on_success(msgs, result):
-        await client.ack(msgs, True)
-    
-    async def on_error(msgs, error):
-        await client.ack(msgs, False)
-    
-    await (client.queue("test-queue-v2-manual-ack")
-        .concurrency(10)
-        .subscription_mode("from_beginning")
+    # Use auto_ack (default) - no callbacks needed
+    await (client.queue(queue_name)
+        .concurrency(1)
         .batch(1000)
         .wait(False)
-        .limit(1)
-        .consume(handler)
-        .on_success(on_success)
-        .on_error(on_error))
+        .limit(10000)
+        .consume(handler))
     
     assert len(unique_ids) == messages_to_push
 

@@ -1,30 +1,51 @@
-# Web Dashboard
+# Web Dashboard Overview
 
-Modern Vue 3 web interface for managing and monitoring Queen MQ.
+The Queen MQ web dashboard is bundled with the server and provides real-time monitoring and management capabilities.
 
-## Features
+## Accessing the Dashboard
 
-- **Real-time Dashboard** - System metrics and throughput
-- **Message Visualization** - Charts and graphs
-- **Queue Management** - Create, configure, monitor queues
-- **Consumer Groups** - Track group positions and lag
-- **Message Browser** - Search and inspect messages
-- **Trace Explorer** - Debug distributed workflows
-- **Analytics** - Historical insights
-- **Dark/Light Theme** - Beautiful UI
-
-## Screenshots
-
-![Dashboard](/webapp.png)
-
-## Access
-
-The dashboard is bundled with Queen server at:
+Once Queen is running, access the dashboard at:
 
 ```
 http://localhost:6632
 ```
 
-No additional installation needed!
+No additional installation required - it's built into the server.
 
-[Setup Guide](/webapp/setup) | [GitHub](https://github.com/smartpricing/queen/tree/master/webapp)
+## Main Features
+
+### Messages View
+
+- Browse messages across all queues
+- View message details and payload
+- See processing timeline with traces
+- Filter by queue, namespace, and status
+
+### Consumer Groups
+
+- View all consumer groups and their status
+- Monitor partition assignments
+- Track consumer lag per queue
+- Perform seek and move operations
+
+### Traces
+
+- Search traces by name
+- View cross-service workflows
+- Debug distributed message flows
+- See trace statistics and timelines
+
+### System Status
+
+- Real-time throughput metrics
+- Connection statistics
+- Queue depth monitoring
+- Maintenance mode toggles
+
+## Related
+
+- [Installation](/guide/installation) - Get Queen running
+- [Message Tracing](/guide/tracing) - Add traces to messages
+- [Maintenance Operations](/guide/maintenance-operations) - Emergency procedures
+- [Monitoring](/server/monitoring) - Server metrics and health checks
+

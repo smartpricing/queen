@@ -229,33 +229,32 @@ void setup_push_routes(uWS::App* app, const RouteContext& ctx) {
                             nlohmann::json json_response;
                             int status_code = 201;
                             bool is_error = false;
+                            bool db_error_detected = false;
+                            std::string db_error_msg;
                             
                             try {
                                 json_response = nlohmann::json::parse(result);
                                 
-                                // Cleanup: remove items from failover storage (push succeeded)
-                                if (push_failover_storage) {
-                                    push_failover_storage->remove(request_id);
+                                // Check if the response indicates a database error
+                                // Queen returns {"success": false, "error": "..."} on DB failure
+                                if (json_response.is_object() && 
+                                    json_response.contains("success") && 
+                                    json_response["success"].is_boolean() &&
+                                    !json_response["success"].get<bool>()) {
+                                    db_error_detected = true;
+                                    db_error_msg = json_response.value("error", "Database error");
+                                    spdlog::warn("[Worker {}] PUSH: Database error detected: {}", worker_id, db_error_msg);
                                 }
                                 
-                                // Notify other instances via UDP that messages are available
-                                // This triggers pop backoff reset on remote workers
-                                if (global_shared_state && global_shared_state->is_enabled()) {
-                                    // Extract unique queue/partition pairs from the pushed items
-                                    // items_json is already a nlohmann::json array
-                                    std::set<std::pair<std::string, std::string>> notified;
-                                    for (const auto& item : items_json) {
-                                        std::string queue = item.value("queue", "");
-                                        std::string partition = item.value("partition", "Default");
-                                        if (!queue.empty() && notified.insert({queue, partition}).second) {
-                                            global_shared_state->notify_message_available(queue, partition);
-                                        }
-                                    }
-                                }
                             } catch (const std::exception& e) {
-                                // Parse failed - try file buffer failover
+                                // Parse failed - also treat as DB error for failover
+                                db_error_detected = true;
+                                db_error_msg = e.what();
                                 spdlog::error("[Worker {}] PUSH result parse failed: {}", worker_id, e.what());
-                                
+                            }
+                            
+                            // If database error detected, try file buffer failover
+                            if (db_error_detected) {
                                 if (push_failover_storage && file_buffer) {
                                     auto items_json_opt = push_failover_storage->retrieve_and_remove(request_id);
                                     if (items_json_opt.has_value()) {
@@ -276,6 +275,9 @@ void setup_push_routes(uWS::App* app, const RouteContext& ctx) {
                                                 } else if (item.contains("messageId")) {
                                                     event["transactionId"] = item["messageId"];
                                                 }
+                                                if (item.contains("traceId")) {
+                                                    event["traceId"] = item["traceId"];
+                                                }
                                                 
                                                 if (file_buffer->write_event(event)) {
                                                     results.push_back({{"status", "buffered"}, {"queue", item.value("queue", "")}});
@@ -285,23 +287,48 @@ void setup_push_routes(uWS::App* app, const RouteContext& ctx) {
                                                 }
                                             }
                                             
+                                            spdlog::info("[Worker {}] PUSH: Failed over {} items to file buffer after DB error", 
+                                                        worker_id, items.size());
                                             json_response = results;
                                             status_code = all_buffered ? 201 : 500;
                                             is_error = !all_buffered;
-                                        } catch (...) {
-                                            json_response = {{"error", e.what()}};
+                                        } catch (const std::exception& parse_err) {
+                                            spdlog::error("[Worker {}] PUSH: Failed to parse failover items: {}", worker_id, parse_err.what());
+                                            json_response = {{"error", db_error_msg}};
                                             status_code = 500;
                                             is_error = true;
                                         }
                                     } else {
-                                        json_response = {{"error", e.what()}};
+                                        spdlog::error("[Worker {}] PUSH: No failover data found for request {}", worker_id, request_id);
+                                        json_response = {{"error", db_error_msg}};
                                         status_code = 500;
                                         is_error = true;
                                     }
                                 } else {
-                                    json_response = {{"error", e.what()}};
+                                    spdlog::error("[Worker {}] PUSH: DB error but no file buffer configured: {}", worker_id, db_error_msg);
+                                    json_response = {{"error", db_error_msg}};
                                     status_code = 500;
                                     is_error = true;
+                                }
+                            } else {
+                                // Success path - cleanup failover storage and notify
+                                if (push_failover_storage) {
+                                    push_failover_storage->remove(request_id);
+                                }
+                                
+                                // Notify other instances via UDP that messages are available
+                                // This triggers pop backoff reset on remote workers
+                                if (global_shared_state && global_shared_state->is_enabled()) {
+                                    // Extract unique queue/partition pairs from the pushed items
+                                    // items_json is already a nlohmann::json array
+                                    std::set<std::pair<std::string, std::string>> notified;
+                                    for (const auto& item : items_json) {
+                                        std::string queue = item.value("queue", "");
+                                        std::string partition = item.value("partition", "Default");
+                                        if (!queue.empty() && notified.insert({queue, partition}).second) {
+                                            global_shared_state->notify_message_available(queue, partition);
+                                        }
+                                    }
                                 }
                             }
                             

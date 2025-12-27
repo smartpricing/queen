@@ -10,6 +10,7 @@ import { QueueBuilder } from './builders/QueueBuilder.js'
 import { TransactionBuilder } from './builders/TransactionBuilder.js'
 import { StreamBuilder } from './stream/StreamBuilder.js'
 import { StreamConsumer } from './stream/StreamConsumer.js'
+import { Admin } from './admin/Admin.js'
 import { CLIENT_DEFAULTS } from './utils/defaults.js'
 import { validateUrl, validateUrls } from './utils/validation.js'
 import * as logger from './utils/logger.js'
@@ -19,6 +20,7 @@ export class Queen {
   #bufferManager
   #config
   #shutdownHandlers = []
+  #admin = null
 
   constructor(config = {}) {
     logger.log('Queen.constructor', { config: typeof config === 'object' && !Array.isArray(config) ? { ...config, urls: config.urls?.length || 0 } : { type: typeof config } })
@@ -145,6 +147,21 @@ export class Queen {
 
   queue(name = null) {
     return new QueueBuilder(this, this.#httpClient, this.#bufferManager, name)
+  }
+
+  // ===========================
+  // Admin API Entry Point
+  // ===========================
+
+  /**
+   * Get the Admin API for administrative and observability operations
+   * @returns {Admin} Admin API instance (lazily initialized, singleton)
+   */
+  get admin() {
+    if (!this.#admin) {
+      this.#admin = new Admin(this.#httpClient)
+    }
+    return this.#admin
   }
 
   // ===========================

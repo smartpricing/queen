@@ -1149,6 +1149,215 @@ process.on('SIGINT', async () => {
 ```
 
 
+## Admin API
+
+The Admin API provides administrative and observability operations typically used by dashboards, monitoring tools, and admin scripts. These endpoints are for inspecting the system, not for regular application message processing.
+
+### Accessing the Admin API
+
+```javascript
+import { Queen } from 'queen-mq'
+
+const queen = new Queen('http://localhost:6632')
+
+// Access via .admin property
+const overview = await queen.admin.getOverview()
+```
+
+### Resources
+
+```javascript
+// System overview (queue counts, message stats, etc.)
+const overview = await queen.admin.getOverview()
+
+// List all namespaces
+const namespaces = await queen.admin.getNamespaces()
+
+// List all tasks  
+const tasks = await queen.admin.getTasks()
+```
+
+### Queue Management
+
+```javascript
+// List all queues
+const queues = await queen.admin.listQueues({ limit: 100, offset: 0 })
+
+// Get specific queue details
+const queue = await queen.admin.getQueue('my-queue')
+
+// List partitions
+const partitions = await queen.admin.getPartitions({ queue: 'my-queue' })
+```
+
+### Message Inspection
+
+```javascript
+// List messages with filters
+const messages = await queen.admin.listMessages({
+  queue: 'my-queue',
+  status: 'pending',  // pending, processing, completed, failed
+  limit: 50,
+  offset: 0
+})
+
+// Get specific message
+const message = await queen.admin.getMessage(partitionId, transactionId)
+
+// Delete a message (DESTRUCTIVE!)
+await queen.admin.deleteMessage(partitionId, transactionId)
+
+// Retry a failed message
+await queen.admin.retryMessage(partitionId, transactionId)
+
+// Move message to Dead Letter Queue
+await queen.admin.moveMessageToDLQ(partitionId, transactionId)
+```
+
+### Traces
+
+```javascript
+// Get available trace names
+const traceNames = await queen.admin.getTraceNames({ limit: 100 })
+
+// Get traces by name (cross-service correlation)
+const traces = await queen.admin.getTracesByName('order-12345', {
+  limit: 100,
+  from: '2025-01-01T00:00:00Z',
+  to: '2025-01-31T23:59:59Z'
+})
+
+// Get traces for a specific message
+const messageTraces = await queen.admin.getTracesForMessage(partitionId, transactionId)
+```
+
+### Analytics & Status
+
+```javascript
+// System status
+const status = await queen.admin.getStatus()
+
+// Queue statistics
+const queueStats = await queen.admin.getQueueStats({ limit: 100 })
+
+// Detailed stats for specific queue
+const detail = await queen.admin.getQueueDetail('my-queue')
+
+// Analytics data (throughput, latency, etc.)
+const analytics = await queen.admin.getAnalytics({
+  from: '2025-01-01T00:00:00Z',
+  to: '2025-01-31T23:59:59Z'
+})
+```
+
+### Consumer Groups
+
+```javascript
+// List all consumer groups
+const groups = await queen.admin.listConsumerGroups()
+
+// Get specific consumer group details
+const group = await queen.admin.getConsumerGroup('my-consumer-group')
+
+// Find lagging consumers (behind by > 60 seconds)
+const lagging = await queen.admin.getLaggingConsumers(60)
+
+// Refresh consumer statistics
+await queen.admin.refreshConsumerStats()
+
+// Delete consumer group for a specific queue
+await queen.admin.deleteConsumerGroupForQueue('my-group', 'my-queue', true)
+
+// Seek consumer group offset
+await queen.admin.seekConsumerGroup('my-group', 'my-queue', {
+  timestamp: '2025-01-15T10:00:00Z'
+})
+```
+
+### System Operations
+
+```javascript
+// Health check
+const health = await queen.admin.health()
+
+// Prometheus metrics (raw text)
+const metrics = await queen.admin.metrics()
+
+// Maintenance mode (push operations)
+const maintenanceStatus = await queen.admin.getMaintenanceMode()
+await queen.admin.setMaintenanceMode(true)  // Enable
+await queen.admin.setMaintenanceMode(false) // Disable
+
+// Pop maintenance mode
+const popMaintenance = await queen.admin.getPopMaintenanceMode()
+await queen.admin.setPopMaintenanceMode(true)
+
+// System metrics (CPU, memory, connections)
+const systemMetrics = await queen.admin.getSystemMetrics()
+
+// Worker metrics
+const workerMetrics = await queen.admin.getWorkerMetrics()
+
+// PostgreSQL statistics
+const pgStats = await queen.admin.getPostgresStats()
+```
+
+### Admin API Reference
+
+| Method | Description |
+|--------|-------------|
+| **Resources** | |
+| `getOverview()` | System overview with counts |
+| `getNamespaces()` | List all namespaces |
+| `getTasks()` | List all tasks |
+| **Queues** | |
+| `listQueues(params)` | List queues with pagination |
+| `getQueue(name)` | Get queue details |
+| `clearQueue(name, partition?)` | Clear queue messages |
+| `getPartitions(params)` | List partitions |
+| **Messages** | |
+| `listMessages(params)` | List messages with filters |
+| `getMessage(partitionId, txId)` | Get specific message |
+| `deleteMessage(partitionId, txId)` | Delete message |
+| `retryMessage(partitionId, txId)` | Retry failed message |
+| `moveMessageToDLQ(partitionId, txId)` | Move to DLQ |
+| **Traces** | |
+| `getTraceNames(params)` | List available trace names |
+| `getTracesByName(name, params)` | Get traces by name |
+| `getTracesForMessage(partitionId, txId)` | Get message traces |
+| **Analytics** | |
+| `getStatus(params)` | System status |
+| `getQueueStats(params)` | Queue statistics |
+| `getQueueDetail(name, params)` | Detailed queue stats |
+| `getAnalytics(params)` | Analytics data |
+| **Consumer Groups** | |
+| `listConsumerGroups()` | List all consumer groups |
+| `getConsumerGroup(name)` | Get consumer group details |
+| `getLaggingConsumers(minLagSeconds)` | Find lagging consumers |
+| `refreshConsumerStats()` | Refresh statistics |
+| `deleteConsumerGroupForQueue(cg, queue, deleteMeta)` | Delete CG for queue |
+| `seekConsumerGroup(cg, queue, options)` | Seek offset |
+| **System** | |
+| `health()` | Health check |
+| `metrics()` | Prometheus metrics |
+| `getMaintenanceMode()` | Get push maintenance status |
+| `setMaintenanceMode(enabled)` | Set push maintenance |
+| `getPopMaintenanceMode()` | Get pop maintenance status |
+| `setPopMaintenanceMode(enabled)` | Set pop maintenance |
+| `getSystemMetrics(params)` | System metrics |
+| `getWorkerMetrics(params)` | Worker metrics |
+| `getPostgresStats()` | PostgreSQL stats |
+
+::: tip When to Use Admin API
+Use the Admin API for:
+- **Dashboards** - Building monitoring UIs
+- **Scripts** - Maintenance and debugging scripts
+- **Monitoring** - Integration with alerting systems
+- **Operations** - Managing consumer groups and queues
+
+For normal message processing, use `queue().push()`, `queue().consume()`, and `ack()` instead.
+:::
+
 ## See Also
 
 - [Quick Start Guide](/guide/quickstart) - Get started quickly

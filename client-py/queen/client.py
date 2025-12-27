@@ -9,6 +9,7 @@ import sys
 from typing import Any, Dict, List, Optional, Union
 from urllib.parse import quote
 
+from .admin.admin import Admin
 from .buffer.buffer_manager import BufferManager
 from .builders.queue_builder import QueueBuilder
 from .builders.transaction_builder import TransactionBuilder
@@ -86,6 +87,9 @@ class Queen:
 
         # Create buffer manager
         self._buffer_manager = BufferManager(self._http_client)
+
+        # Admin API (lazily initialized)
+        self._admin: Optional[Admin] = None
 
         # Setup graceful shutdown
         self._shutdown_handlers: List[Any] = []
@@ -229,6 +233,22 @@ class Queen:
         return QueueBuilder(self, self._http_client, self._buffer_manager, name)
 
     # ===========================
+    # Admin API Entry Point
+    # ===========================
+
+    @property
+    def admin(self) -> Admin:
+        """
+        Get the Admin API for administrative and observability operations
+
+        Returns:
+            Admin API instance (lazily initialized, singleton)
+        """
+        if self._admin is None:
+            self._admin = Admin(self._http_client)
+        return self._admin
+
+    # ===========================
     # Transaction API
     # ===========================
 
@@ -345,12 +365,15 @@ class Queen:
                     {"acknowledgments": acknowledgments, "consumerGroup": ctx.get("group")},
                 )
 
-                if result and result.get("error"):
+                # Server returns an array of results for batch ack
+                # Check if any result has an error
+                if isinstance(result, dict) and result.get("error"):
                     logger.error("Queen.ack", {"type": "batch", "error": result["error"]})
                     return {"success": False, "error": result["error"]}
 
                 logger.log("Queen.ack", {"type": "batch", "success": True, "count": len(acknowledgments)})
-                return {"success": True, **result} if result else {"success": True}
+                # Return the array of results
+                return {"success": True, "results": result} if result else {"success": True}
             except Exception as error:
                 logger.error("Queen.ack", {"type": "batch", "error": str(error)})
                 return {"success": False, "error": str(error)}

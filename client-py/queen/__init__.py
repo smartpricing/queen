@@ -2,6 +2,7 @@
 Queen MQ - High-performance message queue client for Python
 """
 
+from .admin import Admin
 from .client import Queen
 from .types import Message, AckResponse, BufferStats, DLQResponse, TransactionResponse
 from .utils.defaults import (
@@ -16,6 +17,7 @@ __version__ = "0.7.4"
 
 __all__ = [
     "Queen",
+    "Admin",
     "Message",
     "AckResponse",
     "BufferStats",

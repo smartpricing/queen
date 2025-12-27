@@ -120,10 +120,38 @@ export function formatDuration(ms) {
 }
 
 /**
- * Format number with commas
+ * Format number with abbreviations for large values
+ * - Numbers < 1M: show with commas (e.g., "999,999")
+ * - Numbers >= 1M: show as "1.2M", "123.5M"
+ * - Numbers >= 1B: show as "1.2B", "12.3B"
  */
 export function formatNumber(num) {
   if (num === null || num === undefined) return '0'
+  
+  const absNum = Math.abs(num)
+  const sign = num < 0 ? '-' : ''
+  
+  // Billions (1,000,000,000+)
+  if (absNum >= 1_000_000_000) {
+    const value = absNum / 1_000_000_000
+    // Show 1 decimal for < 10B, no decimal for >= 10B
+    const formatted = value >= 10 ? Math.round(value) : value.toFixed(1).replace(/\.0$/, '')
+    return `${sign}${formatted}B`
+  }
+  
+  // Millions (1,000,000+)
+  if (absNum >= 1_000_000) {
+    const value = absNum / 1_000_000
+    // Show 1 decimal for < 10M, no decimal for >= 100M
+    const formatted = value >= 100 
+      ? Math.round(value)
+      : value >= 10 
+        ? value.toFixed(1).replace(/\.0$/, '')
+        : value.toFixed(1).replace(/\.0$/, '')
+    return `${sign}${formatted}M`
+  }
+  
+  // Under 1 million: show with commas
   return num.toLocaleString('en-US')
 }
 
