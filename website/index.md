@@ -3,8 +3,8 @@ layout: home
 
 hero:
   name: "Queen MQ"
-  text: "Modern PostgreSQL-backed Message Queue"
-  tagline: High-performance, feature-rich message queue system with unlimited FIFO partitions, consumer groups, and transactions
+  text: "Partitioned Message Queue backed by PostgreSQL"
+  tagline: Unlimited ordered partitions that never block each other. Consumer groups, replay, transactional delivery — ACID-guaranteed.
   image:
     src: /queen_logo.png
     alt: Queen MQ Logo

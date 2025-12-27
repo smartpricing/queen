@@ -1,8 +1,8 @@
-# Queen MQ - PostgreSQL-backed Message Queue
+# Queen MQ - Partitioned Message Queue backed by PostgreSQL
 
 <div align="center">
 
-**A modern, performant message queue system built on PostgreSQL**
+**Unlimited ordered partitions that never block each other. Consumer groups, replay, transactional delivery — ACID-guaranteed.**
 
 [![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE.md)
 [![Node](https://img.shields.io/badge/node-%3E%3D22.0.0-brightgreen.svg)](https://nodejs.org/)
@@ -22,7 +22,7 @@
 
 ---
 
-Queen MQ is a modern PostgreSQL-backed Message Queue, built with uWebSockets, libuv and libpq async API, feature-rich system with unlimited FIFO partitions, consumer groups, transactions, tracing and streaming capabilities with exact-once delivery guarantees.
+Queen MQ is a partitioned message queue backed by PostgreSQL, built with uWebSockets, libuv, and libpq async API. It features unlimited FIFO partitions that process independently, consumer groups with replay, transactional delivery, tracing, and ACID-guaranteed durability.
 
 ## Why Queen?
 
