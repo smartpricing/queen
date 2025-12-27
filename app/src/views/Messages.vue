@@ -549,7 +549,8 @@ const clearFilters = () => {
 
 // Methods
 const fetchMessages = async () => {
-  loading.value = true
+  // Only show loading skeleton if we don't have data yet (smooth background refresh)
+  if (!messages.value.length) loading.value = true
   try {
     const params = { 
       limit: limit.value,

@@ -16,6 +16,7 @@ CLIENT_DEFAULTS: Dict[str, Any] = {
     "affinity_hash_ring": 128,  # Number of virtual nodes per server for affinity strategy
     "enable_failover": True,  # Auto-failover to other servers
     "health_retry_after_millis": 5000,  # Retry unhealthy backends after 5 seconds
+    "bearer_token": None,  # Bearer token for proxy authentication
 }
 
 QUEUE_DEFAULTS: Dict[str, Any] = {

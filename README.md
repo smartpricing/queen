@@ -37,7 +37,7 @@ Perfect for:
 - Build event-driven microservices with exactly-once delivery guarantees
 - Critical systems that need to be highly available and reliable with zero message loss
 
-It push peaks for single request is around 45k req/s, with sustatined load (PUSH+POP) around 10k req/s.
+It push peaks for single request is around 45k req/s, with sustatined load (PUSH+POP) around 10k req/s, and with consumer groups around 60k req/s.
 
 ## Documentation
 
@@ -54,31 +54,15 @@ It push peaks for single request is around 45k req/s, with sustatined load (PUSH
 - [C++ Client](https://smartpricing.github.io/queen/clients/cpp)
 - [HTTP API Reference](https://smartpricing.github.io/queen/api/http)
 
-### Server
-- [Architecture](https://smartpricing.github.io/queen/server/architecture)
-- [Installation & Build](https://smartpricing.github.io/queen/server/installation)
-- [Configuration](https://smartpricing.github.io/queen/server/configuration)
-- [Environment Variables](https://smartpricing.github.io/queen/server/environment-variables)
-- [Deployment (Docker, K8s, systemd)](https://smartpricing.github.io/queen/server/deployment)
-- [Performance Tuning](https://smartpricing.github.io/queen/server/tuning)
-
-### Features
-- [Queues & Partitions](https://smartpricing.github.io/queen/guide/queues-partitions)
-- [Consumer Groups](https://smartpricing.github.io/queen/guide/consumer-groups)
-- [Transactions](https://smartpricing.github.io/queen/guide/transactions)
-- [Long Polling](https://smartpricing.github.io/queen/guide/long-polling)
-- [Streaming](https://smartpricing.github.io/queen/guide/streaming)
-- [Dead Letter Queue](https://smartpricing.github.io/queen/guide/dlq)
-- [Message Tracing](https://smartpricing.github.io/queen/guide/tracing)
-- [Failover & Recovery](https://smartpricing.github.io/queen/guide/failover)
-
 ---
 
 ## Release History
 
+**JS clients from version 0.12.0 can be run inside a browser**
+
 | Server Version | Description | Compatible Clients |
 |----------------|-------------|-------------------|
-| **0.12.0** | New frontend and docs | JS ≥0.7.4, Python ≥0.7.4 |
+| **0.12.0** | New frontend and docs | JS ≥0.7.4, Python ≥0.7.4, 0.12.0 if needs to use proxy auth |
 | **0.11.0** | Libqueen 0.11.0; added stats tables and optimized analytics procedures, added DB statement timeout and stats reconcile interval | JS ≥0.7.4, Python ≥0.7.4 |
 | **0.10.0** | Total rewrite of the engine with libuv and stored procedures, removed streaming engine | JS ≥0.7.4, Python ≥0.7.4 |
 | **0.8.0** | Added Shared Cache with UDP sync for clustered deployment | JS ≥0.7.4, Python ≥0.7.4 |
@@ -91,8 +75,6 @@ It push peaks for single request is around 45k req/s, with sustatined load (PUSH
 ## TODO
 
 - Evaluate to replace udp sync witch tcp with libuv
-- Proxy new with auth
-- Retention data on frontend
 - Deploy pipeline
 
 ---

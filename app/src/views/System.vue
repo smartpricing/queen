@@ -1545,7 +1545,9 @@ const getLastMetricForReplica = (replica) => {
 }
 
 const fetchData = async () => {
-  loading.value = true
+  // Only show loading skeleton if we don't have data yet (smooth background refresh)
+  const hasData = dataSource.value === 'postgres' ? postgresData.value : (workerData.value || systemData.value)
+  if (!hasData) loading.value = true
   
   try {
     // For postgres stats, no time range needed

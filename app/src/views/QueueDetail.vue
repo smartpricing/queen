@@ -293,8 +293,24 @@ const partitions = computed(() => {
   }))
 })
 
-// Calculate totals from partitions
+// Calculate totals - prefer pre-computed totals from API, fallback to summing partitions
 const totalMessages = computed(() => {
+  // First, try to use pre-computed totals from statusData (get_queue_detail_v2)
+  const apiTotals = statusData.value?.totals
+  if (apiTotals) {
+    // get_queue_detail_v2 returns totals.messages.* and also totals.* (flat)
+    const msgs = apiTotals.messages || apiTotals
+    return {
+      total: msgs.total || 0,
+      pending: msgs.pending || 0,
+      processing: msgs.processing || 0,
+      completed: msgs.completed || 0,
+      failed: msgs.failed || 0,
+      deadLetter: msgs.deadLetter || 0
+    }
+  }
+  
+  // Fallback: sum from partitions
   const totals = {
     total: 0,
     pending: 0,
@@ -382,7 +398,10 @@ const getSortClass = (column) => {
 }
 
 const fetchData = async () => {
-  loading.value = true
+  // Only show loading on initial load
+  if (!queueData.value && !statusData.value) {
+    loading.value = true
+  }
   error.value = null
   
   try {
@@ -392,8 +411,31 @@ const fetchData = async () => {
       analytics.getQueueDetail(queueName.value).catch(() => null)
     ])
     
-    queueData.value = queueResponse?.data || null
-    statusData.value = statusResponse?.data || null
+    // get_queue_v2 returns flat structure: { id, name, namespace, task, partitions, totals }
+    // get_queue_detail_v2 returns: { queue: { id, name, config, ... }, partitions, totals }
+    
+    // Merge the data - prefer statusResponse for partitions (has cursor info)
+    // but extract queue info and config properly
+    const rawQueue = queueResponse?.data || null
+    const rawStatus = statusResponse?.data || null
+    
+    // Build queueData by merging both sources
+    if (rawStatus?.queue) {
+      // get_queue_detail_v2 wraps queue info under 'queue' key
+      queueData.value = {
+        ...rawStatus.queue,
+        // Add config from the nested queue object
+        config: rawStatus.queue.config
+      }
+    } else if (rawQueue) {
+      // Fallback to get_queue_v2 (no config available)
+      queueData.value = rawQueue
+    } else {
+      queueData.value = null
+    }
+    
+    // statusData holds partitions with cursor info
+    statusData.value = rawStatus
     
     // If neither returned data, show error
     if (!queueData.value && !statusData.value) {

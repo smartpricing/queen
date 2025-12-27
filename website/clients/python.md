@@ -44,6 +44,12 @@ async def main():
         'enable_failover': True
     })
     
+    # With proxy authentication (bearer token)
+    queen = Queen(
+        url='https://proxy.example.com:3000',
+        bearer_token=os.environ.get('QUEEN_TOKEN')  # Token from create-user script
+    )
+    
     # Recommended: Use async context manager for automatic cleanup
     async with Queen('http://localhost:6632') as queen:
         # Your code here
@@ -51,6 +57,49 @@ async def main():
 
 asyncio.run(main())
 ```
+
+### Proxy Authentication
+
+When connecting through the Queen proxy (which provides authentication, SSL termination, etc.), you need to provide a bearer token:
+
+```python
+import os
+from queen import Queen
+
+queen = Queen(
+    url='https://queen-proxy.example.com',
+    bearer_token=os.environ.get('QUEEN_TOKEN')
+)
+```
+
+**Getting a token:** Use the proxy's `create-user.js` script to generate tokens for microservices. See [Proxy Setup](/proxy/setup#create-microservice-tokens) for details.
+
+::: tip Environment Variables
+Store tokens in environment variables, never hardcode them:
+
+```bash
+export QUEEN_TOKEN="eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..."
+```
+
+```python
+import os
+from queen import Queen
+
+queen = Queen(
+    url=os.environ.get('QUEEN_PROXY_URL'),
+    bearer_token=os.environ.get('QUEEN_TOKEN')
+)
+```
+:::
+
+::: info Direct Connection
+When connecting directly to the Queen server (without the proxy), no `bearer_token` is needed:
+
+```python
+# Direct connection - no auth required
+queen = Queen('http://queen-server:6632')
+```
+:::
 
 ## Load Balancing & Affinity Routing
 
@@ -1253,7 +1302,8 @@ await asyncio.gather(stage1(), stage2())
     'load_balancing_strategy': 'affinity', # or 'round-robin', 'session'
     'affinity_hash_ring': 128,
     'enable_failover': True,
-    'health_retry_after_millis': 5000
+    'health_retry_after_millis': 5000,
+    'bearer_token': None                   # For proxy authentication
 }
 ```
 

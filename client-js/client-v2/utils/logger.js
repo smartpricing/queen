@@ -1,9 +1,20 @@
 /**
  * Logger utility for Queen Client v2
- * Controlled by QUEEN_CLIENT_LOG environment variable
+ * Controlled by QUEEN_CLIENT_LOG environment variable (Node.js)
+ * or window.QUEEN_CLIENT_LOG (Browser)
  */
 
-const LOG_ENABLED = process.env.QUEEN_CLIENT_LOG === 'true'
+const LOG_ENABLED = (() => {
+  // Node.js environment
+  if (typeof process !== 'undefined' && process.env) {
+    return process.env.QUEEN_CLIENT_LOG === 'true'
+  }
+  // Browser environment
+  if (typeof window !== 'undefined') {
+    return window.QUEEN_CLIENT_LOG === true
+  }
+  return false
+})()
 
 /**
  * Get formatted timestamp

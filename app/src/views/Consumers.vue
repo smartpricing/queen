@@ -644,7 +644,8 @@ const getStatusDotClass = (consumer) => {
 }
 
 const fetchConsumers = async () => {
-  loading.value = true
+  // Only show loading skeleton if we don't have data yet (smooth background refresh)
+  if (!consumers.value.length) loading.value = true
   try {
     const response = await consumersApi.list()
     // API returns array directly

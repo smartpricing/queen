@@ -22,6 +22,7 @@ class HttpClient:
         retry_attempts: int = 3,
         retry_delay_millis: int = 1000,
         enable_failover: bool = True,
+        bearer_token: Optional[str] = None,
     ):
         """
         Initialize HTTP client
@@ -33,6 +34,7 @@ class HttpClient:
             retry_attempts: Number of retry attempts
             retry_delay_millis: Initial retry delay (exponential backoff)
             enable_failover: Enable automatic failover
+            bearer_token: Bearer token for proxy authentication
         """
         self._base_url = base_url
         self._load_balancer = load_balancer
@@ -40,11 +42,18 @@ class HttpClient:
         self._retry_attempts = retry_attempts
         self._retry_delay_millis = retry_delay_millis
         self._enable_failover = enable_failover
+        self._bearer_token = bearer_token
+
+        # Build headers with optional auth
+        headers = {}
+        if bearer_token:
+            headers["Authorization"] = f"Bearer {bearer_token}"
 
         # Create httpx.AsyncClient (persistent connection pool)
         self._client = httpx.AsyncClient(
             timeout=httpx.Timeout(timeout_millis / 1000.0),
             limits=httpx.Limits(max_keepalive_connections=10, max_connections=100),
+            headers=headers,
         )
 
         logger.log(
@@ -55,6 +64,7 @@ class HttpClient:
                 "timeout_millis": timeout_millis,
                 "retry_attempts": retry_attempts,
                 "enable_failover": enable_failover,
+                "has_auth": bearer_token is not None,
             },
         )
 

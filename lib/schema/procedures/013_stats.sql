@@ -102,16 +102,16 @@ BEGIN
     -- This prevents redundant work when multiple instances call in sequence
     -- Skip this check if p_force is true (manual refresh)
     IF NOT p_force THEN
-        SELECT MAX(last_computed_at) INTO v_last_computed
-        FROM queen.stats
-        WHERE stat_type = 'system';
-        
-        IF v_last_computed IS NOT NULL AND v_last_computed > v_now - INTERVAL '5 seconds' THEN
-            RETURN jsonb_build_object(
-                'skipped', true,
-                'reason', 'recently_computed',
-                'lastComputedAt', v_last_computed
-            );
+    SELECT MAX(last_computed_at) INTO v_last_computed
+    FROM queen.stats
+    WHERE stat_type = 'system';
+    
+    IF v_last_computed IS NOT NULL AND v_last_computed > v_now - INTERVAL '5 seconds' THEN
+        RETURN jsonb_build_object(
+            'skipped', true,
+            'reason', 'recently_computed',
+            'lastComputedAt', v_last_computed
+        );
         END IF;
     END IF;
     -- STEP 1: Handle partitions that already have stats (INCREMENTAL - only new messages)
@@ -625,6 +625,7 @@ END;
 $$;
 
 -- queen.get_queue_v2: O(partitions) single queue detail
+-- Aggregates stats across ALL consumer groups (not just __QUEUE_MODE__)
 CREATE OR REPLACE FUNCTION queen.get_queue_v2(p_queue_name TEXT)
 RETURNS JSONB
 LANGUAGE plpgsql
@@ -652,24 +653,27 @@ BEGIN
     END IF;
     
     -- Get partitions with pre-computed stats
+    -- Aggregate across ALL consumer groups per partition (MAX for totals since they're the same)
     WITH partition_stats AS (
         SELECT 
             p.id,
             p.name,
             p.created_at,
-            COALESCE(s.total_messages, 0) as total,
-            COALESCE(s.pending_messages, 0) as pending,
-            COALESCE(s.processing_messages, 0) as processing,
-            COALESCE(s.completed_messages, 0) as completed,
+            -- Use MAX to get the message counts (same for all consumer groups)
+            COALESCE(MAX(s.total_messages), 0) as total,
+            -- Pending/processing may differ per consumer group - use MAX for queue view
+            COALESCE(MAX(s.pending_messages), 0) as pending,
+            COALESCE(MAX(s.processing_messages), 0) as processing,
+            COALESCE(MAX(s.completed_messages), 0) as completed,
             0 as failed,
-            COALESCE(s.dead_letter_messages, 0) as dead_letter,
-            s.oldest_pending_at as oldest_message,
-            s.newest_message_at as newest_message
+            COALESCE(MAX(s.dead_letter_messages), 0) as dead_letter,
+            MAX(s.oldest_pending_at) as oldest_message,
+            MAX(s.newest_message_at) as newest_message
         FROM queen.partitions p
         LEFT JOIN queen.stats s ON s.stat_type = 'partition' 
-            AND s.partition_id = p.id 
-            AND s.consumer_group = '__QUEUE_MODE__'
+            AND s.partition_id = p.id
         WHERE p.queue_id = v_queue_id
+        GROUP BY p.id, p.name, p.created_at
     )
     SELECT 
         COALESCE(jsonb_agg(
@@ -775,6 +779,7 @@ $$;
 
 -- queen.get_queue_detail_v2: Queue detail using pre-computed stats
 -- Returns format matching frontend expectations: partition.messages.*, totals.messages.*, partition.cursor.*
+-- Aggregates stats across ALL consumer groups (not just __QUEUE_MODE__)
 CREATE OR REPLACE FUNCTION queen.get_queue_detail_v2(p_queue_name TEXT)
 RETURNS JSONB
 LANGUAGE plpgsql
@@ -814,30 +819,31 @@ BEGIN
     
     -- Get partitions with pre-computed stats
     -- Format matches frontend: partition.messages.*, partition.cursor.*
+    -- Aggregate across ALL consumer groups per partition
     WITH partition_stats AS (
         SELECT 
             p.id,
             p.name,
             p.created_at,
-            COALESCE(s.total_messages, 0) as total,
-            COALESCE(s.pending_messages, 0) as pending,
-            COALESCE(s.processing_messages, 0) as processing,
-            COALESCE(s.completed_messages, 0) as completed,
+            -- Use MAX for message counts (same for all consumer groups)
+            COALESCE(MAX(s.total_messages), 0) as total,
+            COALESCE(MAX(s.pending_messages), 0) as pending,
+            COALESCE(MAX(s.processing_messages), 0) as processing,
+            COALESCE(MAX(s.completed_messages), 0) as completed,
             0 as failed,
-            COALESCE(s.dead_letter_messages, 0) as dead_letter,
-            s.oldest_pending_at as oldest_message,
-            s.newest_message_at as newest_message,
-            -- Cursor info from partition_consumers
-            COALESCE(pc.total_messages_consumed, 0) as total_consumed,
-            COALESCE(pc.total_batches_consumed, 0) as batches_consumed,
-            pc.last_consumed_at as last_activity
+            COALESCE(MAX(s.dead_letter_messages), 0) as dead_letter,
+            MAX(s.oldest_pending_at) as oldest_message,
+            MAX(s.newest_message_at) as newest_message,
+            -- Cursor info: SUM across all consumer groups
+            COALESCE(SUM(pc.total_messages_consumed), 0) as total_consumed,
+            COALESCE(SUM(pc.total_batches_consumed), 0) as batches_consumed,
+            MAX(pc.last_consumed_at) as last_activity
         FROM queen.partitions p
         LEFT JOIN queen.stats s ON s.stat_type = 'partition' 
-            AND s.partition_id = p.id 
-            AND s.consumer_group = '__QUEUE_MODE__'
-        LEFT JOIN queen.partition_consumers pc ON pc.partition_id = p.id 
-            AND pc.consumer_group = '__QUEUE_MODE__'
+            AND s.partition_id = p.id
+        LEFT JOIN queen.partition_consumers pc ON pc.partition_id = p.id
         WHERE p.queue_id = v_queue_id
+        GROUP BY p.id, p.name, p.created_at
     )
     SELECT 
         COALESCE(jsonb_agg(

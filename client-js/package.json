@@ -1,6 +1,6 @@
 {
   "name": "queen-mq",
-  "version": "0.7.4",
+  "version": "0.12.0",
   "type": "module",
   "description": "High-performance C++ message queue backed by PostgreSQL",
   "main": "client-v2/index.js",

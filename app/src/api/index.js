@@ -48,6 +48,18 @@ export const messages = {
 }
 
 // ============================================
+// TRACES API
+// ============================================
+export const traces = {
+  getByName: (traceName, params) => 
+    client.get(`/api/v1/traces/by-name/${encodeURIComponent(traceName)}`, { params }),
+  getAvailableNames: (params) => 
+    client.get('/api/v1/traces/names', { params }),
+  getForMessage: (partitionId, transactionId) => 
+    client.get(`/api/v1/traces/${partitionId}/${transactionId}`),
+}
+
+// ============================================
 // ANALYTICS API
 // ============================================
 export const analytics = {
@@ -102,6 +114,7 @@ export default {
   resources,
   queues,
   messages,
+  traces,
   analytics,
   consumers,
   system,

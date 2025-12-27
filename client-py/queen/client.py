@@ -37,6 +37,7 @@ class Queen:
         affinity_hash_ring: Optional[int] = None,
         enable_failover: Optional[bool] = None,
         health_retry_after_millis: Optional[int] = None,
+        bearer_token: Optional[str] = None,
     ):
         """
         Initialize Queen client
@@ -52,6 +53,7 @@ class Queen:
             affinity_hash_ring: Virtual nodes per server for affinity
             enable_failover: Enable automatic failover
             health_retry_after_millis: Retry unhealthy backends after N ms
+            bearer_token: Bearer token for proxy authentication
         """
         logger.log(
             "Queen.constructor",
@@ -76,6 +78,7 @@ class Queen:
             affinity_hash_ring=affinity_hash_ring,
             enable_failover=enable_failover,
             health_retry_after_millis=health_retry_after_millis,
+            bearer_token=bearer_token,
         )
 
         # Create HTTP client
@@ -136,6 +139,7 @@ class Queen:
         affinity_hash_ring = self._config["affinity_hash_ring"]
         health_retry_after_millis = self._config["health_retry_after_millis"]
         enable_failover = self._config["enable_failover"]
+        bearer_token = self._config.get("bearer_token")
 
         if len(urls) == 1:
             # Single server
@@ -144,6 +148,7 @@ class Queen:
                 timeout_millis=timeout_millis,
                 retry_attempts=retry_attempts,
                 retry_delay_millis=retry_delay_millis,
+                bearer_token=bearer_token,
             )
 
         # Multiple servers with load balancing
@@ -159,6 +164,7 @@ class Queen:
             retry_attempts=retry_attempts,
             retry_delay_millis=retry_delay_millis,
             enable_failover=enable_failover,
+            bearer_token=bearer_token,
         )
 
     def _setup_graceful_shutdown(self) -> None:

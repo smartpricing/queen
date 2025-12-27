@@ -13,7 +13,8 @@ export const CLIENT_DEFAULTS = {
   loadBalancingStrategy: 'affinity',   // 'round-robin', 'session', or 'affinity'
   affinityHashRing: 128,               // Number of virtual nodes per server for affinity strategy
   enableFailover: true,                // Auto-failover to other servers
-  healthRetryAfterMillis: 5000        // Retry unhealthy backends after 5 seconds
+  healthRetryAfterMillis: 5000,        // Retry unhealthy backends after 5 seconds
+  bearerToken: null                    // Bearer token for proxy authentication
 }
 
 export const QUEUE_DEFAULTS = {

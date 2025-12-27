@@ -1,0 +1,1 @@
+import{G as a,Q as n,k as o,l as u}from"./index-Bh6pUXf_.js";function f(e){const s=a(),r=n("registerRefreshCallback",null),t=n("unregisterRefreshCallback",null);o(()=>{r&&e&&r(s.path,e)}),u(()=>{t&&t(s.path)})}export{f as u};

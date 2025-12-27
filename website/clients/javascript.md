@@ -39,7 +39,50 @@ const queen = new Queen({
   affinityHashRing: 128,              // Virtual nodes per server (for affinity)
   enableFailover: true
 })
+
+// With proxy authentication (bearer token)
+const queen = new Queen({
+  url: 'http://proxy.example.com:3000',
+  bearerToken: process.env.QUEEN_TOKEN  // Token from create-user script
+})
 ```
+
+### Proxy Authentication
+
+When connecting through the Queen proxy (which provides authentication, SSL termination, etc.), you need to provide a bearer token:
+
+```javascript
+const queen = new Queen({
+  url: 'https://queen-proxy.example.com',
+  bearerToken: process.env.QUEEN_TOKEN
+})
+```
+
+**Getting a token:** Use the proxy's `create-user.js` script to generate tokens for microservices. See [Proxy Setup](/proxy/setup#create-microservice-tokens) for details.
+
+::: tip Environment Variables
+Store tokens in environment variables, never hardcode them:
+
+```bash
+export QUEEN_TOKEN="eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..."
+```
+
+```javascript
+const queen = new Queen({
+  url: process.env.QUEEN_PROXY_URL,
+  bearerToken: process.env.QUEEN_TOKEN
+})
+```
+:::
+
+::: info Direct Connection
+When connecting directly to the Queen server (without the proxy), no `bearerToken` is needed:
+
+```javascript
+// Direct connection - no auth required
+const queen = new Queen('http://queen-server:6632')
+```
+:::
 
 ## Load Balancing & Affinity Routing
 
@@ -974,7 +1017,8 @@ try {
   retryDelayMillis: 1000,
   loadBalancingStrategy: 'affinity',    // 'affinity', 'round-robin', or 'session'
   affinityHashRing: 150,                // Virtual nodes per server
-  enableFailover: true
+  enableFailover: true,
+  bearerToken: null                     // For proxy authentication
 }
 ```
 

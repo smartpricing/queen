@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { createUser } from './db.js';
-import { hashPassword } from './auth.js';
+import { hashPassword, generateToken } from './auth.js';
 import readline from 'readline';
 
 const rl = readline.createInterface({
@@ -51,6 +51,34 @@ async function main() {
     process.exit(1);
   }
 
+  // Ask about token generation (useful for microservices)
+  console.log('\nToken expiration:');
+  console.log('  1) 24h    - 24 hours (default)');
+  console.log('  2) 7d     - 7 days');
+  console.log('  3) 30d    - 30 days');
+  console.log('  4) 1y     - 1 year');
+  console.log('  5) never  - No expiration (for microservices)');
+  console.log('  6) skip   - Do not generate token now');
+
+  const expiryChoice = await question('\nSelect token expiration (1-6) [1]: ');
+
+  const expiryMap = {
+    '': '24h',
+    '1': '24h',
+    '2': '7d',
+    '3': '30d',
+    '4': '1y',
+    '5': 'never',
+    '6': null
+  };
+
+  const tokenExpiry = expiryMap[expiryChoice.trim()];
+
+  if (tokenExpiry === undefined) {
+    console.error('Error: Invalid expiration selection');
+    process.exit(1);
+  }
+
   try {
     const passwordHash = await hashPassword(password);
     const user = await createUser(username.trim(), passwordHash, role);
@@ -59,6 +87,15 @@ async function main() {
     console.log(`  Username: ${user.username}`);
     console.log(`  Role: ${user.role}`);
     console.log(`  ID: ${user.id}`);
+
+    if (tokenExpiry !== null) {
+      const token = generateToken(user, tokenExpiry);
+      console.log(`  Token expiry: ${tokenExpiry === 'never' ? 'Never' : tokenExpiry}`);
+      console.log('\n  Bearer Token:');
+      console.log(`  ${token}`);
+      console.log('\n  Use this token in the Authorization header:');
+      console.log(`  Authorization: Bearer ${token}`);
+    }
   } catch (error) {
     if (error.code === '23505') { // Unique constraint violation
       console.error('\nError: Username already exists');

@@ -11,6 +11,7 @@ export class HttpClient {
   #retryAttempts
   #retryDelayMillis
   #enableFailover
+  #bearerToken
 
   constructor(options = {}) {
     const {
@@ -19,7 +20,8 @@ export class HttpClient {
       timeoutMillis = 30000,
       retryAttempts = 3,
       retryDelayMillis = 1000,
-      enableFailover = true
+      enableFailover = true,
+      bearerToken = null
     } = options
 
     this.#baseUrl = baseUrl
@@ -28,13 +30,15 @@ export class HttpClient {
     this.#retryAttempts = retryAttempts
     this.#retryDelayMillis = retryDelayMillis
     this.#enableFailover = enableFailover
+    this.#bearerToken = bearerToken
     
     logger.log('HttpClient.constructor', { 
       hasLoadBalancer: !!loadBalancer, 
       baseUrl: baseUrl || 'load-balanced', 
       timeoutMillis, 
       retryAttempts,
-      enableFailover 
+      enableFailover,
+      hasAuth: !!bearerToken
     })
   }
 
@@ -46,10 +50,15 @@ export class HttpClient {
     const timeoutId = setTimeout(() => controller.abort(), effectiveTimeout)
 
     try {
+      const headers = { 'Content-Type': 'application/json' }
+      if (this.#bearerToken) {
+        headers['Authorization'] = `Bearer ${this.#bearerToken}`
+      }
+
       const options = {
         method,
         signal: controller.signal,
-        headers: { 'Content-Type': 'application/json' }
+        headers
       }
 
       if (body) {

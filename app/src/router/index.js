@@ -26,6 +26,12 @@ const routes = [
     meta: { title: 'Messages', subtitle: 'Browse and inspect messages' }
   },
   {
+    path: '/traces',
+    name: 'Traces',
+    component: () => import('@/views/Traces.vue'),
+    meta: { title: 'Traces', subtitle: 'Track message flows across queues' }
+  },
+  {
     path: '/consumers',
     name: 'Consumers',
     component: () => import('@/views/Consumers.vue'),

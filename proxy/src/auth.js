@@ -25,7 +25,11 @@ export async function authenticateUser(username, password) {
   };
 }
 
-export function generateToken(user) {
+export function generateToken(user, expiresIn = JWT_EXPIRES_IN) {
+  const options = {};
+  if (expiresIn && expiresIn !== 'never') {
+    options.expiresIn = expiresIn;
+  }
   return jwt.sign(
     {
       id: user.id,
@@ -33,7 +37,7 @@ export function generateToken(user) {
       role: user.role
     },
     JWT_SECRET,
-    { expiresIn: JWT_EXPIRES_IN }
+    options
   );
 }
 

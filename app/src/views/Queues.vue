@@ -293,7 +293,8 @@ const activeQueues = computed(() =>
 
 // Methods
 const fetchQueues = async () => {
-  loading.value = true
+  // Only show loading skeleton if we don't have data yet (smooth background refresh)
+  if (!queues.value.length) loading.value = true
   try {
     const response = await queuesApi.list()
     const allQueues = response.data?.queues || response.data || []

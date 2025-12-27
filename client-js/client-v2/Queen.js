@@ -75,7 +75,7 @@ export class Queen {
   }
 
   #createHttpClient() {
-    const { urls, timeoutMillis, retryAttempts, retryDelayMillis, loadBalancingStrategy, affinityHashRing, healthRetryAfterMillis, enableFailover } = this.#config
+    const { urls, timeoutMillis, retryAttempts, retryDelayMillis, loadBalancingStrategy, affinityHashRing, healthRetryAfterMillis, enableFailover, bearerToken } = this.#config
 
     if (urls.length === 1) {
       // Single server
@@ -83,7 +83,8 @@ export class Queen {
         baseUrl: urls[0],
         timeoutMillis,
         retryAttempts,
-        retryDelayMillis
+        retryDelayMillis,
+        bearerToken
       })
     }
 
@@ -97,11 +98,17 @@ export class Queen {
       timeoutMillis,
       retryAttempts,
       retryDelayMillis,
-      enableFailover
+      enableFailover,
+      bearerToken
     })
   }
 
   #setupGracefulShutdown() {
+    // Skip signal handlers in browser environment
+    if (typeof process === 'undefined' || typeof process.on !== 'function') {
+      return
+    }
+
     let signalReceivedCount = 0;
     const shutdown = async (signal) => {
       console.log(`\nReceived ${signal}, shutting down gracefully...`)

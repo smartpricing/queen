@@ -41,6 +41,89 @@
       />
     </div>
 
+    <!-- Health Indicators Row (Compact) -->
+    <div class="grid grid-cols-2 lg:grid-cols-4 gap-2 sm:gap-3">
+      <!-- Time Lag -->
+      <div class="card px-3 py-2">
+        <div class="flex items-center justify-between">
+          <div class="flex items-center gap-1.5">
+            <svg class="w-3.5 h-3.5 text-amber-500" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2">
+              <path stroke-linecap="round" stroke-linejoin="round" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
+            </svg>
+            <span class="text-xs font-medium text-light-500">Time Lag</span>
+          </div>
+          <div class="flex items-center gap-3 text-xs">
+            <span :class="timeLagClass(overview?.lag?.time?.avg)" class="font-semibold tabular-nums">
+              {{ formatDuration(overview?.lag?.time?.avg || 0) }}
+            </span>
+            <span class="text-light-400">/</span>
+            <span :class="timeLagClass(overview?.lag?.time?.max)" class="font-semibold tabular-nums">
+              {{ formatDuration(overview?.lag?.time?.max || 0) }}
+            </span>
+          </div>
+        </div>
+      </div>
+
+      <!-- Offset Lag -->
+      <div class="card px-3 py-2">
+        <div class="flex items-center justify-between">
+          <div class="flex items-center gap-1.5">
+            <svg class="w-3.5 h-3.5 text-blue-500" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2">
+              <path stroke-linecap="round" stroke-linejoin="round" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2" />
+            </svg>
+            <span class="text-xs font-medium text-light-500">Pending</span>
+          </div>
+          <div class="flex items-center gap-3 text-xs">
+            <span :class="offsetLagClass(overview?.lag?.offset?.avg)" class="font-semibold tabular-nums">
+              {{ formatNumber(overview?.lag?.offset?.avg || 0) }}
+            </span>
+            <span class="text-light-400">/</span>
+            <span :class="offsetLagClass(overview?.lag?.offset?.max)" class="font-semibold tabular-nums">
+              {{ formatNumber(overview?.lag?.offset?.max || 0) }}
+            </span>
+          </div>
+        </div>
+      </div>
+
+      <!-- Event Loop Lag -->
+      <div class="card px-3 py-2">
+        <div class="flex items-center justify-between">
+          <div class="flex items-center gap-1.5">
+            <svg class="w-3.5 h-3.5 text-rose-500" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2">
+              <path stroke-linecap="round" stroke-linejoin="round" d="M13 10V3L4 14h7v7l9-11h-7z" />
+            </svg>
+            <span class="text-xs font-medium text-light-500">Event Loop</span>
+          </div>
+          <div class="flex items-center gap-3 text-xs">
+            <span :class="eventLoopClass(avgEventLoopLag)" class="font-semibold tabular-nums">
+              {{ avgEventLoopLag }}ms
+            </span>
+            <span class="text-light-400">/</span>
+            <span :class="eventLoopClass(maxEventLoopLag)" class="font-semibold tabular-nums">
+              {{ maxEventLoopLag }}ms
+            </span>
+          </div>
+        </div>
+      </div>
+
+      <!-- Batch Efficiency -->
+      <div class="card px-3 py-2">
+        <div class="flex items-center justify-between">
+          <div class="flex items-center gap-1.5">
+            <svg class="w-3.5 h-3.5 text-emerald-500" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2">
+              <path stroke-linecap="round" stroke-linejoin="round" d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10" />
+            </svg>
+            <span class="text-xs font-medium text-light-500">Batch</span>
+          </div>
+          <div class="flex items-center gap-2 text-xs">
+            <span class="font-semibold text-emerald-600 dark:text-emerald-400 tabular-nums">{{ batchEfficiency.push }}</span>
+            <span class="font-semibold text-indigo-600 dark:text-indigo-400 tabular-nums">{{ batchEfficiency.pop }}</span>
+            <span class="font-semibold text-green-600 dark:text-green-400 tabular-nums">{{ batchEfficiency.ack }}</span>
+          </div>
+        </div>
+      </div>
+    </div>
+
     <!-- Charts row -->
     <div class="grid grid-cols-1 lg:grid-cols-3 gap-3 sm:gap-5">
       <!-- Throughput chart -->
@@ -278,6 +361,70 @@ const throughput = computed(() => {
   }
 })
 
+// Event loop lag from workers
+const avgEventLoopLag = computed(() => {
+  const workers = statusData.value?.workers
+  if (!workers || workers.length === 0) return 0
+  return Math.round(workers.reduce((sum, w) => sum + (w.avgEventLoopLagMs || 0), 0) / workers.length)
+})
+
+const maxEventLoopLag = computed(() => {
+  const workers = statusData.value?.workers
+  if (!workers || workers.length === 0) return 0
+  return Math.max(...workers.map(w => w.maxEventLoopLagMs || 0))
+})
+
+// Batch efficiency from statusData
+const batchEfficiency = computed(() => {
+  const be = statusData.value?.messages?.batchEfficiency
+  return {
+    push: be?.push?.toFixed(1) || '0',
+    pop: be?.pop?.toFixed(1) || '0',
+    ack: be?.ack?.toFixed(1) || '0'
+  }
+})
+
+// Format duration in seconds to human-readable string
+const formatDuration = (seconds) => {
+  if (!seconds || seconds === 0) return '0s'
+  if (seconds < 60) return `${Math.round(seconds)}s`
+  if (seconds < 3600) {
+    const mins = Math.floor(seconds / 60)
+    const secs = Math.round(seconds % 60)
+    return secs > 0 ? `${mins}m ${secs}s` : `${mins}m`
+  }
+  if (seconds < 86400) {
+    const hours = Math.floor(seconds / 3600)
+    const mins = Math.floor((seconds % 3600) / 60)
+    return mins > 0 ? `${hours}h ${mins}m` : `${hours}h`
+  }
+  const days = Math.floor(seconds / 86400)
+  const hours = Math.floor((seconds % 86400) / 3600)
+  return hours > 0 ? `${days}d ${hours}h` : `${days}d`
+}
+
+// Color classes for health indicators
+const timeLagClass = (seconds) => {
+  if (!seconds || seconds === 0) return 'text-light-600 dark:text-light-300'
+  if (seconds < 60) return 'text-emerald-600 dark:text-emerald-400'
+  if (seconds < 300) return 'text-amber-600 dark:text-amber-400'
+  return 'text-rose-600 dark:text-rose-400'
+}
+
+const offsetLagClass = (count) => {
+  if (!count || count === 0) return 'text-light-600 dark:text-light-300'
+  if (count < 10) return 'text-emerald-600 dark:text-emerald-400'
+  if (count < 50) return 'text-amber-600 dark:text-amber-400'
+  return 'text-rose-600 dark:text-rose-400'
+}
+
+const eventLoopClass = (ms) => {
+  if (!ms || ms === 0) return 'text-light-600 dark:text-light-300'
+  if (ms < 50) return 'text-emerald-600 dark:text-emerald-400'
+  if (ms < 100) return 'text-amber-600 dark:text-amber-400'
+  return 'text-rose-600 dark:text-rose-400'
+}
+
 // Format chart label based on time span
 const formatChartLabel = (date, isMultiDay) => {
   if (isMultiDay) {
@@ -404,9 +551,10 @@ const sortedConsumers = computed(() => {
   })
 })
 
-// Fetch data
+// Fetch data - only show loading state on initial load, not on background refresh
 const fetchOverview = async () => {
-  loadingOverview.value = true
+  // Only show loading skeleton if we don't have data yet
+  if (!overview.value) loadingOverview.value = true
   try {
     const response = await resources.getOverview()
     overview.value = response.data
@@ -418,7 +566,8 @@ const fetchOverview = async () => {
 }
 
 const fetchQueues = async () => {
-  loadingQueues.value = true
+  // Only show loading skeleton if we don't have data yet
+  if (!queues.value.length) loadingQueues.value = true
   try {
     const response = await queuesApi.list()
     queues.value = response.data?.queues || response.data || []
@@ -430,7 +579,8 @@ const fetchQueues = async () => {
 }
 
 const fetchConsumers = async () => {
-  loadingConsumers.value = true
+  // Only show loading skeleton if we don't have data yet
+  if (!consumers.value.length) loadingConsumers.value = true
   try {
     const response = await consumersApi.list()
     // API returns array directly, not nested in consumer_groups
@@ -443,7 +593,8 @@ const fetchConsumers = async () => {
 }
 
 const fetchStatus = async () => {
-  loadingStatus.value = true
+  // Only show loading skeleton if we don't have data yet
+  if (!statusData.value) loadingStatus.value = true
   try {
     const params = getTimeRangeParams()
     const response = await analytics.getStatus(params)

@@ -12,9 +12,9 @@
       </div>
       
       <!-- Actions - scrollable on mobile -->
-      <div class="flex items-center gap-2 sm:gap-3 overflow-x-auto pb-1 sm:pb-0 -mx-1 px-1 sm:mx-0 sm:px-0 scrollbar-hide">
+      <div class="flex items-center gap-2 sm:gap-3 pb-1 sm:pb-0 scrollbar-hide">
         <!-- Search - expandable on mobile -->
-        <div class="relative flex-shrink-0" ref="searchContainer">
+        <div class="relative flex-shrink-0 z-50" ref="searchContainer">
           <!-- Mobile: Icon button to toggle search -->
           <button
             v-if="!showMobileSearch"
@@ -83,47 +83,54 @@
           
           <!-- Search Results Dropdown -->
           <div 
-            v-if="showResults && searchQuery.length > 0 && searchResults.length > 0"
+            v-if="showResults && searchQuery.length > 0"
             class="absolute top-full left-0 right-0 sm:left-auto sm:right-0 sm:w-72 mt-1 bg-white dark:bg-dark-200 rounded-lg shadow-lg border border-light-300/50 dark:border-dark-50/50 overflow-hidden z-50 max-h-80 overflow-y-auto"
           >
-            <div 
-              v-for="(result, index) in searchResults" 
-              :key="result.id"
-              @mousedown.prevent="selectResult(result)"
-              class="px-4 py-2.5 cursor-pointer flex items-center gap-3 transition-colors"
-              :class="[
-                index === selectedIndex 
-                  ? 'bg-queen-50 dark:bg-queen-900/20' 
-                  : 'hover:bg-light-100 dark:hover:bg-dark-100'
-              ]"
-            >
-              <span 
-                class="flex-shrink-0 w-6 h-6 rounded flex items-center justify-center text-xs font-medium"
-                :class="result.type === 'queue' 
-                  ? 'bg-cyber-100 dark:bg-cyber-900/30 text-cyber-700 dark:text-cyber-400'
-                  : 'bg-crown-100 dark:bg-crown-900/30 text-crown-700 dark:text-crown-400'"
-              >
-                {{ result.type === 'queue' ? 'Q' : 'CG' }}
-              </span>
-              <div class="flex-1 min-w-0">
-                <p class="text-sm font-medium text-light-900 dark:text-white truncate">
-                  {{ result.name }}
-                </p>
-                <p class="text-xs text-light-500 truncate">
-                  {{ result.type === 'queue' 
-                    ? `${result.partitions} partitions` 
-                    : `${result.queueName} · ${result.members} members` }}
-                </p>
-              </div>
+            <!-- Loading state -->
+            <div v-if="searchLoading" class="px-4 py-3 text-sm text-light-500 text-center flex items-center justify-center gap-2">
+              <svg class="w-4 h-4 animate-spin" fill="none" viewBox="0 0 24 24">
+                <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+              </svg>
+              Searching...
             </div>
-          </div>
-          
-          <!-- No results -->
-          <div 
-            v-if="showResults && searchQuery.length > 0 && searchResults.length === 0 && !searchLoading"
-            class="absolute top-full left-0 right-0 sm:left-auto sm:right-0 sm:w-72 mt-1 bg-white dark:bg-dark-200 rounded-lg shadow-lg border border-light-300/50 dark:border-dark-50/50 overflow-hidden z-50"
-          >
-            <div class="px-4 py-3 text-sm text-light-500 text-center">
+            
+            <!-- Results -->
+            <template v-else-if="searchResults.length > 0">
+              <div 
+                v-for="(result, index) in searchResults" 
+                :key="result.id"
+                @mousedown.prevent="selectResult(result)"
+                class="px-4 py-2.5 cursor-pointer flex items-center gap-3 transition-colors"
+                :class="[
+                  index === selectedIndex 
+                    ? 'bg-queen-50 dark:bg-queen-900/20' 
+                    : 'hover:bg-light-100 dark:hover:bg-dark-100'
+                ]"
+              >
+                <span 
+                  class="flex-shrink-0 w-6 h-6 rounded flex items-center justify-center text-xs font-medium"
+                  :class="result.type === 'queue' 
+                    ? 'bg-cyber-100 dark:bg-cyber-900/30 text-cyber-700 dark:text-cyber-400'
+                    : 'bg-crown-100 dark:bg-crown-900/30 text-crown-700 dark:text-crown-400'"
+                >
+                  {{ result.type === 'queue' ? 'Q' : 'CG' }}
+                </span>
+                <div class="flex-1 min-w-0">
+                  <p class="text-sm font-medium text-light-900 dark:text-white truncate">
+                    {{ result.name }}
+                  </p>
+                  <p class="text-xs text-light-500 truncate">
+                    {{ result.type === 'queue' 
+                      ? `${result.partitions} partitions` 
+                      : `${result.queueName} · ${result.members} members` }}
+                  </p>
+                </div>
+              </div>
+            </template>
+            
+            <!-- No results -->
+            <div v-else class="px-4 py-3 text-sm text-light-500 text-center">
               No results found
             </div>
           </div>
@@ -346,13 +353,17 @@ const closeSearch = () => {
   searchQuery.value = ''
 }
 
-const onSearchBlur = () => {
-  // Delay to allow click on results
+const onSearchBlur = (event) => {
+  // Delay to allow click on results before closing
   setTimeout(() => {
-    if (isMobile.value && !searchQuery.value) {
-      showMobileSearch.value = false
+    // Only close if query is empty or we clicked outside
+    if (!searchQuery.value) {
+      showResults.value = false
+      if (isMobile.value) {
+        showMobileSearch.value = false
+      }
     }
-  }, 200)
+  }, 150)
 }
 
 // Close search on outside click
@@ -363,9 +374,12 @@ const handleClickOutside = (event) => {
 }
 
 // Reset selected index when search query changes
-watch(searchQuery, () => {
+watch(searchQuery, (newVal) => {
   selectedIndex.value = 0
-  showResults.value = searchQuery.value.length > 0
+  // Always show results when there's a query
+  if (newVal && newVal.length > 0) {
+    showResults.value = true
+  }
 })
 
 // Focus search input when mobile search is shown
@@ -378,15 +392,23 @@ watch(showMobileSearch, async (show) => {
 
 // Search focus handler - load data if not already loaded
 const onSearchFocus = async () => {
-  showResults.value = searchQuery.value.length > 0
-  if (!searchDataLoaded.value) {
+  // Always show results dropdown when focused and has query
+  if (searchQuery.value.length > 0) {
+    showResults.value = true
+  }
+  // Load data if not already loaded
+  if (!searchDataLoaded.value && !searchLoading.value) {
     await loadSearchData()
   }
 }
 
-// Search input handler
+// Search input handler - always show dropdown when typing
 const onSearchInput = () => {
   showResults.value = true
+  // Ensure data is loaded when user starts typing
+  if (!searchDataLoaded.value && !searchLoading.value) {
+    loadSearchData()
+  }
 }
 
 // Refresh handler
@@ -413,12 +435,20 @@ const loadSearchData = async () => {
       queuesApi.list(),
       consumersApi.list()
     ])
-    // Queues API returns { queues: [...] }, consumers returns [...]
-    queues.value = queuesRes.data?.queues || queuesRes.data || []
-    consumers.value = Array.isArray(consumersRes.data) ? consumersRes.data : []
+    
+    // Queues API returns { queues: [...] } or just [...]
+    const queuesData = queuesRes.data?.queues || queuesRes.data || []
+    queues.value = Array.isArray(queuesData) ? queuesData : []
+    
+    // Consumers API returns [...] directly
+    const consumersData = consumersRes.data
+    consumers.value = Array.isArray(consumersData) ? consumersData : []
+    
     searchDataLoaded.value = true
   } catch (error) {
     console.error('Failed to load search data:', error)
+    // Still mark as loaded to prevent infinite retry
+    searchDataLoaded.value = true
   } finally {
     searchLoading.value = false
   }

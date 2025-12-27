@@ -177,12 +177,15 @@
           </div>
           <div class="card-body flex items-center justify-center">
             <BaseChart 
-              v-if="statusData?.messages"
+              v-if="messageDistributionData.labels.length > 0"
               type="doughnut" 
               :data="messageDistributionData" 
               :options="doughnutOptions" 
               height="240px"
             />
+            <div v-else class="text-center py-12 text-light-500">
+              No message data available
+            </div>
           </div>
         </div>
       </div>
@@ -190,16 +193,10 @@
       <!-- Performance Metrics -->
       <div class="card">
         <div class="card-header">
-          <h3 class="font-semibold text-light-900 dark:text-white">Performance Metrics</h3>
+          <h3 class="font-semibold text-light-900 dark:text-white">Message Counts</h3>
         </div>
         <div class="card-body">
-          <div class="grid grid-cols-2 md:grid-cols-4 gap-2 sm:gap-4">
-            <div class="p-4 bg-light-100 dark:bg-dark-300 rounded-lg">
-              <p class="text-xs text-light-500 uppercase tracking-wide">Completed</p>
-              <p class="text-2xl font-bold text-emerald-600 dark:text-emerald-400 mt-1">
-                {{ formatNumber(statusData?.messages?.completed || 0) }}
-              </p>
-            </div>
+          <div class="grid grid-cols-2 md:grid-cols-5 gap-2 sm:gap-4">
             <div class="p-4 bg-light-100 dark:bg-dark-300 rounded-lg">
               <p class="text-xs text-light-500 uppercase tracking-wide">Pending</p>
               <p class="text-2xl font-bold text-cyber-600 dark:text-cyber-400 mt-1">
@@ -210,6 +207,18 @@
               <p class="text-xs text-light-500 uppercase tracking-wide">Processing</p>
               <p class="text-2xl font-bold text-crown-600 dark:text-crown-400 mt-1">
                 {{ formatNumber(statusData?.messages?.processing || 0) }}
+              </p>
+            </div>
+            <div class="p-4 bg-light-100 dark:bg-dark-300 rounded-lg">
+              <p class="text-xs text-light-500 uppercase tracking-wide">Completed</p>
+              <p class="text-2xl font-bold text-emerald-600 dark:text-emerald-400 mt-1">
+                {{ formatNumber(statusData?.messages?.completed || 0) }}
+              </p>
+            </div>
+            <div class="p-4 bg-light-100 dark:bg-dark-300 rounded-lg">
+              <p class="text-xs text-light-500 uppercase tracking-wide">Failed</p>
+              <p class="text-2xl font-bold text-orange-600 dark:text-orange-400 mt-1">
+                {{ formatNumber(statusData?.messages?.failed || 0) }}
               </p>
             </div>
             <div class="p-4 bg-light-100 dark:bg-dark-300 rounded-lg">
@@ -504,21 +513,25 @@ const messageDistributionData = computed(() => {
   
   const data = statusData.value.messages
   
+  // Build data array - only include non-zero values to avoid chart clutter
+  const entries = [
+    { label: 'Pending', value: data.pending || 0, color: 'rgba(6, 182, 212, 0.8)' },
+    { label: 'Processing', value: data.processing || 0, color: 'rgba(245, 158, 11, 0.8)' },
+    { label: 'Completed', value: data.completed || 0, color: 'rgba(16, 185, 129, 0.8)' },
+    { label: 'Failed', value: data.failed || 0, color: 'rgba(249, 115, 22, 0.8)' },
+    { label: 'Dead Letter', value: data.deadLetter || 0, color: 'rgba(244, 63, 94, 0.8)' }
+  ].filter(e => e.value > 0)
+  
+  // If all zeros, return empty to show "no data" message
+  if (entries.length === 0) {
+    return { labels: [], datasets: [] }
+  }
+  
   return {
-    labels: ['Pending', 'Processing', 'Completed', 'Dead Letter'],
+    labels: entries.map(e => e.label),
     datasets: [{
-      data: [
-        data.pending || 0,
-        data.processing || 0,
-        data.completed || 0,
-        data.deadLetter || 0
-      ],
-      backgroundColor: [
-        'rgba(6, 182, 212, 0.8)',
-        'rgba(245, 158, 11, 0.8)',
-        'rgba(16, 185, 129, 0.8)',
-        'rgba(244, 63, 94, 0.8)'
-      ],
+      data: entries.map(e => e.value),
+      backgroundColor: entries.map(e => e.color),
       borderWidth: 0
     }]
   }
@@ -574,7 +587,8 @@ const applyCustomRange = () => {
 }
 
 const fetchAnalytics = async () => {
-  loading.value = true
+  // Only show loading skeleton if we don't have data yet (smooth background refresh)
+  if (!statusData.value) loading.value = true
   try {
     let from, to
     

@@ -28,8 +28,67 @@ SESSION_SECRET=your-session-secret
 ## Create Users
 
 ```bash
-node src/create-user.js admin@example.com password123 admin
+node src/create-user.js 
 ```
+
+Then follow the prompts to create users with different roles.
+
+## Create Microservice Tokens
+
+For microservices that need to authenticate programmatically, you can generate long-lived or non-expiring tokens directly when creating a user:
+
+```bash
+node src/create-user.js
+```
+
+Follow the prompts:
+
+```
+=== Queen Proxy - Create User ===
+
+Username: order-service
+Password: ********
+
+Roles:
+  1) admin       - Full access
+  2) read-write  - Read-write access
+  3) read-only   - Read-only access
+
+Select role (1-3): 2
+
+Token expiration:
+  1) 24h    - 24 hours (default)
+  2) 7d     - 7 days
+  3) 30d    - 30 days
+  4) 1y     - 1 year
+  5) never  - No expiration (for microservices)
+  6) skip   - Do not generate token now
+
+Select token expiration (1-6) [1]: 5
+
+✓ User created successfully!
+  Username: order-service
+  Role: read-write
+  ID: 42
+  Token expiry: Never
+
+  Bearer Token:
+  eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpZCI6NDIsInVzZXJuYW1lIjoib3JkZXItc2VydmljZSIsInJvbGUiOiJyZWFkLXdyaXRlIiwiaWF0IjoxNzM1MzA3MjAwfQ.xxxxx
+
+  Use this token in the Authorization header:
+  Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
+```
+
+::: tip Token Expiration Options
+- **24h/7d/30d** - For temporary access or testing
+- **1y** - For long-running services with annual rotation
+- **never** - For microservices that shouldn't expire (rotate manually if compromised)
+- **skip** - Create user without generating a token (use login flow instead)
+:::
+
+::: warning Security
+Store tokens securely in environment variables or secrets management (e.g., Kubernetes Secrets, HashiCorp Vault). Never commit tokens to version control.
+:::
 
 ## Run
 
