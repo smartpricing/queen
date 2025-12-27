@@ -19,6 +19,7 @@
 -- Lightweight incremental message count (for fast aggregation)
 -- Uses a fixed 30-second window for index efficiency (~37ms vs 8s)
 -- Does NOT recalculate pending counts (that's expensive, done in full reconciliation)
+-- Uses transaction-level advisory lock to prevent concurrent execution across replicas
 CREATE OR REPLACE FUNCTION queen.increment_message_counts_v1()
 RETURNS JSONB
 LANGUAGE plpgsql
@@ -26,7 +27,17 @@ AS $$
 DECLARE
     v_updated INTEGER := 0;
     v_now TIMESTAMPTZ := NOW();
+    v_lock_key BIGINT := 7868669789; -- hash of 'queen_stats_increment'
 BEGIN
+    -- Try to acquire transaction-level advisory lock
+    -- If another instance is running, skip this execution (stats are eventually consistent)
+    IF NOT pg_try_advisory_xact_lock(v_lock_key) THEN
+        RETURN jsonb_build_object(
+            'skipped', true, 
+            'reason', 'another_instance_computing'
+        );
+    END IF;
+
     -- Use fixed 30-second window for index efficiency
     -- The index on messages(created_at) can be used because NOW() - INTERVAL is a constant
     -- The per-partition last_scanned_at is still used as secondary filter to avoid double-counting
@@ -211,6 +222,18 @@ BEGIN
       AND s.consumer_group = COALESCE(dlq_counts.consumer_group, '__QUEUE_MODE__');
     
     -- STEP 4: Handle NEW partitions (no existing stats - need full count, but only for these)
+    -- OPTIMIZED: Uses CTEs to pre-compute counts in single passes instead of correlated subqueries
+    -- This changes O(partitions × messages) to O(messages + partitions) for initial bootstrap
+    WITH message_counts AS (
+        SELECT partition_id, COUNT(*) as msg_count
+        FROM queen.messages
+        GROUP BY partition_id
+    ),
+    dlq_counts AS (
+        SELECT partition_id, COUNT(*) as dlq_count
+        FROM queen.dead_letter_queue
+        GROUP BY partition_id
+    )
     INSERT INTO queen.stats (
         stat_type, stat_key, queue_id, partition_id, consumer_group,
         total_messages, pending_messages, processing_messages, completed_messages, dead_letter_messages,
@@ -222,13 +245,13 @@ BEGIN
         q.id,
         p.id,
         COALESCE(pc.consumer_group, '__QUEUE_MODE__'),
-        -- Total messages in partition
-        (SELECT COUNT(*) FROM queen.messages m WHERE m.partition_id = p.id),
+        -- Total messages in partition (from CTE)
+        COALESCE(mc.msg_count, 0),
         -- Pending = total - completed - dlq
         GREATEST(0, 
-            (SELECT COUNT(*) FROM queen.messages m WHERE m.partition_id = p.id)
+            COALESCE(mc.msg_count, 0)
             - COALESCE(pc.total_messages_consumed, 0)
-            - COALESCE((SELECT COUNT(*) FROM queen.dead_letter_queue dlq WHERE dlq.partition_id = p.id), 0)
+            - COALESCE(dc.dlq_count, 0)
         ),
         -- Processing
         CASE 
@@ -238,17 +261,20 @@ BEGIN
         END,
         -- Completed
         COALESCE(pc.total_messages_consumed, 0),
-        -- Dead letter
-        COALESCE((SELECT COUNT(*) FROM queen.dead_letter_queue dlq WHERE dlq.partition_id = p.id), 0),
-        -- Oldest pending (use partition_lookup)
-        (SELECT pl.last_message_created_at FROM queen.partition_lookup pl WHERE pl.partition_id = p.id),
-        -- Newest message (use partition_lookup)
-        (SELECT pl.last_message_created_at FROM queen.partition_lookup pl WHERE pl.partition_id = p.id),
+        -- Dead letter (from CTE)
+        COALESCE(dc.dlq_count, 0),
+        -- Oldest pending (use partition_lookup via JOIN)
+        pl.last_message_created_at,
+        -- Newest message (use partition_lookup via JOIN)
+        pl.last_message_created_at,
         v_now,
         v_now
     FROM queen.partitions p
     JOIN queen.queues q ON q.id = p.queue_id
     LEFT JOIN queen.partition_consumers pc ON pc.partition_id = p.id
+    LEFT JOIN message_counts mc ON mc.partition_id = p.id
+    LEFT JOIN dlq_counts dc ON dc.partition_id = p.id
+    LEFT JOIN queen.partition_lookup pl ON pl.partition_id = p.id
     WHERE NOT EXISTS (
         SELECT 1 FROM queen.stats s 
         WHERE s.stat_type = 'partition' 

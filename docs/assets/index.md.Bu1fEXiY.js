@@ -16,7 +16,7 @@ import{_ as i,c as a,o as n,ag as e}from"./chunks/framework.-kPtTt-D.js";const g
 <span class="line"><span style="--shiki-light:#005CC5;--shiki-dark:#79B8FF;">  -e</span><span style="--shiki-light:#032F62;--shiki-dark:#9ECBFF;"> POP_WAIT_MAX_INTERVAL_MS=</span><span style="--shiki-light:#005CC5;--shiki-dark:#79B8FF;">5000</span><span style="--shiki-light:#005CC5;--shiki-dark:#79B8FF;"> \\</span></span>
 <span class="line"><span style="--shiki-light:#005CC5;--shiki-dark:#79B8FF;">  -e</span><span style="--shiki-light:#032F62;--shiki-dark:#9ECBFF;"> DEFAULT_SUBSCRIPTION_MODE=new</span><span style="--shiki-light:#005CC5;--shiki-dark:#79B8FF;"> \\</span></span>
 <span class="line"><span style="--shiki-light:#005CC5;--shiki-dark:#79B8FF;">  -e</span><span style="--shiki-light:#032F62;--shiki-dark:#9ECBFF;"> LOG_LEVEL=info</span><span style="--shiki-light:#005CC5;--shiki-dark:#79B8FF;"> \\</span></span>
-<span class="line"><span style="--shiki-light:#032F62;--shiki-dark:#9ECBFF;">  smartnessai/queen-mq:0.12.0-prerelease.8</span></span>
+<span class="line"><span style="--shiki-light:#032F62;--shiki-dark:#9ECBFF;">  smartnessai/queen-mq:0.12.0</span></span>
 <span class="line"></span>
 <span class="line"><span style="--shiki-light:#6A737D;--shiki-dark:#6A737D;"># Install JavaScript client</span></span>
 <span class="line"><span style="--shiki-light:#6F42C1;--shiki-dark:#B392F0;">npm</span><span style="--shiki-light:#032F62;--shiki-dark:#9ECBFF;"> install</span><span style="--shiki-light:#032F62;--shiki-dark:#9ECBFF;"> queen-mq</span></span>

@@ -14,16 +14,24 @@ docker run -p 6632:6632 \
   -e PG_USER=queen \
   -e PG_PASSWORD=secure_password \
   -e PG_DB=queen_production \
-  -e NUM_WORKERS=10 \
-  -e DB_POOL_SIZE=150 \
-  -e SIDECAR_POOL_SIZE=30 \
-  -e SIDECAR_MICRO_BATCH_WAIT_MS=10 \
-  -e POP_WAIT_INITIAL_INTERVAL_MS=500 \
-  -e POP_WAIT_BACKOFF_THRESHOLD=1 \
-  -e POP_WAIT_BACKOFF_MULTIPLIER=3.0 \
-  -e POP_WAIT_MAX_INTERVAL_MS=5000 \
+  -e DB_POOL_SIZE=10 \
   -e DEFAULT_SUBSCRIPTION_MODE=new \
   -e LOG_LEVEL=info \
+  -e RETENTION_INTERVAL=10000 \
+  -e RETENTION_BATCH_SIZE=50000 \
+  -e QUEEN_SYNC_ENABLED=true \
+  -e QUEEN_UDP_PEERS=localhost:6634,localhost:6635 \
+  -e QUEEN_UDP_NOTIFY_PORT=6634 \
+  -e FILE_BUFFER_DIR=/tmp/queen/s1 \
+  -e SIDECAR_POOL_SIZE=70 \
+  -e SIDECAR_MICRO_BATCH_WAIT_MS=10 \
+  -e NUM_WORKERS=4 \
+  -e POP_WAIT_INITIAL_INTERVAL_MS=10 \
+  -e POP_WAIT_MAX_INTERVAL_MS=1000 \
+  -e POP_WAIT_BACKOFF_MULTIPLIER=2 \
+  -e POP_WAIT_BACKOFF_THRESHOLD=1 \
+  -e DB_STATEMENT_TIMEOUT=300000 \
+  -e STATS_RECONCILE_INTERVAL_MS=30000 \
   smartnessai/queen-mq:{{VERSION}}
 ```
 
@@ -42,19 +50,26 @@ docker run -d \
   -e PG_DB=queen_production \
   -e PG_USE_SSL=true \
   -e PG_SSL_REJECT_UNAUTHORIZED=true \
-  -e NUM_WORKERS=20 \
-  -e DB_POOL_SIZE=300 \
-  -e SIDECAR_POOL_SIZE=30 \
-  -e SIDECAR_MICRO_BATCH_WAIT_MS=10 \
-  -e POP_WAIT_INITIAL_INTERVAL_MS=500 \
-  -e POP_WAIT_BACKOFF_THRESHOLD=1 \
-  -e POP_WAIT_BACKOFF_MULTIPLIER=3.0 \
-  -e POP_WAIT_MAX_INTERVAL_MS=5000 \
+  -e DB_POOL_SIZE=10 \
   -e DEFAULT_SUBSCRIPTION_MODE=new \
   -e LOG_LEVEL=info \
   -e LOG_FORMAT=json \
-  -e QUEEN_ENCRYPTION_KEY=your_64_char_hex_key \
+  -e RETENTION_INTERVAL=10000 \
+  -e RETENTION_BATCH_SIZE=50000 \
+  -e QUEEN_SYNC_ENABLED=true \
+  -e QUEEN_UDP_PEERS=localhost:6634,localhost:6635 \
+  -e QUEEN_UDP_NOTIFY_PORT=6634 \
   -e FILE_BUFFER_DIR=/var/lib/queen/buffers \
+  -e SIDECAR_POOL_SIZE=70 \
+  -e SIDECAR_MICRO_BATCH_WAIT_MS=10 \
+  -e NUM_WORKERS=4 \
+  -e POP_WAIT_INITIAL_INTERVAL_MS=10 \
+  -e POP_WAIT_MAX_INTERVAL_MS=1000 \
+  -e POP_WAIT_BACKOFF_MULTIPLIER=2 \
+  -e POP_WAIT_BACKOFF_THRESHOLD=1 \
+  -e DB_STATEMENT_TIMEOUT=300000 \
+  -e STATS_RECONCILE_INTERVAL_MS=30000 \
+  -e QUEEN_ENCRYPTION_KEY=your_64_char_hex_key \
   smartnessai/queen-mq:{{VERSION}}
 ```
 
@@ -68,6 +83,7 @@ The following is our production deployment configuration. Keep in mind that the 
 ```yaml
 ---
 # Source: queen-mq/templates/service.yaml
+
 apiVersion: v1
 kind: Service
 metadata:
@@ -87,6 +103,28 @@ spec:
       port: 6632
       protocol: TCP
       targetPort: 6632
+---
+# Source: queen-mq/templates/service.yaml
+apiVersion: v1
+kind: Service
+metadata:
+  labels:
+    run:  queen-mq
+  name:  queen-mq-headless
+  namespace: smartchat
+spec:
+  clusterIP: None
+  selector:
+    run: queen-mq
+  ports:
+    - name: http
+      port: 6632
+      protocol: TCP
+      targetPort: 6632
+    - name: udp-notify
+      port: 6633
+      protocol: UDP
+      targetPort: 6633    
 ---
 # Source: queen-mq/templates/statefulset.yaml
 apiVersion: apps/v1
@@ -164,29 +202,41 @@ spec:
             - name: PG_DB
               value: queen
             - name: DB_POOL_SIZE
-              value: "40"
-            - name: NUM_WORKERS
-              value: "2"
-            - name: QUEUE_POLL_INTERVAL
-              value: "1000"
-            - name: POLL_DB_INTERVAL
-              value: "500"
-            - name: POLL_WORKER_COUNT
-              value: "1"
-            - name: POLL_WORKER_INTERVAL
-              value: "500"
-            - name: QUEUE_MAX_POLL_INTERVAL
-              value: "5000"
-            - name: LOG_LEVEL
-              value: "info"
+              value: "10"
             - name: DEFAULT_SUBSCRIPTION_MODE
               value: new
-            - name: PARTITION_CLEANUP_DAYS
-              value: "7"
-            - name: RETENTION_BATCH_SIZE
-              value: "1000"
+            - name: LOG_LEVEL
+              value: "info"
             - name: RETENTION_INTERVAL
-              value: "600000"
+              value: "10000"
+            - name: RETENTION_BATCH_SIZE
+              value: "50000"
+            - name: QUEEN_SYNC_ENABLED
+              value: "true"
+            - name: QUEEN_UDP_PEERS
+              value: "queen-mq-0.queen-mq-headless:6634,queen-mq-1.queen-mq-headless:6634,queen-mq-2.queen-mq-headless:6634"
+            - name: QUEEN_UDP_NOTIFY_PORT
+              value: "6634"
+            - name: FILE_BUFFER_DIR
+              value: "/var/lib/queen/buffers"
+            - name: SIDECAR_POOL_SIZE
+              value: "70"
+            - name: SIDECAR_MICRO_BATCH_WAIT_MS
+              value: "10"
+            - name: NUM_WORKERS
+              value: "4"
+            - name: POP_WAIT_INITIAL_INTERVAL_MS
+              value: "10"
+            - name: POP_WAIT_MAX_INTERVAL_MS
+              value: "1000"
+            - name: POP_WAIT_BACKOFF_MULTIPLIER
+              value: "2"
+            - name: POP_WAIT_BACKOFF_THRESHOLD
+              value: "1"
+            - name: DB_STATEMENT_TIMEOUT
+              value: "300000"
+            - name: STATS_RECONCILE_INTERVAL_MS
+              value: "30000"
   volumeClaimTemplates:
     - metadata:
         name: queen-mq-storage-prod
@@ -371,11 +421,41 @@ spec:
             - name: PG_DB
               value: queen
             - name: DB_POOL_SIZE
-              value: "150"
-            - name: NUM_WORKERS
               value: "10"
+            - name: DEFAULT_SUBSCRIPTION_MODE
+              value: new
             - name: LOG_LEVEL
               value: "info"
+            - name: RETENTION_INTERVAL
+              value: "10000"
+            - name: RETENTION_BATCH_SIZE
+              value: "50000"
+            - name: QUEEN_SYNC_ENABLED
+              value: "true"
+            - name: QUEEN_UDP_PEERS
+              value: "queen-mq-0.queen-mq-headless:6634,queen-mq-1.queen-mq-headless:6634,queen-mq-2.queen-mq-headless:6634"
+            - name: QUEEN_UDP_NOTIFY_PORT
+              value: "6634"
+            - name: FILE_BUFFER_DIR
+              value: "/var/lib/queen/buffers"
+            - name: SIDECAR_POOL_SIZE
+              value: "70"
+            - name: SIDECAR_MICRO_BATCH_WAIT_MS
+              value: "10"
+            - name: NUM_WORKERS
+              value: "4"
+            - name: POP_WAIT_INITIAL_INTERVAL_MS
+              value: "10"
+            - name: POP_WAIT_MAX_INTERVAL_MS
+              value: "1000"
+            - name: POP_WAIT_BACKOFF_MULTIPLIER
+              value: "2"
+            - name: POP_WAIT_BACKOFF_THRESHOLD
+              value: "1"
+            - name: DB_STATEMENT_TIMEOUT
+              value: "300000"
+            - name: STATS_RECONCILE_INTERVAL_MS
+              value: "30000"
           
           envFrom:
             - secretRef:
