@@ -4,7 +4,47 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Login - Queen</title>
+    
+    <!-- Fonts -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500;600&family=Outfit:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+    
     <style>
+        :root {
+            /* Queen colors */
+            --queen-400: #F472B6;
+            --queen-500: #EC4899;
+            --queen-600: #DB2777;
+            --queen-700: #BE185D;
+            
+            /* Cyber colors */
+            --cyber-400: #22D3EE;
+            --cyber-500: #06B6D4;
+            --cyber-600: #0891B2;
+            
+            /* Crown colors */
+            --crown-400: #FBBF24;
+            --crown-500: #F59E0B;
+            --crown-600: #D97706;
+            
+            /* Dark surfaces */
+            --dark-50: #18181B;
+            --dark-100: #151518;
+            --dark-200: #121215;
+            --dark-300: #0F0F12;
+            --dark-400: #0C0C0F;
+            
+            /* Light surfaces */
+            --light-100: #FAFAFA;
+            --light-200: #F5F5F7;
+            --light-300: #E5E5E7;
+            --light-400: #D4D4D8;
+            --light-500: #A1A1AA;
+            --light-600: #71717A;
+            --light-800: #3F3F46;
+        }
+        
         * {
             margin: 0;
             padding: 0;
@@ -12,28 +52,89 @@
         }
         
         body {
-            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
-            background: #0d1117;
+            font-family: 'Inter', system-ui, -apple-system, sans-serif;
+            background: var(--dark-400);
             min-height: 100vh;
             display: flex;
             align-items: center;
             justify-content: center;
-            color: #e6edf3;
+            color: var(--light-100);
+            position: relative;
+            overflow: hidden;
+        }
+        
+        /* Mesh gradient background */
+        .bg-mesh {
+            position: fixed;
+            inset: 0;
+            pointer-events: none;
+            background-image: 
+                radial-gradient(at 0% 0%, rgba(236,72,153,0.15) 0px, transparent 50%),
+                radial-gradient(at 100% 0%, rgba(6,182,212,0.12) 0px, transparent 50%),
+                radial-gradient(at 100% 100%, rgba(245,158,11,0.08) 0px, transparent 50%);
+        }
+        
+        /* Subtle animated gradient orbs */
+        .orb {
+            position: absolute;
+            border-radius: 50%;
+            filter: blur(80px);
+            opacity: 0.4;
+            animation: float 20s ease-in-out infinite;
+        }
+        
+        .orb-1 {
+            width: 400px;
+            height: 400px;
+            background: var(--queen-500);
+            top: -200px;
+            left: -100px;
+            animation-delay: 0s;
+        }
+        
+        .orb-2 {
+            width: 300px;
+            height: 300px;
+            background: var(--cyber-500);
+            top: 50%;
+            right: -150px;
+            animation-delay: -7s;
+        }
+        
+        .orb-3 {
+            width: 250px;
+            height: 250px;
+            background: var(--crown-500);
+            bottom: -100px;
+            left: 30%;
+            animation-delay: -14s;
+        }
+        
+        @keyframes float {
+            0%, 100% { transform: translate(0, 0) scale(1); }
+            25% { transform: translate(30px, -30px) scale(1.05); }
+            50% { transform: translate(-20px, 20px) scale(0.95); }
+            75% { transform: translate(10px, 10px) scale(1.02); }
         }
         
         .login-container {
-            background: #161b22;
-            border: 1px solid rgba(48, 54, 61, 0.6);
-            padding: 3rem;
-            border-radius: 12px;
-            box-shadow: 0 10px 40px rgba(0, 0, 0, 0.5);
+            position: relative;
+            z-index: 10;
+            background: var(--dark-200);
+            border: 1px solid rgba(255, 255, 255, 0.05);
+            padding: 2.5rem;
+            border-radius: 1rem;
+            box-shadow: 
+                0 10px 40px -10px rgba(0, 0, 0, 0.5),
+                0 2px 10px -2px rgba(0, 0, 0, 0.3);
             width: 100%;
-            max-width: 420px;
+            max-width: 400px;
+            backdrop-filter: blur(20px);
         }
         
         .logo-section {
             text-align: center;
-            margin-bottom: 2.5rem;
+            margin-bottom: 2rem;
         }
         
         .logo-wrapper {
@@ -41,23 +142,39 @@
             align-items: center;
             justify-content: center;
             margin-bottom: 1rem;
+            position: relative;
+        }
+        
+        .logo-wrapper::after {
+            content: '';
+            position: absolute;
+            inset: -10px;
+            background: radial-gradient(circle, rgba(236,72,153,0.2) 0%, transparent 70%);
+            border-radius: 50%;
+            z-index: -1;
         }
         
         .logo {
-            height: 120px;
+            height: 100px;
             width: auto;
+            filter: drop-shadow(0 0 20px rgba(236,72,153,0.3));
         }
         
         .logo-section h1 {
-            color: #e6edf3;
+            font-family: 'Outfit', 'Inter', system-ui, sans-serif;
+            color: var(--light-100);
             font-size: 1.75rem;
             font-weight: 700;
-            margin-bottom: 0.5rem;
+            margin-bottom: 0.375rem;
             letter-spacing: -0.025em;
+            background: linear-gradient(135deg, var(--queen-400), var(--cyber-400));
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
         }
         
         .logo-section p {
-            color: #8b949e;
+            color: var(--light-500);
             font-size: 0.875rem;
             font-weight: 500;
         }
@@ -69,7 +186,7 @@
         label {
             display: block;
             margin-bottom: 0.5rem;
-            color: #e6edf3;
+            color: var(--light-200);
             font-weight: 500;
             font-size: 0.875rem;
         }
@@ -77,46 +194,53 @@
         input {
             width: 100%;
             padding: 0.75rem 1rem;
-            background: #0d1117;
-            border: 1px solid #30363d;
-            border-radius: 6px;
+            background: var(--dark-300);
+            border: 1px solid var(--dark-50);
+            border-radius: 0.5rem;
             font-size: 0.9375rem;
-            color: #e6edf3;
-            transition: all 0.2s;
+            font-family: 'Inter', system-ui, sans-serif;
+            color: var(--light-100);
+            transition: all 0.2s ease;
             outline: none;
         }
         
         input::placeholder {
-            color: #6e7681;
+            color: var(--light-600);
         }
         
         input:focus {
-            border-color: #58a6ff;
-            box-shadow: 0 0 0 3px rgba(88, 166, 255, 0.1);
-            background: #010409;
+            border-color: var(--queen-500);
+            box-shadow: 0 0 0 3px rgba(236, 72, 153, 0.15);
+            background: var(--dark-400);
         }
         
         input:hover:not(:focus) {
-            border-color: #8b949e;
+            border-color: var(--light-800);
         }
         
         button {
             width: 100%;
-            padding: 0.875rem;
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            padding: 0.875rem 1rem;
+            background: linear-gradient(135deg, var(--queen-500) 0%, var(--queen-600) 100%);
             color: white;
             border: none;
-            border-radius: 6px;
+            border-radius: 0.5rem;
             font-size: 0.9375rem;
+            font-family: 'Inter', system-ui, sans-serif;
             font-weight: 600;
             cursor: pointer;
-            transition: all 0.2s;
-            margin-top: 0.5rem;
+            transition: all 0.2s ease;
+            margin-top: 0.75rem;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 0.5rem;
         }
         
         button:hover {
+            background: linear-gradient(135deg, var(--queen-600) 0%, var(--queen-700) 100%);
+            box-shadow: 0 0 20px -5px rgba(236, 72, 153, 0.4);
             transform: translateY(-1px);
-            box-shadow: 0 6px 20px rgba(102, 126, 234, 0.4);
         }
         
         button:active {
@@ -127,14 +251,15 @@
             opacity: 0.6;
             cursor: not-allowed;
             transform: none;
+            box-shadow: none;
         }
         
         .error {
-            background: rgba(248, 81, 73, 0.1);
-            border: 1px solid rgba(248, 81, 73, 0.3);
-            color: #ff7b72;
+            background: rgba(244, 63, 94, 0.1);
+            border: 1px solid rgba(244, 63, 94, 0.2);
+            color: #FDA4AF;
             padding: 0.75rem 1rem;
-            border-radius: 6px;
+            border-radius: 0.5rem;
             margin-bottom: 1.25rem;
             font-size: 0.875rem;
             display: none;
@@ -148,18 +273,18 @@
         
         .error-icon {
             flex-shrink: 0;
+            color: #F87171;
         }
         
         /* Loading spinner */
         .spinner {
             display: none;
-            width: 16px;
-            height: 16px;
+            width: 18px;
+            height: 18px;
             border: 2px solid rgba(255, 255, 255, 0.3);
             border-top-color: white;
             border-radius: 50%;
             animation: spin 0.6s linear infinite;
-            margin-left: 8px;
         }
         
         button.loading .spinner {
@@ -170,20 +295,70 @@
             to { transform: rotate(360deg); }
         }
         
+        /* Footer */
+        .footer {
+            margin-top: 2rem;
+            text-align: center;
+            padding-top: 1.5rem;
+            border-top: 1px solid var(--dark-50);
+        }
+        
+        .footer p {
+            color: var(--light-600);
+            font-size: 0.75rem;
+        }
+        
+        .footer a {
+            color: var(--queen-400);
+            text-decoration: none;
+            transition: color 0.2s;
+        }
+        
+        .footer a:hover {
+            color: var(--queen-500);
+        }
+        
+        /* Focus ring */
+        *:focus-visible {
+            outline: none;
+            box-shadow: 0 0 0 2px var(--queen-500), 0 0 0 4px rgba(236, 72, 153, 0.2);
+        }
+        
+        /* Selection */
+        ::selection {
+            background: rgba(236, 72, 153, 0.3);
+            color: var(--light-100);
+        }
+        
         /* Responsive */
         @media (max-width: 480px) {
             .login-container {
-                padding: 2rem;
+                padding: 2rem 1.5rem;
                 margin: 1rem;
+                border-radius: 0.75rem;
+            }
+            
+            .logo {
+                height: 80px;
             }
             
             .logo-section h1 {
                 font-size: 1.5rem;
             }
+            
+            .orb {
+                opacity: 0.25;
+            }
         }
     </style>
 </head>
 <body>
+    <!-- Background effects -->
+    <div class="bg-mesh"></div>
+    <div class="orb orb-1"></div>
+    <div class="orb orb-2"></div>
+    <div class="orb orb-3"></div>
+    
     <div class="login-container">
         <div class="logo-section">
             <div class="logo-wrapper">
@@ -227,10 +402,14 @@
             </div>
             
             <button type="submit" id="loginBtn">
-                <span id="btnText">Login</span>
+                <span id="btnText">Sign In</span>
                 <span class="spinner"></span>
             </button>
         </form>
+        
+        <div class="footer">
+            <p>Queen Message Queue</p>
+        </div>
     </div>
 
     <script>
@@ -275,7 +454,7 @@
                 errorDiv.classList.add('show');
                 loginBtn.disabled = false;
                 loginBtn.classList.remove('loading');
-                btnText.textContent = 'Login';
+                btnText.textContent = 'Sign In';
             }
         });
     </script>

@@ -134,7 +134,7 @@
       <DataTable
         title="Active Queues"
         :columns="queueColumns"
-        :data="queues"
+        :data="sortedQueues"
         :loading="loadingQueues"
         :page-size="5"
         clickable
@@ -167,7 +167,7 @@
       <DataTable
         title="Consumer Groups"
         :columns="consumerColumns"
-        :data="consumers"
+        :data="sortedConsumers"
         :loading="loadingConsumers"
         :page-size="5"
         clickable
@@ -386,6 +386,23 @@ const consumerColumns = [
   { key: 'members', label: 'Members', sortable: true, align: 'right' },
   { key: 'totalLag', label: 'Lag', sortable: true, align: 'right' },
 ]
+
+// Sorted data for tables
+const sortedQueues = computed(() => {
+  return [...queues.value].sort((a, b) => {
+    const pendingA = a.messages?.pending || 0
+    const pendingB = b.messages?.pending || 0
+    return pendingB - pendingA // Descending by pending
+  })
+})
+
+const sortedConsumers = computed(() => {
+  return [...consumers.value].sort((a, b) => {
+    const lagA = a.totalLag || 0
+    const lagB = b.totalLag || 0
+    return lagB - lagA // Descending by lag
+  })
+})
 
 // Fetch data
 const fetchOverview = async () => {

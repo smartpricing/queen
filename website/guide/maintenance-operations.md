@@ -87,7 +87,6 @@ Buffered files must be managed directly on the server filesystem. On clustered d
 1. **Webapp:** Sidebar → Click **Pop Maint.** toggle
 2. **API:** `POST /api/v1/system/maintenance/pop` with `{ "enabled": true }`
 
-
 ### Behavior When Active
 
 - All consumers receive empty arrays `[]`

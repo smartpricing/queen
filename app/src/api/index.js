@@ -62,6 +62,7 @@ export const analytics = {
 // ============================================
 export const consumers = {
   list: () => client.get('/api/v1/consumer-groups'),
+  refreshStats: () => client.post('/api/v1/stats/refresh'),
   get: (name) => client.get(`/api/v1/consumer-groups/${encodeURIComponent(name)}`),
   getLagging: (minLagSeconds) => 
     client.get(`/api/v1/consumer-groups/lagging`, { params: { minLagSeconds } }),

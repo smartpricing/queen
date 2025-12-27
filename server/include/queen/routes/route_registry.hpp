@@ -129,6 +129,7 @@ void setup_status_routes(uWS::App* app, const RouteContext& ctx);
 /**
  * Setup consumer group endpoints
  * Routes:
+ *   POST /api/v1/stats/refresh                     (trigger stats recomputation)
  *   GET /api/v1/consumer-groups
  *   GET /api/v1/consumer-groups/lagging
  *   GET /api/v1/consumer-groups/:group

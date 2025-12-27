@@ -101,9 +101,32 @@
           </button>
         </div>
         
+        <!-- User info & Logout (only when behind proxy) -->
+        <div v-if="isProxied" class="mt-3 flex items-center justify-between px-3 py-2 rounded-lg bg-light-100 dark:bg-dark-200">
+          <div class="flex items-center gap-2 min-w-0">
+            <div class="w-6 h-6 rounded-full bg-queen-500/20 flex items-center justify-center flex-shrink-0">
+              <span class="text-xs font-semibold text-queen-600 dark:text-queen-400">
+                {{ proxyUser?.username?.charAt(0)?.toUpperCase() || 'U' }}
+              </span>
+            </div>
+            <span class="text-xs text-light-600 dark:text-light-400 truncate">
+              {{ proxyUser?.username || 'User' }}
+            </span>
+          </div>
+          <button 
+            @click="logout"
+            class="p-1.5 rounded-md text-light-500 hover:text-rose-500 hover:bg-rose-50 dark:hover:bg-rose-900/20 transition-colors"
+            title="Logout"
+          >
+            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="1.5">
+              <path stroke-linecap="round" stroke-linejoin="round" d="M15.75 9V5.25A2.25 2.25 0 0013.5 3h-6a2.25 2.25 0 00-2.25 2.25v13.5A2.25 2.25 0 007.5 21h6a2.25 2.25 0 002.25-2.25V15M12 9l-3 3m0 0l3 3m-3-3h12.75" />
+            </svg>
+          </button>
+        </div>
+        
         <!-- Version info -->
         <p class="text-xs text-light-500 text-center mt-3">
-          v1.0.0
+          v{{ appVersion }}
         </p>
       </div>
     </div>
@@ -114,8 +137,11 @@
 import { ref, computed, onMounted, watch, h } from 'vue'
 import { useRoute } from 'vue-router'
 import { system } from '@/api'
+import { useProxy } from '@/composables/useProxy'
+import { version as appVersion } from '../../package.json'
 
 const route = useRoute()
+const { isProxied, proxyUser, logout } = useProxy()
 
 // Mobile sidebar state
 const isOpen = ref(false)

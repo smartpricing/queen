@@ -1,6 +1,6 @@
 {
   "name": "queen-dashboard",
-  "version": "1.0.0",
+  "version": "0.12.0",
   "private": true,
   "type": "module",
   "scripts": {

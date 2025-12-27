@@ -78,6 +78,7 @@ It push peaks for single request is around 45k req/s, with sustatined load (PUSH
 
 | Server Version | Description | Compatible Clients |
 |----------------|-------------|-------------------|
+| **0.12.0** | New frontend and docs | JS ≥0.7.4, Python ≥0.7.4 |
 | **0.11.0** | Libqueen 0.11.0; added stats tables and optimized analytics procedures, added DB statement timeout and stats reconcile interval | JS ≥0.7.4, Python ≥0.7.4 |
 | **0.10.0** | Total rewrite of the engine with libuv and stored procedures, removed streaming engine | JS ≥0.7.4, Python ≥0.7.4 |
 | **0.8.0** | Added Shared Cache with UDP sync for clustered deployment | JS ≥0.7.4, Python ≥0.7.4 |
@@ -89,11 +90,10 @@ It push peaks for single request is around 45k req/s, with sustatined load (PUSH
 
 ## TODO
 
-- retention data on frontend
-- replace udp sync witch tcp with libuv
-- proxy new with auth
-- deploy pipeline
-- revisit all website
+- Evaluate to replace udp sync witch tcp with libuv
+- Proxy new with auth
+- Retention data on frontend
+- Deploy pipeline
 
 ---
 

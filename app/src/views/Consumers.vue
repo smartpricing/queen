@@ -191,6 +191,23 @@
             <option value="lag">Sort by Lag</option>
             <option value="members">Sort by Members</option>
           </select>
+          
+          <button
+            @click="handleHardRefresh"
+            :disabled="hardRefreshLoading"
+            class="btn btn-secondary text-xs sm:text-sm flex items-center gap-1.5"
+            title="Force refresh stats from database (fixes stale lag data)"
+          >
+            <svg 
+              class="w-4 h-4" 
+              :class="{ 'animate-spin': hardRefreshLoading }"
+              fill="none" stroke="currentColor" viewBox="0 0 24 24"
+            >
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+            </svg>
+            <span class="hidden sm:inline">{{ hardRefreshLoading ? 'Refreshing...' : 'Hard Refresh' }}</span>
+            <span class="sm:hidden">{{ hardRefreshLoading ? '...' : 'Refresh' }}</span>
+          </button>
         </div>
       </div>
     </div>
@@ -540,6 +557,9 @@ const laggingPartitions = ref([])
 const laggingLoading = ref(false)
 const lagThreshold = ref(3600) // Default: 1 hour in seconds
 
+// Hard refresh state
+const hardRefreshLoading = ref(false)
+
 const lagPresets = [
   { value: 60, label: '1m' },
   { value: 300, label: '5m' },
@@ -633,6 +653,21 @@ const fetchConsumers = async () => {
     console.error('Failed to fetch consumers:', err)
   } finally {
     loading.value = false
+  }
+}
+
+// Hard refresh - force stats recomputation then fetch
+const handleHardRefresh = async () => {
+  hardRefreshLoading.value = true
+  try {
+    // First, trigger stats refresh on the server
+    await consumersApi.refreshStats()
+    // Then fetch the updated consumer groups
+    await fetchConsumers()
+  } catch (err) {
+    console.error('Failed to hard refresh:', err)
+  } finally {
+    hardRefreshLoading.value = false
   }
 }
 
