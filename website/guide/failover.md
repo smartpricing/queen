@@ -67,6 +67,5 @@ wc -l /var/lib/queen/buffers/failover_*.buf
 ## Related
 
 - [Server Architecture](/server/architecture)
-- [Performance Tuning](/server/tuning)
 
 [Complete failover documentation](https://github.com/smartpricing/queen/blob/master/documentation/FAILOVER.md)

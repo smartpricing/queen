@@ -1,6 +1,6 @@
 # HTTP API Reference
 
-Complete REST API documentation for Queen MQ. All operations are available through HTTP endpoints.
+Complete HTTP API documentation for Queen MQ. All operations are available through HTTP endpoints.
 
 ## Base URL
 
@@ -955,5 +955,3 @@ Instead of using the raw HTTP API, consider using client libraries:
 
 - [Quick Start Guide](/guide/quickstart) - Get started quickly
 - [Concepts](/guide/concepts) - Understand core concepts
-- [Server Configuration](/server/configuration) - Configure the server
-- [Environment Variables](/server/environment-variables) - Complete variable reference

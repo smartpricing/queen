@@ -1,13 +1,13 @@
 <template>
   <header class="px-4 py-3 sm:px-6 sm:py-4 pl-14 sm:pl-16 lg:pl-6">
     <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
-      <!-- Page title & breadcrumb -->
+      <!-- Page title & subtitle -->
       <div class="min-w-0">
         <h1 class="text-xl sm:text-2xl font-display font-bold text-light-900 dark:text-white truncate">
           {{ pageTitle }}
         </h1>
-        <p v-if="lastUpdated" class="text-xs sm:text-sm text-light-500 dark:text-light-500 mt-0.5">
-          Last updated {{ lastUpdated }}
+        <p v-if="pageSubtitle" class="text-xs sm:text-sm text-light-500 dark:text-light-500 mt-0.5">
+          {{ pageSubtitle }}
         </p>
       </div>
       
@@ -227,7 +227,6 @@
 import { ref, computed, watch, onMounted, onUnmounted, nextTick } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useTheme } from '@/composables/useTheme'
-import { formatRelativeTime } from '@/composables/useApi'
 import { queues as queuesApi, consumers as consumersApi, system } from '@/api'
 
 const route = useRoute()
@@ -271,8 +270,8 @@ const pageTitle = computed(() => {
   return route.meta.title || 'Dashboard'
 })
 
-const lastUpdated = computed(() => {
-  return formatRelativeTime(new Date())
+const pageSubtitle = computed(() => {
+  return route.meta.subtitle || ''
 })
 
 // Search results

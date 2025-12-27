@@ -22,7 +22,6 @@ This guide is for emergency situations. Bookmark it.
 1. **Webapp:** Sidebar → Click **Push Maint.** toggle
 2. **API:** `POST /api/v1/system/maintenance` with `{ "enabled": true }`
 
-![Push Maintenance Toggle](/maintenace.png)
 
 ### Behavior When Active
 
@@ -88,7 +87,6 @@ Buffered files must be managed directly on the server filesystem. On clustered d
 1. **Webapp:** Sidebar → Click **Pop Maint.** toggle
 2. **API:** `POST /api/v1/system/maintenance/pop` with `{ "enabled": true }`
 
-![Pop Maintenance Toggle](/maintenace.png)
 
 ### Behavior When Active
 
@@ -120,7 +118,6 @@ Buffered files must be managed directly on the server filesystem. On clustered d
 
 Manage consumer group cursors from the webapp.
 
-![Consumer Group Actions](/cgseek.png)
 
 ### Move to Now
 

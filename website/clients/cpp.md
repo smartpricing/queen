@@ -112,8 +112,6 @@ See:
 - **Pop**: 4,000-488,000 msg/s (peak with large batches)
 - **Latency**: <50ms
 
-See [Benchmarks](/server/benchmarks) for detailed performance data.
-
 ## Support
 
 [GitHub Repository](https://github.com/smartpricing/queen)

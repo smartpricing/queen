@@ -687,7 +687,4 @@ export FILE_BUFFER_DIR=/tmp/queen-s2
 ## See Also
 
 - [Server Installation](/server/installation) - Build and install Queen
-- [Configuration](/server/configuration) - Configure the server
-- [Environment Variables](/server/environment-variables) - Complete variable reference
 - [Monitoring](/server/monitoring) - Set up monitoring
-- [Troubleshooting](/server/troubleshooting) - Common issues

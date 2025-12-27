@@ -6,10 +6,30 @@ This page documents Queen MQ server releases and their compatible client version
 
 | Server Version | Description | Compatible Clients |
 |----------------|-------------|-------------------|
+| **0.11.0** | Libqueen 0.11.0; added stats tables and optimized analytics procedures, added DB statement timeout and stats reconcile interval | JS ≥0.7.4, Python ≥0.7.4 |
+| **0.10.0** | Total rewrite of the engine with libuv and stored procedures, removed streaming engine | JS ≥0.7.4, Python ≥0.7.4 |
 | **0.8.0** | Added Shared Cache with UDP sync for clustered deployment | JS ≥0.7.4, Python ≥0.7.4 |
 | **0.7.5** | First stable release | JS ≥0.7.4, Python ≥0.7.4 |
 
 ## Release Details
+
+
+### Version 0.11.0
+**Highlights:**
+- Libqueen 0.11.0; added stats tables and optimized analytics procedures, added DB statement timeout and stats reconcile interval
+
+**Compatible Clients:**
+- JavaScript Client: `queen-mq` ≥0.7.4
+- Python Client: `queen-mq` ≥0.7.4
+
+### Version 0.10.0
+
+**Highlights:**
+- Total rewrite of the engine with libuv and stored procedures, removed streaming engine
+
+**Compatible Clients:**
+- JavaScript Client: `queen-mq` ≥0.7.4
+- Python Client: `queen-mq` ≥0.7.4
 
 ### Version 0.8.0
 
@@ -21,8 +41,6 @@ This page documents Queen MQ server releases and their compatible client version
 **Compatible Clients:**
 - JavaScript Client: `queen-mq` ≥0.7.4
 - Python Client: `queen-mq` ≥0.7.4
-
----
 
 ### Version 0.7.5
 
@@ -50,12 +68,3 @@ npm install queen-mq
 ```bash
 pip install queen-mq
 ```
-
-## Upgrading
-
-When upgrading the Queen MQ server, ensure your client libraries are at or above the minimum compatible version listed in the table above.
-
-:::tip Backward Compatibility
-Client versions are generally backward compatible with newer server versions. Always check this table when upgrading the server to ensure your clients remain compatible.
-:::
-

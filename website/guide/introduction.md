@@ -12,30 +12,30 @@ Years ago, when the creator first read the word "queue", they read it as "queen"
 
 ## Key Features
 
-### 🎯 Unlimited FIFO Partitions
+### Unlimited FIFO Partitions
 Create as many ordered partitions as you need within each queue. Messages in the same partition are guaranteed to be processed in order, with automatic lock management to ensure only one consumer processes a partition at a time.
 
-### 👥 Consumer Groups
+### Consumer Groups
 Kafka-style consumer groups allow multiple groups to process the same messages independently. Each group tracks its own position and can start from the beginning, from a specific timestamp, or only process new messages.
 
-### 🔄 Transactions
+### Transactions
 Atomic operations across queues with exactly-once delivery guarantees. Chain push and ack operations together to build reliable workflows that never lose or duplicate messages.
 
-### ⏱️ Long Polling
+### Long Polling
 Efficient server-side waiting for messages. No busy loops, no wasted resources. Messages are delivered instantly when they become available.
 
-### 🛡️ Zero Message Loss
+### Zero Message Loss
 Automatic failover to disk when PostgreSQL is unavailable. Messages are buffered locally and automatically replayed when the database recovers. Survives crashes and restarts.
 
-### 💀 Dead Letter Queue
+### Dead Letter Queue
 Automatic handling of failed messages. Configure retry limits and have messages automatically routed to the dead letter queue for debugging and manual intervention.
 
 ## Architecture Highlights
 
-- **High Performance**: Handle 200K+ messages/second with proper batching
-- **C++17**: Modern C++ with uWebSockets for high-performance networking
-- **Async PostgreSQL**: Fully asynchronous, non-blocking database operations
-- **Horizontal Scaling**: Multiple server instances with automatic load distribution
+- **High Performance**: Handle 10k req/s with houndreds of thousands of messages/second
+- **C++17**: Modern C++ with uWebSockets and libuv
+- **Async PostgreSQL**: Fully asynchronous, non-blocking database operations thoughout libuv
+- **Horizontal Scaling**: Multiple server instances for HA
 - **Modern Dashboard**: Beautiful Vue 3 web interface for monitoring and management
 
 ## Use Cases
@@ -68,24 +68,6 @@ Distribute work across multiple workers:
 - Report generation
 - Email delivery
 
-## How It Works
-
-```mermaid
-graph TD
-    A[Producer] -->|Push| B[Queue]
-    B -->|Partition 1| C[Consumer Group 1]
-    B -->|Partition 2| D[Consumer Group 1]
-    B -->|Partition 1| E[Consumer Group 2]
-    B -->|Partition 2| F[Consumer Group 2]
-    
-    C -->|Process| G[Ack/Nack]
-    D -->|Process| G
-    E -->|Process| H[Ack/Nack]
-    F -->|Process| H
-    
-    G -->|Retry Exhausted| I[Dead Letter Queue]
-    H -->|Retry Exhausted| I
-```
 
 ## Design Principles
 
@@ -94,29 +76,6 @@ graph TD
 3. **Reliability**: ACID guarantees, automatic failover, zero message loss
 4. **Flexibility**: Support multiple messaging patterns (queue, pub/sub)
 5. **Observability**: Built-in tracing, metrics, and beautiful dashboard
-
-## Comparison with Other Systems
-
-| Aspect | Queen | RabbitMQ | Kafka | NATS |
-|--------|-------|----------|-------|------|
-| **Storage** | PostgreSQL | Disk | Disk | Memory/File |
-| **Partitions** | Unlimited | N/A | Limited | N/A |
-| **Consumer Groups** | ✅ Native | ⚠️ Pattern | ✅ Native | ✅ Queue Groups |
-| **Transactions** | ✅ Atomic | ⚠️ Complex | ⚠️ Producer | ❌ |
-| **Replay** | ✅ Timestamp | ❌ | ✅ Offset | ⚠️ Limited |
-| **Dashboard** | ✅ Modern | ⚠️ Basic | ⚠️ External | ⚠️ External |
-| **Setup** | Docker | Complex | Complex | Simple |
-
-## Performance Metrics
-
-Based on benchmarks with Apple M4 Air (all components on same machine):
-
-- **Producer Peak**: 90K+ messages/second
-- **Consumer Peak**: 488K+ messages/second (with batch size 1000)
-- **Latency**: 10-50ms for POP/ACK operations
-- **Throughput**: Scales linearly with batch size
-
-See the [Benchmarks](/server/benchmarks) page for detailed performance data.
 
 ## Getting Started
 
@@ -129,14 +88,3 @@ Or explore specific topics:
 - [C++ Client](/clients/cpp) - High-performance C++ client
 - [Server Setup](/server/installation) - Install and configure the server
 - [Examples](/clients/examples/basic) - See real-world usage patterns
-
-## Community
-
-Queen MQ is built and maintained by [Smartness](https://www.linkedin.com/company/smartness-com/), powering their hospitality platform with millions of messages daily.
-
-- **GitHub**: [github.com/smartpricing/queen](https://github.com/smartpricing/queen)
-- **Docker Hub**: [smartnessai/queen-mq](https://hub.docker.com/r/smartnessai/queen-mq)
-- **License**: Apache 2.0
-
-Join us in building the next generation of message queue systems!
-

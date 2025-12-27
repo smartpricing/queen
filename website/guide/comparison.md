@@ -42,11 +42,6 @@ How Queen concepts map to other systems:
 | **Transaction** | Publisher confirms + acks | Transactional API | N/A | MULTI/EXEC |
 | **Dead Letter Queue** | Dead Letter Exchange | Manual**** | Manual | Manual |
 
-\* RabbitMQ queues are single-consumer by default  
-\** Kafka always uses consumer groups  
-\*** Kafka uses commit-based semantics  
-\**** Kafka requires manual DLQ implementation
-
 ## Feature Comparison
 
 | Feature | Queen | RabbitMQ | Kafka | NATS | Redis Streams |
@@ -70,55 +65,36 @@ How Queen concepts map to other systems:
 
 **When to use Queen over RabbitMQ:**
 
-✅ **Need unlimited partitions** - RabbitMQ queues don't support internal partitioning  
-✅ **Want PostgreSQL integration** - Leverage existing DB infrastructure  
-✅ **Complex workflows** - Native transaction support for push+ack  
-✅ **SQL queries** - Query messages and metadata with SQL  
-✅ **Modern dashboard** - Built-in Vue.js web interface
+**Need unlimited partitions** - RabbitMQ queues don't support internal partitioning  
+**Want PostgreSQL integration** - Leverage existing DB infrastructure  
+**Complex workflows** - Native transaction support for push+ack  
+**SQL queries** - Query messages and metadata with SQL  
+**Modern dashboard** - Built-in Vue.js web interface
 
 **When to use RabbitMQ over Queen:**
 
-✅ **Need routing complexity** - Exchanges, bindings, routing keys  
-✅ **AMQP ecosystem** - Extensive tooling and client libraries  
-✅ **Mature feature set** - Decades of production hardening  
-✅ **No PostgreSQL dependency** - Standalone message broker
-
-**Performance Comparison:**
-
-| Metric | Queen | RabbitMQ |
-|--------|-------|----------|
-| Throughput | 130K+ msg/s | 50K-100K msg/s |
-| Latency | 10-50ms | 5-20ms |
-| Partitions | Unlimited | N/A |
-| Persistence | PostgreSQL | Disk/Memory |
+**Need routing complexity** - Exchanges, bindings, routing keys  
+**AMQP ecosystem** - Extensive tooling and client libraries  
+**Mature feature set** - Decades of production hardening  
+**No PostgreSQL dependency** - Standalone message broker
 
 ### vs Kafka
 
 **When to use Queen over Kafka:**
 
-✅ **Variable processing times** - One slow message doesn't block partition  
-✅ **Need unlimited partitions** - Don't hit Kafka's partition limits  
-✅ **Simpler operations** - No ZooKeeper/KRaft to manage  
-✅ **SQL integration** - Direct database access  
-✅ **Smaller scale** - Easier to operate for smaller deployments  
-✅ **Web dashboard** - Built-in monitoring
+**Variable processing times** - One slow message doesn't block partition  
+**Need unlimited partitions** - Don't hit Kafka's partition limits  
+**Simpler operations** - No ZooKeeper/KRaft to manage  
+**SQL integration** - Direct database access  
+**Smaller scale** - Easier to operate for smaller deployments  
 
 **When to use Kafka over Queen:**
 
-✅ **Multi-datacenter replication** - Kafka's replication is battle-tested  
-✅ **Stream processing** - Kafka Streams ecosystem  
-✅ **Massive scale** - Proven at trillion-message scale  
-✅ **Log compaction** - Advanced retention strategies  
-✅ **Ecosystem** - Connectors, Schema Registry, ksqlDB
-
-**Performance Comparison:**
-
-| Metric | Queen | Kafka |
-|--------|-------|-------|
-| Throughput | 130K+ msg/s | 1M+ msg/s |
-| Latency | 10-50ms | 2-10ms |
-| Partitions/Topic | Unlimited | 10K-100K practical limit |
-| Operational Complexity | Low | High |
+**Multi-datacenter replication** - Kafka's replication is battle-tested  
+**Stream processing** - Kafka Streams ecosystem  
+**Massive scale** - Proven at trillion-message scale  
+**Log compaction** - Advanced retention strategies  
+**Ecosystem** - Connectors, Schema Registry, ksqlDB
 
 **Architecture Difference:**
 
@@ -147,53 +123,36 @@ Solution: Slow message in chat-1 doesn't affect chat-2
 
 **When to use Queen over NATS:**
 
-✅ **Need consumer groups** - More advanced than queue groups  
-✅ **Complex workflows** - Transaction support  
-✅ **PostgreSQL integration** - Direct SQL access  
-✅ **Message replay** - Flexible timestamp-based replay  
-✅ **Dead letter queue** - Automatic failure handling
+**Need consumer groups** - More advanced than queue groups  
+**Complex workflows** - Transaction support  
+**PostgreSQL integration** - Direct SQL access  
+**Message replay** - Flexible timestamp-based replay  
+**Dead letter queue** - Automatic failure handling
 
 **When to use NATS over Queen:**
 
-✅ **Low latency critical** - NATS is extremely fast  
-✅ **Pub/sub patterns** - NATS excels at pub/sub  
-✅ **Lightweight** - Minimal resource footprint  
-✅ **At-most-once delivery** - Fire-and-forget patterns
+**Low latency critical** - NATS is extremely fast  
+**Pub/sub patterns** - NATS excels at pub/sub  
+**Lightweight** - Minimal resource footprint  
+**At-most-once delivery** - Fire-and-forget patterns
 
-**Performance Comparison:**
-
-| Metric | Queen | NATS |
-|--------|-------|------|
-| Throughput | 130K+ msg/s | 1M+ msg/s |
-| Latency | 10-50ms | <1ms |
-| Persistence | PostgreSQL | File-based |
-| Durability | Strong (ACID) | Configurable |
 
 ### vs Redis Streams
 
 **When to use Queen over Redis:**
 
-✅ **Durability requirements** - PostgreSQL ACID guarantees  
-✅ **Complex queries** - SQL over messages  
-✅ **Large messages** - No memory constraints  
-✅ **Automatic DLQ** - Built-in failure handling  
-✅ **Transaction support** - Atomic push+ack
+**Durability requirements** - PostgreSQL ACID guarantees  
+**Complex queries** - SQL over messages  
+**Large messages** - No memory constraints  
+**Automatic DLQ** - Built-in failure handling  
+**Transaction support** - Atomic push+ack
 
 **When to use Redis over Queen:**
 
-✅ **Ultra-low latency** - In-memory performance  
-✅ **Already using Redis** - Leverage existing infrastructure  
-✅ **Simple use cases** - Minimal setup  
-✅ **High throughput** - Memory-speed operations
-
-**Performance Comparison:**
-
-| Metric | Queen | Redis Streams |
-|--------|-------|---------------|
-| Throughput | 130K+ msg/s | 500K+ msg/s |
-| Latency | 10-50ms | <5ms |
-| Persistence | PostgreSQL | RDB/AOF |
-| Memory Usage | Low | High |
+**Ultra-low latency** - In-memory performance  
+**Already using Redis** - Leverage existing infrastructure  
+**Simple use cases** - Minimal setup  
+**High throughput** - Memory-speed operations
 
 ## When to Choose Queen
 
@@ -201,43 +160,43 @@ Solution: Slow message in chat-1 doesn't affect chat-2
 
 #### 1. Chat Systems
 ```
-✅ Variable response times (AI, agents, users)
-✅ Need per-conversation ordering
-✅ 100K+ concurrent conversations
-✅ Message history and replay
+Variable response times (AI, agents, users)**
+Need per-conversation ordering**
+100K+ concurrent conversations**
+Message history and replay**
 ```
 
 #### 2. AI Processing Pipelines
 ```
-✅ Unpredictable processing times
-✅ Need per-document/per-user queues
-✅ Workflow orchestration
-✅ Failure tracking and retry
+Unpredictable processing times
+Need per-document/per-user queues
+Workflow orchestration
+Failure tracking and retry
 ```
 
 #### 3. Human-in-the-Loop Workflows
 ```
-✅ Variable human response times
-✅ Task routing and prioritization
-✅ Audit trail requirements
-✅ PostgreSQL integration for workflow state
+Variable human response times
+Task routing and prioritization
+Audit trail requirements
+PostgreSQL integration for workflow state
 ```
 
 #### 4. Event-Driven Microservices
 ```
-✅ Transaction guarantees
-✅ Message tracing across services
-✅ Dead letter queue handling
-✅ SQL queries for debugging
+Transaction guarantees
+Message tracing across services
+Dead letter queue handling
+SQL queries for debugging
 ```
 
 ### Not Ideal For
 
-❌ **Ultra-high throughput** (>1M msg/s) - Use Kafka  
-❌ **Ultra-low latency** (<1ms) - Use NATS  
-❌ **Multi-datacenter replication** - Use Kafka  
-❌ **Complex routing patterns** - Use RabbitMQ  
-❌ **In-memory only** - Use Redis
+**Ultra-high throughput** (>1M msg/s) - Use Kafka  
+**Ultra-low latency** (<1ms) - Use NATS  
+**Multi-datacenter replication** - Use Kafka  
+**Complex routing patterns** - Use RabbitMQ  
+**In-memory only** - Use Redis
 
 ## Migration Guides
 
@@ -264,6 +223,7 @@ await consumer.run({
 await queen
   .queue('my-queue')
   .group('my-group')
+  .each()
   .consume(async (message) => {
     await process(message.data)
   })
@@ -319,41 +279,30 @@ await queen
   })
 ```
 
-## Benchmark Summary
-
-Based on official benchmarks:
-
-| System | Throughput | Latency | Partitions | Operational Complexity |
-|--------|------------|---------|------------|------------------------|
-| **Queen** | 130K+ msg/s | 10-50ms | Unlimited | Low |
-| **Kafka** | 1M+ msg/s | 2-10ms | 10K-100K | High |
-| **RabbitMQ** | 50K-100K msg/s | 5-20ms | N/A | Medium |
-| **NATS** | 1M+ msg/s | <1ms | N/A | Low |
-| **Redis Streams** | 500K+ msg/s | <5ms | N/A | Low |
-
 ## Architecture Philosophy
 
 ### Queen's Design Principles
 
-1. **PostgreSQL-First** - Leverage database ACID guarantees
-2. **Unlimited Partitions** - No artificial limits
-3. **Developer-Friendly** - SQL queries, modern dashboard
-4. **Operational Simplicity** - No complex clustering
-5. **Zero Message Loss** - Automatic failover to disk
+1. **Dumbness** - Dumb clients and servers over HTTP
+2. **PostgreSQL-First** - Leverage database ACID guarantees
+3. **Unlimited Partitions** - No artificial limits
+4. **Developer-Friendly** - SQL queries, modern dashboard
+5. **Operational Simplicity** - No complex clustering
+6. **Zero Message Loss** - Automatic failover to disk
 
 ### Trade-offs
 
 **What we optimized for:**
-- ✅ Ease of operation
-- ✅ Developer experience  
-- ✅ PostgreSQL integration
-- ✅ Variable processing times
-- ✅ Unlimited partitions
+- Ease of operation
+- Developer experience  
+- PostgreSQL integration
+- Variable processing times
+- Unlimited partitions
 
 **What we traded off:**
-- ⚠️ Raw throughput (vs Kafka)
-- ⚠️ Ultra-low latency (vs NATS)
-- ⚠️ Multi-DC replication (vs Kafka)
+- Raw throughput (vs Kafka)
+- Ultra-low latency (vs NATS)
+- Multi-DC replication (vs Kafka)
 
 ## Conclusion
 
@@ -367,14 +316,9 @@ Choose Queen when you need:
 
 Queen is production-ready and processing millions of messages daily at Smartness.
 
-::: tip Real-World Use
-Queen powers Smartchat at Smartness, handling 100,000+ chat conversations with AI processing that can take seconds to minutes, without blocking other conversations.
-:::
-
 ## See Also
 
 - [Quick Start](/guide/quickstart) - Get started with Queen
 - [Concepts](/guide/concepts) - Understand core concepts
-- [Benchmarks](/server/benchmarks) - Detailed performance data
 - [Why Queen MQ](/guide/introduction#why-we-built-queen-mq) - Origin story
 

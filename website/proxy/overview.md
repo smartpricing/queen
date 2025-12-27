@@ -6,9 +6,6 @@ Authentication and SSL proxy for Queen MQ.
 
 - **Authentication** - User login and access control
 - **SSL/TLS** - HTTPS encryption
-- **Rate Limiting** - API rate limits
-- **Logging** - Centralized request logging
-- **Load Balancing** - Distribute across Queen servers
 
 ## Architecture
 
@@ -27,12 +24,6 @@ Client (HTTPS) → Proxy (Auth/SSL) → Queen Server (HTTP)
 
 ## When to Use
 
-✅ Production deployments  
-✅ Multi-user environments  
-✅ Internet-facing APIs  
-✅ Compliance requirements
-
-❌ Development (use Queen directly)  
-❌ Internal networks (optional)
+Use th proxy when you want to expose the Queen server to the internet for human users.
 
 [Setup Guide](/proxy/setup) | [GitHub](https://github.com/smartpricing/queen/tree/master/proxy)

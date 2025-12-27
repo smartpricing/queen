@@ -145,92 +145,6 @@ export NUM_WORKERS=12
 export SIDECAR_POOL_SIZE=50
 ```
 
-### 5. Operation-Specific Behavior
-
-libqueen treats different operations differently for optimal performance:
-
-| Operation | Signal Sent? | Why |
-|-----------|--------------|-----|
-| **PUSH** | ❌ No (buffer only) | Allows requests to accumulate for maximum batching |
-| **POP** | ✅ Yes (immediate wake) | Latency-sensitive, needs fast response |
-| **ACK** | ✅ Yes (immediate wake) | Consumers waiting for acknowledgment |
-| **POP_WAIT** | Goes to waiting queue | Separate timer-based polling with backoff |
-
-**PUSH Optimization:** When a PUSH request arrives, it's added to the pending queue but does *not* wake up libqueen immediately. This allows multiple PUSH requests to accumulate and be batched together when the 5ms timer fires.
-
-```bash
-export SIDECAR_POOL_SIZE=50              # Total connections (split among workers)
-export SIDECAR_MICRO_BATCH_WAIT_MS=5     # Batching window
-export SIDECAR_MAX_ITEMS_PER_TX=1000     # Max items per transaction
-```
-
-## Request Flow: PUSH
-
-```
-1. Client sends HTTP POST to /api/v1/push
-        ↓
-2. Acceptor routes to Worker (round-robin)
-        ↓
-3. Worker parses JSON, registers in ResponseRegistry
-        ↓
-4. Worker queues request to libqueen
-   (PUSH does NOT call uv_async_send - relies on batch timer)
-        ↓
-5. libqueen batch timer fires (every 5ms)
-   Collects all pending PUSH requests
-        ↓
-6. libqueen calls: SELECT queen.push_messages_v2($1)
-   PQsendQueryParams() (non-blocking)
-        ↓
-7. uv_poll monitors socket for response
-        ↓
-8. Result ready → parse JSONB → deliver to worker
-   uWS::Loop::defer() (thread-safe)
-        ↓
-9. Worker sends HTTP 201 response
-
-Total time: 10-50ms (typical)
-```
-
-## Request Flow: POP
-
-```
-1. Client sends GET to /api/v1/pop?partition=orders-123
-        ↓
-2. Worker registers in ResponseRegistry
-        ↓
-3. Worker queues to libqueen + uv_async_send() (immediate wake)
-        ↓
-4. libqueen batches POP requests
-        ↓
-5. Single call: SELECT queen.pop_unified_batch($1::jsonb)
-   PostgreSQL handles atomically:
-     - Acquire leases (SKIP LOCKED for wildcards)
-     - Fetch messages after cursor
-     - Release lease if empty
-        ↓
-6. Messages returned as JSON
-        ↓
-7. Response delivered to HTTP thread via defer()
-
-Total time: 3-10ms (typical)
-```
-
-## Secondary Operations: AsyncQueueManager
-
-While libqueen handles high-performance primary operations (PUSH, POP, ACK), the **AsyncQueueManager** handles secondary operations via a traditional connection pool:
-
-| Operation | Path |
-|-----------|------|
-| **Schema initialization** | AsyncQueueManager |
-| **Queue configuration** | AsyncQueueManager |
-| **Consumer group management** | AsyncQueueManager |
-| **Message tracing** | AsyncQueueManager |
-| **Maintenance mode** | AsyncQueueManager |
-| **File buffer replay** | AsyncQueueManager |
-
-This separation keeps the hot path (libqueen) lean and focused.
-
 ## Background Services
 
 Queen runs three background services:
@@ -269,29 +183,6 @@ Recovery:   Background → Read .buf files → Replay to PostgreSQL
 export FILE_BUFFER_DIR=/var/lib/queen/buffers
 export FILE_BUFFER_FLUSH_MS=100
 export FILE_BUFFER_MAX_BATCH=100
-```
-
-## Performance
-
-| Metric | Value |
-|--------|-------|
-| PUSH sustained | 130K+ msg/s (batched) |
-| POP sustained | 50K+ ops/s |
-| Single message | 10K+ msg/s (no client batching) |
-| PUSH latency | 5-15ms |
-| POP latency | 3-10ms |
-
-## Scalability
-
-### Horizontal
-
-Deploy multiple instances behind a load balancer. Each server is stateless — any server handles any request.
-
-### Vertical
-
-```bash
-export NUM_WORKERS=20           # More workers
-export SIDECAR_POOL_SIZE=100    # More PG connections per worker
 ```
 
 ## Design Principles
@@ -334,7 +225,4 @@ export FILE_BUFFER_DIR=/var/lib/queen/buffers
 
 ## See Also
 
-- [How It Works](/server/how-it-works) - Deep dive into libuv, microbatching, and PostgreSQL stored procedures
-- [Environment Variables](/server/environment-variables) - Complete configuration reference
-- [Performance Tuning](/server/tuning) - Optimization guide
 - [Deployment](/server/deployment) - Production deployment patterns

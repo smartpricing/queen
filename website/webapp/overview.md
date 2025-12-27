@@ -4,22 +4,18 @@ Modern Vue 3 web interface for managing and monitoring Queen MQ.
 
 ## Features
 
-- 📊 **Real-time Dashboard** - System metrics and throughput
-- 📈 **Message Visualization** - Charts and graphs
-- 🔍 **Queue Management** - Create, configure, monitor queues
-- 👥 **Consumer Groups** - Track group positions and lag
-- 💬 **Message Browser** - Search and inspect messages
-- 🔎 **Trace Explorer** - Debug distributed workflows
-- 📉 **Analytics** - Historical insights
-- 🌓 **Dark/Light Theme** - Beautiful UI
+- **Real-time Dashboard** - System metrics and throughput
+- **Message Visualization** - Charts and graphs
+- **Queue Management** - Create, configure, monitor queues
+- **Consumer Groups** - Track group positions and lag
+- **Message Browser** - Search and inspect messages
+- **Trace Explorer** - Debug distributed workflows
+- **Analytics** - Historical insights
+- **Dark/Light Theme** - Beautiful UI
 
 ## Screenshots
 
-![Dashboard](/new_dashboard.png)
-![Queues](/new_queues.png)
-![Messages](/new_messages.png)
-![Traces](/new_traces.png)
-![Analytics](/new_analytics.png)
+![Dashboard](/webapp.png)
 
 ## Access
 

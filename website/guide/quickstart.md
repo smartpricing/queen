@@ -54,12 +54,7 @@ curl http://localhost:6632/health
 You should see:
 
 ```json
-{
-  "status": "healthy",
-  "database": "connected",
-  "server": "C++ Queen Server (Acceptor/Worker)",
-  "version": "1.0.0"
-}
+{"database":"connected","queen":{"status":"active","worker_id":3},"server":"C++ Queen Server (libqueen)","shared_state":{"enabled":true,"maintenance_mode":false,"pop_maintenance_mode":false,"queue_config_cache":{"hit_rate":0.0,"hits":0,"misses":0,"size":85},"running":true,"server_health":{"heartbeats_received":29932,"restarts_detected":0,"servers_alive":1,"servers_dead":0,"servers_tracked":1},"server_id":"alice.local:6634","transport":{"learned_identities":{},"learned_identities_count":0,"messages_dropped":0,"messages_received":29934,"messages_sent":59868,"peer_count":2,"peers":[{"config_server_id":"localhost:6634","hostname":"localhost","port":6634,"resolved":true,"resolved_ip":"127.0.0.1"},{"config_server_id":"localhost:6635","hostname":"localhost","port":6635,"resolved":true,"resolved_ip":"127.0.0.1"}],"port":6634,"sequence_rejections":0,"server_id":"alice.local:6634","session_id":"b2705c6f66b59975","signature_failures":0}},"status":"healthy","version":"1.0.0","worker_id":3}
 ```
 
 ## Step 2: Install the Client
@@ -273,24 +268,7 @@ Then in another terminal, run the producer:
 node producer.js
 ```
 
-Watch as messages flow from producer to consumer in real-time! 🎯
-
-## Step 5: Explore the Dashboard
-
-Queen comes with a beautiful web dashboard. Open your browser and visit:
-
-```
-http://localhost:6632
-```
-
-You'll see:
-- 📊 Real-time throughput metrics
-- 📈 Queue statistics
-- 💬 Message browser
-- 🔍 Trace explorer
-- 👥 Consumer group status
-
-![Queen Dashboard](/new_dashboard.png)
+Watch as messages flow from producer to consumer in real-time!
 
 ## What's Next?
 
@@ -308,7 +286,6 @@ Now that you have Queen running, explore more advanced features:
 
 ### Go to Production
 - [Server Installation](/server/installation) - Build from source
-- [Performance Tuning](/server/tuning) - Optimize for your workload
 - [Deployment Guide](/server/deployment) - Docker, Kubernetes, systemd
 - [Clustered Deployments](/guide/long-polling#clustered-deployments-inter-instance-notifications) - Low-latency multi-server setup
 
@@ -316,81 +293,3 @@ Now that you have Queen running, explore more advanced features:
 - [Basic Usage](/clients/examples/basic) - Simple patterns
 - [Batch Operations](/clients/examples/batch) - High throughput
 - [Consumer Groups](/clients/examples/consumer-groups) - Scalable processing
-
-## Common Next Steps
-
-### Using Partitions for Ordering
-
-```javascript
-// Messages in the same partition are processed in order
-await queen
-  .queue('orders')
-  .partition('customer-123')  // All messages for this customer are ordered
-  .push([
-    { data: { action: 'create', orderId: 'ORD-001' } },
-    { data: { action: 'update', orderId: 'ORD-001' } },
-    { data: { action: 'complete', orderId: 'ORD-001' } }
-  ])
-```
-
-### Using Transactions
-
-```javascript
-// Atomically forward a message to another queue
-await queen
-  .transaction()
-  .queue('next-queue')
-  .push([{ data: { processed: true } }])
-  .ack(currentMessage)  // Only ack if push succeeds
-  .commit()
-```
-
-### Multiple Consumer Groups
-
-```javascript
-// Process the same messages for different purposes
-// Consumer group 1: analytics
-queen.queue('events').group('analytics').consume(async (msg) => {
-  await updateAnalytics(msg.data)
-})
-
-// Consumer group 2: notifications
-queen.queue('events').group('notifications').consume(async (msg) => {
-  await sendNotification(msg.data)
-})
-```
-
-## Troubleshooting
-
-### Server won't start?
-
-Check the logs:
-```bash
-docker logs -f <container-id>
-```
-
-Make sure PostgreSQL is accessible and the database exists.
-
-### Messages not being consumed?
-
-1. Check if the consumer group is created
-2. Verify the queue exists
-3. Look for errors in the console
-4. Check the dashboard for stuck messages
-
-### Need Help?
-
-- Check the [Server Troubleshooting](/server/troubleshooting) guide
-- Review [Examples](/clients/examples/basic) for common patterns
-- Visit our [GitHub repository](https://github.com/smartpricing/queen)
-- Connect with us on [LinkedIn](https://www.linkedin.com/company/smartness-com/)
-
----
-
-Ready to build something awesome? Dive deeper into the client documentation:
-- [JavaScript Client](/clients/javascript)
-- [Python Client](/clients/python)
-- [C++ Client](/clients/cpp)
-
-Or explore the [Complete Guide](/guide/concepts)!
-

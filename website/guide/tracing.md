@@ -222,15 +222,11 @@ await queen.queue('reports').consume(async (msg) => {
 2. Click on any message
 3. View "Processing Timeline" with all trace events
 
-![Messages](/new_messages.png)
-
 ### Method 2: Search by Trace Name
 
 1. Go to **Traces** page  
 2. Enter a trace name (e.g., `order-12345`)
 3. See timeline across **ALL messages** with that name
-
-![Traces](/new_traces.png)
 
 ### Method 3: Browse Available Traces
 

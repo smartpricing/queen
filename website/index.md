@@ -64,8 +64,8 @@ features:
     details: JavaScript, Python, and C++ clients with idiomatic APIs. Or use the HTTP API directly from any language.
     link: /clients/javascript
   
-  - title: Distributed Cache (UDPSYNC)
-    details: Multi-server deployments share state via UDP sync to reduce database queries by 80-90%. Real-time peer notifications for instant message delivery.
+  - title: Multi instace coordnation 
+    details: Multi-server deployments share state via UDP sync. Real-time peer notifications for instant message delivery.
     link: /server/deployment#distributed-cache-udpsync
 ---
 
@@ -79,61 +79,9 @@ features:
 }
 </style>
 
-## 📚 Documentation
-
-<div class="doc-links">
-  <a href="./guide/quickstart" class="doc-link">
-    <div class="doc-link-title">
-      <span class="doc-link-icon">🚀</span>
-      Quick Start
-    </div>
-    <div>Get started in minutes</div>
-  </a>
-  
-  <a href="./clients/javascript" class="doc-link">
-    <div class="doc-link-title">
-      <span class="doc-link-icon">💻</span>
-      Client Libraries
-    </div>
-    <div>JavaScript, Python, C++, and HTTP API</div>
-  </a>
-  
-  <a href="./server/installation" class="doc-link">
-    <div class="doc-link-title">
-      <span class="doc-link-icon">⚙️</span>
-      Server Setup
-    </div>
-    <div>Install and configure</div>
-  </a>
-  
-  <a href="./server/deployment" class="doc-link">
-    <div class="doc-link-title">
-      <span class="doc-link-icon">☸️</span>
-      Deployment
-    </div>
-    <div>Docker, K8s, systemd</div>
-  </a>
-  
-  <a href="./webapp/overview" class="doc-link">
-    <div class="doc-link-title">
-      <span class="doc-link-icon">📊</span>
-      Web Dashboard
-    </div>
-    <div>Monitor and manage</div>
-  </a>
-  
-  <a href="./guide/comparison" class="doc-link">
-    <div class="doc-link-title">
-      <span class="doc-link-icon">⚖️</span>
-      Comparison
-    </div>
-    <div>vs Kafka, RabbitMQ, NATS</div>
-  </a>
-</div>
-
 ## Why We Built Queen MQ
 
-:::tip 🏨 Born from Real Production Needs
+:::tip Born from Real Production Needs
 Queen was created at [Smartness](https://www.linkedin.com/company/smartness-com/) to power [**Smartchat**](https://www.smartness.com/en/guest-messaging) - an AI-powered guest messaging platform for the hospitality industry.
 :::
 
@@ -179,6 +127,40 @@ If you're building systems where message processing has inherently variable late
 
 ## Quick Example
 
+Start with Docker:
+
+```bash
+# Start PostgreSQL and Queen server
+docker network create queen
+docker run --name postgres --network queen \
+  -e POSTGRES_PASSWORD=postgres -p 5432:5432 -d postgres
+
+docker run -p 6632:6632 --network queen \
+  -e PG_HOST=postgres \
+  -e PG_PASSWORD=postgres \
+  -e NUM_WORKERS=2 \
+  -e DB_POOL_SIZE=5 \
+  -e SIDECAR_POOL_SIZE=30 \
+  -e SIDECAR_MICRO_BATCH_WAIT_MS=10 \
+  -e POP_WAIT_INITIAL_INTERVAL_MS=500 \
+  -e POP_WAIT_BACKOFF_THRESHOLD=1 \
+  -e POP_WAIT_BACKOFF_MULTIPLIER=3.0 \
+  -e POP_WAIT_MAX_INTERVAL_MS=5000 \
+  -e DEFAULT_SUBSCRIPTION_MODE=new \
+  -e LOG_LEVEL=info \
+  smartnessai/queen-mq:{{VERSION}}
+
+# Install JavaScript client
+npm install queen-mq
+
+# Or install Python client
+pip install queen-mq
+
+# Start building!
+```
+
+And than use the client to push and consume messages:
+
 ```javascript
 import { Queen } from 'queen-mq'
 
@@ -210,107 +192,6 @@ await queen.queue('orders')
   }).onError(async (message, error) => {
     await queen.ack(message, false, { group: 'order-processor' })
   })
-```
-
-## Performance Metrics
-
-<div class="custom-stats">
-  <div class="custom-stat">
-    <div class="custom-stat-value">200K+</div>
-    <div class="custom-stat-label">Messages/Second</div>
-  </div>
-  <div class="custom-stat">
-    <div class="custom-stat-value">10-50ms</div>
-    <div class="custom-stat-label">Latency</div>
-  </div>
-  <div class="custom-stat">
-    <div class="custom-stat-value">Unlimited</div>
-    <div class="custom-stat-label">Partitions</div>
-  </div>
-  <div class="custom-stat">
-    <div class="custom-stat-value">Zero</div>
-    <div class="custom-stat-label">Message Loss</div>
-  </div>
-</div>
-
-## Key Features Comparison
-
-| Feature | Queen | RabbitMQ | Kafka | Redis Streams |
-|---------|-------|----------|-------|---------------|
-| FIFO Partitions | ✅ Unlimited | ❌ | ✅ Limited | ✅ Limited |
-| Consumer Groups | ✅ | ⚠️ Manual | ✅ | ✅ |
-| Transactions | ✅ Atomic | ⚠️ Complex | ⚠️ Limited | ❌ |
-| Long Polling | ✅ Built-in | ✅ | ❌ | ✅ |
-| Dead Letter Queue | ✅ Automatic | ✅ | ⚠️ Manual | ❌ |
-| Message Replay | ✅ Timestamp | ❌ | ✅ | ✅ |
-| Persistence | ✅ PostgreSQL | ✅ Disk | ✅ Disk | ⚠️ Memory |
-| Distributed Cache | ✅ UDPSYNC | ❌ | ✅ ZooKeeper | ❌ |
-| Web Dashboard | ✅ Modern | ⚠️ Basic | ⚠️ External | ❌ |
-
-## Use Cases
-
-### 🏢 Enterprise Workflows
-Build reliable multi-step workflows with transactions and exactly-once delivery. Perfect for financial systems, order processing, and data pipelines.
-
-### 📊 Real-time Analytics
-Send messages to multiple consumer groups for different analytics purposes. Replay historical data from any timestamp.
-
-### 🔄 Event-Driven Architecture
-Decouple microservices with guaranteed message delivery. Built-in tracing helps debug distributed systems.
-
-### 💼 Task Queues
-Distribute work across multiple workers with automatic load balancing. Long-running tasks supported with lease renewal.
-
-## Architecture
-
-Queen uses a high-performance **acceptor/worker pattern** with fully asynchronous, non-blocking PostgreSQL architecture:
-
-- **Network Layer**: uWebSockets with configurable workers (default: 10)
-- **Database Layer**: Async connection pool (142 non-blocking connections)
-- **Failover Layer**: Automatic disk buffering when PostgreSQL unavailable
-- **Distributed Cache**: UDP-based state sync between servers (UDPSYNC)
-- **Background Services**: Poll workers, metrics, retention, eviction
-
-[Learn more about the architecture →](/server/architecture)
-
-## Built by Developers, for Developers
-
-Queen was created by [Smartness](https://www.linkedin.com/company/smartness-com/) to power their hospitality platform. It's built with modern C++17, uses PostgreSQL for ACID guarantees, and includes a beautiful Vue.js dashboard.
-
-:::tip 🎉 Production Ready
-Queen is currently running in production, handling millions of messages daily. Version {{VERSION}} is stable and ready for your projects.
-:::
-
-## Get Started in Minutes
-
-```bash
-# Start PostgreSQL and Queen server
-docker network create queen
-docker run --name postgres --network queen \
-  -e POSTGRES_PASSWORD=postgres -p 5432:5432 -d postgres
-
-docker run -p 6632:6632 --network queen \
-  -e PG_HOST=postgres \
-  -e PG_PASSWORD=postgres \
-  -e NUM_WORKERS=2 \
-  -e DB_POOL_SIZE=5 \
-  -e SIDECAR_POOL_SIZE=30 \
-  -e SIDECAR_MICRO_BATCH_WAIT_MS=10 \
-  -e POP_WAIT_INITIAL_INTERVAL_MS=500 \
-  -e POP_WAIT_BACKOFF_THRESHOLD=1 \
-  -e POP_WAIT_BACKOFF_MULTIPLIER=3.0 \
-  -e POP_WAIT_MAX_INTERVAL_MS=5000 \
-  -e DEFAULT_SUBSCRIPTION_MODE=new \
-  -e LOG_LEVEL=info \
-  smartnessai/queen-mq:{{VERSION}}
-
-# Install JavaScript client
-npm install queen-mq
-
-# Or install Python client
-pip install queen-mq
-
-# Start building!
 ```
 
 [Full Quick Start Guide →](/guide/quickstart)

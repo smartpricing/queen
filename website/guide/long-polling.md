@@ -447,12 +447,9 @@ Each server automatically excludes itself from the peer list, so you can use the
 
 This reduces cross-server message delivery latency from **up to 2000ms** (max backoff) to **10-50ms**.
 
-See [Environment Variables](/server/environment-variables#inter-instance-communication-clustered-deployments) for complete configuration options.
-
 ## Related Topics
 
 - [Consumer Groups](/guide/consumer-groups) - Scaling consumption
-- [Performance Tuning](/server/tuning) - Optimize server settings
 
 ## Summary
 

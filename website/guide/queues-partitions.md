@@ -457,7 +457,6 @@ for (let i = 0; i < messages.length; i++) {
 - [Consumer Groups](/guide/consumer-groups) - Multiple groups processing same partitions
 - [Transactions](/guide/transactions) - Atomic operations across queues
 - [Long Polling](/guide/long-polling) - Efficient message waiting
-- [Performance Tuning](/server/tuning) - Optimize partition throughput
 
 ## Summary
 

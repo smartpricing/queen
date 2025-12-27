@@ -26,7 +26,6 @@ export default defineConfig({
     
     nav: [
       { text: 'Home', link: '/' },
-      { text: 'Quick Start', link: '/guide/quickstart' },
       { text: 'Guide', link: '/guide/introduction' },
       { 
         text: 'Clients',
@@ -42,8 +41,6 @@ export default defineConfig({
         items: [
           { text: 'Architecture', link: '/server/architecture' },
           { text: 'Installation', link: '/server/installation' },
-          { text: 'Configuration', link: '/server/configuration' },
-          { text: 'Environment Variables', link: '/server/environment-variables' },
           { text: 'Deployment', link: '/server/deployment' },
           { text: 'Production Benchmarks', link: '/server/benchmark-results' }
         ]
@@ -52,10 +49,7 @@ export default defineConfig({
         text: 'More',
         items: [
           { text: 'Web Dashboard', link: '/webapp/overview' },
-          { text: 'Proxy Server', link: '/proxy/overview' },
-          { text: 'GitHub', link: 'https://github.com/smartpricing/queen' },
-          { text: 'LinkedIn', link: 'https://www.linkedin.com/company/smartness-com/' },
-          { text: 'Docker Hub', link: 'https://hub.docker.com/r/smartnessai/queen-mq' }
+          { text: 'Proxy Server', link: '/proxy/overview' }
         ]
       }
     ],
@@ -120,22 +114,15 @@ export default defineConfig({
           text: 'Server',
           items: [
             { text: 'Architecture', link: '/server/architecture' },
-            { text: 'How It Works', link: '/server/how-it-works' },
             { text: 'Installation', link: '/server/installation' },
-            { text: 'Configuration', link: '/server/configuration' },
-            { text: 'Environment Variables', link: '/server/environment-variables' },
-            { text: 'Performance Tuning', link: '/server/tuning' },
             { text: 'Deployment', link: '/server/deployment' }
           ]
         },
       {
         text: 'Operations',
         items: [
-          { text: 'Monitoring', link: '/server/monitoring' },
-          { text: 'Benchmarks', link: '/server/benchmarks' },
+
           { text: 'Production Benchmark Results', link: '/server/benchmark-results' },
-          { text: 'Benchmarking Tool', link: '/server/benchmarking' },
-          { text: 'Troubleshooting', link: '/server/troubleshooting' },
           { text: 'Release History', link: '/server/releases' }
         ]
       }
