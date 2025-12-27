@@ -13,7 +13,7 @@ from .utils.defaults import (
     BUFFER_DEFAULTS,
 )
 
-__version__ = "0.7.4"
+__version__ = "0.12.0"
 
 __all__ = [
     "Queen",
