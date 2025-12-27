@@ -66,7 +66,7 @@ BEGIN
             LEFT JOIN queen.queues q ON q.id = p.queue_id
         )
         SELECT * FROM enriched
-        ORDER BY partition_id, consumer_group, txn_id
+        ORDER BY partition_id, consumer_group, message_created_at, message_id
     LOOP
         v_success := false;
         v_error := v_ack.validation_error;
@@ -84,6 +84,7 @@ BEGIN
         IF v_error IS NULL THEN
             IF v_ack.status IN ('completed', 'success') THEN
                 -- Atomic update uses table's current acked_count for correct batch completion logic
+                -- ACKs are sorted by (message_created_at, message_id) so cursor always advances forward
                 UPDATE queen.partition_consumers 
                 SET last_consumed_id = v_ack.message_id,
                     last_consumed_created_at = v_ack.message_created_at,

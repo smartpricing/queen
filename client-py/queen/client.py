@@ -409,7 +409,21 @@ class Queen:
         try:
             result = await self._http_client.post("/api/v1/ack", body)
 
-            if result and result.get("error"):
+            # Server returns an array with single element for single ACK
+            if isinstance(result, list):
+                if result and len(result) > 0:
+                    first_result = result[0]
+                    if first_result.get("success"):
+                        logger.log("Queen.ack", {"type": "single", "transaction_id": transaction_id, "success": True})
+                        return {"success": True, **first_result}
+                    else:
+                        error = first_result.get("error", "ACK failed")
+                        logger.error("Queen.ack", {"type": "single", "transaction_id": transaction_id, "error": error})
+                        return {"success": False, "error": error}
+                return {"success": True}
+            
+            # Handle dict response (error case)
+            if isinstance(result, dict) and result.get("error"):
                 logger.error("Queen.ack", {"type": "single", "transaction_id": transaction_id, "error": result["error"]})
                 return {"success": False, "error": result["error"]}
 
