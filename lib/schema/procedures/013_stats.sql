@@ -70,11 +70,15 @@ BEGIN
 END;
 $$;
 
+-- Drop old function signature without parameters (if exists)
+DROP FUNCTION IF EXISTS queen.compute_partition_stats_v1();
+
 -- Compute partition-level stats using INCREMENTAL SCAN
 -- Only scans NEW messages since last_scanned_at (fast!)
 -- Uses partition_consumers metadata for completed/processing (no message scan needed)
 -- Uses transaction-level advisory lock to prevent concurrent execution
-CREATE OR REPLACE FUNCTION queen.compute_partition_stats_v1()
+-- p_force: if true, bypasses the 5-second debounce check (for manual refresh)
+CREATE OR REPLACE FUNCTION queen.compute_partition_stats_v1(p_force BOOLEAN DEFAULT FALSE)
 RETURNS JSONB
 LANGUAGE plpgsql
 AS $$
@@ -96,16 +100,19 @@ BEGIN
     
     -- Check if stats were computed very recently (within 5 seconds)
     -- This prevents redundant work when multiple instances call in sequence
-    SELECT MAX(last_computed_at) INTO v_last_computed
-    FROM queen.stats
-    WHERE stat_type = 'system';
-    
-    IF v_last_computed IS NOT NULL AND v_last_computed > v_now - INTERVAL '5 seconds' THEN
-        RETURN jsonb_build_object(
-            'skipped', true,
-            'reason', 'recently_computed',
-            'lastComputedAt', v_last_computed
-        );
+    -- Skip this check if p_force is true (manual refresh)
+    IF NOT p_force THEN
+        SELECT MAX(last_computed_at) INTO v_last_computed
+        FROM queen.stats
+        WHERE stat_type = 'system';
+        
+        IF v_last_computed IS NOT NULL AND v_last_computed > v_now - INTERVAL '5 seconds' THEN
+            RETURN jsonb_build_object(
+                'skipped', true,
+                'reason', 'recently_computed',
+                'lastComputedAt', v_last_computed
+            );
+        END IF;
     END IF;
     -- STEP 1: Handle partitions that already have stats (INCREMENTAL - only new messages)
     -- Count new messages since last_scanned_at and ADD to existing totals
@@ -952,7 +959,11 @@ $$;
 -- Uses transaction-level advisory lock to prevent concurrent execution
 -- across multiple server instances. Lock auto-releases when function returns.
 
-CREATE OR REPLACE FUNCTION queen.refresh_all_stats_v1()
+-- Drop old function signature without parameters (if exists)
+DROP FUNCTION IF EXISTS queen.refresh_all_stats_v1();
+
+-- p_force: if true, bypasses debounce checks (for manual "Hard Refresh")
+CREATE OR REPLACE FUNCTION queen.refresh_all_stats_v1(p_force BOOLEAN DEFAULT FALSE)
 RETURNS JSONB
 LANGUAGE plpgsql
 AS $$
@@ -971,7 +982,7 @@ BEGIN
     END IF;
     
     -- Step 1: Compute partition stats (from messages)
-    SELECT queen.compute_partition_stats_v1() INTO v_step;
+    SELECT queen.compute_partition_stats_v1(p_force) INTO v_step;
     v_result := v_result || jsonb_build_object('partition', v_step);
     
     -- Step 2: Aggregate queue stats
@@ -1006,14 +1017,14 @@ $$;
 -- ============================================================================
 
 GRANT EXECUTE ON FUNCTION queen.increment_message_counts_v1() TO PUBLIC;
-GRANT EXECUTE ON FUNCTION queen.compute_partition_stats_v1() TO PUBLIC;
+GRANT EXECUTE ON FUNCTION queen.compute_partition_stats_v1(BOOLEAN) TO PUBLIC;
 GRANT EXECUTE ON FUNCTION queen.aggregate_queue_stats_v1() TO PUBLIC;
 GRANT EXECUTE ON FUNCTION queen.aggregate_namespace_stats_v1() TO PUBLIC;
 GRANT EXECUTE ON FUNCTION queen.aggregate_task_stats_v1() TO PUBLIC;
 GRANT EXECUTE ON FUNCTION queen.aggregate_system_stats_v1() TO PUBLIC;
 -- NOTE: write_stats_history_v1 and cleanup_stats_history_v1 REMOVED (handled by worker_metrics)
 GRANT EXECUTE ON FUNCTION queen.cleanup_orphaned_stats_v1() TO PUBLIC;
-GRANT EXECUTE ON FUNCTION queen.refresh_all_stats_v1() TO PUBLIC;
+GRANT EXECUTE ON FUNCTION queen.refresh_all_stats_v1(BOOLEAN) TO PUBLIC;
 
 -- NOTE: get_system_overview_v2 and get_status_v2 REMOVED (replaced by v3 in 014_worker_metrics.sql)
 GRANT EXECUTE ON FUNCTION queen.get_queues_v2() TO PUBLIC;

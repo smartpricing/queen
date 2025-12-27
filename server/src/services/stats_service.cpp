@@ -114,8 +114,8 @@ void StatsService::run_full_reconciliation() {
     try {
         auto conn = db_pool_->acquire();
         
-        // Call the full refresh stored procedure
-        std::string sql = "SELECT queen.refresh_all_stats_v1()";
+        // Call the full refresh stored procedure (force=false for background job)
+        std::string sql = "SELECT queen.refresh_all_stats_v1(false)";
         
         sendQueryParamsAsync(conn.get(), sql, {});
         auto result = getTuplesResult(conn.get());

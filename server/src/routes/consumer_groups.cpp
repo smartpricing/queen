@@ -62,11 +62,12 @@ static void submit_sp_call(
 
 void setup_consumer_group_routes(uWS::App* app, const RouteContext& ctx) {
     // POST /api/v1/stats/refresh - Trigger immediate stats refresh (for stale data)
+    // Uses force=true to bypass the 5-second debounce check
     app->post("/api/v1/stats/refresh", [ctx](auto* res, auto* req) {
         (void)req;
         try {
-            spdlog::info("[Worker {}] Manual stats refresh triggered", ctx.worker_id);
-            submit_sp_call(ctx, res, "SELECT queen.refresh_all_stats_v1()");
+            spdlog::info("[Worker {}] Manual stats refresh triggered (force=true)", ctx.worker_id);
+            submit_sp_call(ctx, res, "SELECT queen.refresh_all_stats_v1(true)");
         } catch (const std::exception& e) {
             send_error_response(res, e.what(), 500);
         }
