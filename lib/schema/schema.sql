@@ -373,10 +373,6 @@ ALTER TABLE queen.stats SET (
     fillfactor = 50
 );
 
--- Drop legacy indexes (for existing deployments)
-DROP INDEX IF EXISTS queen.idx_partition_lookup_queue_message_ts;  -- Prevented HOT updates
-DROP INDEX IF EXISTS queen.idx_messages_partition_created_id;      -- Duplicate of idx_messages_partition_created
-
 -- ============================================================================
 -- Triggers
 -- ============================================================================
@@ -389,68 +385,3 @@ CREATE OR REPLACE TRIGGER trg_update_partition_lookup
     REFERENCING NEW TABLE AS new_messages
     FOR EACH STATEMENT
     EXECUTE FUNCTION queen.update_partition_lookup_trigger();
-
-    
--- ============================================================================
--- Queen Schema Migration: Master → Tasync (Cleanup)
--- Run this AFTER deploying tasync to production
--- 
--- This migration removes objects that exist in master but are NOT used by tasync.
--- It's safe to run after tasync is deployed because:
---   1. Tasync's schema.sql uses CREATE OR REPLACE for objects it needs
---   2. This script only drops objects tasync doesn't use
---   3. All DROP statements use IF EXISTS for idempotency
--- ============================================================================
-
-BEGIN;
-
--- 1. DROP STREAMING TABLES (CASCADE handles FKs)
-DROP TABLE IF EXISTS queen.stream_leases CASCADE;
-DROP TABLE IF EXISTS queen.stream_consumer_offsets CASCADE;
-DROP TABLE IF EXISTS queen.stream_sources CASCADE;
-DROP TABLE IF EXISTS queen.streams CASCADE;
-DROP TABLE IF EXISTS queen.queue_watermarks CASCADE;
-
--- 2. DROP MASTER-ONLY INDEXES
-DROP INDEX IF EXISTS queen.idx_queue_watermarks_name;
-DROP INDEX IF EXISTS queen.idx_stream_leases_lookup;
-DROP INDEX IF EXISTS queen.idx_stream_leases_expires;
-DROP INDEX IF EXISTS queen.idx_stream_consumer_offsets_lookup;
-DROP INDEX IF EXISTS queen.idx_queues_priority;
-DROP INDEX IF EXISTS queen.idx_queues_namespace;
-DROP INDEX IF EXISTS queen.idx_queues_task;
-DROP INDEX IF EXISTS queen.idx_queues_namespace_task;
-DROP INDEX IF EXISTS queen.idx_queues_retention_enabled;
-DROP INDEX IF EXISTS queen.idx_partitions_queue_name;
-DROP INDEX IF EXISTS queen.idx_partitions_last_activity;
-DROP INDEX IF EXISTS queen.idx_messages_trace_id;
-DROP INDEX IF EXISTS queen.idx_messages_created_at;
-DROP INDEX IF EXISTS queen.idx_partition_consumers_lookup;
-DROP INDEX IF EXISTS queen.idx_partition_consumers_active_leases;
-DROP INDEX IF EXISTS queen.idx_partition_consumers_expired_leases;
-DROP INDEX IF EXISTS queen.idx_partition_consumers_progress;
-DROP INDEX IF EXISTS queen.idx_partition_consumers_idle;
-DROP INDEX IF EXISTS queen.idx_partition_consumers_consumer_group;
-DROP INDEX IF EXISTS queen.idx_partition_lookup_queue_name;
-DROP INDEX IF EXISTS queen.idx_partition_lookup_partition_id;
-DROP INDEX IF EXISTS queen.idx_partition_lookup_timestamp;
-
--- 3. DROP MASTER-ONLY TRIGGERS (triggers that exist in master but NOT in tasync)
--- NOTE: trg_update_partition_lookup is NOT dropped here - it's preserved and updated by schema.sql
-DROP TRIGGER IF EXISTS trigger_update_partition_activity ON queen.messages;
-DROP TRIGGER IF EXISTS trigger_update_pending_on_push ON queen.messages;
-DROP TRIGGER IF EXISTS trigger_update_watermark ON queen.messages;
-
--- 4. DROP MASTER-ONLY TRIGGER FUNCTIONS (CASCADE to drop dependent triggers)
-DROP FUNCTION IF EXISTS update_partition_last_activity() CASCADE;
-DROP FUNCTION IF EXISTS update_pending_on_push() CASCADE;
-DROP FUNCTION IF EXISTS update_queue_watermark() CASCADE;
-
-COMMIT;
-
--- ============================================================================
--- NOTE: After first deployment with fillfactor=50, run MANUALLY (one-time only):
---   VACUUM FULL queen.partition_lookup;
---   VACUUM FULL queen.partition_consumers;
--- This rebuilds tables with free space for HOT updates. Don't include in schema
--- as VACUUM FULL takes exclusive locks and blocks all operations.

@@ -262,12 +262,12 @@
         <template #members="{ value }">
           <span class="badge badge-queen">{{ value }}</span>
         </template>
-        <template #totalLag="{ value }">
+        <template #maxTimeLag="{ value }">
           <span 
             class="badge"
-            :class="value > 1000 ? 'badge-danger' : value > 100 ? 'badge-warning' : 'badge-success'"
+            :class="value > 300 ? 'badge-danger' : value > 60 ? 'badge-warning' : 'badge-success'"
           >
-            {{ formatNumber(value || 0) }}
+            {{ value > 0 ? formatDuration(value) : '-' }}
           </span>
         </template>
       </DataTable>
@@ -531,7 +531,7 @@ const queueColumns = [
 const consumerColumns = [
   { key: 'name', label: 'Group Name', sortable: true },
   { key: 'members', label: 'Members', sortable: true, align: 'right' },
-  { key: 'totalLag', label: 'Lag', sortable: true, align: 'right' },
+  { key: 'maxTimeLag', label: 'Time Lag', sortable: true, align: 'right' },
 ]
 
 // Sorted data for tables
@@ -545,9 +545,9 @@ const sortedQueues = computed(() => {
 
 const sortedConsumers = computed(() => {
   return [...consumers.value].sort((a, b) => {
-    const lagA = a.totalLag || 0
-    const lagB = b.totalLag || 0
-    return lagB - lagA // Descending by lag
+    const lagA = a.maxTimeLag || 0
+    const lagB = b.maxTimeLag || 0
+    return lagB - lagA // Descending by time lag
   })
 })
 

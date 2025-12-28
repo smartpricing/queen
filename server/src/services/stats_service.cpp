@@ -122,7 +122,7 @@ void StatsService::run_full_reconciliation() {
         
         if (PQntuples(result.get()) > 0) {
             const char* json_result = PQgetvalue(result.get(), 0, 0);
-            spdlog::debug("StatsService: Full reconciliation complete: {}", json_result);
+            spdlog::info("StatsService: Full reconciliation complete: {}", json_result);
         }
         
     } catch (const std::exception& e) {

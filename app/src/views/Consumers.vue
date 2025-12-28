@@ -15,9 +15,9 @@
         </p>
       </div>
       <div class="card p-3 sm:p-4">
-        <p class="text-[10px] sm:text-xs text-light-500 uppercase tracking-wide">Total Lag</p>
+        <p class="text-[10px] sm:text-xs text-light-500 uppercase tracking-wide">Partitions Behind</p>
         <p class="text-xl sm:text-2xl font-bold font-display text-crown-600 dark:text-crown-400 mt-1">
-          {{ formatNumber(totalLag) }}
+          {{ formatNumber(totalPartitionsBehind) }}
         </p>
       </div>
       <div class="card p-3 sm:p-4">
@@ -231,9 +231,6 @@
                 Members
               </th>
               <th class="text-right px-4 py-3 text-xs font-semibold text-light-500 uppercase tracking-wide">
-                Offset Lag
-              </th>
-              <th class="text-right px-4 py-3 text-xs font-semibold text-light-500 uppercase tracking-wide">
                 Time Lag
               </th>
               <th class="text-center px-4 py-3 text-xs font-semibold text-light-500 uppercase tracking-wide">
@@ -247,7 +244,6 @@
               <td class="px-4 py-3"><div class="skeleton h-5 w-16" /></td>
               <td class="px-4 py-3"><div class="skeleton h-4 w-24" /></td>
               <td class="px-4 py-3"><div class="skeleton h-4 w-8 ml-auto" /></td>
-              <td class="px-4 py-3"><div class="skeleton h-4 w-12 ml-auto" /></td>
               <td class="px-4 py-3"><div class="skeleton h-4 w-16 ml-auto" /></td>
               <td class="px-4 py-3"><div class="skeleton h-4 w-32 mx-auto" /></td>
             </tr>
@@ -283,14 +279,6 @@
               <td class="px-4 py-3 text-right">
                 <span class="text-sm font-medium text-cyber-600 dark:text-cyber-400">
                   {{ consumer.members || 0 }}
-                </span>
-              </td>
-              <td class="px-4 py-3 text-right">
-                <span 
-                  class="text-sm font-medium"
-                  :class="(consumer.totalLag || 0) > 0 ? 'text-amber-600 dark:text-amber-400' : 'text-light-600 dark:text-light-400'"
-                >
-                  {{ formatNumber(consumer.totalLag || 0) }}
                 </span>
               </td>
               <td class="px-4 py-3 text-right">
@@ -400,9 +388,9 @@
               </p>
             </div>
             <div class="p-4 rounded-lg bg-light-100 dark:bg-dark-300 text-center">
-              <p class="text-xs text-light-500 uppercase tracking-wide">Lag</p>
+              <p class="text-xs text-light-500 uppercase tracking-wide">Time Lag</p>
               <p class="text-2xl font-bold text-light-900 dark:text-white mt-1">
-                {{ formatNumber(selectedConsumer.totalLag || 0) }}
+                {{ (selectedConsumer.maxTimeLag || 0) > 0 ? formatDuration(selectedConsumer.maxTimeLag * 1000) : '-' }}
               </p>
             </div>
           </div>
@@ -576,8 +564,8 @@ const lagPresets = [
 const isLagging = (consumer) => {
   // Use state field from API (Lagging, Stable, Dead)
   if (consumer.state === 'Lagging') return true
-  // Fallback: check if maxTimeLag > 0 or totalLag > 0
-  return (consumer.maxTimeLag || 0) > 0 || (consumer.totalLag || 0) > 0
+  // Fallback: check if maxTimeLag > 0 or partitionsWithLag > 0
+  return (consumer.maxTimeLag || 0) > 0 || (consumer.partitionsWithLag || 0) > 0
 }
 
 // Computed
@@ -598,9 +586,9 @@ const filteredConsumers = computed(() => {
     if (sortBy.value === 'name') {
       return a.name.localeCompare(b.name)
     } else if (sortBy.value === 'lag') {
-      // Sort by maxTimeLag first (more meaningful), then totalLag
-      const aLag = (a.maxTimeLag || 0) * 1000000 + (a.totalLag || 0)
-      const bLag = (b.maxTimeLag || 0) * 1000000 + (b.totalLag || 0)
+      // Sort by maxTimeLag (primary metric for lag detection)
+      const aLag = (a.maxTimeLag || 0)
+      const bLag = (b.maxTimeLag || 0)
       return bLag - aLag
     } else if (sortBy.value === 'members') {
       return (b.members || 0) - (a.members || 0)
@@ -615,8 +603,8 @@ const totalConsumers = computed(() =>
   consumers.value.reduce((sum, c) => sum + (c.members || 0), 0)
 )
 
-const totalLag = computed(() =>
-  consumers.value.reduce((sum, c) => sum + (c.totalLag || 0), 0)
+const totalPartitionsBehind = computed(() =>
+  consumers.value.reduce((sum, c) => sum + (c.partitionsWithLag || 0), 0)
 )
 
 const laggingGroups = computed(() =>

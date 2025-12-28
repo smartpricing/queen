@@ -109,13 +109,14 @@ BEGIN
         );
     END IF;
     
-    -- Check if stats were computed very recently (within 5 seconds)
+    -- Check if PARTITION stats were computed very recently (within 5 seconds)
     -- This prevents redundant work when multiple instances call in sequence
     -- Skip this check if p_force is true (manual refresh)
+    -- NOTE: Must check partition stats, not system stats (aggregations update system.last_computed_at)
     IF NOT p_force THEN
     SELECT MAX(last_computed_at) INTO v_last_computed
     FROM queen.stats
-    WHERE stat_type = 'system';
+    WHERE stat_type = 'partition';
     
     IF v_last_computed IS NOT NULL AND v_last_computed > v_now - INTERVAL '5 seconds' THEN
         RETURN jsonb_build_object(
@@ -204,7 +205,9 @@ BEGIN
         oldest_pending_at = CASE 
             WHEN pend.actual_pending > 0 THEN pend.last_consumed_created_at
             ELSE NULL
-        END
+        END,
+        -- Track when partition stats were actually computed (for debounce check)
+        last_computed_at = v_now
     FROM pending_counts pend
     WHERE s.stat_type = 'partition'
       AND s.stat_key = pend.stat_key;
@@ -990,9 +993,6 @@ $$;
 -- ============================================================================
 -- Uses transaction-level advisory lock to prevent concurrent execution
 -- across multiple server instances. Lock auto-releases when function returns.
-
--- Drop old function signature without parameters (if exists)
-DROP FUNCTION IF EXISTS queen.refresh_all_stats_v1();
 
 -- p_force: if true, bypasses debounce checks (for manual "Hard Refresh")
 CREATE OR REPLACE FUNCTION queen.refresh_all_stats_v1(p_force BOOLEAN DEFAULT FALSE)

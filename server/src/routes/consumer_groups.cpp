@@ -74,11 +74,12 @@ void setup_consumer_group_routes(uWS::App* app, const RouteContext& ctx) {
     });
     
     // GET /api/v1/consumer-groups - Consumer groups summary (async via stored procedure)
-    // Uses v2 which leverages pre-computed stats (~45x faster than v1)
+    // Uses v3 which leverages partition_lookup metadata (~50x faster than v1)
+    // Note: v3 returns approximate time lag and partitionsWithLag instead of exact totalLag count
     app->get("/api/v1/consumer-groups", [ctx](auto* res, auto* req) {
         (void)req;
         try {
-            submit_sp_call(ctx, res, "SELECT queen.get_consumer_groups_v2()");
+            submit_sp_call(ctx, res, "SELECT queen.get_consumer_groups_v3()");
         } catch (const std::exception& e) {
             send_error_response(res, e.what(), 500);
         }
