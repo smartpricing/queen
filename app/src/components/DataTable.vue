@@ -3,9 +3,12 @@
     <!-- Header -->
     <div v-if="title || $slots.header" class="card-header flex items-center justify-between">
       <div class="flex items-center gap-3">
-        <h3 v-if="title" class="font-semibold text-light-900 dark:text-white">
-          {{ title }}
-        </h3>
+        <div>
+          <h3 v-if="title" class="font-semibold text-light-900 dark:text-white">
+            {{ title }}
+          </h3>
+          <p v-if="subtitle" class="text-xs text-light-500 mt-0.5">{{ subtitle }}</p>
+        </div>
         <span v-if="total" class="badge badge-queen">
           {{ formatNumber(total) }} total
         </span>
@@ -115,6 +118,7 @@ const props = defineProps({
   columns: { type: Array, required: true },
   data: { type: Array, default: () => [] },
   title: { type: String, default: null },
+  subtitle: { type: String, default: null },
   total: { type: Number, default: null },
   loading: { type: Boolean, default: false },
   clickable: { type: Boolean, default: false },

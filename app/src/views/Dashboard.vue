@@ -164,16 +164,16 @@
         </div>
       </div>
 
-      <!-- Queue distribution -->
+      <!-- Queue time lag -->
       <div class="card">
         <div class="card-header">
-          <h3 class="font-semibold text-light-900 dark:text-white">Queue Distribution</h3>
-          <p class="text-xs text-light-500 mt-0.5">Pending messages per queue</p>
+          <h3 class="font-semibold text-light-900 dark:text-white">Queue Time Lag</h3>
+          <p class="text-xs text-light-500 mt-0.5">Max consumer lag per queue</p>
         </div>
         <div class="card-body">
-          <div v-if="queueDistribution.length > 0" class="space-y-4">
+          <div v-if="queueTimeLag.length > 0" class="space-y-4">
             <div 
-              v-for="queue in queueDistribution.slice(0, 5)" 
+              v-for="queue in queueTimeLag.slice(0, 5)" 
               :key="queue.name"
               class="group"
             >
@@ -181,8 +181,13 @@
                 <span class="font-medium text-light-800 dark:text-light-200 truncate max-w-[150px]">
                   {{ queue.name }}
                 </span>
-                <span class="text-light-600 dark:text-light-400 tabular-nums">
-                  {{ formatNumber(queue.count) }}
+                <span 
+                  class="tabular-nums font-medium"
+                  :class="queue.lag > 600 ? 'text-rose-600 dark:text-rose-400' : 
+                          queue.lag > 60 ? 'text-amber-600 dark:text-amber-400' : 
+                          'text-emerald-600 dark:text-emerald-400'"
+                >
+                  {{ queue.lag > 0 ? formatDuration(queue.lag) : '-' }}
                 </span>
               </div>
               <div class="h-2 bg-light-200 dark:bg-dark-100 rounded-full overflow-hidden">
@@ -194,18 +199,18 @@
               </div>
             </div>
             <router-link 
-              v-if="queueDistribution.length > 5"
-              to="/queues" 
+              v-if="queueTimeLag.length > 5"
+              to="/consumers" 
               class="inline-flex items-center gap-1 text-sm text-queen-600 dark:text-queen-400 hover:underline mt-2"
             >
-              View all {{ queueDistribution.length }} queues
+              View all {{ queueTimeLag.length }} queues
               <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
                 <path stroke-linecap="round" stroke-linejoin="round" d="M9 5l7 7-7 7" />
               </svg>
             </router-link>
           </div>
           <div v-else class="h-[200px] flex items-center justify-center text-light-500 text-sm">
-            No queues found
+            No consumer groups found
           </div>
         </div>
       </div>
@@ -216,6 +221,7 @@
       <!-- Recent queues table -->
       <DataTable
         title="Active Queues"
+        subtitle="Data may be stale"
         :columns="queueColumns"
         :data="sortedQueues"
         :loading="loadingQueues"
@@ -229,26 +235,12 @@
         <template #messages.pending="{ row }">
           <span class="badge badge-cyber">{{ formatNumber(row.messages?.pending || 0) }}</span>
         </template>
-        <template #messages.processing="{ row }">
-          <span class="badge badge-crown">{{ formatNumber(row.messages?.processing || 0) }}</span>
-        </template>
-        <template #status="{ row }">
-          <span 
-            class="inline-flex items-center gap-1.5"
-            :class="(row.messages?.processing || 0) > 0 ? 'text-emerald-600 dark:text-emerald-400' : 'text-light-500'"
-          >
-            <span 
-              class="w-1.5 h-1.5 rounded-full"
-              :class="(row.messages?.processing || 0) > 0 ? 'bg-emerald-500 animate-pulse' : 'bg-light-400'"
-            />
-            {{ (row.messages?.processing || 0) > 0 ? 'Active' : 'Idle' }}
-          </span>
-        </template>
       </DataTable>
 
       <!-- Consumer groups -->
       <DataTable
         title="Consumer Groups"
+        subtitle="Time lag data is accurate and updated in real-time"
         :columns="consumerColumns"
         :data="sortedConsumers"
         :loading="loadingConsumers"
@@ -256,8 +248,11 @@
         clickable
         @row-click="(row) => $router.push('/consumers')"
       >
-        <template #name="{ value }">
-          <span class="font-medium text-light-900 dark:text-white truncate max-w-[180px]">{{ value }}</span>
+        <template #name="{ value, row }">
+          <div class="truncate max-w-[180px]">
+            <span class="font-medium text-light-900 dark:text-white">{{ value }}</span>
+            <p v-if="row.queueName" class="text-xs text-light-500 dark:text-light-400 truncate">{{ row.queueName }}</p>
+          </div>
         </template>
         <template #members="{ value }">
           <span class="badge badge-queen">{{ value }}</span>
@@ -487,50 +482,52 @@ const messageFlowChartOptions = {
   }
 }
 
-// Queue distribution - using messages.pending and messages.processing
-const queueDistribution = computed(() => {
-  if (!queues.value.length) return []
+// Queue time lag - group consumers by queue and show max time lag
+const queueTimeLag = computed(() => {
+  if (!consumers.value.length) return []
   
-  const total = queues.value.reduce((sum, q) => {
-    const pending = q.messages?.pending || 0
-    const processing = q.messages?.processing || 0
-    return sum + pending + processing
-  }, 0)
+  // Group consumers by queue and find max time lag per queue
+  const queueLagMap = {}
+  consumers.value.forEach(c => {
+    const queueName = c.queueName || 'Unknown'
+    const lag = c.maxTimeLag || 0
+    if (!queueLagMap[queueName] || lag > queueLagMap[queueName]) {
+      queueLagMap[queueName] = lag
+    }
+  })
+  
+  const queueLags = Object.entries(queueLagMap).map(([name, lag]) => ({ name, lag }))
+  const maxLag = Math.max(...queueLags.map(q => q.lag), 1) // Avoid division by zero
   
   const colors = [
-    'bg-gradient-to-r from-queen-500 to-queen-600',
-    'bg-gradient-to-r from-cyber-500 to-cyber-600',
-    'bg-gradient-to-r from-crown-500 to-crown-600',
-    'bg-gradient-to-r from-emerald-500 to-emerald-600',
-    'bg-gradient-to-r from-violet-500 to-violet-600',
+    'bg-gradient-to-r from-rose-500 to-rose-600',
+    'bg-gradient-to-r from-amber-500 to-amber-600',
+    'bg-gradient-to-r from-orange-500 to-orange-600',
+    'bg-gradient-to-r from-red-500 to-red-600',
+    'bg-gradient-to-r from-pink-500 to-pink-600',
   ]
   
-  return queues.value
-    .map((q, i) => {
-      const pending = q.messages?.pending || 0
-      const processing = q.messages?.processing || 0
-      const count = pending + processing
-      return {
-        name: q.name,
-        count,
-        percentage: total > 0 ? (count / total) * 100 : 0,
-        colorClass: colors[i % colors.length]
-      }
-    })
-    .sort((a, b) => b.count - a.count)
+  return queueLags
+    .sort((a, b) => b.lag - a.lag)
+    .map((q, i) => ({
+      name: q.name,
+      lag: q.lag,
+      percentage: maxLag > 0 ? (q.lag / maxLag) * 100 : 0,
+      colorClass: q.lag > 600 ? 'bg-gradient-to-r from-rose-500 to-rose-600' : 
+                  q.lag > 60 ? 'bg-gradient-to-r from-amber-500 to-amber-600' : 
+                  'bg-gradient-to-r from-emerald-500 to-emerald-600'
+    }))
 })
 
 // Table columns
 const queueColumns = [
   { key: 'name', label: 'Queue Name', sortable: true },
   { key: 'messages.pending', label: 'Pending', sortable: true, align: 'right' },
-  { key: 'messages.processing', label: 'Processing', sortable: true, align: 'right' },
-  { key: 'status', label: 'Status' },
 ]
 
 const consumerColumns = [
   { key: 'name', label: 'Group Name', sortable: true },
-  { key: 'members', label: 'Members', sortable: true, align: 'right' },
+  { key: 'members', label: 'Partitions', sortable: true, align: 'right' },
   { key: 'maxTimeLag', label: 'Time Lag', sortable: true, align: 'right' },
 ]
 

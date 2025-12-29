@@ -28,6 +28,10 @@ Queen MQ is a partitioned message queue backed by PostgreSQL, built with uWebSoc
 
 Born at [Smartness](https://www.linkedin.com/company/smartness-com/) to power **Smartchat**, Queen solves a unique problem: **unlimited FIFO partitions** where slow processing in one partition doesn't block others.
 
+<p align="center">
+  <img src="assets/dashboard.png" alt="Queen MQ Dashboard" height="200" />
+</p>
+
 Perfect for:
 - Processing messages in order, without losing them somewhere in the middle
 - Do not want that a slow message processing in one partition blocks other partitions 
@@ -45,7 +49,6 @@ It push peaks for single request is around 45k req/s, with sustatined load (PUSH
 
 ### Getting Started
 - [Quick Start Guide](https://smartpricing.github.io/queen/guide/quickstart)
-- [Installation](https://smartpricing.github.io/queen/guide/installation)
 - [Basic Concepts](https://smartpricing.github.io/queen/guide/concepts)
 
 ### Client Libraries
@@ -62,9 +65,9 @@ It push peaks for single request is around 45k req/s, with sustatined load (PUSH
 
 | Server Version | Description | Compatible Clients |
 |----------------|-------------|-------------------|
-| **0.12.0** | New frontend and docs | JS ≥0.7.4, Python ≥0.7.4, 0.12.0 if needs to use proxy auth |
-| **0.11.0** | Libqueen 0.11.0; added stats tables and optimized analytics procedures, added DB statement timeout and stats reconcile interval | JS ≥0.7.4, Python ≥0.7.4 |
-| **0.10.0** | Total rewrite of the engine with libuv and stored procedures, removed streaming engine | JS ≥0.7.4, Python ≥0.7.4 |
+| **0.12.x** | New frontend and docs | JS ≥0.7.4, Python ≥0.7.4, 0.12.0 if needs to use proxy auth |
+| **0.11.x** | Libqueen 0.11.0; added stats tables and optimized analytics procedures, added DB statement timeout and stats reconcile interval | JS ≥0.7.4, Python ≥0.7.4 |
+| **0.10.x** | Total rewrite of the engine with libuv and stored procedures, removed streaming engine | JS ≥0.7.4, Python ≥0.7.4 |
 | **0.8.0** | Added Shared Cache with UDP sync for clustered deployment | JS ≥0.7.4, Python ≥0.7.4 |
 | **0.7.5** | First stable release | JS ≥0.7.4, Python ≥0.7.4 |
 

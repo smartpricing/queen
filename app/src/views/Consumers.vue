@@ -130,7 +130,7 @@
                 <td class="px-3 py-2 text-right font-medium text-amber-600 dark:text-amber-400">
                   {{ formatNumber(partition.offset_lag) }}
                 </td>
-                <td class="px-3 py-2 text-right font-medium text-rose-600 dark:text-rose-400">
+                <td class="px-3 py-2 text-right font-medium" :class="(partition.time_lag_seconds || 0) > 600 ? 'text-rose-600 dark:text-rose-400' : 'text-light-600 dark:text-light-400'">
                   {{ formatDuration(partition.time_lag_seconds * 1000) }}
                 </td>
                 <td class="px-3 py-2 text-right font-semibold text-light-900 dark:text-white">
@@ -284,7 +284,7 @@
               <td class="px-4 py-3 text-right">
                 <span 
                   class="text-sm font-medium"
-                  :class="(consumer.maxTimeLag || 0) > 0 ? 'text-rose-600 dark:text-rose-400' : 'text-light-600 dark:text-light-400'"
+                  :class="(consumer.maxTimeLag || 0) > 600 ? 'text-rose-600 dark:text-rose-400' : 'text-light-600 dark:text-light-400'"
                 >
                   {{ (consumer.maxTimeLag || 0) > 0 ? formatDuration(consumer.maxTimeLag * 1000) : '-' }}
                 </span>
