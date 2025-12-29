@@ -9,7 +9,7 @@
     "create-user": "node src/create-user.js"
   },
   "dependencies": {
-    "express": "^4.18.2",
+    "express": "^4.22.1",
     "pg": "^8.11.3",
     "bcrypt": "^5.1.1",
     "jsonwebtoken": "^9.0.2",
