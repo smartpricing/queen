@@ -29,7 +29,7 @@ Queen MQ is a partitioned message queue backed by PostgreSQL, built with uWebSoc
 Born at [Smartness](https://www.linkedin.com/company/smartness-com/) to power **Smartchat**, Queen solves a unique problem: **unlimited FIFO partitions** where slow processing in one partition doesn't block others.
 
 <p align="center">
-  <img src="assets/dashboard.png" alt="Queen MQ Dashboard" height="200" />
+  <img src="assets/dashboard.png" alt="Queen MQ Dashboard" height="350" />
 </p>
 
 Perfect for:
