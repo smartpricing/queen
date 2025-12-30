@@ -102,7 +102,6 @@ curl -X POST http://localhost:6632/api/v1/configure \
       "leaseTime": 300,
       "maxSize": 10000,
       "retryLimit": 3,
-      "priority": 5,
       "delayedProcessing": 2,
       "windowBuffer": 0,
       "retentionSeconds": 3600,
@@ -123,7 +122,6 @@ curl -X POST http://localhost:6632/api/v1/configure \
 | `maxSize` | int | 10000 | Maximum queue size |
 | `retryLimit` | int | 3 | Max retry attempts |
 | `retryDelay` | int | 1000 | Delay in milliseconds between retries |
-| `priority` | int | 0 | Queue priority (0-10) |
 | `delayedProcessing` | int | 0 | Delay in seconds before message is available |
 | `windowBuffer` | int | 0 | Time in seconds messages wait before being available |
 | `retentionSeconds` | int | 0 | Retention time for pending messages (0 = forever) |
@@ -531,8 +529,7 @@ curl http://localhost:6632/api/v1/resources/queues
       "consumerGroups": 2,
       "config": {
         "leaseTime": 300,
-        "retryLimit": 3,
-        "priority": 5
+        "retryLimit": 3
       }
     }
   ]

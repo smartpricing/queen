@@ -25,7 +25,6 @@ await queen.queue('critical-tasks')
   .config({
     leaseTime: 30,           // 30 seconds to process each message
     retryLimit: 3,           // Retry up to 3 times on failure
-    priority: 5,             // Queue priority (0-10)
     encryptionEnabled: true  // Encrypt messages at rest
   })
   .create()
@@ -152,22 +151,23 @@ await queen.queue('events')
 Control where a consumer group starts:
 
 ```javascript
-// Only process NEW messages (default)
+// Only process NEW messages
 await queen.queue('events')
   .group('new-consumer')
-  .subscribe('new_only')
+  .subscriptionMode('new')
   .consume(...)
 
-// Process ALL messages from the beginning
+// Process ALL messages from the beginning (default)
 await queen.queue('events')
   .group('replay-consumer')
-  .subscribe('from_beginning')
+  .subscriptionMode('all')
   .consume(...)
 
 // Process messages from a specific timestamp
 await queen.queue('events')
   .group('historical-consumer')
-  .subscribe('from_timestamp', new Date('2025-01-01'))
+  .subscriptionMode('timestamp')
+  .subscriptionFrom(new Date('2025-01-01'))
   .consume(...)
 ```
 
@@ -346,22 +346,6 @@ await queen.queue('events')
 - **Event types**: Task per event type
 - **Filtering**: Consume only relevant messages
 
-## Message Priority
-
-Control processing order with priority levels:
-
-```javascript
-// Create queue with priority
-await queen.queue('tasks')
-  .config({ priority: 5 })  // 0-10, higher = more important
-  .create()
-
-// High-priority messages processed first
-await queen.queue('urgent-tasks')
-  .config({ priority: 10 })
-  .create()
-```
-
 ## Message Retention
 
 Control how long messages are kept:
@@ -378,42 +362,6 @@ await queen.queue('logs')
 - **Retention**: How long pending/failed messages are kept before deletion
 - **Completed Retention**: How long successfully processed messages are kept
 - **Zero means forever** (until manually deleted)
-
-## Quality of Service (QoS)
-
-Queen supports multiple delivery guarantees:
-
-### At-Most-Once (QoS 0)
-```javascript
-// Fire and forget - messages buffered locally
-await queen.queue('analytics')
-  .qos(0)
-  .push([...])
-// Returns immediately, messages sent in background
-```
-
-### At-Least-Once (QoS 1)
-```javascript
-// Wait for server confirmation (default)
-await queen.queue('orders')
-  .qos(1)  // Default
-  .push([...])
-// Returns after server stores messages
-```
-
-### Exactly-Once (with transactions)
-```javascript
-// Use transactions + transaction IDs
-await queen.transaction()
-  .ack(inputMessage)
-  .queue('output')
-  .push([{
-    transactionId: `output-${inputMessage.transactionId}`,
-    data: { ... }
-  }])
-  .commit()
-// Atomic operation with deduplication
-```
 
 ## Conceptual Hierarchy
 

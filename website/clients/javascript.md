@@ -262,7 +262,6 @@ await queen.queue('my-tasks')
   .config({
     leaseTime: 60,           // 60 seconds to process
     retryLimit: 3,           // Max 3 retries
-    priority: 5,             // Priority level (0-10)
     dlqAfterMaxRetries: true, // Auto move to DLQ after max retries
     retentionSeconds: 86400, // Keep messages 24 hours
     encryptionEnabled: false
@@ -913,9 +912,6 @@ await queen.queue('super-queue').config({
   // Dead Letter Queue
   dlqAfterMaxRetries: true,      // Move to DLQ after max retries
   
-  // Priority
-  priority: 5,                   // Higher = higher priority (0-10)
-  
   // Delays & Buffers
   delayedProcessing: 60,         // Available after 60 seconds
   windowBuffer: 30,              // Hold messages for 30 seconds to batch
@@ -1028,7 +1024,6 @@ try {
 {
   leaseTime: 300,          // 5 minutes
   retryLimit: 3,
-  priority: 0,
   delayedProcessing: 0,
   windowBuffer: 0,
   maxSize: 0,              // Unlimited
@@ -1088,8 +1083,8 @@ import { Queen } from 'queen-mq'
 const queen = new Queen('http://localhost:6632')
 
 // Setup queues
-await queen.queue('raw-events').config({ priority: 5 }).create()
-await queen.queue('processed-events').config({ priority: 10 }).create()
+await queen.queue('raw-events').create()
+await queen.queue('processed-events').create()
 
 // Stage 1: Ingest with buffering
 async function ingestEvents() {

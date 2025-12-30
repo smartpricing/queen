@@ -17,7 +17,6 @@ await queen.queue('critical-tasks')
   .config({
     leaseTime: 60,        // 60 seconds to process
     retryLimit: 5,        // Retry up to 5 times
-    priority: 10,         // High priority
     encryptionEnabled: true
   })
   .create()
@@ -29,7 +28,6 @@ await queen.queue('critical-tasks')
 |--------|------|---------|-------------|
 | `leaseTime` | number | 300 | Seconds before lease expires |
 | `retryLimit` | number | 3 | Max retry attempts |
-| `priority` | number | 0 | Queue priority (0-10) |
 | `delayedProcessing` | number | 0 | Delay before available (seconds) |
 | `windowBuffer` | number | 0 | Batch window (seconds) |
 | `retentionSeconds` | number | 0 | Pending message retention (0=forever) |
@@ -300,28 +298,7 @@ for (let shard = 0; shard < 50; shard++) {
 }
 ```
 
-### Pattern 2: Priority Lanes
-
-```javascript
-// High-priority queue
-await queen.queue('urgent-tasks')
-  .config({ priority: 10 })
-  .create()
-
-// Normal-priority queue
-await queen.queue('normal-tasks')
-  .config({ priority: 5 })
-  .create()
-
-// Low-priority queue
-await queen.queue('batch-tasks')
-  .config({ priority: 1 })
-  .create()
-
-// Consumers process high-priority first
-```
-
-### Pattern 3: Workflow Stages
+### Pattern 2: Workflow Stages
 
 ```javascript
 // Stage 1: Ingest

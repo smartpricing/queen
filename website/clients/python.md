@@ -227,7 +227,6 @@ await queen.queue('my-tasks').create()
 await queen.queue('orders').config({
     'leaseTime': 300,              # 5 minutes
     'retryLimit': 3,
-    'priority': 5,
     'dlqAfterMaxRetries': True,
     'encryptionEnabled': False
 }).create()
@@ -245,7 +244,6 @@ await queen.queue('my-tasks').delete()
 |--------|------|---------|-------------|
 | `leaseTime` | int | 300 | Lease duration in seconds |
 | `retryLimit` | int | 3 | Max retry attempts |
-| `priority` | int | 0 | Queue priority (0-10) |
 | `delayedProcessing` | int | 0 | Delay before messages become available (seconds) |
 | `windowBuffer` | int | 0 | Server-side batching window (seconds) |
 | `maxSize` | int | 0 | Max queue size (0 = unlimited) |
@@ -1051,23 +1049,6 @@ await (queen.queue()
     .consume(handler))
 ```
 
-## Priority Queues
-
-Higher priority queues are processed first when consuming from multiple queues.
-
-```python
-# Create queues with different priorities
-await queen.queue('urgent-alerts').config({'priority': 10}).create()
-await queen.queue('regular-tasks').config({'priority': 5}).create()
-await queen.queue('background-jobs').config({'priority': 1}).create()
-
-# Consumer processes by priority: urgent first, then regular, then background
-async def handler(message):
-    print('Processing:', message)
-
-await queen.queue().namespace('all').consume(handler)
-```
-
 ## Delayed Processing
 
 Messages don't become available until the delay passes.
@@ -1313,7 +1294,6 @@ await asyncio.gather(stage1(), stage2())
 {
     'leaseTime': 300,                      # 5 minutes
     'retryLimit': 3,
-    'priority': 0,
     'delayedProcessing': 0,
     'windowBuffer': 0,
     'maxSize': 0,                          # Unlimited
@@ -1423,8 +1403,8 @@ from queen import Queen
 async def main():
     async with Queen('http://localhost:6632') as queen:
         # Create queues
-        await queen.queue('raw-events').config({'priority': 5}).create()
-        await queen.queue('processed-events').config({'priority': 10}).create()
+        await queen.queue('raw-events').create()
+        await queen.queue('processed-events').create()
         
         # Stage 1: Ingest with buffering
         async def ingest():

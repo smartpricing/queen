@@ -498,8 +498,8 @@ from queen import Queen
 async def main():
     async with Queen('http://localhost:6632') as queen:
         # Create queues
-        await queen.queue('raw-events').config({'priority': 5}).create()
-        await queen.queue('processed-events').config({'priority': 10}).create()
+        await queen.queue('raw-events').create()
+        await queen.queue('processed-events').create()
         
         # Stage 1: Ingest with buffering
         async def ingest():
@@ -762,7 +762,6 @@ async def main():
         await queen.queue('orders').config({
             'leaseTime': 300,
             'retryLimit': 3,
-            'priority': 10,
             'dlqAfterMaxRetries': True,
             'encryptionEnabled': True
         }).create()
