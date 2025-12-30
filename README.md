@@ -61,27 +61,31 @@ sleep 2
 docker run -p 6632:6632 --network queen -e PG_HOST=qpg -e PG_PORT=5432 -e PG_PASSWORD=postgres -e NUM_WORKERS=2 -e DB_POOL_SIZE=5 -e SIDECAR_POOL_SIZE=30 smartnessai/queen-mq:0.12.1
 ```
 
-Then use CURL (or the client libraries) to push and consume messages
+Then in another terminal, use cURL (or the client libraries) to push and consume messages
 
 **Push message:**
 ```bash
 curl -X POST http://localhost:6632/api/v1/push \
   -H "Content-Type: application/json" \
   -d '{"items": [{"queue": "demo", "payload": {"hello": "world"}}]}'
+```
 
-# Response: [{"message_id": "...", "status": "queued", ...}]
+that returns something like:
+```json
+[{"message_id": "...", "status": "queued", ...}]
 ```
 
 **Consume message:**
 ```bash
 curl "http://localhost:6632/api/v1/pop/queue/demo?autoAck=true"
-
-# Response: {"messages": [{"data": {"hello": "world"}, ...}], "success": true}
 ```
 
-Then go to the dashboard (http://localhost:6632) to see the message:
+that returns something like:
+```json
+{"messages": [{"data": {"hello": "world"}, ...}], "success": true}
+```
 
-
+Then go to the dashboard (http://localhost:6632) to see the messages and the status of the queue.
 
 ## Documentation
 
