@@ -34,14 +34,54 @@ Born at [Smartness](https://www.linkedin.com/company/smartness-com/) to power **
 
 Perfect for:
 - Processing messages in order, without losing them somewhere in the middle
-- Do not want that a slow message processing in one partition blocks other partitions 
-- When you need thousands of thousands of partitions to process messages in parallel, respecting the order of the messages
+- Avoid slow message processing blocking other partitions, solving Head of Line Blocking problem
+- When you need tens of thousands of partitions to process messages in parallel, respecting the order of the messages
 - Process the same messages in multiple pipelines
 - Have a clear view of the message processing flow and traceability
 - Build event-driven microservices with exactly-once delivery guarantees
 - Critical systems that need to be highly available and reliable with zero message loss
 
-It push peaks for single request is around 45k req/s, with sustatined load (PUSH+POP) around 10k req/s, and with consumer groups around 60k req/s.
+Its push peaks for single request is around 45k req/s, with sustatined load (PUSH+POP) around 10k req/s, and with consumer groups around 60k req/s.
+
+## Quick Start
+
+Create a Docker network and start PostgreSQL and Queen Server:
+
+```bash
+# Create a Docker network for Queen components
+docker network create queen
+
+# Start PostgreSQL
+docker run --name qpg --network queen -e POSTGRES_PASSWORD=postgres -p 5433:5432 -d postgres
+
+# Wait for PostgreSQL to start
+sleep 2
+
+# Start Queen Server
+docker run -p 6632:6632 --network queen -e PG_HOST=qpg -e PG_PORT=5432 -e PG_PASSWORD=postgres -e NUM_WORKERS=2 -e DB_POOL_SIZE=5 -e SIDECAR_POOL_SIZE=30 smartnessai/queen-mq:0.12.1
+```
+
+Then use CURL (or the client libraries) to push and consume messages
+
+**Push message:**
+```bash
+curl -X POST http://localhost:6632/api/v1/push \
+  -H "Content-Type: application/json" \
+  -d '{"items": [{"queue": "demo", "payload": {"hello": "world"}}]}'
+
+# Response: [{"message_id": "...", "status": "queued", ...}]
+```
+
+**Consume message:**
+```bash
+curl "http://localhost:6632/api/v1/pop/queue/demo?autoAck=true"
+
+# Response: {"messages": [{"data": {"hello": "world"}, ...}], "success": true}
+```
+
+Then go to the dashboard (http://localhost:6632) to see the message:
+
+
 
 ## Documentation
 
@@ -77,7 +117,7 @@ It push peaks for single request is around 45k req/s, with sustatined load (PUSH
 
 ## TODO
 
-- Evaluate to replace udp sync witch tcp with libuv
+- Evaluate to replace udp sync with tcp with libuv
 - Deploy pipeline
 
 ---
