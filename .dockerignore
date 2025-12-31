@@ -1,12 +1,14 @@
 # Node modules
 node_modules/
 webapp/node_modules/
+app/node_modules/
 
 # Build artifacts
 server/build/
 server/bin/
 server/vendor/
 webapp/dist/
+app/dist/
 
 # Git
 .git/
