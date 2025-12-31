@@ -1,5 +1,7 @@
 # Queen MQ - Partitioned Message Queue backed by PostgreSQL
 
+*Note that queen-mq is available also as a experimental PostgreSQL extension, see [pg_qpubsub](pg_qpubsub/README.md) for more details.*
+
 <div align="center">
 
 **Unlimited ordered partitions that never block each other. Consumer groups, replay, transactional delivery — ACID-guaranteed.**
@@ -23,6 +25,8 @@
 ---
 
 Queen MQ is a partitioned message queue backed by PostgreSQL, built with uWebSockets, libuv, and libpq async API. It features unlimited FIFO partitions that process independently, consumer groups with replay, transactional delivery, tracing, and ACID-guaranteed durability.
+
+For a PostgreSQL extension version of Queen MQ, see [pg_qpubsub](pg_qpubsub/README.md).
 
 ## Why Queen?
 
@@ -101,6 +105,22 @@ Then go to the dashboard (http://localhost:6632) to see the messages and the sta
 - [C++ Client](https://smartpricing.github.io/queen/clients/cpp)
 - [HTTP API Reference](https://smartpricing.github.io/queen/api/http)
 
+--- 
+
+## Structure of the repository
+
+The repository is structured as follows:
+
+- `lib`: C++ core queen library (libqueen), implementing libuv loops, sql schema and procedures
+- `server`: Queen MQ server, implementing the HTTP API that talks to the libqueen library
+- `pg_qpubsub`: PostgreSQL extension for using queen-mq semantics as a PostgreSQL extension
+- `client-js`: JavaScript client library (browser and node.js)
+- `client-py`: Python client library (python 3.8+)
+- `client-cpp`: C++ client library (cpp 17)
+- `proxy`: Proxy server (authentication)
+- `app`: Vue.js dashboard (vue 3)
+- `website`: Documentation website (vitepress)
+- `examples`: JS client examples
 ---
 
 ## Release History

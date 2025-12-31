@@ -49,7 +49,8 @@ export default defineConfig({
         text: 'More',
         items: [
           { text: 'Web Dashboard', link: '/webapp/overview' },
-          { text: 'Proxy Server', link: '/proxy/overview' }
+          { text: 'Proxy Server', link: '/proxy/overview' },
+          { text: 'PostgreSQL Extension', link: '/pg_qpubsub/' }
         ]
       }
     ],
@@ -154,6 +155,15 @@ export default defineConfig({
           text: 'API Reference',
           items: [
             { text: 'HTTP API', link: '/api/http' }
+          ]
+        }
+      ],
+      
+      '/pg_qpubsub/': [
+        {
+          text: 'PostgreSQL Extension',
+          items: [
+            { text: 'Overview', link: '/pg_qpubsub/' }
           ]
         }
       ]
