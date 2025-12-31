@@ -418,8 +418,3 @@ pg_qpubsub/
 - **Queen schema** — Core tables and procedures from `../lib/schema/`
 
 > **Note:** `pgcrypto` is included by default in PostgreSQL and available on most managed database platforms (RDS, Cloud SQL, etc.). Just run `CREATE EXTENSION pgcrypto` before loading pg_qpubsub.
-
-## License
-
-MIT
-
