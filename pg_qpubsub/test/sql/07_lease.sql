@@ -15,8 +15,8 @@ DECLARE
 BEGIN
     -- Setup: Configure queue with short lease
     PERFORM queen.configure('test-lease-renew', p_lease_time := 30);
-    PERFORM queen.push('test-lease-renew', '{"lease": "test"}'::jsonb);
-    SELECT * INTO msg FROM queen.pop_one('test-lease-renew');
+    PERFORM queen.produce('test-lease-renew', '{"lease": "test"}'::jsonb);
+    SELECT * INTO msg FROM queen.consume_one('test-lease-renew');
     
     IF msg.lease_id IS NULL THEN
         RAISE EXCEPTION 'FAIL: No lease_id returned';
@@ -51,18 +51,18 @@ DECLARE
 BEGIN
     -- Setup
     PERFORM queen.configure('test-lease-prevent', p_lease_time := 60);
-    PERFORM queen.push('test-lease-prevent', '{"prevent": true}'::jsonb);
+    PERFORM queen.produce('test-lease-prevent', '{"prevent": true}'::jsonb);
     
-    -- First pop acquires lease
-    SELECT * INTO msg1 FROM queen.pop_one('test-lease-prevent');
+    -- First consume acquires lease
+    SELECT * INTO msg1 FROM queen.consume_one('test-lease-prevent');
     
-    -- Second pop should return empty (message is leased)
-    SELECT COUNT(*) INTO count_second FROM queen.pop_one('test-lease-prevent');
+    -- Second consume should return empty (message is leased)
+    SELECT COUNT(*) INTO count_second FROM queen.consume_one('test-lease-prevent');
     
     IF count_second = 0 THEN
         RAISE NOTICE 'PASS: Leased message not available for re-consumption';
     ELSE
-        RAISE NOTICE 'PASS: Second pop returned % (lease may have mechanism)', count_second;
+        RAISE NOTICE 'PASS: Second consume returned % (lease may have mechanism)', count_second;
     END IF;
 END;
 $$;
@@ -83,7 +83,7 @@ BEGIN
 END;
 $$;
 
--- Test 4: Lease expiration allows re-pop (requires short lease + wait)
+-- Test 4: Lease expiration allows re-consume (requires short lease + wait)
 -- Note: This test may be slow due to waiting for lease expiration
 DO $$
 DECLARE
@@ -92,17 +92,17 @@ DECLARE
 BEGIN
     -- Setup: Configure queue with very short lease (2 seconds)
     PERFORM queen.configure('test-lease-expire', p_lease_time := 2);
-    PERFORM queen.push('test-lease-expire', '{"expire": "test"}'::jsonb);
+    PERFORM queen.produce('test-lease-expire', '{"expire": "test"}'::jsonb);
     
-    -- First pop acquires lease
-    SELECT * INTO msg1 FROM queen.pop_one('test-lease-expire');
+    -- First consume acquires lease
+    SELECT * INTO msg1 FROM queen.consume_one('test-lease-expire');
     
     IF msg1.transaction_id IS NOT NULL THEN
         -- Wait for lease to expire (3 seconds)
         PERFORM pg_sleep(3);
         
-        -- Second pop should now get the message (lease expired)
-        SELECT * INTO msg2 FROM queen.pop_one('test-lease-expire');
+        -- Second consume should now get the message (lease expired)
+        SELECT * INTO msg2 FROM queen.consume_one('test-lease-expire');
         
         IF msg2.transaction_id = msg1.transaction_id THEN
             RAISE NOTICE 'PASS: Message re-delivered after lease expiration';
@@ -124,8 +124,8 @@ DECLARE
     renew3 TIMESTAMPTZ;
 BEGIN
     -- Setup
-    PERFORM queen.push('test-multi-renew', '{"multi": "renew"}'::jsonb);
-    SELECT * INTO msg FROM queen.pop_one('test-multi-renew');
+    PERFORM queen.produce('test-multi-renew', '{"multi": "renew"}'::jsonb);
+    SELECT * INTO msg FROM queen.consume_one('test-multi-renew');
     
     -- Renew multiple times
     renew1 := queen.renew(msg.lease_id, 30);
@@ -141,4 +141,3 @@ END;
 $$;
 
 \echo 'PASS: Lease tests completed'
-

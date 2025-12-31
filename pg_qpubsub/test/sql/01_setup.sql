@@ -37,16 +37,26 @@ BEGIN
 END;
 $$;
 
--- Verify wrapper functions exist
+-- Verify wrapper functions exist (Kafka-style naming)
 DO $$
 DECLARE
     required_functions TEXT[] := ARRAY[
-        'push', 'pop', 'pop_batch', 'pop_one', 'pop_auto_ack', 
-        'ack', 'ack_group', 'ack_status', 'nack', 'reject',
-        'renew', 'forward', 'transaction', 'configure',
-        'has_messages', 'depth', 'channel_name', 'notify',
-        'push_notify', 'pop_wait', 'pop_wait_one',
-        'uuid_generate_v7', 'uuid_v7_to_timestamptz', 'uuid_v7_boundary'
+        -- Produce (formerly push)
+        'produce', 'produce_full', 'produce_notify',
+        -- Consume (formerly pop)
+        'consume', 'consume_batch', 'consume_one', 'consume_auto_commit',
+        -- Commit (formerly ack)
+        'commit', 'nack', 'reject',
+        -- Lease & Transaction
+        'renew', 'forward', 'transaction',
+        -- Utilities
+        'configure', 'has_messages', 'depth', 'lag',
+        -- Notify/Listen
+        'channel_name', 'notify',
+        -- Long Polling
+        'poll', 'poll_one',
+        -- UUID v7
+        'uuid_generate_v7', 'uuid_v7_to_timestamptz', 'uuid_v7_boundary', 'uuid_generate_v7_at'
     ];
     f TEXT;
 BEGIN

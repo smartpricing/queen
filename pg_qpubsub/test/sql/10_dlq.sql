@@ -14,9 +14,9 @@ DECLARE
 BEGIN
     -- Setup queue with DLQ enabled
     PERFORM queen.configure('test-dlq-reject', p_dead_letter_queue := true);
-    PERFORM queen.push('test-dlq-reject', '{"dlq": "reject"}'::jsonb, 'dlq-reject-txn');
+    PERFORM queen.produce('test-dlq-reject', '{"dlq": "reject"}'::jsonb, 'dlq-reject-txn');
     
-    SELECT * INTO msg FROM queen.pop_one('test-dlq-reject');
+    SELECT * INTO msg FROM queen.consume_one('test-dlq-reject');
     
     -- Reject the message
     reject_result := queen.reject(msg.transaction_id, msg.partition_id, msg.lease_id, 'Test rejection');
@@ -43,8 +43,8 @@ DECLARE
 BEGIN
     -- Setup
     PERFORM queen.configure('test-dlq-error', p_dead_letter_queue := true);
-    PERFORM queen.push('test-dlq-error', '{"error": "test"}'::jsonb);
-    SELECT * INTO msg FROM queen.pop_one('test-dlq-error');
+    PERFORM queen.produce('test-dlq-error', '{"error": "test"}'::jsonb);
+    SELECT * INTO msg FROM queen.consume_one('test-dlq-error');
     
     -- Reject with specific error
     reject_result := queen.reject(msg.transaction_id, msg.partition_id, msg.lease_id, 'Specific error message for testing');
@@ -70,8 +70,8 @@ DECLARE
 BEGIN
     -- Setup queue with retries
     PERFORM queen.configure('test-dlq-retry-count', p_dead_letter_queue := true, p_retry_limit := 3);
-    PERFORM queen.push('test-dlq-retry-count', '{"retry": "count"}'::jsonb);
-    SELECT * INTO msg FROM queen.pop_one('test-dlq-retry-count');
+    PERFORM queen.produce('test-dlq-retry-count', '{"retry": "count"}'::jsonb);
+    SELECT * INTO msg FROM queen.consume_one('test-dlq-retry-count');
     
     -- Reject (simulating exhausted retries)
     PERFORM queen.reject(msg.transaction_id, msg.partition_id, msg.lease_id, 'Exhausted retries');
@@ -97,8 +97,8 @@ DECLARE
 BEGIN
     -- Setup
     PERFORM queen.configure('test-dlq-metadata', p_dead_letter_queue := true);
-    PERFORM queen.push('test-dlq-metadata', '{"meta": "data"}'::jsonb, 'dlq-meta-txn');
-    SELECT * INTO msg FROM queen.pop_one('test-dlq-metadata');
+    PERFORM queen.produce('test-dlq-metadata', '{"meta": "data"}'::jsonb, 'dlq-meta-txn');
+    SELECT * INTO msg FROM queen.consume_one('test-dlq-metadata');
     
     -- Reject
     PERFORM queen.reject(msg.transaction_id, msg.partition_id, msg.lease_id, 'Metadata test');
@@ -127,8 +127,8 @@ DECLARE
 BEGIN
     -- Setup
     PERFORM queen.configure('test-dlq-timestamp', p_dead_letter_queue := true);
-    PERFORM queen.push('test-dlq-timestamp', '{"time": "stamp"}'::jsonb);
-    SELECT * INTO msg FROM queen.pop_one('test-dlq-timestamp');
+    PERFORM queen.produce('test-dlq-timestamp', '{"time": "stamp"}'::jsonb);
+    SELECT * INTO msg FROM queen.consume_one('test-dlq-timestamp');
     
     time_before := clock_timestamp();
     
@@ -166,14 +166,14 @@ BEGIN
         jsonb_build_object('type', 'push', 'queue', 'test-dlq-multiple', 'payload', '{"idx": 3}'::jsonb)
     ));
     
-    -- Pop and reject all
-    SELECT * INTO msg1 FROM queen.pop_one('test-dlq-multiple');
+    -- Consume and reject all
+    SELECT * INTO msg1 FROM queen.consume_one('test-dlq-multiple');
     PERFORM queen.reject(msg1.transaction_id, msg1.partition_id, msg1.lease_id, 'Error 1');
     
-    SELECT * INTO msg2 FROM queen.pop_one('test-dlq-multiple');
+    SELECT * INTO msg2 FROM queen.consume_one('test-dlq-multiple');
     PERFORM queen.reject(msg2.transaction_id, msg2.partition_id, msg2.lease_id, 'Error 2');
     
-    SELECT * INTO msg3 FROM queen.pop_one('test-dlq-multiple');
+    SELECT * INTO msg3 FROM queen.consume_one('test-dlq-multiple');
     PERFORM queen.reject(msg3.transaction_id, msg3.partition_id, msg3.lease_id, 'Error 3');
     
     -- Count DLQ entries
@@ -199,13 +199,13 @@ DECLARE
 BEGIN
     -- Setup
     PERFORM queen.configure('test-dlq-cg', p_dead_letter_queue := true);
-    PERFORM queen.push('test-dlq-cg', '{"cg": "test"}'::jsonb);
+    PERFORM queen.produce('test-dlq-cg', '{"cg": "test"}'::jsonb);
     
-    -- Pop with consumer group
-    SELECT * INTO msg FROM queen.pop('test-dlq-cg', 'my-failing-consumer', 1, 60);
+    -- Consume with consumer group
+    SELECT * INTO msg FROM queen.consume('test-dlq-cg', 'my-failing-consumer', 1, 60);
     
-    -- Reject
-    PERFORM queen.ack_status(msg.transaction_id, msg.partition_id, msg.lease_id, 'dlq', 'my-failing-consumer', 'Consumer group failure');
+    -- Reject using commit with status
+    PERFORM queen.commit(msg.transaction_id, msg.partition_id, msg.lease_id, 'dlq', 'my-failing-consumer', 'Consumer group failure');
     
     -- Verify consumer group stored
     SELECT consumer_group INTO dlq_consumer_group
@@ -228,19 +228,18 @@ DECLARE
 BEGIN
     -- Setup queue with 0 retries (immediate DLQ on failure)
     PERFORM queen.configure('test-dlq-nack-exhausted', p_dead_letter_queue := true, p_retry_limit := 0);
-    PERFORM queen.push('test-dlq-nack-exhausted', '{"exhaust": true}'::jsonb);
+    PERFORM queen.produce('test-dlq-nack-exhausted', '{"exhaust": true}'::jsonb);
     
-    SELECT * INTO msg FROM queen.pop_one('test-dlq-nack-exhausted');
+    SELECT * INTO msg FROM queen.consume_one('test-dlq-nack-exhausted');
     
     -- Nack (should go directly to DLQ with retry_limit=0)
     PERFORM queen.nack(msg.transaction_id, msg.partition_id, msg.lease_id, 'Immediate failure');
     
     -- Check if message is no longer available
-    SELECT COUNT(*) INTO remaining FROM queen.pop_one('test-dlq-nack-exhausted');
+    SELECT COUNT(*) INTO remaining FROM queen.consume_one('test-dlq-nack-exhausted');
     
     RAISE NOTICE 'PASS: Nack with exhausted retries (remaining messages: %)', remaining;
 END;
 $$;
 
 \echo 'PASS: DLQ tests completed'
-

@@ -4,11 +4,17 @@
  * This example demonstrates using pg_qpubsub procedures directly with the
  * native PostgreSQL driver, without the Queen client library.
  * 
+ * API follows Kafka-style naming:
+ * - produce  (send messages to a queue)
+ * - consume  (receive messages from a queue)
+ * - commit   (acknowledge message processing)
+ * - poll     (consume with wait/long-polling)
+ * 
  * Features demonstrated:
  * - Creating/configuring a queue
- * - Pushing messages
+ * - Producing messages
  * - Consuming from multiple consumer groups (pub/sub fan-out)
- * - Manual pop and ack
+ * - Manual consume and commit
  * 
  * Prerequisites:
  * - PostgreSQL with pg_qpubsub extension loaded
@@ -60,10 +66,10 @@ async function configureQueue() {
 }
 
 // ============================================================================
-// STEP 2: Push messages
+// STEP 2: Produce messages (formerly "push")
 // ============================================================================
-async function pushMessages() {
-  console.log('\n=== Step 2: Push Messages ===\n')
+async function produceMessages() {
+  console.log('\n=== Step 2: Produce Messages ===\n')
   
   const messages = [
     { orderId: 1001, product: 'Widget A', quantity: 5, price: 29.99 },
@@ -74,17 +80,17 @@ async function pushMessages() {
   ]
   
   for (const msg of messages) {
-    // queen.push(queue, payload, transaction_id)
+    // queen.produce(queue, payload, transaction_id)
     const transactionId = uuidv4()
     const result = await pool.query(
-      `SELECT queen.push($1::text, $2::jsonb, $3::text) AS message_id`,
+      `SELECT queen.produce($1::text, $2::jsonb, $3::text) AS message_id`,
       [QUEUE_NAME, JSON.stringify(msg), transactionId]
     )
     
-    console.log(`Pushed order ${msg.orderId}: ${result.rows[0].message_id}`)
+    console.log(`Produced order ${msg.orderId}: ${result.rows[0].message_id}`)
   }
   
-  console.log(`\nTotal: ${messages.length} messages pushed`)
+  console.log(`\nTotal: ${messages.length} messages produced`)
 }
 
 // ============================================================================
@@ -97,8 +103,8 @@ async function consumeMessages(consumerGroup, processDelay = 100) {
   let hasMore = true
   
   while (hasMore) {
-    // Pop a batch of messages
-    // queen.pop(queue, consumer_group, batch_size, lease_seconds)
+    // Consume a batch of messages (formerly "pop")
+    // queen.consume(queue, consumer_group, batch_size, lease_seconds)
     // NOTE: Explicit type casts required!
     const result = await pool.query(`
       SELECT 
@@ -108,10 +114,8 @@ async function consumeMessages(consumerGroup, processDelay = 100) {
         payload,
         created_at,
         lease_id
-      FROM queen.pop($1::text, $2::text, $3::int, $4::int)
+      FROM queen.consume($1::text, $2::text, $3::int, $4::int)
     `, [QUEUE_NAME, consumerGroup, 2, 60])
-
-    console.log(result.rows)
     
     if (result.rows.length === 0) {
       log(consumerGroup, 'No more messages')
@@ -133,18 +137,18 @@ async function consumeMessages(consumerGroup, processDelay = 100) {
       // Simulate processing time
       await new Promise(resolve => setTimeout(resolve, processDelay))
       
-      // Acknowledge the message with consumer group
-      // queen.ack(transaction_id, partition_id, lease_id, status, consumer_group, error_message)
+      // Commit the message (formerly "ack")
+      // queen.commit(transaction_id, partition_id, lease_id, status, consumer_group, error_message)
       // Using 6-param version to avoid ambiguity with 4-param version
-      const ackResult = await pool.query(
-        `SELECT queen.ack($1::text, $2::uuid, $3::text, $4::text, $5::text, $6::text) AS ack`,
+      const commitResult = await pool.query(
+        `SELECT queen.commit($1::text, $2::uuid, $3::text, $4::text, $5::text, $6::text) AS success`,
         [msg.transaction_id, msg.partition_id, msg.lease_id, 'completed', consumerGroup, null]
       )
       
-      if (ackResult.rows[0].ack) {
-        log(consumerGroup, `  ✓ Acknowledged`)
+      if (commitResult.rows[0].success) {
+        log(consumerGroup, `  ✓ Committed`)
       } else {
-        log(consumerGroup, `  ✗ Ack failed!`)
+        log(consumerGroup, `  ✗ Commit failed!`)
       }
       
       processed++
@@ -174,10 +178,10 @@ async function runConsumerGroups() {
 }
 
 // ============================================================================
-// BONUS: Check queue depth
+// BONUS: Check queue depth (lag)
 // ============================================================================
 async function checkQueueDepth() {
-  console.log('\n=== Bonus: Queue Depth ===\n')
+  console.log('\n=== Bonus: Queue Depth (Lag) ===\n')
   
   const result = await pool.query(
     `SELECT queen.depth($1::text) AS depth`,
@@ -185,6 +189,13 @@ async function checkQueueDepth() {
   )
   
   console.log(`Queue "${QUEUE_NAME}" depth: ${result.rows[0].depth}`)
+  
+  // Can also use queen.lag() which is an alias for depth()
+  const lagResult = await pool.query(
+    `SELECT queen.lag($1::text) AS lag`,
+    [QUEUE_NAME]
+  )
+  console.log(`Queue "${QUEUE_NAME}" lag: ${lagResult.rows[0].lag}`)
 }
 
 // ============================================================================
@@ -194,14 +205,15 @@ async function main() {
   console.log('╔══════════════════════════════════════════════════════════════╗')
   console.log('║       pg_qpubsub Direct Usage Example                        ║')
   console.log('║       Using native pg driver without Queen client            ║')
+  console.log('║       Kafka-style API: produce, consume, commit              ║')
   console.log('╚══════════════════════════════════════════════════════════════╝')
   
   try {
     // Step 1: Configure queue
     await configureQueue()
     
-    // Step 2: Push messages
-    await pushMessages()
+    // Step 2: Produce messages
+    await produceMessages()
     
     // Step 3: Consume with two consumer groups
     await runConsumerGroups()

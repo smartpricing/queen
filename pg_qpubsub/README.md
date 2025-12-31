@@ -4,16 +4,27 @@ A PostgreSQL extension providing a high-performance message queue with partition
 
 ## Features
 
-- ✅ **Push/Pop/Ack** — Standard queue operations
-- ✅ **Batch Operations** — Process hundreds of messages per call
-- ✅ **Partitions** — Parallel processing with ordering guarantees
-- ✅ **Consumer Groups** — Pub/Sub pattern (multiple groups receive same messages)
-- ✅ **At-Least-Once Delivery** — Messages redelivered if not acknowledged
-- ✅ **Dead Letter Queue** — Failed messages preserved for inspection
-- ✅ **NOTIFY/LISTEN** — Real-time notifications on new messages
-- ✅ **Long Polling** — Blocking pop with configurable timeout
-- ✅ **Transactional Pipelines** — Ack + Push atomically
-- ✅ **Real-time Analytics** — Throughput, lag, queue depth metrics
+- **Produce/Consume/Commit** — Kafka-style queue operations
+- **Batch Operations** — Process hundreds of messages per call
+- **Partitions** — Parallel processing with ordering guarantees
+- **Consumer Groups** — Pub/Sub pattern (multiple groups receive same messages)
+- **At-Least-Once Delivery** — Messages redelivered if not committed
+- **Dead Letter Queue** — Failed messages preserved for inspection
+- **NOTIFY/LISTEN** — Real-time notifications on new messages
+- **Long Polling** — Blocking consume (poll) with configurable timeout
+- **Transactional Pipelines** — Commit + Produce atomically
+- **Real-time Analytics** — Throughput, lag, queue depth metrics
+
+## API Naming Convention (Kafka-style)
+
+| Function | Description | Kafka Equivalent |
+|----------|-------------|------------------|
+| `produce` | Send message to queue | `producer.send()` |
+| `consume` | Receive messages | `consumer.poll()` |
+| `commit` | Acknowledge processing | `consumer.commit()` |
+| `poll` | Consume with wait/long-polling | `consumer.poll(timeout)` |
+| `nack` | Mark failed (retry) | - |
+| `reject` | Send to DLQ | - |
 
 ## Installation
 
@@ -68,57 +79,57 @@ See Node.js examples in the `examples/31-pg-qpubsub-direct.js` file.
 ### Basic Usage
 
 ```sql
--- Configure a queue (optional - queues auto-create on first push)
+-- Configure a queue (optional - queues auto-create on first produce)
 SELECT queen.configure('orders', 
     p_lease_time := 60,        -- 60 second lease
     p_retry_limit := 3,        -- Retry failed messages 3 times
     p_dead_letter_queue := true -- Enable DLQ for failed messages
 );
 
--- Push a message
-SELECT queen.push('orders', '{"orderId": 123}'::jsonb);
+-- Produce a message
+SELECT queen.produce('orders', '{"orderId": 123}'::jsonb);
 
--- Pop messages (queue mode)
-CREATE TEMP TABLE popped AS SELECT * FROM queen.pop_batch('orders', 10, 60);
+-- Consume messages (queue mode)
+CREATE TEMP TABLE consumed AS SELECT * FROM queen.consume_batch('orders', 10, 60);
 
 -- Process your messages...
-SELECT payload FROM popped;
+SELECT payload FROM consumed;
 
--- Acknowledge all messages
-SELECT queen.ack(transaction_id, partition_id, lease_id) FROM popped;
+-- Commit all messages
+SELECT queen.commit(transaction_id, partition_id, lease_id) FROM consumed;
 
 -- Or with consumer groups (pub/sub mode):
-SELECT * FROM queen.pop('orders', 'processor-group', 10, 60);
+SELECT * FROM queen.consume('orders', 'processor-group', 10, 60);
 ```
 
 ### With Notifications
 
 ```sql
--- Push with notification (consumers listening will wake up)
-SELECT queen.push_notify('orders', '{"orderId": 123}'::jsonb);
+-- Produce with notification (consumers listening will wake up)
+SELECT queen.produce_notify('orders', '{"orderId": 123}'::jsonb);
 
 -- Or use long polling (blocks until messages arrive or timeout)
-SELECT * FROM queen.pop_wait('orders', 'processor', 10, 60, 30);
+SELECT * FROM queen.poll('orders', 'processor', 10, 60, 30);
 ```
 
 ## API Reference
 
-### Push Functions
+### Produce Functions
 
-#### `queen.push(queue, payload, [transaction_id])` → `UUID`
-Push a message to a queue.
+#### `queen.produce(queue, payload, [transaction_id])` → `UUID`
+Produce a message to a queue.
 ```sql
-queen.push(
+queen.produce(
     p_queue TEXT,
     p_payload JSONB,
     p_transaction_id TEXT DEFAULT NULL
 ) RETURNS UUID
 ```
 
-#### `queen.push(queue, partition, payload, [transaction_id])` → `UUID`
-Push to a specific partition.
+#### `queen.produce(queue, partition, payload, [transaction_id])` → `UUID`
+Produce to a specific partition.
 ```sql
-queen.push(
+queen.produce(
     p_queue TEXT,
     p_partition TEXT,
     p_payload JSONB,
@@ -126,10 +137,10 @@ queen.push(
 ) RETURNS UUID
 ```
 
-#### `queen.push_notify(queue, payload, [transaction_id], [partition])` → `UUID`
-Push message and send NOTIFY to wake consumers.
+#### `queen.produce_notify(queue, payload, [transaction_id], [partition])` → `UUID`
+Produce message and send NOTIFY to wake consumers.
 ```sql
-queen.push_notify(
+queen.produce_notify(
     p_queue TEXT,
     p_payload JSONB,
     p_transaction_id TEXT DEFAULT NULL,
@@ -137,20 +148,20 @@ queen.push_notify(
 ) RETURNS UUID
 ```
 
-#### `queen.push_notify(queue, partition, payloads[])` → `UUID[]`
-Batch push with single NOTIFY.
+#### `queen.produce_notify(queue, partition, payloads[])` → `UUID[]`
+Batch produce with single NOTIFY.
 ```sql
-queen.push_notify(
+queen.produce_notify(
     p_queue TEXT,
     p_partition TEXT,
     p_payloads JSONB[]
 ) RETURNS UUID[]
 ```
 
-#### `queen.push_full(...)` → `TABLE(message_id, transaction_id)`
-Push with all options (namespace, task, delay).
+#### `queen.produce_full(...)` → `TABLE(message_id, transaction_id)`
+Produce with all options (namespace, task, delay).
 ```sql
-queen.push_full(
+queen.produce_full(
     p_queue TEXT,
     p_payload JSONB,
     p_partition TEXT DEFAULT 'Default',
@@ -163,12 +174,12 @@ queen.push_full(
 
 ---
 
-### Pop Functions
+### Consume Functions
 
-#### `queen.pop(queue, [consumer_group], [batch_size], [lease_seconds])` → `TABLE`
-Pop messages from a queue.
+#### `queen.consume(queue, [consumer_group], [batch_size], [lease_seconds])` → `TABLE`
+Consume messages from a queue.
 ```sql
-queen.pop(
+queen.consume(
     p_queue TEXT,
     p_consumer_group TEXT DEFAULT '__QUEUE_MODE__',
     p_batch_size INTEGER DEFAULT 1,
@@ -176,10 +187,10 @@ queen.pop(
 ) RETURNS TABLE(partition_id UUID, id UUID, transaction_id TEXT, payload JSONB, created_at TIMESTAMPTZ, lease_id TEXT)
 ```
 
-#### `queen.pop(queue, partition, consumer_group, batch_size, [lease_seconds])` → `TABLE`
-Pop from a specific partition.
+#### `queen.consume(queue, partition, consumer_group, batch_size, [lease_seconds])` → `TABLE`
+Consume from a specific partition.
 ```sql
-queen.pop(
+queen.consume(
     p_queue TEXT,
     p_partition TEXT,
     p_consumer_group TEXT,
@@ -188,40 +199,44 @@ queen.pop(
 ) RETURNS TABLE(partition_id UUID, id UUID, transaction_id TEXT, payload JSONB, created_at TIMESTAMPTZ, lease_id TEXT)
 ```
 
-#### `queen.pop_one(queue, [consumer_group], [lease_seconds])` → `TABLE`
-Pop a single message.
+#### `queen.consume_one(queue, [consumer_group], [lease_seconds])` → `TABLE`
+Consume a single message.
 ```sql
-queen.pop_one(
+queen.consume_one(
     p_queue TEXT,
     p_consumer_group TEXT DEFAULT '__QUEUE_MODE__',
     p_lease_seconds INTEGER DEFAULT 60
 ) RETURNS TABLE(partition_id UUID, id UUID, transaction_id TEXT, payload JSONB, created_at TIMESTAMPTZ, lease_id TEXT)
 ```
 
-#### `queen.pop_batch(queue, batch_size, [lease_seconds])` → `TABLE`
-Pop a batch of messages (queue mode, no consumer group required).
+#### `queen.consume_batch(queue, batch_size, [lease_seconds])` → `TABLE`
+Consume a batch of messages (queue mode, no consumer group required).
 ```sql
-queen.pop_batch(
+queen.consume_batch(
     p_queue TEXT,
     p_batch_size INTEGER,
     p_lease_seconds INTEGER DEFAULT 60
 ) RETURNS TABLE(partition_id UUID, id UUID, transaction_id TEXT, payload JSONB, created_at TIMESTAMPTZ, lease_id TEXT)
 ```
 
-#### `queen.pop_auto_ack(queue, [consumer_group], [batch_size])` → `TABLE`
-Pop with automatic acknowledgment (fire-and-forget).
+#### `queen.consume_auto_commit(queue, [consumer_group], [batch_size])` → `TABLE`
+Consume with automatic commit (fire-and-forget).
 ```sql
-queen.pop_auto_ack(
+queen.consume_auto_commit(
     p_queue TEXT,
     p_consumer_group TEXT DEFAULT '__QUEUE_MODE__',
     p_batch_size INTEGER DEFAULT 1
 ) RETURNS TABLE(partition_id UUID, id UUID, transaction_id TEXT, payload JSONB, created_at TIMESTAMPTZ, lease_id TEXT)
 ```
 
-#### `queen.pop_wait(queue, [consumer_group], [batch_size], [lease_seconds], [timeout_seconds])` → `TABLE`
+---
+
+### Poll Functions (Long Polling)
+
+#### `queen.poll(queue, [consumer_group], [batch_size], [lease_seconds], [timeout_seconds])` → `TABLE`
 Long polling - blocks until messages arrive or timeout.
 ```sql
-queen.pop_wait(
+queen.poll(
     p_queue TEXT,
     p_consumer_group TEXT DEFAULT '__QUEUE_MODE__',
     p_batch_size INTEGER DEFAULT 1,
@@ -230,10 +245,10 @@ queen.pop_wait(
 ) RETURNS TABLE(partition_id UUID, id UUID, transaction_id TEXT, payload JSONB, created_at TIMESTAMPTZ, lease_id TEXT)
 ```
 
-#### `queen.pop_wait_one(queue, [consumer_group], [lease_seconds], [timeout_seconds])` → `TABLE`
+#### `queen.poll_one(queue, [consumer_group], [lease_seconds], [timeout_seconds])` → `TABLE`
 Long poll for a single message.
 ```sql
-queen.pop_wait_one(
+queen.poll_one(
     p_queue TEXT,
     p_consumer_group TEXT DEFAULT '__QUEUE_MODE__',
     p_lease_seconds INTEGER DEFAULT 60,
@@ -241,24 +256,37 @@ queen.pop_wait_one(
 ) RETURNS TABLE(partition_id UUID, id UUID, transaction_id TEXT, payload JSONB, created_at TIMESTAMPTZ, lease_id TEXT)
 ```
 
+#### `queen.poll(queue, partition, consumer_group, batch_size, lease_seconds, [timeout_seconds])` → `TABLE`
+Long poll from a specific partition.
+```sql
+queen.poll(
+    p_queue TEXT,
+    p_partition TEXT,
+    p_consumer_group TEXT,
+    p_batch_size INTEGER,
+    p_lease_seconds INTEGER,
+    p_timeout_seconds INTEGER DEFAULT 30
+) RETURNS TABLE(partition_id UUID, id UUID, transaction_id TEXT, payload JSONB, created_at TIMESTAMPTZ, lease_id TEXT)
+```
+
 ---
 
-### Ack Functions
+### Commit Functions
 
-#### `queen.ack(transaction_id, partition_id, lease_id)` → `BOOLEAN`
-Acknowledge successful processing (queue mode).
+#### `queen.commit(transaction_id, partition_id, lease_id)` → `BOOLEAN`
+Commit successful processing (queue mode).
 ```sql
-queen.ack(
+queen.commit(
     p_transaction_id TEXT,
     p_partition_id UUID,
     p_lease_id TEXT
 ) RETURNS BOOLEAN
 ```
 
-#### `queen.ack_group(transaction_id, partition_id, lease_id, consumer_group)` → `BOOLEAN`
-Acknowledge successful processing (pub/sub mode with explicit consumer group).
+#### `queen.commit(transaction_id, partition_id, lease_id, consumer_group)` → `BOOLEAN`
+Commit successful processing (pub/sub mode with explicit consumer group).
 ```sql
-queen.ack_group(
+queen.commit(
     p_transaction_id TEXT,
     p_partition_id UUID,
     p_lease_id TEXT,
@@ -266,15 +294,15 @@ queen.ack_group(
 ) RETURNS BOOLEAN
 ```
 
-#### `queen.ack_status(transaction_id, partition_id, lease_id, status, [consumer_group], [error_message])` → `BOOLEAN`
-Acknowledge with explicit status ('completed', 'failed', 'retry', 'dlq').
+#### `queen.commit(transaction_id, partition_id, lease_id, status, consumer_group, [error_message])` → `BOOLEAN`
+Commit with explicit status ('completed', 'failed', 'retry', 'dlq').
 ```sql
-queen.ack_status(
+queen.commit(
     p_transaction_id TEXT,
     p_partition_id UUID,
     p_lease_id TEXT,
     p_status TEXT,
-    p_consumer_group TEXT DEFAULT '__QUEUE_MODE__',
+    p_consumer_group TEXT,
     p_error_message TEXT DEFAULT NULL
 ) RETURNS BOOLEAN
 ```
@@ -337,6 +365,15 @@ queen.depth(
 ) RETURNS BIGINT
 ```
 
+#### `queen.lag(queue, [consumer_group])` → `BIGINT`
+Alias for `depth()` (Kafka terminology).
+```sql
+queen.lag(
+    p_queue TEXT,
+    p_consumer_group TEXT DEFAULT '__QUEUE_MODE__'
+) RETURNS BIGINT
+```
+
 #### `queen.renew(lease_id, [extend_seconds])` → `TIMESTAMPTZ`
 Extend an active lease. Returns new expiration time or NULL if lease not found.
 ```sql
@@ -347,7 +384,7 @@ queen.renew(
 ```
 
 #### `queen.forward(...)` → `UUID`
-Atomically ack source message and push to destination queue.
+Atomically commit source message and produce to destination queue.
 ```sql
 queen.forward(
     p_source_transaction_id TEXT,
@@ -407,11 +444,16 @@ pg_qpubsub/
 └── test/
     └── sql/               # Test files
         ├── 01_setup.sql
-        ├── 02_push.sql
-        ├── 03_pop.sql
-        ├── 04_ack.sql
-        ├── 05_notify.sql
-        └── 06_long_poll.sql
+        ├── 02_push.sql    # Produce tests
+        ├── 03_pop.sql     # Consume tests
+        ├── 04_ack.sql     # Commit tests
+        ├── 05_transaction.sql
+        ├── 06_consumer_groups.sql
+        ├── 07_lease.sql
+        ├── 08_uuid_v7.sql
+        ├── 09_utilities.sql
+        ├── 10_dlq.sql
+        └── 11_long_poll.sql
 ```
 
 ## Dependencies

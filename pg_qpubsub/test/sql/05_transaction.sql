@@ -5,7 +5,7 @@
 \echo '=== TEST 05: Transaction Operations ==='
 \echo '============================================================================'
 
--- Test 1: Basic transaction - push and ack atomically
+-- Test 1: Basic transaction - produce and ack atomically
 DO $$
 DECLARE
     msg RECORD;
@@ -14,23 +14,21 @@ DECLARE
     result_count_b INT;
 BEGIN
     -- Setup queue A
-    PERFORM queen.push('test-txn-a', '{"value": 1}'::jsonb, 'txn-source');
+    PERFORM queen.produce('test-txn-a', '{"value": 1}'::jsonb, 'txn-source');
     
-    -- Pop from A
-    SELECT * INTO msg FROM queen.pop_one('test-txn-a');
+    -- Consume from A
+    SELECT * INTO msg FROM queen.consume_one('test-txn-a');
     
     IF msg.transaction_id IS NULL THEN
         RAISE EXCEPTION 'FAIL: No message to consume';
     END IF;
     
-    -- Transaction: Push to B and ack from A
+    -- Transaction: Produce to B and ack from A
     txn_result := queen.transaction(jsonb_build_array(
         jsonb_build_object(
             'type', 'push',
             'queue', 'test-txn-b',
-            'messages', jsonb_build_array(
-                jsonb_build_object('data', jsonb_build_object('value', (msg.payload->>'value')::int + 1))
-            )
+            'payload', jsonb_build_object('value', (msg.payload->>'value')::int + 1)
         ),
         jsonb_build_object(
             'type', 'ack',
@@ -41,18 +39,18 @@ BEGIN
     ));
     
     -- Verify: A should be empty, B should have message
-    SELECT COUNT(*) INTO result_count_a FROM queen.pop_one('test-txn-a');
-    SELECT COUNT(*) INTO result_count_b FROM queen.pop_one('test-txn-b');
+    SELECT COUNT(*) INTO result_count_a FROM queen.consume_one('test-txn-a');
+    SELECT COUNT(*) INTO result_count_b FROM queen.consume_one('test-txn-b');
     
     IF result_count_a = 0 AND result_count_b = 1 THEN
-        RAISE NOTICE 'PASS: Transaction push+ack works atomically';
+        RAISE NOTICE 'PASS: Transaction produce+ack works atomically';
     ELSE
         RAISE NOTICE 'PASS: Transaction completed (A=%, B=%)', result_count_a, result_count_b;
     END IF;
 END;
 $$;
 
--- Test 2: Transaction with multiple pushes to different queues
+-- Test 2: Transaction with multiple produces to different queues
 DO $$
 DECLARE
     msg RECORD;
@@ -61,20 +59,20 @@ DECLARE
     count_c INT;
 BEGIN
     -- Setup
-    PERFORM queen.push('test-txn-multi-a', '{"source": true}'::jsonb);
-    SELECT * INTO msg FROM queen.pop_one('test-txn-multi-a');
+    PERFORM queen.produce('test-txn-multi-a', '{"source": true}'::jsonb);
+    SELECT * INTO msg FROM queen.consume_one('test-txn-multi-a');
     
-    -- Transaction: Push to B and C, ack from A
+    -- Transaction: Produce to B and C, ack from A
     txn_result := queen.transaction(jsonb_build_array(
         jsonb_build_object(
             'type', 'push',
             'queue', 'test-txn-multi-b',
-            'messages', jsonb_build_array(jsonb_build_object('data', '{"target": "b"}'::jsonb))
+            'payload', '{"target": "b"}'::jsonb
         ),
         jsonb_build_object(
             'type', 'push',
             'queue', 'test-txn-multi-c',
-            'messages', jsonb_build_array(jsonb_build_object('data', '{"target": "c"}'::jsonb))
+            'payload', '{"target": "c"}'::jsonb
         ),
         jsonb_build_object(
             'type', 'ack',
@@ -85,13 +83,13 @@ BEGIN
     ));
     
     -- Verify both B and C have messages
-    SELECT COUNT(*) INTO count_b FROM queen.pop_one('test-txn-multi-b');
-    SELECT COUNT(*) INTO count_c FROM queen.pop_one('test-txn-multi-c');
+    SELECT COUNT(*) INTO count_b FROM queen.consume_one('test-txn-multi-b');
+    SELECT COUNT(*) INTO count_c FROM queen.consume_one('test-txn-multi-c');
     
     IF count_b = 1 AND count_c = 1 THEN
-        RAISE NOTICE 'PASS: Transaction with multiple pushes to different queues works';
+        RAISE NOTICE 'PASS: Transaction with multiple produces to different queues works';
     ELSE
-        RAISE EXCEPTION 'FAIL: Multiple pushes failed (B=%, C=%)', count_b, count_c;
+        RAISE EXCEPTION 'FAIL: Multiple produces failed (B=%, C=%)', count_b, count_c;
     END IF;
 END;
 $$;
@@ -105,19 +103,19 @@ DECLARE
     txn_result JSONB;
     remaining INT;
 BEGIN
-    -- Setup: Push 3 messages using transaction API
+    -- Setup: Produce 3 messages using transaction API
     PERFORM queen.transaction(jsonb_build_array(
         jsonb_build_object('type', 'push', 'queue', 'test-txn-multi-ack', 'payload', '{"value": 1}'::jsonb),
         jsonb_build_object('type', 'push', 'queue', 'test-txn-multi-ack', 'payload', '{"value": 2}'::jsonb),
         jsonb_build_object('type', 'push', 'queue', 'test-txn-multi-ack', 'payload', '{"value": 3}'::jsonb)
     ));
     
-    -- Pop all 3
-    SELECT * INTO msg1 FROM queen.pop_one('test-txn-multi-ack');
-    SELECT * INTO msg2 FROM queen.pop_one('test-txn-multi-ack');
-    SELECT * INTO msg3 FROM queen.pop_one('test-txn-multi-ack');
+    -- Consume all 3
+    SELECT * INTO msg1 FROM queen.consume_one('test-txn-multi-ack');
+    SELECT * INTO msg2 FROM queen.consume_one('test-txn-multi-ack');
+    SELECT * INTO msg3 FROM queen.consume_one('test-txn-multi-ack');
     
-    -- Transaction: Ack all 3, push sum to another queue
+    -- Transaction: Ack all 3, produce sum to another queue
     txn_result := queen.transaction(jsonb_build_array(
         jsonb_build_object('type', 'ack', 'transactionId', msg1.transaction_id, 'partitionId', msg1.partition_id::text, 'leaseId', msg1.lease_id),
         jsonb_build_object('type', 'ack', 'transactionId', msg2.transaction_id, 'partitionId', msg2.partition_id::text, 'leaseId', msg2.lease_id),
@@ -125,12 +123,12 @@ BEGIN
         jsonb_build_object(
             'type', 'push',
             'queue', 'test-txn-multi-ack-result',
-            'messages', jsonb_build_array(jsonb_build_object('data', '{"sum": 6}'::jsonb))
+            'payload', '{"sum": 6}'::jsonb
         )
     ));
     
     -- Verify source is empty
-    SELECT COUNT(*) INTO remaining FROM queen.pop_batch('test-txn-multi-ack', 10, 60);
+    SELECT COUNT(*) INTO remaining FROM queen.consume_batch('test-txn-multi-ack', 10, 60);
     
     IF remaining = 0 THEN
         RAISE NOTICE 'PASS: Transaction with multiple acks works';
@@ -140,7 +138,7 @@ BEGIN
 END;
 $$;
 
--- Test 4: Transaction with batch push (multiple push operations)
+-- Test 4: Transaction with batch produce (multiple produce operations)
 DO $$
 DECLARE
     msg RECORD;
@@ -148,11 +146,11 @@ DECLARE
     batch_count INT;
 BEGIN
     -- Setup
-    PERFORM queen.push('test-txn-batch-src', '{"batch": "source"}'::jsonb);
-    SELECT * INTO msg FROM queen.pop_one('test-txn-batch-src');
+    PERFORM queen.produce('test-txn-batch-src', '{"batch": "source"}'::jsonb);
+    SELECT * INTO msg FROM queen.consume_one('test-txn-batch-src');
     
-    -- Transaction: Push 5 individual messages to destination
-    -- Note: Each push is a separate operation in the transaction
+    -- Transaction: Produce 5 individual messages to destination
+    -- Note: Each produce is a separate operation in the transaction
     txn_result := queen.transaction(jsonb_build_array(
         jsonb_build_object('type', 'push', 'queue', 'test-txn-batch-dst', 'payload', '{"idx": 1}'::jsonb),
         jsonb_build_object('type', 'push', 'queue', 'test-txn-batch-dst', 'payload', '{"idx": 2}'::jsonb),
@@ -163,12 +161,12 @@ BEGIN
     ));
     
     -- Verify 5 messages in destination
-    SELECT COUNT(*) INTO batch_count FROM queen.pop_batch('test-txn-batch-dst', 10, 60);
+    SELECT COUNT(*) INTO batch_count FROM queen.consume_batch('test-txn-batch-dst', 10, 60);
     
     IF batch_count = 5 THEN
-        RAISE NOTICE 'PASS: Transaction batch push created 5 messages';
+        RAISE NOTICE 'PASS: Transaction batch produce created 5 messages';
     ELSE
-        RAISE EXCEPTION 'FAIL: Batch push created % messages (expected 5)', batch_count;
+        RAISE EXCEPTION 'FAIL: Batch produce created % messages (expected 5)', batch_count;
     END IF;
 END;
 $$;
@@ -182,15 +180,15 @@ DECLARE
     remaining_p1 INT;
     remaining_p2 INT;
 BEGIN
-    -- Setup: Push to different partitions using transaction API
+    -- Setup: Produce to different partitions using transaction API
     PERFORM queen.transaction(jsonb_build_array(
         jsonb_build_object('type', 'push', 'queue', 'test-txn-partitions', 'partition', 'p1', 'payload', '{"partition": "p1"}'::jsonb),
         jsonb_build_object('type', 'push', 'queue', 'test-txn-partitions', 'partition', 'p2', 'payload', '{"partition": "p2"}'::jsonb)
     ));
     
-    -- Pop from both partitions
-    SELECT * INTO msg1 FROM queen.pop('test-txn-partitions', 'p1', '__QUEUE_MODE__', 1, 60);
-    SELECT * INTO msg2 FROM queen.pop('test-txn-partitions', 'p2', '__QUEUE_MODE__', 1, 60);
+    -- Consume from both partitions
+    SELECT * INTO msg1 FROM queen.consume('test-txn-partitions', 'p1', '__QUEUE_MODE__', 1, 60);
+    SELECT * INTO msg2 FROM queen.consume('test-txn-partitions', 'p2', '__QUEUE_MODE__', 1, 60);
     
     -- Transaction: Ack both
     txn_result := queen.transaction(jsonb_build_array(
@@ -199,8 +197,8 @@ BEGIN
     ));
     
     -- Verify both partitions empty
-    SELECT COUNT(*) INTO remaining_p1 FROM queen.pop('test-txn-partitions', 'p1', '__QUEUE_MODE__', 1, 60);
-    SELECT COUNT(*) INTO remaining_p2 FROM queen.pop('test-txn-partitions', 'p2', '__QUEUE_MODE__', 1, 60);
+    SELECT COUNT(*) INTO remaining_p1 FROM queen.consume('test-txn-partitions', 'p1', '__QUEUE_MODE__', 1, 60);
+    SELECT COUNT(*) INTO remaining_p2 FROM queen.consume('test-txn-partitions', 'p2', '__QUEUE_MODE__', 1, 60);
     
     IF remaining_p1 = 0 AND remaining_p2 = 0 THEN
         RAISE NOTICE 'PASS: Transaction with multiple partitions works';
@@ -219,10 +217,10 @@ DECLARE
     txn_result JSONB;
 BEGIN
     -- Initial message with value 10
-    PERFORM queen.push('test-txn-chain-1', '{"step": 1, "value": 10}'::jsonb);
+    PERFORM queen.produce('test-txn-chain-1', '{"step": 1, "value": 10}'::jsonb);
     
     -- Stage 1: Process from queue1 to queue2 (value * 2 = 20)
-    SELECT * INTO msg1 FROM queen.pop_one('test-txn-chain-1');
+    SELECT * INTO msg1 FROM queen.consume_one('test-txn-chain-1');
     txn_result := queen.transaction(jsonb_build_array(
         jsonb_build_object(
             'type', 'push',
@@ -233,7 +231,7 @@ BEGIN
     ));
     
     -- Stage 2: Process from queue2 to queue3 (value + 5 = 25)
-    SELECT * INTO msg2 FROM queen.pop_one('test-txn-chain-2');
+    SELECT * INTO msg2 FROM queen.consume_one('test-txn-chain-2');
     txn_result := queen.transaction(jsonb_build_array(
         jsonb_build_object(
             'type', 'push',
@@ -244,7 +242,7 @@ BEGIN
     ));
     
     -- Verify final result
-    SELECT * INTO final FROM queen.pop_one('test-txn-chain-3');
+    SELECT * INTO final FROM queen.consume_one('test-txn-chain-3');
     
     IF final.payload->>'value' = '25' THEN
         RAISE NOTICE 'PASS: Chained transaction pipeline works (final value = 25)';
@@ -261,8 +259,8 @@ DECLARE
     forwarded RECORD;
 BEGIN
     -- Setup
-    PERFORM queen.push('test-forward-src', '{"forward": true}'::jsonb);
-    SELECT * INTO msg FROM queen.pop_one('test-forward-src');
+    PERFORM queen.produce('test-forward-src', '{"forward": true}'::jsonb);
+    SELECT * INTO msg FROM queen.consume_one('test-forward-src');
     
     -- Forward to destination
     PERFORM queen.forward(
@@ -274,7 +272,7 @@ BEGIN
     );
     
     -- Verify message is in destination
-    SELECT * INTO forwarded FROM queen.pop_one('test-forward-dst');
+    SELECT * INTO forwarded FROM queen.consume_one('test-forward-dst');
     
     IF forwarded.payload->>'forwarded' = 'true' THEN
         RAISE NOTICE 'PASS: Forward operation works';
@@ -285,4 +283,3 @@ END;
 $$;
 
 \echo 'PASS: Transaction tests completed'
-

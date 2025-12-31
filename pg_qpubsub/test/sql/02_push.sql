@@ -1,74 +1,74 @@
 -- ============================================================================
--- TEST 02: Push Operations
+-- TEST 02: Produce Operations (formerly Push)
 -- ============================================================================
 \echo '============================================================================'
-\echo '=== TEST 02: Push Operations ==='
+\echo '=== TEST 02: Produce Operations ==='
 \echo '============================================================================'
 
--- Test 1: Basic push
+-- Test 1: Basic produce
 DO $$
 DECLARE
     msg_id UUID;
 BEGIN
-    msg_id := queen.push('test-push-basic', '{"message": "Hello, world!"}'::jsonb);
+    msg_id := queen.produce('test-produce-basic', '{"message": "Hello, world!"}'::jsonb);
     
     IF msg_id IS NOT NULL THEN
-        RAISE NOTICE 'PASS: Basic push returns message ID: %', msg_id;
+        RAISE NOTICE 'PASS: Basic produce returns message ID: %', msg_id;
     ELSE
-        RAISE EXCEPTION 'FAIL: Basic push returned NULL';
+        RAISE EXCEPTION 'FAIL: Basic produce returned NULL';
     END IF;
 END;
 $$;
 
--- Test 2: Push with transaction ID
+-- Test 2: Produce with transaction ID
 DO $$
 DECLARE
     msg_id UUID;
 BEGIN
-    msg_id := queen.push('test-push-txnid', '{"message": "With txn ID"}'::jsonb, 'my-custom-txn-id');
+    msg_id := queen.produce('test-produce-txnid', '{"message": "With txn ID"}'::jsonb, 'my-custom-txn-id');
     
     IF msg_id IS NOT NULL THEN
         -- Verify the message was stored with correct txn_id
         IF EXISTS (SELECT 1 FROM queen.messages WHERE transaction_id = 'my-custom-txn-id') THEN
-            RAISE NOTICE 'PASS: Push with transaction ID works';
+            RAISE NOTICE 'PASS: Produce with transaction ID works';
         ELSE
             RAISE EXCEPTION 'FAIL: Message not found with transaction_id';
         END IF;
     ELSE
-        RAISE EXCEPTION 'FAIL: Push with txn_id returned NULL';
+        RAISE EXCEPTION 'FAIL: Produce with txn_id returned NULL';
     END IF;
 END;
 $$;
 
--- Test 3: Push duplicate message (uses temp table to pass data between statements)
-CREATE TEMP TABLE test_push_dup (step INT, msg_id UUID);
-INSERT INTO test_push_dup VALUES (1, queen.push('test-push-duplicate', '{"message": "First"}'::jsonb, 'duplicate-test-txn'));
-INSERT INTO test_push_dup VALUES (2, queen.push('test-push-duplicate', '{"message": "Second"}'::jsonb, 'duplicate-test-txn'));
+-- Test 3: Produce duplicate message (uses temp table to pass data between statements)
+CREATE TEMP TABLE test_produce_dup (step INT, msg_id UUID);
+INSERT INTO test_produce_dup VALUES (1, queen.produce('test-produce-duplicate', '{"message": "First"}'::jsonb, 'duplicate-test-txn'));
+INSERT INTO test_produce_dup VALUES (2, queen.produce('test-produce-duplicate', '{"message": "Second"}'::jsonb, 'duplicate-test-txn'));
 
 DO $$
 DECLARE
     msg_id1 UUID;
     msg_id2 UUID;
 BEGIN
-    SELECT msg_id INTO msg_id1 FROM test_push_dup WHERE step = 1;
-    SELECT msg_id INTO msg_id2 FROM test_push_dup WHERE step = 2;
+    SELECT msg_id INTO msg_id1 FROM test_produce_dup WHERE step = 1;
+    SELECT msg_id INTO msg_id2 FROM test_produce_dup WHERE step = 2;
     
     IF msg_id1 = msg_id2 THEN
         RAISE NOTICE 'PASS: Duplicate detection works (same ID returned)';
     ELSE
-        RAISE NOTICE 'PASS: Duplicate pushed (IDs differ: % vs %)', msg_id1, msg_id2;
+        RAISE NOTICE 'PASS: Duplicate produced (IDs differ: % vs %)', msg_id1, msg_id2;
     END IF;
 END;
 $$;
-DROP TABLE test_push_dup;
+DROP TABLE test_produce_dup;
 
--- Test 4: Push to specific partition
+-- Test 4: Produce to specific partition
 DO $$
 DECLARE
     msg_id UUID;
     partition_name TEXT;
 BEGIN
-    msg_id := queen.push('test-push-partition', 'custom-partition', '{"message": "Partitioned"}'::jsonb);
+    msg_id := queen.produce('test-produce-partition', 'custom-partition', '{"message": "Partitioned"}'::jsonb);
     
     -- Verify message is in the correct partition
     SELECT p.name INTO partition_name
@@ -77,7 +77,7 @@ BEGIN
     WHERE m.id = msg_id;
     
     IF partition_name = 'custom-partition' THEN
-        RAISE NOTICE 'PASS: Push to specific partition works';
+        RAISE NOTICE 'PASS: Produce to specific partition works';
     ELSE
         RAISE EXCEPTION 'FAIL: Message in wrong partition: %', partition_name;
     END IF;
@@ -85,17 +85,17 @@ END;
 $$;
 
 -- Test 5: Same transaction ID on different partitions (uses temp table)
-CREATE TEMP TABLE test_push_parts (part TEXT, msg_id UUID);
-INSERT INTO test_push_parts VALUES ('a', queen.push('test-push-diff-part', 'partition-a', '{"part": "a"}'::jsonb, 'same-txn-diff-part'));
-INSERT INTO test_push_parts VALUES ('b', queen.push('test-push-diff-part', 'partition-b', '{"part": "b"}'::jsonb, 'same-txn-diff-part'));
+CREATE TEMP TABLE test_produce_parts (part TEXT, msg_id UUID);
+INSERT INTO test_produce_parts VALUES ('a', queen.produce('test-produce-diff-part', 'partition-a', '{"part": "a"}'::jsonb, 'same-txn-diff-part'));
+INSERT INTO test_produce_parts VALUES ('b', queen.produce('test-produce-diff-part', 'partition-b', '{"part": "b"}'::jsonb, 'same-txn-diff-part'));
 
 DO $$
 DECLARE
     msg_id1 UUID;
     msg_id2 UUID;
 BEGIN
-    SELECT msg_id INTO msg_id1 FROM test_push_parts WHERE part = 'a';
-    SELECT msg_id INTO msg_id2 FROM test_push_parts WHERE part = 'b';
+    SELECT msg_id INTO msg_id1 FROM test_produce_parts WHERE part = 'a';
+    SELECT msg_id INTO msg_id2 FROM test_produce_parts WHERE part = 'b';
     
     IF msg_id1 IS NOT NULL AND msg_id2 IS NOT NULL AND msg_id1 <> msg_id2 THEN
         RAISE NOTICE 'PASS: Same txn_id on different partitions creates different messages';
@@ -104,42 +104,42 @@ BEGIN
     END IF;
 END;
 $$;
-DROP TABLE test_push_parts;
+DROP TABLE test_produce_parts;
 
--- Test 6: Push batch of messages (using transaction API)
+-- Test 6: Produce batch of messages (using transaction API)
 DO $$
 DECLARE
     result_count INT;
     txn_result JSONB;
 BEGIN
-    -- Use transaction API for multiple pushes in same transaction
+    -- Use transaction API for multiple produces in same transaction
     txn_result := queen.transaction(jsonb_build_array(
-        jsonb_build_object('type', 'push', 'queue', 'test-push-batch', 'payload', '{"idx": 1}'::jsonb),
-        jsonb_build_object('type', 'push', 'queue', 'test-push-batch', 'payload', '{"idx": 2}'::jsonb),
-        jsonb_build_object('type', 'push', 'queue', 'test-push-batch', 'payload', '{"idx": 3}'::jsonb)
+        jsonb_build_object('type', 'push', 'queue', 'test-produce-batch', 'payload', '{"idx": 1}'::jsonb),
+        jsonb_build_object('type', 'push', 'queue', 'test-produce-batch', 'payload', '{"idx": 2}'::jsonb),
+        jsonb_build_object('type', 'push', 'queue', 'test-produce-batch', 'payload', '{"idx": 3}'::jsonb)
     ));
     
     SELECT COUNT(*) INTO result_count
     FROM queen.messages m
     JOIN queen.partitions p ON m.partition_id = p.id
     JOIN queen.queues q ON p.queue_id = q.id
-    WHERE q.name = 'test-push-batch';
+    WHERE q.name = 'test-produce-batch';
     
     IF result_count >= 3 THEN
-        RAISE NOTICE 'PASS: Batch push created % messages', result_count;
+        RAISE NOTICE 'PASS: Batch produce created % messages', result_count;
     ELSE
         RAISE EXCEPTION 'FAIL: Expected at least 3 messages, got %', result_count;
     END IF;
 END;
 $$;
 
--- Test 7: Push null payload
+-- Test 7: Produce null payload
 DO $$
 DECLARE
     msg_id UUID;
     stored_payload JSONB;
 BEGIN
-    msg_id := queen.push('test-push-null', 'null'::jsonb);
+    msg_id := queen.produce('test-produce-null', 'null'::jsonb);
     
     SELECT payload INTO stored_payload FROM queen.messages WHERE id = msg_id;
     
@@ -151,13 +151,13 @@ BEGIN
 END;
 $$;
 
--- Test 8: Push empty object payload
+-- Test 8: Produce empty object payload
 DO $$
 DECLARE
     msg_id UUID;
     stored_payload JSONB;
 BEGIN
-    msg_id := queen.push('test-push-empty', '{}'::jsonb);
+    msg_id := queen.produce('test-produce-empty', '{}'::jsonb);
     
     SELECT payload INTO stored_payload FROM queen.messages WHERE id = msg_id;
     
@@ -169,7 +169,7 @@ BEGIN
 END;
 $$;
 
--- Test 9: Push large payload
+-- Test 9: Produce large payload
 DO $$
 DECLARE
     msg_id UUID;
@@ -183,7 +183,7 @@ BEGIN
     ) INTO large_payload
     FROM generate_series(1, 1000) i;
     
-    msg_id := queen.push('test-push-large', large_payload);
+    msg_id := queen.produce('test-produce-large', large_payload);
     
     SELECT payload INTO stored_payload FROM queen.messages WHERE id = msg_id;
     SELECT jsonb_array_length(stored_payload->'items') INTO item_count;
@@ -196,13 +196,13 @@ BEGIN
 END;
 $$;
 
--- Test 10: Push with push_full (all options)
+-- Test 10: Produce with produce_full (all options)
 DO $$
 DECLARE
     result RECORD;
 BEGIN
-    SELECT * INTO result FROM queen.push_full(
-        p_queue := 'test-push-full',
+    SELECT * INTO result FROM queen.produce_full(
+        p_queue := 'test-produce-full',
         p_payload := '{"full": true}'::jsonb,
         p_partition := 'full-partition',
         p_transaction_id := 'full-txn-id',
@@ -211,11 +211,11 @@ BEGIN
     );
     
     IF result.message_id IS NOT NULL AND result.transaction_id = 'full-txn-id' THEN
-        RAISE NOTICE 'PASS: push_full works with all options';
+        RAISE NOTICE 'PASS: produce_full works with all options';
     ELSE
-        RAISE EXCEPTION 'FAIL: push_full did not return expected values';
+        RAISE EXCEPTION 'FAIL: produce_full did not return expected values';
     END IF;
 END;
 $$;
 
-\echo 'PASS: Push tests completed'
+\echo 'PASS: Produce tests completed'

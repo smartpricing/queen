@@ -1,7 +1,14 @@
 -- wrappers.sql
 -- Simplified wrapper functions for pg_qpubsub
--- These wrap the core Queen procedures with a more user-friendly API
+-- These wrap the core Queen procedures with a Kafka-style API
 -- Requires: pgcrypto extension (for gen_random_bytes)
+--
+-- Naming convention (Kafka-style):
+--   produce  - send messages to a queue (Kafka: producer.send)
+--   consume  - receive messages from a queue (Kafka: consumer.poll)
+--   commit   - acknowledge message processing (Kafka: consumer.commitSync)
+--   renew    - extend message lease
+--   transaction - atomic multi-operation
 
 -- ============================================================================
 -- UUID V7 GENERATION (time-sortable UUIDs per RFC 9562)
@@ -133,11 +140,11 @@ END;
 $$;
 
 -- ============================================================================
--- PUSH WRAPPERS
+-- PRODUCE WRAPPERS (formerly push)
 -- ============================================================================
 
--- Simple push: queue + payload
-CREATE OR REPLACE FUNCTION queen.push(
+-- Simple produce: queue + payload
+CREATE OR REPLACE FUNCTION queen.produce(
     p_queue TEXT,
     p_payload JSONB,
     p_transaction_id TEXT DEFAULT NULL
@@ -162,8 +169,8 @@ BEGIN
 END;
 $$;
 
--- Push with partition
-CREATE OR REPLACE FUNCTION queen.push(
+-- Produce with partition
+CREATE OR REPLACE FUNCTION queen.produce(
     p_queue TEXT,
     p_partition TEXT,
     p_payload JSONB,
@@ -189,8 +196,8 @@ BEGIN
 END;
 $$;
 
--- Full push with all options
-CREATE OR REPLACE FUNCTION queen.push_full(
+-- Full produce with all options
+CREATE OR REPLACE FUNCTION queen.produce_full(
     p_queue TEXT,
     p_payload JSONB,
     p_partition TEXT DEFAULT 'Default',
@@ -237,11 +244,11 @@ END;
 $$;
 
 -- ============================================================================
--- POP WRAPPERS
+-- CONSUME WRAPPERS (formerly pop)
 -- ============================================================================
 
--- Simple pop: queue + consumer_group (discovers any available partition)
-CREATE OR REPLACE FUNCTION queen.pop(
+-- Simple consume: queue + consumer_group (discovers any available partition)
+CREATE OR REPLACE FUNCTION queen.consume(
     p_queue TEXT,
     p_consumer_group TEXT DEFAULT '__QUEUE_MODE__',
     p_batch_size INTEGER DEFAULT 1,
@@ -276,12 +283,12 @@ BEGIN
     -- Result is array: [{"idx": 0, "result": {...}}]
     v_batch := v_result->0->'result';
     v_lease_id := v_batch->>'leaseId';
-    v_partition_id := (v_batch->>'partitionId')::uuid;  -- partitionId is at batch level
+    v_partition_id := (v_batch->>'partitionId')::uuid;
     
     IF v_batch->>'success' = 'true' THEN
         RETURN QUERY
         SELECT 
-            v_partition_id,  -- Use batch-level partitionId
+            v_partition_id,
             (m->>'id')::uuid,
             m->>'transactionId',
             m->'data',
@@ -292,8 +299,8 @@ BEGIN
 END;
 $$;
 
--- Pop from specific partition
-CREATE OR REPLACE FUNCTION queen.pop(
+-- Consume from specific partition
+CREATE OR REPLACE FUNCTION queen.consume(
     p_queue TEXT,
     p_partition TEXT,
     p_consumer_group TEXT,
@@ -344,9 +351,8 @@ BEGIN
 END;
 $$;
 
--- Pop batch from queue (convenience for queue mode with batch size)
--- This avoids the need to specify consumer_group when you just want batch + lease
-CREATE OR REPLACE FUNCTION queen.pop_batch(
+-- Consume batch from queue (convenience for queue mode with batch size)
+CREATE OR REPLACE FUNCTION queen.consume_batch(
     p_queue TEXT,
     p_batch_size INTEGER,
     p_lease_seconds INTEGER DEFAULT 60
@@ -361,11 +367,11 @@ RETURNS TABLE(
 )
 LANGUAGE sql
 AS $$
-    SELECT * FROM queen.pop(p_queue, '__QUEUE_MODE__', p_batch_size, p_lease_seconds);
+    SELECT * FROM queen.consume(p_queue, '__QUEUE_MODE__', p_batch_size, p_lease_seconds);
 $$;
 
--- Pop one message
-CREATE OR REPLACE FUNCTION queen.pop_one(
+-- Consume one message
+CREATE OR REPLACE FUNCTION queen.consume_one(
     p_queue TEXT,
     p_consumer_group TEXT DEFAULT '__QUEUE_MODE__',
     p_lease_seconds INTEGER DEFAULT 60
@@ -380,11 +386,11 @@ RETURNS TABLE(
 )
 LANGUAGE sql
 AS $$
-    SELECT * FROM queen.pop(p_queue, p_consumer_group, 1, p_lease_seconds);
+    SELECT * FROM queen.consume(p_queue, p_consumer_group, 1, p_lease_seconds);
 $$;
 
--- Pop with auto-ack (fire-and-forget)
-CREATE OR REPLACE FUNCTION queen.pop_auto_ack(
+-- Consume with auto-commit (fire-and-forget)
+CREATE OR REPLACE FUNCTION queen.consume_auto_commit(
     p_queue TEXT,
     p_consumer_group TEXT DEFAULT '__QUEUE_MODE__',
     p_batch_size INTEGER DEFAULT 1
@@ -432,11 +438,11 @@ END;
 $$;
 
 -- ============================================================================
--- ACK WRAPPERS
+-- COMMIT WRAPPERS (formerly ack)
 -- ============================================================================
 
--- Acknowledge success (simple 3-arg version for queue mode)
-CREATE OR REPLACE FUNCTION queen.ack(
+-- Commit success (simple 3-arg version for queue mode)
+CREATE OR REPLACE FUNCTION queen.commit(
     p_transaction_id TEXT,
     p_partition_id UUID,
     p_lease_id TEXT
@@ -462,9 +468,8 @@ BEGIN
 END;
 $$;
 
--- Acknowledge with explicit consumer group (4-arg version for pubsub mode)
--- Note: p_consumer_group is explicitly typed to avoid ambiguity
-CREATE OR REPLACE FUNCTION queen.ack_group(
+-- Commit with explicit consumer group (4-arg version for pubsub mode)
+CREATE OR REPLACE FUNCTION queen.commit(
     p_transaction_id TEXT,
     p_partition_id UUID,
     p_lease_id TEXT,
@@ -491,13 +496,13 @@ BEGIN
 END;
 $$;
 
--- Acknowledge with explicit status (full control)
-CREATE OR REPLACE FUNCTION queen.ack_status(
+-- Commit with explicit status (full control)
+CREATE OR REPLACE FUNCTION queen.commit(
     p_transaction_id TEXT,
     p_partition_id UUID,
     p_lease_id TEXT,
     p_status TEXT,
-    p_consumer_group TEXT DEFAULT '__QUEUE_MODE__',
+    p_consumer_group TEXT,
     p_error_message TEXT DEFAULT NULL
 )
 RETURNS BOOLEAN
@@ -533,7 +538,7 @@ CREATE OR REPLACE FUNCTION queen.nack(
 RETURNS BOOLEAN
 LANGUAGE sql
 AS $$
-    SELECT queen.ack_status(
+    SELECT queen.commit(
         p_transaction_id,
         p_partition_id,
         p_lease_id,
@@ -554,7 +559,7 @@ CREATE OR REPLACE FUNCTION queen.reject(
 RETURNS BOOLEAN
 LANGUAGE sql
 AS $$
-    SELECT queen.ack_status(
+    SELECT queen.commit(
         p_transaction_id,
         p_partition_id,
         p_lease_id,
@@ -600,7 +605,7 @@ $$;
 -- TRANSACTION WRAPPERS
 -- ============================================================================
 
--- Forward: Ack source + Push to destination atomically
+-- Forward: Commit source + Produce to destination atomically
 CREATE OR REPLACE FUNCTION queen.forward(
     p_source_transaction_id TEXT,
     p_source_partition_id UUID,
@@ -622,7 +627,7 @@ BEGIN
     
     -- execute_transaction_v2 expects an array of operations with 'type' field
     v_result := queen.execute_transaction_v2(jsonb_build_array(
-        -- Ack operation
+        -- Ack operation (commit the source)
         jsonb_build_object(
             'type', 'ack',
             'transactionId', p_source_transaction_id,
@@ -631,7 +636,7 @@ BEGIN
             'consumerGroup', p_source_consumer_group,
             'status', 'completed'
         ),
-        -- Push operation
+        -- Push operation (produce to destination)
         jsonb_build_object(
             'type', 'push',
             'queue', p_dest_queue,
@@ -699,7 +704,7 @@ AS $$
     SELECT queen.has_pending_messages(p_queue, p_partition, p_consumer_group);
 $$;
 
--- Get queue depth (approximate)
+-- Get queue depth (approximate) - also known as "lag" in Kafka
 CREATE OR REPLACE FUNCTION queen.depth(
     p_queue TEXT,
     p_consumer_group TEXT DEFAULT '__QUEUE_MODE__'
@@ -724,6 +729,17 @@ BEGIN
     
     RETURN COALESCE(v_count, 0);
 END;
+$$;
+
+-- Alias: lag (Kafka terminology for unconsumed messages)
+CREATE OR REPLACE FUNCTION queen.lag(
+    p_queue TEXT,
+    p_consumer_group TEXT DEFAULT '__QUEUE_MODE__'
+)
+RETURNS BIGINT
+LANGUAGE sql
+AS $$
+    SELECT queen.depth(p_queue, p_consumer_group);
 $$;
 
 -- Configure queue
@@ -789,8 +805,8 @@ BEGIN
 END;
 $$;
 
--- Enhanced push that sends notification
-CREATE OR REPLACE FUNCTION queen.push_notify(
+-- Enhanced produce that sends notification
+CREATE OR REPLACE FUNCTION queen.produce_notify(
     p_queue TEXT,
     p_payload JSONB,
     p_transaction_id TEXT DEFAULT NULL,
@@ -802,14 +818,14 @@ AS $$
 DECLARE
     v_id UUID;
 BEGIN
-    v_id := queen.push(p_queue, p_partition, p_payload, p_transaction_id);
+    v_id := queen.produce(p_queue, p_partition, p_payload, p_transaction_id);
     PERFORM queen.notify(p_queue);
     RETURN v_id;
 END;
 $$;
 
--- Batch push with single notification
-CREATE OR REPLACE FUNCTION queen.push_notify(
+-- Batch produce with single notification
+CREATE OR REPLACE FUNCTION queen.produce_notify(
     p_queue TEXT,
     p_partition TEXT,
     p_payloads JSONB[]
@@ -855,11 +871,11 @@ END;
 $$;
 
 -- ============================================================================
--- LONG POLLING SUPPORT
+-- LONG POLLING SUPPORT (poll = consume with wait)
 -- ============================================================================
 
--- Pop with wait (long polling)
-CREATE OR REPLACE FUNCTION queen.pop_wait(
+-- Poll with wait (long polling) - Kafka-style poll
+CREATE OR REPLACE FUNCTION queen.poll(
     p_queue TEXT,
     p_consumer_group TEXT DEFAULT '__QUEUE_MODE__',
     p_batch_size INTEGER DEFAULT 1,
@@ -885,9 +901,9 @@ BEGIN
     v_channel := queen.channel_name(p_queue);
     v_start_time := clock_timestamp();
     
-    -- First, try immediate pop
+    -- First, try immediate consume
     FOR partition_id, id, transaction_id, payload, created_at, lease_id IN
-        SELECT * FROM queen.pop(p_queue, p_consumer_group, p_batch_size, p_lease_seconds)
+        SELECT * FROM queen.consume(p_queue, p_consumer_group, p_batch_size, p_lease_seconds)
     LOOP
         v_found := TRUE;
         RETURN NEXT;
@@ -916,9 +932,9 @@ BEGIN
             
             -- Check if messages available
             IF queen.has_messages(p_queue, NULL, p_consumer_group) THEN
-                -- Try to pop
+                -- Try to consume
                 FOR partition_id, id, transaction_id, payload, created_at, lease_id IN
-                    SELECT * FROM queen.pop(p_queue, p_consumer_group, p_batch_size, p_lease_seconds)
+                    SELECT * FROM queen.consume(p_queue, p_consumer_group, p_batch_size, p_lease_seconds)
                 LOOP
                     v_found := TRUE;
                     RETURN NEXT;
@@ -940,8 +956,8 @@ BEGIN
 END;
 $$;
 
--- Convenience: pop one message with wait
-CREATE OR REPLACE FUNCTION queen.pop_wait_one(
+-- Convenience: poll one message
+CREATE OR REPLACE FUNCTION queen.poll_one(
     p_queue TEXT,
     p_consumer_group TEXT DEFAULT '__QUEUE_MODE__',
     p_lease_seconds INTEGER DEFAULT 60,
@@ -957,11 +973,11 @@ RETURNS TABLE(
 )
 LANGUAGE sql
 AS $$
-    SELECT * FROM queen.pop_wait(p_queue, p_consumer_group, 1, p_lease_seconds, p_timeout_seconds);
+    SELECT * FROM queen.poll(p_queue, p_consumer_group, 1, p_lease_seconds, p_timeout_seconds);
 $$;
 
--- Pop from specific partition with wait
-CREATE OR REPLACE FUNCTION queen.pop_wait(
+-- Poll from specific partition
+CREATE OR REPLACE FUNCTION queen.poll(
     p_queue TEXT,
     p_partition TEXT,
     p_consumer_group TEXT,
@@ -988,9 +1004,9 @@ BEGIN
     v_channel := queen.channel_name(p_queue);
     v_start_time := clock_timestamp();
     
-    -- First, try immediate pop
+    -- First, try immediate consume
     FOR partition_id, id, transaction_id, payload, created_at, lease_id IN
-        SELECT * FROM queen.pop(p_queue, p_partition, p_consumer_group, p_batch_size, p_lease_seconds)
+        SELECT * FROM queen.consume(p_queue, p_partition, p_consumer_group, p_batch_size, p_lease_seconds)
     LOOP
         v_found := TRUE;
         RETURN NEXT;
@@ -1015,7 +1031,7 @@ BEGIN
             
             IF queen.has_messages(p_queue, p_partition, p_consumer_group) THEN
                 FOR partition_id, id, transaction_id, payload, created_at, lease_id IN
-                    SELECT * FROM queen.pop(p_queue, p_partition, p_consumer_group, p_batch_size, p_lease_seconds)
+                    SELECT * FROM queen.consume(p_queue, p_partition, p_consumer_group, p_batch_size, p_lease_seconds)
                 LOOP
                     v_found := TRUE;
                     RETURN NEXT;
@@ -1035,4 +1051,3 @@ BEGIN
     RETURN;
 END;
 $$;
-

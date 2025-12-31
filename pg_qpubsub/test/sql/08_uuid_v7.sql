@@ -203,8 +203,8 @@ DECLARE
     msg_id UUID;
     version_char CHAR;
 BEGIN
-    -- Push creates a message with UUID v7 ID
-    msg_id := queen.push('test-uuid-message', '{"uuid": "test"}'::jsonb);
+    -- Produce creates a message with UUID v7 ID
+    msg_id := queen.produce('test-uuid-message', '{"uuid": "test"}'::jsonb);
     version_char := substr(msg_id::text, 15, 1);
     
     IF version_char = '7' THEN
@@ -216,8 +216,8 @@ END;
 $$;
 
 -- Test 10: Range query using uuid_v7_boundary
--- Note: This test uses separate statements to allow multiple pushes
-SELECT queen.push('test-uuid-range', '{"range": 1}'::jsonb);
+-- Note: This test uses separate statements to allow multiple produces
+SELECT queen.produce('test-uuid-range', '{"range": 1}'::jsonb);
 SELECT pg_sleep(0.1);
 
 DO $$
@@ -230,8 +230,8 @@ BEGIN
 END;
 $$;
 
-SELECT queen.push('test-uuid-range', '{"range": 2}'::jsonb);
-SELECT queen.push('test-uuid-range', '{"range": 3}'::jsonb);
+SELECT queen.produce('test-uuid-range', '{"range": 2}'::jsonb);
+SELECT queen.produce('test-uuid-range', '{"range": 3}'::jsonb);
 
 DO $$
 DECLARE
@@ -242,7 +242,7 @@ END;
 $$;
 
 SELECT pg_sleep(0.1);
-SELECT queen.push('test-uuid-range', '{"range": 4}'::jsonb);
+SELECT queen.produce('test-uuid-range', '{"range": 4}'::jsonb);
 
 DO $$
 DECLARE
@@ -271,4 +271,3 @@ END;
 $$;
 
 \echo 'PASS: UUID v7 tests completed'
-

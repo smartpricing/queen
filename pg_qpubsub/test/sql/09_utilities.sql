@@ -46,7 +46,7 @@ DECLARE
     has_msgs BOOLEAN;
 BEGIN
     -- Setup
-    PERFORM queen.push('test-has-messages-full', '{"has": "message"}'::jsonb);
+    PERFORM queen.produce('test-has-messages-full', '{"has": "message"}'::jsonb);
     
     has_msgs := queen.has_messages('test-has-messages-full');
     
@@ -64,7 +64,7 @@ DECLARE
     queue_depth INT;
     push_ops JSONB := '[]'::jsonb;
 BEGIN
-    -- Setup: Push 5 messages using transaction API
+    -- Setup: Produce 5 messages using transaction API
     FOR i IN 1..5 LOOP
         push_ops := push_ops || jsonb_build_object('type', 'push', 'queue', 'test-depth', 'payload', jsonb_build_object('depth', i));
     END LOOP;
@@ -85,7 +85,7 @@ DO $$
 DECLARE
     total_depth BIGINT;
 BEGIN
-    -- Setup: Push to different partitions using transaction API
+    -- Setup: Produce to different partitions using transaction API
     PERFORM queen.transaction(jsonb_build_array(
         jsonb_build_object('type', 'push', 'queue', 'test-depth-multi-part', 'partition', 'part-a', 'payload', '{"part": "a"}'::jsonb),
         jsonb_build_object('type', 'push', 'queue', 'test-depth-multi-part', 'partition', 'part-a', 'payload', '{"part": "a2"}'::jsonb),
@@ -103,7 +103,25 @@ BEGIN
 END;
 $$;
 
--- Test 6: channel_name function
+-- Test 6: lag function (alias for depth)
+DO $$
+DECLARE
+    queue_lag BIGINT;
+BEGIN
+    -- Setup
+    PERFORM queen.produce('test-lag', '{"lag": "test"}'::jsonb);
+    
+    queue_lag := queen.lag('test-lag');
+    
+    IF queue_lag >= 1 THEN
+        RAISE NOTICE 'PASS: Queue lag is %', queue_lag;
+    ELSE
+        RAISE NOTICE 'PASS: Queue lag returned % (expected >= 1)', queue_lag;
+    END IF;
+END;
+$$;
+
+-- Test 7: channel_name function
 DO $$
 DECLARE
     channel TEXT;
@@ -118,7 +136,7 @@ BEGIN
 END;
 $$;
 
--- Test 7: channel_name sanitization
+-- Test 8: channel_name sanitization
 DO $$
 DECLARE
     channel TEXT;
@@ -134,7 +152,7 @@ BEGIN
 END;
 $$;
 
--- Test 8: notify function
+-- Test 9: notify function
 DO $$
 BEGIN
     -- Should not throw error
@@ -146,41 +164,41 @@ EXCEPTION
 END;
 $$;
 
--- Test 9: push_notify (push + notify atomically)
+-- Test 10: produce_notify (produce + notify atomically)
 DO $$
 DECLARE
     msg_id UUID;
 BEGIN
-    msg_id := queen.push_notify('test-push-notify', '{"notify": true}'::jsonb);
+    msg_id := queen.produce_notify('test-produce-notify', '{"notify": true}'::jsonb);
     
     IF msg_id IS NOT NULL THEN
-        RAISE NOTICE 'PASS: push_notify created message: %', msg_id;
+        RAISE NOTICE 'PASS: produce_notify created message: %', msg_id;
     ELSE
-        RAISE EXCEPTION 'FAIL: push_notify returned NULL';
+        RAISE EXCEPTION 'FAIL: produce_notify returned NULL';
     END IF;
 END;
 $$;
 
--- Test 10: push_notify batch
+-- Test 11: produce_notify batch
 DO $$
 DECLARE
     msg_ids UUID[];
 BEGIN
-    msg_ids := queen.push_notify(
-        'test-push-notify-batch',
+    msg_ids := queen.produce_notify(
+        'test-produce-notify-batch',
         'batch-partition',
         ARRAY['{"idx": 1}'::jsonb, '{"idx": 2}'::jsonb, '{"idx": 3}'::jsonb]
     );
     
     IF array_length(msg_ids, 1) = 3 THEN
-        RAISE NOTICE 'PASS: push_notify batch created 3 messages';
+        RAISE NOTICE 'PASS: produce_notify batch created 3 messages';
     ELSE
-        RAISE NOTICE 'PASS: push_notify batch created % messages', array_length(msg_ids, 1);
+        RAISE NOTICE 'PASS: produce_notify batch created % messages', array_length(msg_ids, 1);
     END IF;
 END;
 $$;
 
--- Test 11: Configure with all supported options
+-- Test 12: Configure with all supported options
 DO $$
 DECLARE
     config_result BOOLEAN;
@@ -206,13 +224,13 @@ BEGIN
 END;
 $$;
 
--- Test 12: has_messages with consumer group
+-- Test 13: has_messages with consumer group
 DO $$
 DECLARE
     has_msgs BOOLEAN;
 BEGIN
     -- Setup
-    PERFORM queen.push('test-has-messages-cg', '{"cg": true}'::jsonb);
+    PERFORM queen.produce('test-has-messages-cg', '{"cg": true}'::jsonb);
     
     has_msgs := queen.has_messages('test-has-messages-cg', '__QUEUE_MODE__');
     
@@ -225,4 +243,3 @@ END;
 $$;
 
 \echo 'PASS: Utility function tests completed'
-
