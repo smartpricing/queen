@@ -63,6 +63,8 @@ psql -d mydb -c "CREATE EXTENSION pg_qpubsub"
 
 ## Quick Start
 
+See Node.js examples in the `examples/31-pg-qpubsub-direct.js` file.
+
 ### Basic Usage
 
 ```sql
