@@ -26,7 +26,7 @@
 
 Queen MQ is a partitioned message queue backed by PostgreSQL, built with uWebSockets, libuv, and libpq async API. It features unlimited FIFO partitions that process independently, consumer groups with replay, transactional delivery, tracing, and ACID-guaranteed durability.
 
-For a PostgreSQL extension version of Queen MQ, see [pg_qpubsub](pg_qpubsub/README.md).
+For a experimental PostgreSQL extension version of Queen MQ, see [pg_qpubsub](pg_qpubsub/README.md).
 
 ## Why Queen?
 
@@ -62,7 +62,7 @@ docker run --name qpg --network queen -e POSTGRES_PASSWORD=postgres -p 5433:5432
 sleep 2
 
 # Start Queen Server
-docker run -p 6632:6632 --network queen -e PG_HOST=qpg -e PG_PORT=5432 -e PG_PASSWORD=postgres -e NUM_WORKERS=2 -e DB_POOL_SIZE=5 -e SIDECAR_POOL_SIZE=30 smartnessai/queen-mq:0.12.1
+docker run -p 6632:6632 --network queen -e PG_HOST=qpg -e PG_PORT=5432 -e PG_PASSWORD=postgres -e NUM_WORKERS=2 -e DB_POOL_SIZE=5 -e SIDECAR_POOL_SIZE=30 smartnessai/queen-mq:0.12.2
 ```
 
 Then in another terminal, use cURL (or the client libraries) to push and consume messages
@@ -143,6 +143,7 @@ The repository is structured as follows:
 
 - Evaluate to replace udp sync with tcp with libuv
 - Deploy pipeline
+- Manually test pg_qpubsub extension
 
 ---
 
