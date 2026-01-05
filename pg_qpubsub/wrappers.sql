@@ -208,20 +208,20 @@ $$;
 -- ============================================================================
 -- PRIMARY API: CONSUME (JSONB batch)
 -- ============================================================================
--- Thin wrapper around pop_unified_batch
+-- Wrapper around pop_unified_batch with camelCase normalization
 --
 -- Input format (array of requests):
 -- [
 --   {
---     "queue_name": "orders",
---     "partition_name": "",          -- empty = any partition
---     "consumer_group": "__QUEUE_MODE__",
---     "batch_size": 10,
---     "lease_seconds": 60,           -- optional, uses queue config if not set
---     "worker_id": "worker-1",
---     "auto_ack": false,
---     "sub_mode": "",                -- 'new' or ''
---     "sub_from": ""                 -- 'now', timestamp, or ''
+--     "queueName": "orders",
+--     "partitionName": "",           -- empty = any partition
+--     "consumerGroup": "__QUEUE_MODE__",
+--     "batchSize": 10,
+--     "leaseSeconds": 60,            -- optional, uses queue config if not set
+--     "workerId": "worker-1",
+--     "autoAck": false,
+--     "subMode": "",                 -- 'new' or ''
+--     "subFrom": ""                  -- 'now', timestamp, or ''
 --   },
 --   ...
 -- ]
@@ -231,9 +231,31 @@ $$;
 
 CREATE OR REPLACE FUNCTION queen.consume(p_requests JSONB)
 RETURNS JSONB
-LANGUAGE sql
+LANGUAGE plpgsql
 AS $$
-    SELECT queen.pop_unified_batch(p_requests);
+DECLARE
+    v_transformed JSONB;
+BEGIN
+    -- Transform camelCase keys to snake_case for pop_unified_batch
+    -- Accepts both camelCase and snake_case for backwards compatibility
+    SELECT jsonb_agg(
+        jsonb_build_object(
+            'queue_name',      COALESCE(req->>'queueName', req->>'queue_name'),
+            'partition_name',  COALESCE(req->>'partitionName', req->>'partition_name', ''),
+            'consumer_group',  COALESCE(req->>'consumerGroup', req->>'consumer_group', '__QUEUE_MODE__'),
+            'batch_size',      COALESCE((req->>'batchSize')::int, (req->>'batch_size')::int, 1),
+            'lease_seconds',   COALESCE((req->>'leaseSeconds')::int, (req->>'lease_seconds')::int, 60),
+            'worker_id',       COALESCE(req->>'workerId', req->>'worker_id', 'wrapper-' || gen_random_uuid()::text),
+            'auto_ack',        COALESCE((req->>'autoAck')::boolean, (req->>'auto_ack')::boolean, false),
+            'sub_mode',        COALESCE(req->>'subMode', req->>'sub_mode', ''),
+            'sub_from',        COALESCE(req->>'subFrom', req->>'sub_from', '')
+        )
+    )
+    INTO v_transformed
+    FROM jsonb_array_elements(p_requests) AS req;
+    
+    RETURN queen.pop_unified_batch(v_transformed);
+END;
 $$;
 
 

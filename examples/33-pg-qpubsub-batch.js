@@ -84,17 +84,17 @@ console.log(`\nTotal: ${PARTITIONS * ITEMS_PER_PARTITION} messages produced\n`)
 console.log('=== Batch Consume (Queue Mode) ===\n')
 
 for (let p = 0; p < PARTITIONS; p++) {
-    // Build consume request
+    // Build consume request (camelCase keys)
     const consumeRequest = [{
-        queue_name: QUEUE_NAME,
-        partition_name: '',           // empty = any partition
-        consumer_group: '__QUEUE_MODE__',
-        batch_size: ITEMS_PER_PARTITION,
-        lease_seconds: 60,
-        worker_id: `worker-${uuidv4()}`,
-        auto_ack: false,
-        sub_mode: '',
-        sub_from: ''
+        queueName: QUEUE_NAME,
+        partitionName: '',            // empty = any partition
+        consumerGroup: '__QUEUE_MODE__',
+        batchSize: ITEMS_PER_PARTITION,
+        leaseSeconds: 60,
+        workerId: `worker-${uuidv4()}`,
+        autoAck: false,
+        subMode: '',
+        subFrom: ''
     }]
     
     // Single batch consume call
@@ -107,7 +107,7 @@ for (let p = 0; p < PARTITIONS; p++) {
     const batch = consumeResult.rows[0].results[0].result
     const messages = batch.messages || []
     const partitionId = batch.partitionId
-    const leaseId = consumeRequest[0].worker_id
+    const leaseId = consumeRequest[0].workerId
     
     console.log(`Consumed ${messages.length} messages from partition ${partitionId}`)
     
@@ -152,15 +152,15 @@ console.log('=== Batch Consume (Consumer Group: analytics) ===\n')
 
 for (let p = 0; p < PARTITIONS; p++) {
     const consumeRequest = [{
-        queue_name: QUEUE_NAME,
-        partition_name: '',
-        consumer_group: 'analytics',
-        batch_size: ITEMS_PER_PARTITION,
-        lease_seconds: 60,
-        worker_id: `analytics-worker-${uuidv4()}`,
-        auto_ack: false,
-        sub_mode: 'all',  // Process from beginning
-        sub_from: ''
+        queueName: QUEUE_NAME,
+        partitionName: '',
+        consumerGroup: 'analytics',
+        batchSize: ITEMS_PER_PARTITION,
+        leaseSeconds: 60,
+        workerId: `analytics-worker-${uuidv4()}`,
+        autoAck: false,
+        subMode: 'all',  // Process from beginning
+        subFrom: ''
     }]
     
     const consumeResult = await pool.query(
@@ -171,7 +171,7 @@ for (let p = 0; p < PARTITIONS; p++) {
     const batch = consumeResult.rows[0].results[0].result
     const messages = batch.messages || []
     const partitionId = batch.partitionId
-    const leaseId = consumeRequest[0].worker_id
+    const leaseId = consumeRequest[0].workerId
     
     console.log(`[analytics] Consumed ${messages.length} messages from partition ${partitionId}`)
     

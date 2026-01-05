@@ -39,6 +39,30 @@ For SQL usage, psql, triggers, and simple cases.
 | `queen.nack(...)` | Mark for retry |
 | `queen.reject(...)` | Send to DLQ |
 
+### Note on JSONB API
+
+The JSONB functions (`produce`, `consume`, `commit`, `renew`) are thin wrappers around the core libqueen procedures (`push_messages_v2`, `pop_unified_batch`, `ack_messages_v2`, `renew_lease_v2`). They return immediately after executing the operation.
+
+Features like **LISTEN/NOTIFY** for real-time notifications must be implemented at the application level:
+
+```javascript
+// Example: LISTEN/NOTIFY with JSONB API
+const client = await pool.connect()
+
+client.on('notification', async (msg) => {
+  // Notified - now consume using batch API
+  const result = await client.query(
+    `SELECT queen.consume($1::jsonb)`,
+    [JSON.stringify([{ queueName: 'orders', batchSize: 10, ... }])]
+  )
+  // process messages...
+})
+
+await client.query(`LISTEN queen_orders`)
+```
+
+The scalar `consume_one` function supports a `timeout` parameter for long-polling within SQL.
+
 ## Quick Start
 
 ### Node.js (Primary API)
@@ -56,11 +80,11 @@ await pool.query(`SELECT queen.produce($1::jsonb)`, [JSON.stringify(items)])
 
 // Batch consume
 const req = [{
-  queue_name: 'orders',
-  consumer_group: '__QUEUE_MODE__',
-  batch_size: 10,
-  lease_seconds: 60,
-  worker_id: 'worker-1'
+  queueName: 'orders',
+  consumerGroup: '__QUEUE_MODE__',
+  batchSize: 10,
+  leaseSeconds: 60,
+  workerId: 'worker-1'
 }]
 const result = await pool.query(`SELECT queen.consume($1::jsonb)`, [JSON.stringify(req)])
 const messages = result.rows[0].consume[0].result.messages
@@ -108,17 +132,17 @@ SELECT queen.commit_one('txn-id', 'partition-uuid'::uuid, 'lease-id');
 #### `queen.consume(p_requests JSONB)` -> `JSONB`
 
 ```javascript
-// Input
+// Input (camelCase)
 [{
-  "queue_name": "orders",
-  "partition_name": "",
-  "consumer_group": "__QUEUE_MODE__",
-  "batch_size": 10,
-  "lease_seconds": 60,
-  "worker_id": "worker-1",
-  "auto_ack": false,
-  "sub_mode": "",
-  "sub_from": ""
+  "queueName": "orders",
+  "partitionName": "",
+  "consumerGroup": "__QUEUE_MODE__",
+  "batchSize": 10,
+  "leaseSeconds": 60,
+  "workerId": "worker-1",
+  "autoAck": false,
+  "subMode": "",
+  "subFrom": ""
 }]
 // Output
 [{ "idx": 0, "result": { "success": true, "partitionId": "uuid", "messages": [...] }}]
