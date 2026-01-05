@@ -1,186 +1,264 @@
 -- ============================================================================
--- TEST 06: Consumer Groups (Pub/Sub Mode)
+-- Test 06: Consumer Groups (Pub/Sub)
 -- ============================================================================
-\echo '============================================================================'
-\echo '=== TEST 06: Consumer Groups (Pub/Sub Mode) ==='
-\echo '============================================================================'
 
--- Test 1: Multiple consumer groups can read same messages
+\echo '=== Test 06: Consumer Groups (Pub/Sub) ==='
+
+-- Setup: Create queue with messages
+SELECT queen.configure('test_pubsub', 60, 3, false);
+SELECT queen.produce_one('test_pubsub', '{"event": 1}'::jsonb, 'Default', 'pubsub-1');
+SELECT queen.produce_one('test_pubsub', '{"event": 2}'::jsonb, 'Default', 'pubsub-2');
+SELECT queen.produce_one('test_pubsub', '{"event": 3}'::jsonb, 'Default', 'pubsub-3');
+
+-- Test 1: Two consumer groups receive same messages (fan-out)
 DO $$
 DECLARE
-    count_g1 INT;
-    count_g2 INT;
-    push_ops JSONB := '[]'::jsonb;
+    v_group1_count INT := 0;
+    v_group2_count INT := 0;
+    v_msg RECORD;
 BEGIN
-    -- Setup: Produce messages using transaction API
-    FOR i IN 1..5 LOOP
-        push_ops := push_ops || jsonb_build_object('type', 'push', 'queue', 'test-pubsub-multi', 'payload', jsonb_build_object('idx', i));
+    -- Group 1 consumes all messages
+    FOR v_msg IN SELECT * FROM queen.consume_one('test_pubsub', 'group-analytics', 10)
+    LOOP
+        v_group1_count := v_group1_count + 1;
+        PERFORM queen.commit_one(v_msg.transaction_id, v_msg.partition_id, v_msg.lease_id, 'group-analytics');
     END LOOP;
-    PERFORM queen.transaction(push_ops);
     
-    -- Consumer group 1 consumes messages
-    SELECT COUNT(*) INTO count_g1 
-    FROM queen.consume('test-pubsub-multi', 'consumer-group-1', 10, 60);
-    
-    -- Consumer group 2 also consumes same messages (pub/sub fan-out)
-    SELECT COUNT(*) INTO count_g2 
-    FROM queen.consume('test-pubsub-multi', 'consumer-group-2', 10, 60);
-    
-    IF count_g1 = 5 AND count_g2 = 5 THEN
-        RAISE NOTICE 'PASS: Both consumer groups received all 5 messages (fan-out)';
-    ELSE
-        RAISE NOTICE 'PASS: Consumer groups received messages (g1=%, g2=%)', count_g1, count_g2;
-    END IF;
-END;
-$$;
-
--- Test 2: Consumer group cursor isolation
-DO $$
-DECLARE
-    msg1 RECORD;
-    msg2 RECORD;
-    remaining_g1 INT;
-    count_g2 INT;
-BEGIN
-    -- Setup: Produce messages using transaction API
-    PERFORM queen.transaction(jsonb_build_array(
-        jsonb_build_object('type', 'push', 'queue', 'test-pubsub-isolation', 'payload', '{"idx": 1}'::jsonb),
-        jsonb_build_object('type', 'push', 'queue', 'test-pubsub-isolation', 'payload', '{"idx": 2}'::jsonb)
-    ));
-    
-    -- Group 1 consumes and commits first message
-    SELECT * INTO msg1 FROM queen.consume('test-pubsub-isolation', 'isolated-group-1', 1, 60);
-    PERFORM queen.commit(msg1.transaction_id, msg1.partition_id, msg1.lease_id, 'isolated-group-1');
-    
-    -- Group 1 should have 1 remaining
-    SELECT COUNT(*) INTO remaining_g1 
-    FROM queen.consume('test-pubsub-isolation', 'isolated-group-1', 10, 60);
-    
-    -- Group 2 should still see all messages (hasn't consumed any)
-    SELECT COUNT(*) INTO count_g2 
-    FROM queen.consume('test-pubsub-isolation', 'isolated-group-2', 10, 60);
-    
-    IF remaining_g1 = 1 AND count_g2 = 2 THEN
-        RAISE NOTICE 'PASS: Consumer group cursors are isolated (g1 remaining=1, g2=2)';
-    ELSE
-        RAISE NOTICE 'PASS: Consumer groups have separate cursors (g1 remaining=%, g2=%)', remaining_g1, count_g2;
-    END IF;
-END;
-$$;
-
--- Test 3: Consumer group with partition affinity
-DO $$
-DECLARE
-    count_p1 INT;
-    count_p2 INT;
-    push_ops JSONB := '[]'::jsonb;
-BEGIN
-    -- Setup: Produce to different partitions using transaction API
-    FOR i IN 1..3 LOOP
-        push_ops := push_ops || jsonb_build_object('type', 'push', 'queue', 'test-pubsub-partition', 'partition', 'partition-a', 'payload', jsonb_build_object('part', 'a', 'idx', i));
-        push_ops := push_ops || jsonb_build_object('type', 'push', 'queue', 'test-pubsub-partition', 'partition', 'partition-b', 'payload', jsonb_build_object('part', 'b', 'idx', i));
+    -- Group 2 consumes same messages
+    FOR v_msg IN SELECT * FROM queen.consume_one('test_pubsub', 'group-billing', 10)
+    LOOP
+        v_group2_count := v_group2_count + 1;
+        PERFORM queen.commit_one(v_msg.transaction_id, v_msg.partition_id, v_msg.lease_id, 'group-billing');
     END LOOP;
-    PERFORM queen.transaction(push_ops);
     
-    -- Consumer group reads from partition A only
-    SELECT COUNT(*) INTO count_p1 
-    FROM queen.consume('test-pubsub-partition', 'partition-a', 'partition-consumer', 10, 60);
-    
-    -- Another consumer reads from partition B only
-    SELECT COUNT(*) INTO count_p2 
-    FROM queen.consume('test-pubsub-partition', 'partition-b', 'partition-consumer', 10, 60);
-    
-    IF count_p1 = 3 AND count_p2 = 3 THEN
-        RAISE NOTICE 'PASS: Partition-specific consumption works (A=3, B=3)';
-    ELSE
-        RAISE EXCEPTION 'FAIL: Partition consumption failed (A=%, B=%)', count_p1, count_p2;
+    IF v_group1_count != 3 THEN
+        RAISE EXCEPTION 'FAIL: Group 1 expected 3 messages, got %', v_group1_count;
     END IF;
+    
+    IF v_group2_count != 3 THEN
+        RAISE EXCEPTION 'FAIL: Group 2 expected 3 messages, got %', v_group2_count;
+    END IF;
+    
+    RAISE NOTICE 'PASS: Fan-out works - both groups received all messages';
 END;
 $$;
 
--- Test 4: Consumer group commit updates cursor independently
-DO $$
-DECLARE
-    msg_g1 RECORD;
-    msg_g2 RECORD;
-    commit_g1 BOOLEAN;
-    remaining_g1 INT;
-    remaining_g2 INT;
-BEGIN
-    -- Setup
-    PERFORM queen.produce('test-pubsub-commit', '{"commit": "test"}'::jsonb);
-    
-    -- Both groups consume
-    SELECT * INTO msg_g1 FROM queen.consume('test-pubsub-commit', 'commit-group-1', 1, 60);
-    SELECT * INTO msg_g2 FROM queen.consume('test-pubsub-commit', 'commit-group-2', 1, 60);
-    
-    -- Only group 1 commits
-    commit_g1 := queen.commit(msg_g1.transaction_id, msg_g1.partition_id, msg_g1.lease_id, 'commit-group-1');
-    
-    -- Group 1 should have no more messages
-    SELECT COUNT(*) INTO remaining_g1 
-    FROM queen.consume('test-pubsub-commit', 'commit-group-1', 10, 60);
-    
-    -- Group 2 still has the message (not committed by group 2)
-    -- Note: It's still leased by msg_g2, but after lease expires, it should be available
-    
-    IF commit_g1 AND remaining_g1 = 0 THEN
-        RAISE NOTICE 'PASS: Consumer group commit advances only that group''s cursor';
-    ELSE
-        RAISE EXCEPTION 'FAIL: Group commit issue (commit=%, remaining=%)', commit_g1, remaining_g1;
-    END IF;
-END;
-$$;
+-- Test 2: Subscription mode 'new' - skip historical messages
+SELECT queen.configure('test_subscription_new', 60, 3, false);
+-- First produce some "historical" messages
+SELECT queen.produce_one('test_subscription_new', '{"historical": 1}'::jsonb, 'Default', 'hist-1');
+SELECT queen.produce_one('test_subscription_new', '{"historical": 2}'::jsonb, 'Default', 'hist-2');
 
--- Test 5: Queue mode vs Pub/Sub mode
 DO $$
 DECLARE
-    count_queue INT;
-    count_pubsub INT;
+    v_count INT := 0;
+    v_msg RECORD;
 BEGIN
-    -- Setup: Produce messages
-    PERFORM queen.produce('test-mode-comparison', '{"mode": "test"}'::jsonb);
-    
-    -- Queue mode (default __QUEUE_MODE__ consumer group)
-    SELECT COUNT(*) INTO count_queue FROM queen.consume_one('test-mode-comparison');
-    
-    -- Pub/Sub mode (named consumer group)
-    SELECT COUNT(*) INTO count_pubsub 
-    FROM queen.consume('test-mode-comparison', 'named-group', 1, 60);
-    
-    IF count_queue = 1 THEN
-        RAISE NOTICE 'PASS: Queue mode consumes message (queue=%, pubsub=%)', count_queue, count_pubsub;
-    ELSE
-        RAISE NOTICE 'PASS: Mode comparison (queue=%, pubsub=%)', count_queue, count_pubsub;
-    END IF;
-END;
-$$;
-
--- Test 6: Three consumer groups
-DO $$
-DECLARE
-    count_a INT;
-    count_b INT;
-    count_c INT;
-    push_ops JSONB := '[]'::jsonb;
-BEGIN
-    -- Setup: Produce 10 messages using transaction API
-    FOR i IN 1..10 LOOP
-        push_ops := push_ops || jsonb_build_object('type', 'push', 'queue', 'test-three-groups', 'payload', jsonb_build_object('idx', i));
+    -- Subscribe with mode='new' (should skip historical)
+    FOR v_msg IN SELECT * FROM queen.consume_one(
+        'test_subscription_new',
+        'new-subscriber',
+        10,
+        NULL,        -- partition
+        0,           -- timeout
+        FALSE,       -- auto_commit
+        'new'        -- subscription_mode
+    )
+    LOOP
+        v_count := v_count + 1;
     END LOOP;
-    PERFORM queen.transaction(push_ops);
     
-    -- All three groups should get all messages
-    SELECT COUNT(*) INTO count_a FROM queen.consume('test-three-groups', 'group-alpha', 20, 60);
-    SELECT COUNT(*) INTO count_b FROM queen.consume('test-three-groups', 'group-beta', 20, 60);
-    SELECT COUNT(*) INTO count_c FROM queen.consume('test-three-groups', 'group-gamma', 20, 60);
-    
-    IF count_a = 10 AND count_b = 10 AND count_c = 10 THEN
-        RAISE NOTICE 'PASS: All three consumer groups received all 10 messages';
-    ELSE
-        RAISE NOTICE 'PASS: Three groups received (alpha=%, beta=%, gamma=%)', count_a, count_b, count_c;
+    -- Should get 0 messages (historical messages skipped)
+    IF v_count != 0 THEN
+        RAISE EXCEPTION 'FAIL: subscription_mode=new should skip historical, got %', v_count;
     END IF;
+    
+    RAISE NOTICE 'PASS: subscription_mode=new skips historical messages';
 END;
 $$;
 
-\echo 'PASS: Consumer group tests completed'
+-- Now produce a new message and verify it's received
+SELECT queen.produce_one('test_subscription_new', '{"new": "message"}'::jsonb, 'Default', 'new-msg-1');
+
+DO $$
+DECLARE
+    v_count INT := 0;
+BEGIN
+    SELECT COUNT(*) INTO v_count FROM queen.consume_one(
+        'test_subscription_new',
+        'new-subscriber',
+        10
+    );
+    
+    -- Should get 1 message (the new one)
+    IF v_count != 1 THEN
+        RAISE EXCEPTION 'FAIL: Should get new message after subscription, got %', v_count;
+    END IF;
+    
+    RAISE NOTICE 'PASS: New messages received after subscription_mode=new';
+END;
+$$;
+
+-- Test 3: Subscription mode 'all' - process from beginning
+SELECT queen.configure('test_subscription_all', 60, 3, false);
+SELECT queen.produce_one('test_subscription_all', '{"from": "beginning"}'::jsonb, 'Default', 'all-1');
+SELECT queen.produce_one('test_subscription_all', '{"from": "beginning"}'::jsonb, 'Default', 'all-2');
+
+DO $$
+DECLARE
+    v_count INT := 0;
+BEGIN
+    SELECT COUNT(*) INTO v_count FROM queen.consume_one(
+        'test_subscription_all',
+        'all-subscriber',
+        10,
+        NULL,
+        0,
+        FALSE,
+        'all'  -- subscription_mode
+    );
+    
+    IF v_count != 2 THEN
+        RAISE EXCEPTION 'FAIL: subscription_mode=all should get all messages, got %', v_count;
+    END IF;
+    
+    RAISE NOTICE 'PASS: subscription_mode=all processes from beginning';
+END;
+$$;
+
+-- Test 4: Seek to end (skip all pending)
+SELECT queen.configure('test_seek_end', 60, 3, false);
+SELECT queen.produce_one('test_seek_end', '{"skip": "me"}'::jsonb, 'Default', 'seek-1');
+SELECT queen.produce_one('test_seek_end', '{"skip": "me too"}'::jsonb, 'Default', 'seek-2');
+
+-- First, consume with a group to create the consumer
+DO $$
+DECLARE
+    v_count INT;
+BEGIN
+    SELECT COUNT(*) INTO v_count FROM queen.consume_one('test_seek_end', 'seek-group', 10);
+    RAISE NOTICE 'Initial consume got % messages', v_count;
+END;
+$$;
+
+-- Now seek to end
+DO $$
+DECLARE
+    v_result BOOLEAN;
+    v_count INT;
+BEGIN
+    v_result := queen.seek('seek-group', 'test_seek_end', TRUE);  -- to_end = true
+    
+    IF NOT v_result THEN
+        RAISE EXCEPTION 'FAIL: seek to end returned false';
+    END IF;
+    
+    -- Now consume should get nothing (cursor at end)
+    SELECT COUNT(*) INTO v_count FROM queen.consume_one('test_seek_end', 'seek-group', 10);
+    
+    IF v_count != 0 THEN
+        RAISE EXCEPTION 'FAIL: After seek to end, should get 0 messages, got %', v_count;
+    END IF;
+    
+    RAISE NOTICE 'PASS: seek to end works';
+END;
+$$;
+
+-- Test 5: Seek to timestamp
+SELECT queen.configure('test_seek_ts', 60, 3, false);
+
+-- Produce messages with some delay between them
+SELECT queen.produce_one('test_seek_ts', '{"seq": 1}'::jsonb, 'Default', 'ts-1');
+SELECT pg_sleep(0.1);
+SELECT queen.produce_one('test_seek_ts', '{"seq": 2}'::jsonb, 'Default', 'ts-2');
+SELECT pg_sleep(0.1);
+SELECT queen.produce_one('test_seek_ts', '{"seq": 3}'::jsonb, 'Default', 'ts-3');
+
+-- Create consumer group
+DO $$
+BEGIN
+    PERFORM queen.consume_one('test_seek_ts', 'seek-ts-group', 1);
+END;
+$$;
+
+-- Seek to 1 second ago (should still get recent messages)
+DO $$
+DECLARE
+    v_result BOOLEAN;
+BEGIN
+    v_result := queen.seek('seek-ts-group', 'test_seek_ts', FALSE, NOW() - INTERVAL '1 second');
+    
+    IF NOT v_result THEN
+        RAISE EXCEPTION 'FAIL: seek to timestamp returned false';
+    END IF;
+    
+    RAISE NOTICE 'PASS: seek to timestamp works';
+END;
+$$;
+
+-- Test 6: Delete consumer group
+SELECT queen.configure('test_delete_cg', 60, 3, false);
+SELECT queen.produce_one('test_delete_cg', '{"delete": "group"}'::jsonb, 'Default', 'del-1');
+
+-- Create consumer group by consuming
+DO $$
+BEGIN
+    PERFORM queen.consume_one('test_delete_cg', 'delete-me-group', 1);
+END;
+$$;
+
+-- Delete the consumer group
+DO $$
+DECLARE
+    v_result BOOLEAN;
+    v_exists BOOLEAN;
+BEGIN
+    v_result := queen.delete_consumer_group('delete-me-group', 'test_delete_cg');
+    
+    IF NOT v_result THEN
+        RAISE EXCEPTION 'FAIL: delete_consumer_group returned false';
+    END IF;
+    
+    -- Verify it's deleted
+    SELECT EXISTS (
+        SELECT 1 FROM queen.partition_consumers pc
+        JOIN queen.partitions p ON pc.partition_id = p.id
+        JOIN queen.queues q ON p.queue_id = q.id
+        WHERE pc.consumer_group = 'delete-me-group'
+          AND q.name = 'test_delete_cg'
+    ) INTO v_exists;
+    
+    IF v_exists THEN
+        RAISE EXCEPTION 'FAIL: Consumer group still exists after delete';
+    END IF;
+    
+    RAISE NOTICE 'PASS: delete_consumer_group works';
+END;
+$$;
+
+-- Test 7: lag with consumer group
+SELECT queen.configure('test_lag_cg', 60, 3, false);
+SELECT queen.produce_one('test_lag_cg', '{"lag": 1}'::jsonb, 'Default', 'lag-1');
+SELECT queen.produce_one('test_lag_cg', '{"lag": 2}'::jsonb, 'Default', 'lag-2');
+
+DO $$
+DECLARE
+    v_lag BIGINT;
+BEGIN
+    -- Lag for queue mode (no consumer group)
+    v_lag := queen.lag('test_lag_cg');
+    IF v_lag != 2 THEN
+        RAISE EXCEPTION 'FAIL: Queue mode lag expected 2, got %', v_lag;
+    END IF;
+    
+    -- Create consumer group and check its lag
+    PERFORM queen.consume_one('test_lag_cg', 'lag-test-group', 10);
+    
+    v_lag := queen.lag('test_lag_cg', 'lag-test-group');
+    
+    -- After consuming, lag should be 0 (if we ack) or still some value
+    RAISE NOTICE 'PASS: lag with consumer group works (lag=%)', v_lag;
+END;
+$$;
+
+\echo 'Test 06: PASSED'

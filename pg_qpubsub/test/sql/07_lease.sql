@@ -1,143 +1,192 @@
 -- ============================================================================
--- TEST 07: Lease Operations
+-- Test 07: Lease Management
 -- ============================================================================
-\echo '============================================================================'
-\echo '=== TEST 07: Lease Operations ==='
-\echo '============================================================================'
 
--- Test 1: Basic lease renewal
+\echo '=== Test 07: Lease Management ==='
+
+-- Test 1: Lease time comes from queue configuration
+SELECT queen.configure('test_lease_config', 120, 3, false);  -- 120 second lease
+SELECT queen.produce_one('test_lease_config', '{"lease": "config"}'::jsonb, 'Default', 'lease-cfg-1');
+
 DO $$
 DECLARE
-    msg RECORD;
-    renew_result TIMESTAMPTZ;
-    expires_before TIMESTAMPTZ;
-    expires_after TIMESTAMPTZ;
+    v_msg RECORD;
+    v_lease_expires TIMESTAMPTZ;
 BEGIN
-    -- Setup: Configure queue with short lease
-    PERFORM queen.configure('test-lease-renew', p_lease_time := 30);
-    PERFORM queen.produce('test-lease-renew', '{"lease": "test"}'::jsonb);
-    SELECT * INTO msg FROM queen.consume_one('test-lease-renew');
+    -- Consume message
+    SELECT * INTO v_msg FROM queen.consume_one('test_lease_config') LIMIT 1;
     
-    IF msg.lease_id IS NULL THEN
-        RAISE EXCEPTION 'FAIL: No lease_id returned';
+    -- Check lease expiry in partition_consumers
+    SELECT lease_expires_at INTO v_lease_expires
+    FROM queen.partition_consumers pc
+    WHERE pc.worker_id = v_msg.lease_id;
+    
+    IF v_lease_expires IS NULL THEN
+        RAISE EXCEPTION 'FAIL: No lease recorded';
     END IF;
     
-    -- Get initial lease expiration
-    SELECT lease_expires_at INTO expires_before
-    FROM queen.partition_consumers
-    WHERE worker_id = msg.lease_id;
-    
-    -- Renew lease (returns new expiration timestamp)
-    renew_result := queen.renew(msg.lease_id, 60);
-    
-    -- Get new lease expiration
-    SELECT lease_expires_at INTO expires_after
-    FROM queen.partition_consumers
-    WHERE worker_id = msg.lease_id;
-    
-    IF renew_result IS NOT NULL AND (expires_after IS NULL OR expires_after > expires_before) THEN
-        RAISE NOTICE 'PASS: Lease renewal extends expiration (before=%, after=%)', expires_before, expires_after;
-    ELSE
-        RAISE NOTICE 'PASS: Lease renewal completed (result=%, before=%, after=%)', renew_result, expires_before, expires_after;
+    -- Lease should be approximately 120 seconds from now (within 5 seconds tolerance)
+    IF v_lease_expires < NOW() + INTERVAL '115 seconds' OR v_lease_expires > NOW() + INTERVAL '125 seconds' THEN
+        RAISE EXCEPTION 'FAIL: Lease expiry not close to 120 seconds: %', v_lease_expires;
     END IF;
+    
+    -- Cleanup
+    PERFORM queen.commit_one(v_msg.transaction_id, v_msg.partition_id, v_msg.lease_id);
+    
+    RAISE NOTICE 'PASS: Lease time comes from queue configuration';
 END;
 $$;
 
--- Test 2: Lease prevents re-consumption
+-- Test 2: Renew lease
+SELECT queen.configure('test_renew', 30, 3, false);  -- Short 30 second lease
+SELECT queen.produce_one('test_renew', '{"renew": "test"}'::jsonb, 'Default', 'renew-1');
+
 DO $$
 DECLARE
-    msg1 RECORD;
-    count_second INT;
+    v_msg RECORD;
+    v_original_expires TIMESTAMPTZ;
+    v_new_expires TIMESTAMPTZ;
+    v_result TIMESTAMPTZ;
 BEGIN
-    -- Setup
-    PERFORM queen.configure('test-lease-prevent', p_lease_time := 60);
-    PERFORM queen.produce('test-lease-prevent', '{"prevent": true}'::jsonb);
+    -- Consume message
+    SELECT * INTO v_msg FROM queen.consume_one('test_renew') LIMIT 1;
     
-    -- First consume acquires lease
-    SELECT * INTO msg1 FROM queen.consume_one('test-lease-prevent');
+    -- Get original expiry
+    SELECT lease_expires_at INTO v_original_expires
+    FROM queen.partition_consumers pc
+    WHERE pc.worker_id = v_msg.lease_id;
     
-    -- Second consume should return empty (message is leased)
-    SELECT COUNT(*) INTO count_second FROM queen.consume_one('test-lease-prevent');
+    -- Renew for 60 more seconds
+    v_result := queen.renew_one(v_msg.lease_id, 60);
     
-    IF count_second = 0 THEN
-        RAISE NOTICE 'PASS: Leased message not available for re-consumption';
-    ELSE
-        RAISE NOTICE 'PASS: Second consume returned % (lease may have mechanism)', count_second;
+    IF v_result IS NULL THEN
+        RAISE EXCEPTION 'FAIL: Renew returned NULL';
     END IF;
+    
+    -- Get new expiry
+    SELECT lease_expires_at INTO v_new_expires
+    FROM queen.partition_consumers pc
+    WHERE pc.worker_id = v_msg.lease_id;
+    
+    IF v_new_expires <= v_original_expires THEN
+        RAISE EXCEPTION 'FAIL: Lease was not extended (original: %, new: %)', v_original_expires, v_new_expires;
+    END IF;
+    
+    -- Cleanup
+    PERFORM queen.commit_one(v_msg.transaction_id, v_msg.partition_id, v_msg.lease_id);
+    
+    RAISE NOTICE 'PASS: Renew lease works (extended from % to %)', v_original_expires, v_new_expires;
 END;
 $$;
 
--- Test 3: Renew with invalid lease_id
+-- Test 3: Renew with default extension
+SELECT queen.produce_one('test_renew', '{"renew": "default"}'::jsonb, 'Default', 'renew-2');
+
 DO $$
 DECLARE
-    renew_result TIMESTAMPTZ;
+    v_msg RECORD;
+    v_result TIMESTAMPTZ;
 BEGIN
-    -- Try to renew non-existent lease
-    renew_result := queen.renew('invalid-lease-id-that-does-not-exist', 60);
+    -- Consume message
+    SELECT * INTO v_msg FROM queen.consume_one('test_renew') LIMIT 1;
     
-    IF renew_result IS NULL THEN
-        RAISE NOTICE 'PASS: Renew with invalid lease_id returns NULL';
-    ELSE
-        RAISE NOTICE 'PASS: Renew behavior with invalid lease (result=%)', renew_result;
+    -- Renew with default extension (60 seconds)
+    v_result := queen.renew_one(v_msg.lease_id);
+    
+    IF v_result IS NULL THEN
+        RAISE EXCEPTION 'FAIL: Renew with default returned NULL';
     END IF;
+    
+    -- Cleanup
+    PERFORM queen.commit_one(v_msg.transaction_id, v_msg.partition_id, v_msg.lease_id);
+    
+    RAISE NOTICE 'PASS: Renew with default extension works';
 END;
 $$;
 
--- Test 4: Lease expiration allows re-consume (requires short lease + wait)
--- Note: This test may be slow due to waiting for lease expiration
+-- Test 4: Renew invalid lease returns NULL
 DO $$
 DECLARE
-    msg1 RECORD;
-    msg2 RECORD;
+    v_result TIMESTAMPTZ;
 BEGIN
-    -- Setup: Configure queue with very short lease (2 seconds)
-    PERFORM queen.configure('test-lease-expire', p_lease_time := 2);
-    PERFORM queen.produce('test-lease-expire', '{"expire": "test"}'::jsonb);
+    v_result := queen.renew_one('non-existent-lease-id', 60);
     
-    -- First consume acquires lease
-    SELECT * INTO msg1 FROM queen.consume_one('test-lease-expire');
-    
-    IF msg1.transaction_id IS NOT NULL THEN
-        -- Wait for lease to expire (3 seconds)
-        PERFORM pg_sleep(3);
-        
-        -- Second consume should now get the message (lease expired)
-        SELECT * INTO msg2 FROM queen.consume_one('test-lease-expire');
-        
-        IF msg2.transaction_id = msg1.transaction_id THEN
-            RAISE NOTICE 'PASS: Message re-delivered after lease expiration';
-        ELSE
-            RAISE NOTICE 'PASS: Lease expiration test completed';
-        END IF;
-    ELSE
-        RAISE NOTICE 'SKIP: Could not test lease expiration (no message)';
+    IF v_result IS NOT NULL THEN
+        RAISE EXCEPTION 'FAIL: Renew invalid lease should return NULL';
     END IF;
+    
+    RAISE NOTICE 'PASS: Renew invalid lease returns NULL';
 END;
 $$;
 
--- Test 5: Multiple lease renewals
+-- Test 5: Leased messages are not re-consumed (queue mode)
+SELECT queen.configure('test_lease_protect', 300, 3, false);
+SELECT queen.produce_one('test_lease_protect', '{"protected": "message"}'::jsonb, 'Default', 'protect-1');
+
 DO $$
 DECLARE
-    msg RECORD;
-    renew1 TIMESTAMPTZ;
-    renew2 TIMESTAMPTZ;
-    renew3 TIMESTAMPTZ;
+    v_msg1 RECORD;
+    v_count INT;
 BEGIN
-    -- Setup
-    PERFORM queen.produce('test-multi-renew', '{"multi": "renew"}'::jsonb);
-    SELECT * INTO msg FROM queen.consume_one('test-multi-renew');
+    -- First consume takes the lease
+    SELECT * INTO v_msg1 FROM queen.consume_one('test_lease_protect') LIMIT 1;
     
-    -- Renew multiple times
-    renew1 := queen.renew(msg.lease_id, 30);
-    renew2 := queen.renew(msg.lease_id, 30);
-    renew3 := queen.renew(msg.lease_id, 30);
-    
-    IF renew1 IS NOT NULL AND renew2 IS NOT NULL AND renew3 IS NOT NULL THEN
-        RAISE NOTICE 'PASS: Multiple lease renewals succeed';
-    ELSE
-        RAISE EXCEPTION 'FAIL: Multiple renewals failed (r1=%, r2=%, r3=%)', renew1, renew2, renew3;
+    IF v_msg1.id IS NULL THEN
+        RAISE EXCEPTION 'FAIL: First consume got nothing';
     END IF;
+    
+    -- Second consume should get nothing (message is leased)
+    SELECT COUNT(*) INTO v_count FROM queen.consume_one('test_lease_protect');
+    
+    IF v_count != 0 THEN
+        RAISE EXCEPTION 'FAIL: Second consume should get 0 messages while leased';
+    END IF;
+    
+    -- Cleanup
+    PERFORM queen.commit_one(v_msg1.transaction_id, v_msg1.partition_id, v_msg1.lease_id);
+    
+    RAISE NOTICE 'PASS: Leased messages protected from re-consumption';
 END;
 $$;
 
-\echo 'PASS: Lease tests completed'
+-- Test 6: Lease released on commit
+SELECT queen.produce_one('test_lease_protect', '{"release": "on commit"}'::jsonb, 'Default', 'release-1');
+
+DO $$
+DECLARE
+    v_msg RECORD;
+    v_lease_exists BOOLEAN;
+BEGIN
+    -- Consume message
+    SELECT * INTO v_msg FROM queen.consume_one('test_lease_protect') LIMIT 1;
+    
+    -- Verify lease exists
+    SELECT EXISTS (
+        SELECT 1 FROM queen.partition_consumers
+        WHERE worker_id = v_msg.lease_id
+          AND lease_expires_at IS NOT NULL
+    ) INTO v_lease_exists;
+    
+    IF NOT v_lease_exists THEN
+        RAISE EXCEPTION 'FAIL: Lease not created';
+    END IF;
+    
+    -- Commit
+    PERFORM queen.commit_one(v_msg.transaction_id, v_msg.partition_id, v_msg.lease_id);
+    
+    -- Verify lease is released
+    SELECT EXISTS (
+        SELECT 1 FROM queen.partition_consumers
+        WHERE worker_id = v_msg.lease_id
+          AND lease_expires_at IS NOT NULL
+    ) INTO v_lease_exists;
+    
+    IF v_lease_exists THEN
+        RAISE EXCEPTION 'FAIL: Lease not released after commit';
+    END IF;
+    
+    RAISE NOTICE 'PASS: Lease released on commit';
+END;
+$$;
+
+\echo 'Test 07: PASSED'

@@ -4,459 +4,329 @@ A PostgreSQL extension providing a high-performance message queue with partition
 
 ## Features
 
-- **Produce/Consume/Commit** — Kafka-style queue operations
-- **Batch Operations** — Process hundreds of messages per call
-- **Partitions** — Parallel processing with ordering guarantees
-- **Consumer Groups** — Pub/Sub pattern (multiple groups receive same messages)
-- **At-Least-Once Delivery** — Messages redelivered if not committed
-- **Dead Letter Queue** — Failed messages preserved for inspection
-- **NOTIFY/LISTEN** — Real-time notifications on new messages
-- **Long Polling** — Blocking consume (poll) with configurable timeout
-- **Transactional Pipelines** — Commit + Produce atomically
-- **Real-time Analytics** — Throughput, lag, queue depth metrics
+- **Produce/Consume/Commit** - Kafka-style queue operations
+- **Two-Layer API** - JSONB batch API for applications, scalar API for SQL
+- **Partitions** - Parallel processing with ordering guarantees
+- **Consumer Groups** - Pub/Sub pattern (multiple groups receive same messages)
+- **At-Least-Once Delivery** - Messages redelivered if not committed
+- **Dead Letter Queue** - Failed messages preserved for inspection
+- **NOTIFY/LISTEN** - Real-time notifications on new messages
+- **Transactional Pipelines** - Commit + Produce atomically
 
-## API Naming Convention (Kafka-style)
+## Two-Layer API
 
-| Function | Description | Kafka Equivalent |
-|----------|-------------|------------------|
-| `produce` | Send message to queue | `producer.send()` |
-| `consume` | Receive messages | `consumer.poll()` |
-| `commit` | Acknowledge processing | `consumer.commitSync()` |
-| `poll` | Consume with wait/long-polling | `consumer.poll(timeout)` |
-| `nack` | Mark failed (retry) | - |
-| `reject` | Send to DLQ | - |
+pg_qpubsub provides two API layers for different use cases:
+
+### Primary API (JSONB)
+
+For programmatic access from Node.js, Python, Go, etc. Accepts JSONB arrays for batch operations.
+
+| Function | Description |
+|----------|-------------|
+| `queen.produce(items JSONB)` | Batch produce messages |
+| `queen.consume(requests JSONB)` | Batch consume messages |
+| `queen.commit(acks JSONB)` | Batch acknowledge messages |
+| `queen.renew(leases JSONB)` | Batch renew leases |
+| `queen.transaction(ops JSONB)` | Atomic multi-operation |
+
+### Convenience API (Scalar)
+
+For SQL usage, psql, triggers, and simple cases. Uses scalar parameters.
+
+| Function | Description |
+|----------|-------------|
+| `queen.produce_one(queue, payload, ...)` | Produce single message |
+| `queen.consume_one(queue, consumer_group, ...)` | Consume messages |
+| `queen.commit_one(txn_id, partition_id, lease_id, ...)` | Acknowledge single message |
+| `queen.renew_one(lease_id, extend_seconds)` | Renew single lease |
+| `queen.nack(...)` | Mark for retry |
+| `queen.reject(...)` | Send to DLQ |
 
 ## Installation
 
-There are two ways to install pg_qpubsub:
+### Direct SQL Loading (Recommended)
 
-### Option 1: Direct SQL Loading (Recommended)
-
-**No extension installation required.** Works on managed databases (AWS RDS, Google Cloud SQL, Azure, etc.).
+Works on managed databases (AWS RDS, Google Cloud SQL, Azure, etc.).
 
 ```bash
-# 1. Build the SQL file
-./build.sh
+# Build the SQL file
+cd pg_qpubsub && ./build.sh
 
-# 2. Load pgcrypto (required dependency)
-PGPASSWORD=postgres psql -U postgres -h localhost -d mydb -c "CREATE EXTENSION IF NOT EXISTS pgcrypto"
+# Load pgcrypto (required)
+psql -d mydb -c "CREATE EXTENSION IF NOT EXISTS pgcrypto"
 
-# 3. Load pg_qpubsub directly
-PGPASSWORD=postgres psql -U postgres -h localhost -d mydb -f pg_qpubsub--1.0.sql
+# Load pg_qpubsub
+psql -d mydb -f pg_qpubsub--1.0.sql
 ```
 
-That's it! All functions are now available in the `queen` schema.
+### PostgreSQL Extension
 
-### Option 2: PostgreSQL Extension
-
-Requires PostgreSQL dev headers and superuser access.
+Requires superuser access.
 
 ```bash
-# Build
 ./build.sh
-
-# Install to PostgreSQL
 make install
-
-# Enable in database
 psql -d mydb -c "CREATE EXTENSION pg_qpubsub"
 ```
 
-### Which Option Should I Use?
-
-| Scenario | Recommended |
-|----------|-------------|
-| AWS RDS, Cloud SQL, Azure DB | **Direct SQL** (extensions often blocked) |
-| Local development | Either works |
-| Self-hosted PostgreSQL | Either works |
-| Need `ALTER EXTENSION UPDATE` | PostgreSQL Extension |
-| CI/CD pipelines | **Direct SQL** (simpler) |
-
 ## Quick Start
 
-### Basic Usage
+### Using Primary API (Node.js)
 
-```sql
--- Configure a queue (optional - queues auto-create on first produce)
-SELECT queen.configure('orders', 
-    p_lease_time := 60,        -- 60 second lease
-    p_retry_limit := 3,        -- Retry failed messages 3 times
-    p_dead_letter_queue := true -- Enable DLQ for failed messages
-);
+```javascript
+import pg from 'pg'
+const pool = new pg.Pool({ connectionString: DATABASE_URL })
 
--- Produce a message
-SELECT queen.produce('orders', '{"orderId": 123}'::jsonb);
+// Batch produce (guaranteed ordering)
+const items = [
+  { queue: 'orders', payload: { orderId: 1 } },
+  { queue: 'orders', payload: { orderId: 2 } },
+  { queue: 'orders', payload: { orderId: 3 } }
+]
+await pool.query(`SELECT queen.produce($1::jsonb)`, [JSON.stringify(items)])
 
--- Consume messages (queue mode)
-CREATE TEMP TABLE consumed AS SELECT * FROM queen.consume_batch('orders', 10, 60);
+// Batch consume
+const consumeReq = [{
+  queue_name: 'orders',
+  consumer_group: '__QUEUE_MODE__',
+  batch_size: 10,
+  lease_seconds: 60,
+  worker_id: 'worker-1'
+}]
+const result = await pool.query(`SELECT queen.consume($1::jsonb)`, [JSON.stringify(consumeReq)])
+const messages = result.rows[0].consume[0].result.messages
 
--- Process your messages...
-SELECT payload FROM consumed;
-
--- Commit all messages
-SELECT queen.commit(transaction_id, partition_id, lease_id) FROM consumed;
-
--- Or with consumer groups (pub/sub mode):
-SELECT * FROM queen.consume('orders', 'processor-group', 10, 60);
+// Batch commit
+const acks = messages.map(m => ({
+  transactionId: m.transactionId,
+  partitionId: result.rows[0].consume[0].result.partitionId,
+  leaseId: 'worker-1',
+  consumerGroup: '__QUEUE_MODE__',
+  status: 'completed'
+}))
+await pool.query(`SELECT queen.commit($1::jsonb)`, [JSON.stringify(acks)])
 ```
 
-### With Notifications
+### Using Convenience API (SQL)
 
 ```sql
--- Produce with notification (consumers listening will wake up)
-SELECT queen.produce_notify('orders', '{"orderId": 123}'::jsonb);
+-- Configure queue
+SELECT queen.configure('orders', 60, 3, true);
 
--- Or use long polling (blocks until messages arrive or timeout)
-SELECT * FROM queen.poll('orders', 'processor', 10, 60, 30);
+-- Produce a message
+SELECT queen.produce_one('orders', '{"orderId": 123}'::jsonb);
+
+-- Consume messages
+SELECT * FROM queen.consume_one('orders', '__QUEUE_MODE__', 10);
+
+-- Commit (use values from consumed row)
+SELECT queen.commit_one('txn-id', 'partition-uuid', 'lease-id');
 ```
 
 ## API Reference
 
-### Produce Functions
+### Primary API
 
-#### `queen.produce(queue, payload, [transaction_id])` → `UUID`
-Produce a message to a queue.
-```sql
-queen.produce(
-    p_queue TEXT,
-    p_payload JSONB,
-    p_transaction_id TEXT DEFAULT NULL
-) RETURNS UUID
+#### `queen.produce(p_items JSONB)` -> `JSONB`
+
+Batch produce messages.
+
+```javascript
+// Input format
+[
+  {
+    "queue": "orders",
+    "partition": "Default",
+    "payload": { "orderId": 123 },
+    "transactionId": "optional-idempotency-key"
+  }
+]
+
+// Returns array of results
+[{ "index": 0, "message_id": "uuid", "status": "queued" }]
 ```
 
-#### `queen.produce(queue, partition, payload, [transaction_id])` → `UUID`
-Produce to a specific partition.
-```sql
-queen.produce(
-    p_queue TEXT,
-    p_partition TEXT,
-    p_payload JSONB,
-    p_transaction_id TEXT DEFAULT NULL
-) RETURNS UUID
+#### `queen.consume(p_requests JSONB)` -> `JSONB`
+
+Batch consume messages.
+
+```javascript
+// Input format
+[
+  {
+    "queue_name": "orders",
+    "partition_name": "",          // empty = any partition
+    "consumer_group": "__QUEUE_MODE__",
+    "batch_size": 10,
+    "lease_seconds": 60,
+    "worker_id": "worker-1",
+    "auto_ack": false,
+    "sub_mode": "",                // 'new' for new messages only
+    "sub_from": ""
+  }
+]
+
+// Returns array of results
+[{
+  "idx": 0,
+  "result": {
+    "success": true,
+    "partitionId": "uuid",
+    "messages": [
+      { "id": "uuid", "transactionId": "...", "data": {...}, "createdAt": "..." }
+    ]
+  }
+}]
 ```
 
-#### `queen.produce_notify(queue, payload, [transaction_id], [partition])` → `UUID`
-Produce message and send NOTIFY to wake consumers.
-```sql
-queen.produce_notify(
-    p_queue TEXT,
-    p_payload JSONB,
-    p_transaction_id TEXT DEFAULT NULL,
-    p_partition TEXT DEFAULT 'Default'
-) RETURNS UUID
+#### `queen.commit(p_acks JSONB)` -> `JSONB`
+
+Batch acknowledge messages.
+
+```javascript
+// Input format
+[
+  {
+    "transactionId": "...",
+    "partitionId": "uuid",
+    "leaseId": "worker-1",
+    "consumerGroup": "__QUEUE_MODE__",
+    "status": "completed",         // 'completed', 'retry', 'dlq'
+    "errorMessage": null
+  }
+]
+
+// Returns array of results
+[{ "index": 0, "success": true }]
 ```
 
-#### `queen.produce_notify(queue, partition, payloads[])` → `UUID[]`
-Batch produce with single NOTIFY.
-```sql
-queen.produce_notify(
-    p_queue TEXT,
-    p_partition TEXT,
-    p_payloads JSONB[]
-) RETURNS UUID[]
+#### `queen.renew(p_leases JSONB)` -> `JSONB`
+
+Batch renew leases.
+
+```javascript
+// Input format
+[{ "leaseId": "worker-1", "extendSeconds": 60 }]
+
+// Returns array of results
+[{ "index": 0, "success": true, "expiresAt": "timestamp" }]
 ```
 
-#### `queen.produce_full(...)` → `TABLE(message_id, transaction_id)`
-Produce with all options (namespace, task, delay).
-```sql
-queen.produce_full(
-    p_queue TEXT,
-    p_payload JSONB,
-    p_partition TEXT DEFAULT 'Default',
-    p_transaction_id TEXT DEFAULT NULL,
-    p_namespace TEXT DEFAULT NULL,
-    p_task TEXT DEFAULT NULL,
-    p_delay_until TIMESTAMPTZ DEFAULT NULL
-) RETURNS TABLE(message_id UUID, transaction_id TEXT)
+#### `queen.transaction(p_operations JSONB)` -> `JSONB`
+
+Execute multiple operations atomically.
+
+```javascript
+// Input format
+[
+  { "type": "push", "queue": "orders", "payload": {...} },
+  { "type": "ack", "transactionId": "...", "partitionId": "...", "leaseId": "..." }
+]
 ```
 
----
+### Convenience API
 
-### Consume Functions
+#### `queen.produce_one(queue, payload, partition, transaction_id, notify)` -> `UUID`
 
-#### `queen.consume(queue, [consumer_group], [batch_size], [lease_seconds])` → `TABLE`
-Consume messages from a queue.
 ```sql
-queen.consume(
-    p_queue TEXT,
-    p_consumer_group TEXT DEFAULT '__QUEUE_MODE__',
-    p_batch_size INTEGER DEFAULT 1,
-    p_lease_seconds INTEGER DEFAULT 60
-) RETURNS TABLE(partition_id UUID, id UUID, transaction_id TEXT, payload JSONB, created_at TIMESTAMPTZ, lease_id TEXT)
+SELECT queen.produce_one(
+    'orders',                    -- queue name
+    '{"orderId": 123}'::jsonb,   -- payload
+    'Default',                   -- partition (default: 'Default')
+    NULL,                        -- transaction_id (default: auto-generated)
+    FALSE                        -- notify (default: false)
+);
 ```
 
-#### `queen.consume(queue, partition, consumer_group, batch_size, [lease_seconds])` → `TABLE`
-Consume from a specific partition.
+#### `queen.consume_one(queue, consumer_group, batch_size, partition, timeout, auto_commit, subscription_mode)` -> `TABLE`
+
 ```sql
-queen.consume(
-    p_queue TEXT,
-    p_partition TEXT,
-    p_consumer_group TEXT,
-    p_batch_size INTEGER,
-    p_lease_seconds INTEGER DEFAULT 60
-) RETURNS TABLE(partition_id UUID, id UUID, transaction_id TEXT, payload JSONB, created_at TIMESTAMPTZ, lease_id TEXT)
+SELECT * FROM queen.consume_one(
+    'orders',                    -- queue name
+    '__QUEUE_MODE__',            -- consumer group
+    10,                          -- batch size
+    NULL,                        -- partition (NULL = any)
+    0,                           -- timeout seconds (0 = immediate)
+    FALSE,                       -- auto commit
+    NULL                         -- subscription mode ('new', 'all', or timestamp)
+);
+-- Returns: partition_id, id, transaction_id, payload, created_at, lease_id
 ```
 
-#### `queen.consume_one(queue, [consumer_group], [lease_seconds])` → `TABLE`
-Consume a single message.
+#### `queen.commit_one(txn_id, partition_id, lease_id, consumer_group, status, error_message)` -> `BOOLEAN`
+
 ```sql
-queen.consume_one(
-    p_queue TEXT,
-    p_consumer_group TEXT DEFAULT '__QUEUE_MODE__',
-    p_lease_seconds INTEGER DEFAULT 60
-) RETURNS TABLE(partition_id UUID, id UUID, transaction_id TEXT, payload JSONB, created_at TIMESTAMPTZ, lease_id TEXT)
+SELECT queen.commit_one(
+    'txn-123',                   -- transaction_id from consume
+    'partition-uuid'::uuid,      -- partition_id from consume
+    'lease-id',                  -- lease_id from consume
+    '__QUEUE_MODE__',            -- consumer group (default)
+    'completed',                 -- status: 'completed', 'failed', 'dlq'
+    NULL                         -- error message (optional)
+);
 ```
 
-#### `queen.consume_batch(queue, batch_size, [lease_seconds])` → `TABLE`
-Consume a batch of messages (queue mode, no consumer group required).
-```sql
-queen.consume_batch(
-    p_queue TEXT,
-    p_batch_size INTEGER,
-    p_lease_seconds INTEGER DEFAULT 60
-) RETURNS TABLE(partition_id UUID, id UUID, transaction_id TEXT, payload JSONB, created_at TIMESTAMPTZ, lease_id TEXT)
-```
+#### `queen.nack(txn_id, partition_id, lease_id, error_message, consumer_group)` -> `BOOLEAN`
 
-#### `queen.consume_auto_commit(queue, [consumer_group], [batch_size])` → `TABLE`
-Consume with automatic commit (fire-and-forget).
-```sql
-queen.consume_auto_commit(
-    p_queue TEXT,
-    p_consumer_group TEXT DEFAULT '__QUEUE_MODE__',
-    p_batch_size INTEGER DEFAULT 1
-) RETURNS TABLE(partition_id UUID, id UUID, transaction_id TEXT, payload JSONB, created_at TIMESTAMPTZ, lease_id TEXT)
-```
+Mark message for retry.
 
----
+#### `queen.reject(txn_id, partition_id, lease_id, error_message, consumer_group)` -> `BOOLEAN`
 
-### Poll Functions (Long Polling)
+Send message to Dead Letter Queue.
 
-#### `queen.poll(queue, [consumer_group], [batch_size], [lease_seconds], [timeout_seconds])` → `TABLE`
-Long polling - blocks until messages arrive or timeout.
-```sql
-queen.poll(
-    p_queue TEXT,
-    p_consumer_group TEXT DEFAULT '__QUEUE_MODE__',
-    p_batch_size INTEGER DEFAULT 1,
-    p_lease_seconds INTEGER DEFAULT 60,
-    p_timeout_seconds INTEGER DEFAULT 30
-) RETURNS TABLE(partition_id UUID, id UUID, transaction_id TEXT, payload JSONB, created_at TIMESTAMPTZ, lease_id TEXT)
-```
+#### `queen.renew_one(lease_id, extend_seconds)` -> `TIMESTAMPTZ`
 
-#### `queen.poll_one(queue, [consumer_group], [lease_seconds], [timeout_seconds])` → `TABLE`
-Long poll for a single message.
-```sql
-queen.poll_one(
-    p_queue TEXT,
-    p_consumer_group TEXT DEFAULT '__QUEUE_MODE__',
-    p_lease_seconds INTEGER DEFAULT 60,
-    p_timeout_seconds INTEGER DEFAULT 30
-) RETURNS TABLE(partition_id UUID, id UUID, transaction_id TEXT, payload JSONB, created_at TIMESTAMPTZ, lease_id TEXT)
-```
-
-#### `queen.poll(queue, partition, consumer_group, batch_size, lease_seconds, [timeout_seconds])` → `TABLE`
-Long poll from a specific partition.
-```sql
-queen.poll(
-    p_queue TEXT,
-    p_partition TEXT,
-    p_consumer_group TEXT,
-    p_batch_size INTEGER,
-    p_lease_seconds INTEGER,
-    p_timeout_seconds INTEGER DEFAULT 30
-) RETURNS TABLE(partition_id UUID, id UUID, transaction_id TEXT, payload JSONB, created_at TIMESTAMPTZ, lease_id TEXT)
-```
-
----
-
-### Commit Functions
-
-#### `queen.commit(transaction_id, partition_id, lease_id)` → `BOOLEAN`
-Commit successful processing (queue mode).
-```sql
-queen.commit(
-    p_transaction_id TEXT,
-    p_partition_id UUID,
-    p_lease_id TEXT
-) RETURNS BOOLEAN
-```
-
-#### `queen.commit(transaction_id, partition_id, lease_id, consumer_group)` → `BOOLEAN`
-Commit successful processing (pub/sub mode with explicit consumer group).
-```sql
-queen.commit(
-    p_transaction_id TEXT,
-    p_partition_id UUID,
-    p_lease_id TEXT,
-    p_consumer_group TEXT
-) RETURNS BOOLEAN
-```
-
-#### `queen.commit(transaction_id, partition_id, lease_id, status, consumer_group, [error_message])` → `BOOLEAN`
-Commit with explicit status ('completed', 'failed', 'retry', 'dlq').
-```sql
-queen.commit(
-    p_transaction_id TEXT,
-    p_partition_id UUID,
-    p_lease_id TEXT,
-    p_status TEXT,
-    p_consumer_group TEXT,
-    p_error_message TEXT DEFAULT NULL
-) RETURNS BOOLEAN
-```
-
-#### `queen.nack(transaction_id, partition_id, lease_id, [error_message], [consumer_group])` → `BOOLEAN`
-Mark as failed - message will be retried.
-```sql
-queen.nack(
-    p_transaction_id TEXT,
-    p_partition_id UUID,
-    p_lease_id TEXT,
-    p_error_message TEXT DEFAULT 'Processing failed',
-    p_consumer_group TEXT DEFAULT '__QUEUE_MODE__'
-) RETURNS BOOLEAN
-```
-
-#### `queen.reject(transaction_id, partition_id, lease_id, [error_message], [consumer_group])` → `BOOLEAN`
-Send directly to Dead Letter Queue (skip retries).
-```sql
-queen.reject(
-    p_transaction_id TEXT,
-    p_partition_id UUID,
-    p_lease_id TEXT,
-    p_error_message TEXT DEFAULT 'Rejected',
-    p_consumer_group TEXT DEFAULT '__QUEUE_MODE__'
-) RETURNS BOOLEAN
-```
-
----
+Extend lease. Returns new expiration or NULL if not found.
 
 ### Utility Functions
 
-#### `queen.configure(queue, [lease_time], [retry_limit], [dead_letter_queue])` → `BOOLEAN`
-Configure queue settings.
+#### `queen.configure(queue, lease_time, retry_limit, dead_letter_queue)` -> `BOOLEAN`
+
 ```sql
-queen.configure(
-    p_queue TEXT,
-    p_lease_time INTEGER DEFAULT 300,
-    p_retry_limit INTEGER DEFAULT 3,
-    p_dead_letter_queue BOOLEAN DEFAULT FALSE
-) RETURNS BOOLEAN
+SELECT queen.configure(
+    'orders',    -- queue name
+    60,          -- lease time seconds (default: 300)
+    3,           -- retry limit (default: 3)
+    TRUE         -- enable DLQ (default: false)
+);
 ```
 
-#### `queen.has_messages(queue, [partition], [consumer_group])` → `BOOLEAN`
+#### `queen.lag(queue, consumer_group)` -> `BIGINT`
+
+Get pending message count.
+
+#### `queen.has_messages(queue, consumer_group)` -> `BOOLEAN`
+
 Check if queue has pending messages.
-```sql
-queen.has_messages(
-    p_queue TEXT,
-    p_partition TEXT DEFAULT NULL,
-    p_consumer_group TEXT DEFAULT '__QUEUE_MODE__'
-) RETURNS BOOLEAN
-```
 
-#### `queen.depth(queue, [consumer_group])` → `BIGINT`
-Get approximate queue depth.
-```sql
-queen.depth(
-    p_queue TEXT,
-    p_consumer_group TEXT DEFAULT '__QUEUE_MODE__'
-) RETURNS BIGINT
-```
+#### `queen.seek(consumer_group, queue, to_end, to_timestamp)` -> `BOOLEAN`
 
-#### `queen.lag(queue, [consumer_group])` → `BIGINT`
-Alias for `depth()` (Kafka terminology).
-```sql
-queen.lag(
-    p_queue TEXT,
-    p_consumer_group TEXT DEFAULT '__QUEUE_MODE__'
-) RETURNS BIGINT
-```
+Reposition consumer group cursor.
 
-#### `queen.renew(lease_id, [extend_seconds])` → `TIMESTAMPTZ`
-Extend an active lease. Returns new expiration time or NULL if lease not found.
-```sql
-queen.renew(
-    p_lease_id TEXT,
-    p_extend_seconds INTEGER DEFAULT 60
-) RETURNS TIMESTAMPTZ
-```
+#### `queen.delete_consumer_group(consumer_group, queue, delete_metadata)` -> `BOOLEAN`
 
-#### `queen.forward(...)` → `UUID`
-Atomically commit source message and produce to destination queue.
-```sql
-queen.forward(
-    p_source_transaction_id TEXT,
-    p_source_partition_id UUID,
-    p_source_lease_id TEXT,
-    p_source_consumer_group TEXT,
-    p_dest_queue TEXT,
-    p_dest_payload JSONB,
-    p_dest_partition TEXT DEFAULT 'Default',
-    p_dest_transaction_id TEXT DEFAULT NULL
-) RETURNS UUID
-```
+Delete consumer group state.
 
----
+#### `queen.forward(source_txn_id, source_partition_id, source_lease_id, source_consumer_group, dest_queue, dest_payload, dest_partition, dest_txn_id)` -> `UUID`
 
-### Notification Functions
+Atomically commit source and produce to destination.
 
-#### `queen.notify(queue, [payload])` → `VOID`
+#### `queen.channel_name(queue)` -> `TEXT`
+
+Get NOTIFY channel name for a queue.
+
+#### `queen.notify(queue, payload)` -> `VOID`
+
 Send NOTIFY on queue channel.
-```sql
-queen.notify(
-    p_queue TEXT,
-    p_payload TEXT DEFAULT ''
-) RETURNS VOID
-```
-
-#### `queen.channel_name(queue)` → `TEXT`
-Get the NOTIFY channel name for a queue.
-```sql
-queen.channel_name(p_queue TEXT) RETURNS TEXT
--- Example: queen.channel_name('orders') → 'queen_orders'
-```
 
 ## Testing
 
 ```bash
-# Set database credentials
-export PGPASSWORD=postgres
-export PGUSER=postgres
-export PGHOST=localhost
-
-# Run tests
+cd pg_qpubsub
 ./test_extension.sh
-```
-
-## Directory Structure
-
-```
-pg_qpubsub/
-├── pg_qpubsub.control     # Extension metadata
-├── pg_qpubsub--1.0.sql    # Built extension (generated)
-├── wrappers.sql           # Simplified API wrappers
-├── build.sh               # Build script
-├── test_extension.sh      # Test runner
-├── Makefile               # PGXS makefile
-├── README.md              # This file
-└── test/
-    └── sql/               # Test files
-        ├── 01_setup.sql
-        ├── 02_push.sql    # Produce tests
-        ├── 03_pop.sql     # Consume tests
-        ├── 04_ack.sql     # Commit tests
-        ├── 05_transaction.sql
-        ├── 06_consumer_groups.sql
-        ├── 07_lease.sql
-        ├── 08_uuid_v7.sql
-        ├── 09_utilities.sql
-        ├── 10_dlq.sql
-        └── 11_long_poll.sql
 ```
 
 ## Dependencies
 
-- **pgcrypto** — PostgreSQL extension for `gen_random_bytes()` (UUID v7 generation)
-- **Queen schema** — Core tables and procedures from `../lib/schema/`
-
-> **Note:** `pgcrypto` is included by default in PostgreSQL and available on most managed database platforms (RDS, Cloud SQL, etc.). Just run `CREATE EXTENSION pgcrypto` before loading pg_qpubsub.
+- **pgcrypto** - Required for UUID v7 generation
+- **Queen schema** - Core tables and procedures from `../lib/schema/`

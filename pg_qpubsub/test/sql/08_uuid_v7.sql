@@ -1,273 +1,194 @@
 -- ============================================================================
--- TEST 08: UUID v7 Operations
+-- Test 08: UUID v7 Functions
 -- ============================================================================
-\echo '============================================================================'
-\echo '=== TEST 08: UUID v7 Operations ==='
-\echo '============================================================================'
 
--- Test 1: Basic UUID v7 generation
+\echo '=== Test 08: UUID v7 Functions ==='
+
+-- Test 1: uuid_generate_v7 returns valid UUID
 DO $$
 DECLARE
-    uuid1 UUID;
-    uuid_str TEXT;
+    v_uuid UUID;
+    v_uuid_text TEXT;
 BEGIN
-    uuid1 := queen.uuid_generate_v7();
-    uuid_str := uuid1::text;
+    v_uuid := queen.uuid_generate_v7();
     
-    IF uuid1 IS NOT NULL AND length(uuid_str) = 36 THEN
-        RAISE NOTICE 'PASS: UUID v7 generated: %', uuid1;
-    ELSE
-        RAISE EXCEPTION 'FAIL: Invalid UUID generated';
+    IF v_uuid IS NULL THEN
+        RAISE EXCEPTION 'FAIL: uuid_generate_v7 returned NULL';
     END IF;
+    
+    -- Check version nibble (should be 7)
+    v_uuid_text := v_uuid::TEXT;
+    IF substring(v_uuid_text, 15, 1) != '7' THEN
+        RAISE EXCEPTION 'FAIL: UUID version is not 7: %', v_uuid_text;
+    END IF;
+    
+    -- Check variant (should be 8, 9, a, or b)
+    IF substring(v_uuid_text, 20, 1) NOT IN ('8', '9', 'a', 'b') THEN
+        RAISE EXCEPTION 'FAIL: UUID variant incorrect: %', v_uuid_text;
+    END IF;
+    
+    RAISE NOTICE 'PASS: uuid_generate_v7 returns valid UUID: %', v_uuid;
 END;
 $$;
 
--- Test 2: UUID v7 version bits are correct (version 7 = 0111)
+-- Test 2: Sequential UUIDs are ordered
 DO $$
 DECLARE
-    uuid1 UUID;
-    uuid_str TEXT;
-    version_char CHAR;
+    v_uuid1 UUID;
+    v_uuid2 UUID;
+    v_uuid3 UUID;
 BEGIN
-    uuid1 := queen.uuid_generate_v7();
-    uuid_str := uuid1::text;
+    v_uuid1 := queen.uuid_generate_v7();
+    v_uuid2 := queen.uuid_generate_v7();
+    v_uuid3 := queen.uuid_generate_v7();
     
-    -- Version is in position 15 (after 8-4 chars + 1 hyphen)
-    version_char := substr(uuid_str, 15, 1);
-    
-    IF version_char = '7' THEN
-        RAISE NOTICE 'PASS: UUID v7 has correct version nibble (7)';
-    ELSE
-        RAISE EXCEPTION 'FAIL: UUID version is %, expected 7', version_char;
+    IF NOT (v_uuid1 < v_uuid2 AND v_uuid2 < v_uuid3) THEN
+        RAISE EXCEPTION 'FAIL: Sequential UUIDs not ordered: % < % < %', v_uuid1, v_uuid2, v_uuid3;
     END IF;
+    
+    RAISE NOTICE 'PASS: Sequential UUIDs are ordered';
 END;
 $$;
 
--- Test 3: UUID v7 variant bits are correct (variant 2 = 10xx)
+-- Test 3: uuid_v7_to_timestamptz extracts time
 DO $$
 DECLARE
-    uuid1 UUID;
-    uuid_str TEXT;
-    variant_char CHAR;
+    v_before TIMESTAMPTZ;
+    v_uuid UUID;
+    v_extracted TIMESTAMPTZ;
+    v_after TIMESTAMPTZ;
 BEGIN
-    uuid1 := queen.uuid_generate_v7();
-    uuid_str := uuid1::text;
+    v_before := clock_timestamp();
+    v_uuid := queen.uuid_generate_v7();
+    v_after := clock_timestamp();
     
-    -- Variant is first char after third hyphen (position 20)
-    variant_char := substr(uuid_str, 20, 1);
+    v_extracted := queen.uuid_v7_to_timestamptz(v_uuid);
     
-    -- Variant 2 means first two bits are 10, so char should be 8, 9, a, or b
-    IF variant_char IN ('8', '9', 'a', 'b') THEN
-        RAISE NOTICE 'PASS: UUID v7 has correct variant nibble (%)', variant_char;
-    ELSE
-        RAISE EXCEPTION 'FAIL: UUID variant is %, expected 8, 9, a, or b', variant_char;
+    IF v_extracted IS NULL THEN
+        RAISE EXCEPTION 'FAIL: uuid_v7_to_timestamptz returned NULL';
     END IF;
+    
+    -- Extracted time should be between before and after (with 1 second tolerance)
+    IF v_extracted < v_before - INTERVAL '1 second' OR v_extracted > v_after + INTERVAL '1 second' THEN
+        RAISE EXCEPTION 'FAIL: Extracted time % not between % and %', v_extracted, v_before, v_after;
+    END IF;
+    
+    RAISE NOTICE 'PASS: uuid_v7_to_timestamptz extracts correct time: %', v_extracted;
 END;
 $$;
 
--- Test 4: UUID v7s are chronologically sortable
+-- Test 4: uuid_v7_boundary creates boundary UUID
 DO $$
 DECLARE
-    uuids UUID[] := ARRAY[]::UUID[];
-    sorted_uuids UUID[];
-    all_in_order BOOLEAN := true;
-    i INT;
+    v_time TIMESTAMPTZ;
+    v_boundary UUID;
+    v_boundary_text TEXT;
 BEGIN
-    -- Generate 10 UUIDs
-    FOR i IN 1..10 LOOP
-        uuids := array_append(uuids, queen.uuid_generate_v7());
-        -- Small delay to ensure different timestamps
-        PERFORM pg_sleep(0.001);
-    END LOOP;
+    v_time := NOW();
+    v_boundary := queen.uuid_v7_boundary(v_time);
     
-    -- Sort them
-    SELECT array_agg(u ORDER BY u) INTO sorted_uuids
-    FROM unnest(uuids) AS u;
-    
-    -- Check if generation order matches sort order
-    FOR i IN 1..10 LOOP
-        IF uuids[i] != sorted_uuids[i] THEN
-            all_in_order := false;
-        END IF;
-    END LOOP;
-    
-    IF all_in_order THEN
-        RAISE NOTICE 'PASS: UUID v7s are chronologically sortable';
-    ELSE
-        RAISE NOTICE 'PASS: UUID v7 sorting test completed (may have sub-ms collisions)';
+    IF v_boundary IS NULL THEN
+        RAISE EXCEPTION 'FAIL: uuid_v7_boundary returned NULL';
     END IF;
+    
+    v_boundary_text := v_boundary::TEXT;
+    
+    -- Boundary UUID should have zeros in specific positions
+    IF substring(v_boundary_text, 15, 1) != '7' THEN
+        RAISE EXCEPTION 'FAIL: Boundary UUID version incorrect: %', v_boundary_text;
+    END IF;
+    
+    RAISE NOTICE 'PASS: uuid_v7_boundary creates valid boundary: %', v_boundary;
 END;
 $$;
 
--- Test 5: Extract timestamp from UUID v7
+-- Test 5: uuid_generate_v7_at creates UUID at specific time
 DO $$
 DECLARE
-    uuid1 UUID;
-    extracted_time TIMESTAMPTZ;
-    now_time TIMESTAMPTZ;
-    time_diff INTERVAL;
+    v_target_time TIMESTAMPTZ;
+    v_uuid UUID;
+    v_extracted TIMESTAMPTZ;
 BEGIN
-    now_time := clock_timestamp();
-    uuid1 := queen.uuid_generate_v7();
-    extracted_time := queen.uuid_v7_to_timestamptz(uuid1);
+    v_target_time := '2025-01-01 00:00:00+00'::TIMESTAMPTZ;
+    v_uuid := queen.uuid_generate_v7_at(v_target_time);
+    v_extracted := queen.uuid_v7_to_timestamptz(v_uuid);
     
-    time_diff := extracted_time - now_time;
-    
-    -- Should be within 1 second
-    IF abs(extract(epoch from time_diff)) < 1 THEN
-        RAISE NOTICE 'PASS: Extracted timestamp matches current time (diff: %)', time_diff;
-    ELSE
-        RAISE EXCEPTION 'FAIL: Extracted timestamp too different (diff: %)', time_diff;
+    -- Extracted time should match target (within 1 second)
+    IF ABS(EXTRACT(EPOCH FROM v_extracted - v_target_time)) > 1 THEN
+        RAISE EXCEPTION 'FAIL: uuid_generate_v7_at time mismatch (target: %, got: %)', v_target_time, v_extracted;
     END IF;
+    
+    RAISE NOTICE 'PASS: uuid_generate_v7_at creates UUID at specific time';
 END;
 $$;
 
--- Test 6: UUID v7 boundary function for range queries
-DO $$
-DECLARE
-    boundary_uuid UUID;
-    test_time TIMESTAMPTZ;
-    extracted_time TIMESTAMPTZ;
-BEGIN
-    test_time := '2024-01-15 12:00:00+00'::timestamptz;
-    boundary_uuid := queen.uuid_v7_boundary(test_time);
-    extracted_time := queen.uuid_v7_to_timestamptz(boundary_uuid);
-    
-    -- Should match the input time (within 1 second due to ms precision)
-    IF abs(extract(epoch from (extracted_time - test_time))) < 1 THEN
-        RAISE NOTICE 'PASS: uuid_v7_boundary creates UUID with correct timestamp';
-    ELSE
-        RAISE EXCEPTION 'FAIL: Boundary UUID timestamp mismatch (expected %, got %)', test_time, extracted_time;
-    END IF;
-END;
-$$;
+-- Test 6: Range query using UUID v7 boundary
+SELECT queen.configure('test_uuid_range', 60, 3, false);
 
--- Test 7: UUID v7 at specific time (with randomness)
-DO $$
-DECLARE
-    uuid1 UUID;
-    uuid2 UUID;
-    test_time TIMESTAMPTZ;
-BEGIN
-    test_time := '2024-06-01 00:00:00+00'::timestamptz;
-    
-    uuid1 := queen.uuid_generate_v7_at(test_time);
-    uuid2 := queen.uuid_generate_v7_at(test_time);
-    
-    -- Should be different (random bits differ)
-    IF uuid1 != uuid2 THEN
-        RAISE NOTICE 'PASS: uuid_generate_v7_at creates unique UUIDs for same timestamp';
-    ELSE
-        RAISE EXCEPTION 'FAIL: uuid_generate_v7_at returned identical UUIDs';
-    END IF;
-END;
-$$;
-
--- Test 8: UUID v7 sequence counter for sub-millisecond ordering
-DO $$
-DECLARE
-    uuids UUID[] := ARRAY[]::UUID[];
-    all_unique BOOLEAN;
-    all_sorted BOOLEAN := true;
-    i INT;
-BEGIN
-    -- Generate many UUIDs in rapid succession (same millisecond)
-    FOR i IN 1..100 LOOP
-        uuids := array_append(uuids, queen.uuid_generate_v7());
-    END LOOP;
-    
-    -- Check all are unique
-    SELECT COUNT(DISTINCT u) = 100 INTO all_unique
-    FROM unnest(uuids) AS u;
-    
-    -- Check they're in order
-    FOR i IN 2..100 LOOP
-        IF uuids[i] < uuids[i-1] THEN
-            all_sorted := false;
-        END IF;
-    END LOOP;
-    
-    IF all_unique AND all_sorted THEN
-        RAISE NOTICE 'PASS: UUID v7 sequence counter maintains order for rapid generation';
-    ELSIF all_unique THEN
-        RAISE NOTICE 'PASS: All UUIDs unique (sorted=%)', all_sorted;
-    ELSE
-        RAISE EXCEPTION 'FAIL: UUID uniqueness or ordering issue';
-    END IF;
-END;
-$$;
-
--- Test 9: UUID v7 used in message IDs
-DO $$
-DECLARE
-    msg_id UUID;
-    version_char CHAR;
-BEGIN
-    -- Produce creates a message with UUID v7 ID
-    msg_id := queen.produce('test-uuid-message', '{"uuid": "test"}'::jsonb);
-    version_char := substr(msg_id::text, 15, 1);
-    
-    IF version_char = '7' THEN
-        RAISE NOTICE 'PASS: Message ID is UUID v7: %', msg_id;
-    ELSE
-        RAISE NOTICE 'PASS: Message ID generated (version char: %)', version_char;
-    END IF;
-END;
-$$;
-
--- Test 10: Range query using uuid_v7_boundary
--- Note: This test uses separate statements to allow multiple produces
-SELECT queen.produce('test-uuid-range', '{"range": 1}'::jsonb);
+-- Produce some messages
+SELECT queen.produce_one('test_uuid_range', '{"seq": 1}'::jsonb, 'Default', 'uuid-range-1');
 SELECT pg_sleep(0.1);
-
-DO $$
-DECLARE
-    start_time TIMESTAMPTZ := clock_timestamp();
-BEGIN
-    -- Store start time in a temp table for later use
-    CREATE TEMP TABLE IF NOT EXISTS test_times (name TEXT PRIMARY KEY, ts TIMESTAMPTZ);
-    INSERT INTO test_times VALUES ('start', start_time) ON CONFLICT (name) DO UPDATE SET ts = EXCLUDED.ts;
-END;
-$$;
-
-SELECT queen.produce('test-uuid-range', '{"range": 2}'::jsonb);
-SELECT queen.produce('test-uuid-range', '{"range": 3}'::jsonb);
-
-DO $$
-DECLARE
-    end_time TIMESTAMPTZ := clock_timestamp();
-BEGIN
-    INSERT INTO test_times VALUES ('end', end_time) ON CONFLICT (name) DO UPDATE SET ts = EXCLUDED.ts;
-END;
-$$;
-
+SELECT queen.produce_one('test_uuid_range', '{"seq": 2}'::jsonb, 'Default', 'uuid-range-2');
 SELECT pg_sleep(0.1);
-SELECT queen.produce('test-uuid-range', '{"range": 4}'::jsonb);
+SELECT queen.produce_one('test_uuid_range', '{"seq": 3}'::jsonb, 'Default', 'uuid-range-3');
 
 DO $$
 DECLARE
-    start_time TIMESTAMPTZ;
-    end_time TIMESTAMPTZ;
-    start_uuid UUID;
-    end_uuid UUID;
-    messages_in_range INT;
+    v_midpoint TIMESTAMPTZ;
+    v_boundary UUID;
+    v_count_before INT;
+    v_count_after INT;
 BEGIN
-    SELECT ts INTO start_time FROM test_times WHERE name = 'start';
-    SELECT ts INTO end_time FROM test_times WHERE name = 'end';
+    -- Get midpoint time
+    v_midpoint := NOW() - INTERVAL '50 milliseconds';
+    v_boundary := queen.uuid_v7_boundary(v_midpoint);
     
-    -- Create boundary UUIDs
-    start_uuid := queen.uuid_v7_boundary(start_time);
-    end_uuid := queen.uuid_v7_boundary(end_time);
+    -- Count messages before and after boundary
+    SELECT COUNT(*) INTO v_count_before
+    FROM queen.messages m
+    JOIN queen.partitions p ON m.partition_id = p.id
+    JOIN queen.queues q ON p.queue_id = q.id
+    WHERE q.name = 'test_uuid_range'
+      AND m.id < v_boundary;
     
-    -- Query messages in range
-    SELECT COUNT(*) INTO messages_in_range
-    FROM queen.messages
-    WHERE id >= start_uuid AND id <= end_uuid;
+    SELECT COUNT(*) INTO v_count_after
+    FROM queen.messages m
+    JOIN queen.partitions p ON m.partition_id = p.id
+    JOIN queen.queues q ON p.queue_id = q.id
+    WHERE q.name = 'test_uuid_range'
+      AND m.id >= v_boundary;
     
-    RAISE NOTICE 'PASS: Range query with uuid_v7_boundary found % messages in time window', messages_in_range;
+    IF v_count_before + v_count_after != 3 THEN
+        RAISE EXCEPTION 'FAIL: Total count should be 3, got % + %', v_count_before, v_count_after;
+    END IF;
     
-    DROP TABLE IF EXISTS test_times;
+    RAISE NOTICE 'PASS: Range queries with UUID v7 boundary work (before: %, after: %)', v_count_before, v_count_after;
 END;
 $$;
 
-\echo 'PASS: UUID v7 tests completed'
+-- Test 7: High-volume UUID generation maintains ordering
+DO $$
+DECLARE
+    v_uuids UUID[];
+    v_i INT;
+    v_prev UUID;
+BEGIN
+    -- Generate 100 UUIDs rapidly
+    FOR v_i IN 1..100 LOOP
+        v_uuids := array_append(v_uuids, queen.uuid_generate_v7());
+    END LOOP;
+    
+    -- Verify all are in order
+    v_prev := v_uuids[1];
+    FOR v_i IN 2..100 LOOP
+        IF v_uuids[v_i] <= v_prev THEN
+            RAISE EXCEPTION 'FAIL: UUID at position % not greater than previous', v_i;
+        END IF;
+        v_prev := v_uuids[v_i];
+    END LOOP;
+    
+    RAISE NOTICE 'PASS: High-volume UUID generation maintains strict ordering';
+END;
+$$;
+
+\echo 'Test 08: PASSED'

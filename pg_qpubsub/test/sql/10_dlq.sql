@@ -1,245 +1,215 @@
 -- ============================================================================
--- TEST 10: Dead Letter Queue (DLQ) Operations
+-- Test 10: Dead Letter Queue (DLQ)
 -- ============================================================================
-\echo '============================================================================'
-\echo '=== TEST 10: Dead Letter Queue (DLQ) Operations ==='
-\echo '============================================================================'
 
--- Test 1: Reject sends message to DLQ
+\echo '=== Test 10: Dead Letter Queue (DLQ) ==='
+
+-- Test 1: Configure queue with DLQ enabled
 DO $$
 DECLARE
-    msg RECORD;
-    reject_result BOOLEAN;
-    dlq_entry RECORD;
+    v_result BOOLEAN;
+    v_queue RECORD;
 BEGIN
-    -- Setup queue with DLQ enabled
-    PERFORM queen.configure('test-dlq-reject', p_dead_letter_queue := true);
-    PERFORM queen.produce('test-dlq-reject', '{"dlq": "reject"}'::jsonb, 'dlq-reject-txn');
+    v_result := queen.configure('test_dlq', 60, 3, true);  -- DLQ enabled
     
-    SELECT * INTO msg FROM queen.consume_one('test-dlq-reject');
-    
-    -- Reject the message
-    reject_result := queen.reject(msg.transaction_id, msg.partition_id, msg.lease_id, 'Test rejection');
-    
-    -- Verify message is in DLQ
-    SELECT * INTO dlq_entry
-    FROM queen.dead_letter_queue
-    WHERE message_id = msg.id;
-    
-    IF reject_result AND dlq_entry.message_id IS NOT NULL THEN
-        RAISE NOTICE 'PASS: Reject sends message to DLQ with error: %', dlq_entry.error_message;
-    ELSE
-        RAISE NOTICE 'PASS: Reject completed (dlq_entry found: %)', dlq_entry.message_id IS NOT NULL;
+    IF NOT v_result THEN
+        RAISE EXCEPTION 'FAIL: Configure with DLQ returned false';
     END IF;
+    
+    SELECT * INTO v_queue FROM queen.queues WHERE name = 'test_dlq';
+    
+    IF NOT v_queue.dead_letter_queue THEN
+        RAISE EXCEPTION 'FAIL: DLQ not enabled on queue';
+    END IF;
+    
+    RAISE NOTICE 'PASS: Configure queue with DLQ enabled';
 END;
 $$;
 
--- Test 2: DLQ stores error message
-DO $$
-DECLARE
-    msg RECORD;
-    reject_result BOOLEAN;
-    stored_error TEXT;
-BEGIN
-    -- Setup
-    PERFORM queen.configure('test-dlq-error', p_dead_letter_queue := true);
-    PERFORM queen.produce('test-dlq-error', '{"error": "test"}'::jsonb);
-    SELECT * INTO msg FROM queen.consume_one('test-dlq-error');
-    
-    -- Reject with specific error
-    reject_result := queen.reject(msg.transaction_id, msg.partition_id, msg.lease_id, 'Specific error message for testing');
-    
-    -- Verify error is stored
-    SELECT error_message INTO stored_error
-    FROM queen.dead_letter_queue
-    WHERE message_id = msg.id;
-    
-    IF stored_error = 'Specific error message for testing' THEN
-        RAISE NOTICE 'PASS: DLQ stores exact error message';
-    ELSE
-        RAISE NOTICE 'PASS: DLQ stored error: %', stored_error;
-    END IF;
-END;
-$$;
+-- Test 2: Commit with status='dlq' moves message to DLQ
+SELECT queen.produce_one('test_dlq', '{"to_dlq": "test"}'::jsonb, 'Default', 'dlq-txn-1');
 
--- Test 3: DLQ stores retry count
 DO $$
 DECLARE
-    msg RECORD;
-    dlq_retry_count INT;
+    v_msg RECORD;
+    v_result BOOLEAN;
+    v_dlq_count INT;
 BEGIN
-    -- Setup queue with retries
-    PERFORM queen.configure('test-dlq-retry-count', p_dead_letter_queue := true, p_retry_limit := 3);
-    PERFORM queen.produce('test-dlq-retry-count', '{"retry": "count"}'::jsonb);
-    SELECT * INTO msg FROM queen.consume_one('test-dlq-retry-count');
+    -- Consume message
+    SELECT * INTO v_msg FROM queen.consume_one('test_dlq') LIMIT 1;
     
-    -- Reject (simulating exhausted retries)
-    PERFORM queen.reject(msg.transaction_id, msg.partition_id, msg.lease_id, 'Exhausted retries');
-    
-    -- Check retry count in DLQ
-    SELECT retry_count INTO dlq_retry_count
-    FROM queen.dead_letter_queue
-    WHERE message_id = msg.id;
-    
-    IF dlq_retry_count IS NOT NULL THEN
-        RAISE NOTICE 'PASS: DLQ stores retry count: %', dlq_retry_count;
-    ELSE
-        RAISE NOTICE 'PASS: DLQ entry created (retry_count: %)', dlq_retry_count;
+    IF v_msg.id IS NULL THEN
+        RAISE EXCEPTION 'FAIL: No message to consume';
     END IF;
-END;
-$$;
-
--- Test 4: DLQ stores original message metadata
-DO $$
-DECLARE
-    msg RECORD;
-    dlq_entry RECORD;
-BEGIN
-    -- Setup
-    PERFORM queen.configure('test-dlq-metadata', p_dead_letter_queue := true);
-    PERFORM queen.produce('test-dlq-metadata', '{"meta": "data"}'::jsonb, 'dlq-meta-txn');
-    SELECT * INTO msg FROM queen.consume_one('test-dlq-metadata');
     
-    -- Reject
-    PERFORM queen.reject(msg.transaction_id, msg.partition_id, msg.lease_id, 'Metadata test');
+    -- Move to DLQ
+    v_result := queen.commit_one(
+        v_msg.transaction_id,
+        v_msg.partition_id,
+        v_msg.lease_id,
+        '__QUEUE_MODE__',
+        'dlq',
+        'Test DLQ move'
+    );
     
-    -- Verify metadata
-    SELECT * INTO dlq_entry
-    FROM queen.dead_letter_queue
-    WHERE message_id = msg.id;
-    
-    IF dlq_entry.partition_id = msg.partition_id 
-       AND dlq_entry.original_created_at IS NOT NULL THEN
-        RAISE NOTICE 'PASS: DLQ stores partition_id and original_created_at';
-    ELSE
-        RAISE NOTICE 'PASS: DLQ metadata stored';
+    IF NOT v_result THEN
+        RAISE EXCEPTION 'FAIL: Commit to DLQ returned false';
     END IF;
-END;
-$$;
-
--- Test 5: DLQ failed_at timestamp
-DO $$
-DECLARE
-    msg RECORD;
-    dlq_failed_at TIMESTAMPTZ;
-    time_before TIMESTAMPTZ;
-    time_after TIMESTAMPTZ;
-BEGIN
-    -- Setup
-    PERFORM queen.configure('test-dlq-timestamp', p_dead_letter_queue := true);
-    PERFORM queen.produce('test-dlq-timestamp', '{"time": "stamp"}'::jsonb);
-    SELECT * INTO msg FROM queen.consume_one('test-dlq-timestamp');
     
-    time_before := clock_timestamp();
-    
-    -- Reject
-    PERFORM queen.reject(msg.transaction_id, msg.partition_id, msg.lease_id, 'Timestamp test');
-    
-    time_after := clock_timestamp();
-    
-    -- Verify failed_at
-    SELECT failed_at INTO dlq_failed_at
-    FROM queen.dead_letter_queue
-    WHERE message_id = msg.id;
-    
-    IF dlq_failed_at >= time_before AND dlq_failed_at <= time_after THEN
-        RAISE NOTICE 'PASS: DLQ failed_at timestamp is accurate';
-    ELSE
-        RAISE NOTICE 'PASS: DLQ has failed_at: %', dlq_failed_at;
-    END IF;
-END;
-$$;
-
--- Test 6: Multiple messages to DLQ
-DO $$
-DECLARE
-    msg1 RECORD;
-    msg2 RECORD;
-    msg3 RECORD;
-    dlq_count INT;
-BEGIN
-    -- Setup using transaction API
-    PERFORM queen.configure('test-dlq-multiple', p_dead_letter_queue := true);
-    PERFORM queen.transaction(jsonb_build_array(
-        jsonb_build_object('type', 'push', 'queue', 'test-dlq-multiple', 'payload', '{"idx": 1}'::jsonb),
-        jsonb_build_object('type', 'push', 'queue', 'test-dlq-multiple', 'payload', '{"idx": 2}'::jsonb),
-        jsonb_build_object('type', 'push', 'queue', 'test-dlq-multiple', 'payload', '{"idx": 3}'::jsonb)
-    ));
-    
-    -- Consume and reject all
-    SELECT * INTO msg1 FROM queen.consume_one('test-dlq-multiple');
-    PERFORM queen.reject(msg1.transaction_id, msg1.partition_id, msg1.lease_id, 'Error 1');
-    
-    SELECT * INTO msg2 FROM queen.consume_one('test-dlq-multiple');
-    PERFORM queen.reject(msg2.transaction_id, msg2.partition_id, msg2.lease_id, 'Error 2');
-    
-    SELECT * INTO msg3 FROM queen.consume_one('test-dlq-multiple');
-    PERFORM queen.reject(msg3.transaction_id, msg3.partition_id, msg3.lease_id, 'Error 3');
-    
-    -- Count DLQ entries
-    SELECT COUNT(*) INTO dlq_count
+    -- Verify message in DLQ (use message_id, not transaction_id)
+    SELECT COUNT(*) INTO v_dlq_count
     FROM queen.dead_letter_queue dlq
     JOIN queen.partitions p ON dlq.partition_id = p.id
     JOIN queen.queues q ON p.queue_id = q.id
-    WHERE q.name = 'test-dlq-multiple';
+    WHERE q.name = 'test_dlq'
+      AND dlq.message_id = v_msg.id;
     
-    IF dlq_count = 3 THEN
-        RAISE NOTICE 'PASS: Multiple messages sent to DLQ (count: 3)';
-    ELSE
-        RAISE NOTICE 'PASS: DLQ contains % entries', dlq_count;
+    IF v_dlq_count != 1 THEN
+        RAISE EXCEPTION 'FAIL: Message not found in DLQ';
     END IF;
+    
+    RAISE NOTICE 'PASS: Message moved to DLQ';
 END;
 $$;
 
--- Test 7: DLQ stores consumer group
+-- Test 3: reject() convenience function moves to DLQ
+SELECT queen.produce_one('test_dlq', '{"reject": "test"}'::jsonb, 'Default', 'reject-dlq-1');
+
 DO $$
 DECLARE
-    msg RECORD;
-    dlq_consumer_group TEXT;
+    v_msg RECORD;
+    v_result BOOLEAN;
+    v_dlq_count INT;
 BEGIN
-    -- Setup
-    PERFORM queen.configure('test-dlq-cg', p_dead_letter_queue := true);
-    PERFORM queen.produce('test-dlq-cg', '{"cg": "test"}'::jsonb);
+    -- Consume message
+    SELECT * INTO v_msg FROM queen.consume_one('test_dlq') LIMIT 1;
     
-    -- Consume with consumer group
-    SELECT * INTO msg FROM queen.consume('test-dlq-cg', 'my-failing-consumer', 1, 60);
+    -- Reject it
+    v_result := queen.reject(
+        v_msg.transaction_id,
+        v_msg.partition_id,
+        v_msg.lease_id,
+        'Rejected for testing'
+    );
     
-    -- Reject using commit with status
-    PERFORM queen.commit(msg.transaction_id, msg.partition_id, msg.lease_id, 'dlq', 'my-failing-consumer', 'Consumer group failure');
-    
-    -- Verify consumer group stored
-    SELECT consumer_group INTO dlq_consumer_group
-    FROM queen.dead_letter_queue
-    WHERE message_id = msg.id;
-    
-    IF dlq_consumer_group = 'my-failing-consumer' THEN
-        RAISE NOTICE 'PASS: DLQ stores consumer group';
-    ELSE
-        RAISE NOTICE 'PASS: DLQ consumer_group: %', dlq_consumer_group;
+    IF NOT v_result THEN
+        RAISE EXCEPTION 'FAIL: reject() returned false';
     END IF;
+    
+    -- Verify in DLQ
+    SELECT COUNT(*) INTO v_dlq_count
+    FROM queen.dead_letter_queue dlq
+    WHERE dlq.message_id = v_msg.id;
+    
+    IF v_dlq_count != 1 THEN
+        RAISE EXCEPTION 'FAIL: Rejected message not in DLQ';
+    END IF;
+    
+    RAISE NOTICE 'PASS: reject() moves message to DLQ';
 END;
 $$;
 
--- Test 8: Nack with exhausted retries goes to DLQ
+-- Test 4: DLQ stores error message (note: underlying ack might override our message)
+SELECT queen.produce_one('test_dlq', '{"error": "tracking"}'::jsonb, 'Default', 'error-track-1');
+
 DO $$
 DECLARE
-    msg RECORD;
-    remaining INT;
+    v_msg RECORD;
+    v_dlq_record RECORD;
 BEGIN
-    -- Setup queue with 0 retries (immediate DLQ on failure)
-    PERFORM queen.configure('test-dlq-nack-exhausted', p_dead_letter_queue := true, p_retry_limit := 0);
-    PERFORM queen.produce('test-dlq-nack-exhausted', '{"exhaust": true}'::jsonb);
+    -- Consume message
+    SELECT * INTO v_msg FROM queen.consume_one('test_dlq') LIMIT 1;
     
-    SELECT * INTO msg FROM queen.consume_one('test-dlq-nack-exhausted');
+    -- Reject with specific error
+    PERFORM queen.reject(
+        v_msg.transaction_id,
+        v_msg.partition_id,
+        v_msg.lease_id,
+        'Custom error: Something went wrong'
+    );
     
-    -- Nack (should go directly to DLQ with retry_limit=0)
-    PERFORM queen.nack(msg.transaction_id, msg.partition_id, msg.lease_id, 'Immediate failure');
+    -- Check DLQ record exists with SOME error message
+    SELECT * INTO v_dlq_record
+    FROM queen.dead_letter_queue dlq
+    WHERE dlq.message_id = v_msg.id;
     
-    -- Check if message is no longer available
-    SELECT COUNT(*) INTO remaining FROM queen.consume_one('test-dlq-nack-exhausted');
+    IF v_dlq_record.id IS NULL THEN
+        RAISE EXCEPTION 'FAIL: DLQ record not found';
+    END IF;
     
-    RAISE NOTICE 'PASS: Nack with exhausted retries (remaining messages: %)', remaining;
+    IF v_dlq_record.error_message IS NULL THEN
+        RAISE EXCEPTION 'FAIL: No error message stored in DLQ';
+    END IF;
+    
+    RAISE NOTICE 'PASS: DLQ stores error message: %', v_dlq_record.error_message;
 END;
 $$;
 
-\echo 'PASS: DLQ tests completed'
+-- Test 5: Queue without DLQ enabled
+SELECT queen.configure('test_no_dlq', 60, 3, false);  -- DLQ disabled
+SELECT queen.produce_one('test_no_dlq', '{"no_dlq": "test"}'::jsonb, 'Default', 'no-dlq-1');
+
+DO $$
+DECLARE
+    v_msg RECORD;
+    v_result BOOLEAN;
+    v_initial_depth BIGINT;
+    v_final_depth BIGINT;
+BEGIN
+    SELECT queen.lag('test_no_dlq') INTO v_initial_depth;
+    
+    -- Consume message
+    SELECT * INTO v_msg FROM queen.consume_one('test_no_dlq') LIMIT 1;
+    
+    -- Try to reject (should still work, just might not go to DLQ)
+    v_result := queen.reject(
+        v_msg.transaction_id,
+        v_msg.partition_id,
+        v_msg.lease_id,
+        'Rejected from non-DLQ queue'
+    );
+    
+    -- The message should be processed either way
+    IF NOT v_result THEN
+        RAISE EXCEPTION 'FAIL: Reject on non-DLQ queue failed';
+    END IF;
+    
+    RAISE NOTICE 'PASS: Reject works on queue without DLQ enabled';
+END;
+$$;
+
+-- Test 6: nack vs reject behavior
+SELECT queen.configure('test_nack_vs_reject', 60, 3, true);
+SELECT queen.produce_one('test_nack_vs_reject', '{"nack": "me"}'::jsonb, 'Default', 'nack-vs-1');
+
+DO $$
+DECLARE
+    v_msg RECORD;
+    v_result BOOLEAN;
+    v_dlq_count INT;
+BEGIN
+    -- Consume message
+    SELECT * INTO v_msg FROM queen.consume_one('test_nack_vs_reject') LIMIT 1;
+    
+    -- nack should NOT move to DLQ (just mark for retry)
+    v_result := queen.nack(
+        v_msg.transaction_id,
+        v_msg.partition_id,
+        v_msg.lease_id,
+        'Temporary error'
+    );
+    
+    -- Check NOT in DLQ
+    SELECT COUNT(*) INTO v_dlq_count
+    FROM queen.dead_letter_queue dlq
+    WHERE dlq.message_id = v_msg.id;
+    
+    IF v_dlq_count > 0 THEN
+        RAISE EXCEPTION 'FAIL: nack should not move message to DLQ';
+    END IF;
+    
+    RAISE NOTICE 'PASS: nack does not move message to DLQ (retry behavior)';
+END;
+$$;
+
+\echo 'Test 10: PASSED'

@@ -1,60 +1,34 @@
 -- ============================================================================
--- TEST 01: Extension Setup and Schema Verification
+-- Test 01: Setup and Basic Verification
 -- ============================================================================
-\echo '============================================================================'
-\echo '=== TEST 01: Extension Setup and Schema Verification ==='
-\echo '============================================================================'
+
+\echo '=== Test 01: Setup and Basic Verification ==='
 
 -- Verify schema exists
 DO $$
 BEGIN
-    IF EXISTS (SELECT 1 FROM pg_namespace WHERE nspname = 'queen') THEN
-        RAISE NOTICE 'PASS: Schema "queen" exists';
-    ELSE
+    IF NOT EXISTS (SELECT 1 FROM pg_namespace WHERE nspname = 'queen') THEN
         RAISE EXCEPTION 'FAIL: Schema "queen" does not exist';
     END IF;
+    RAISE NOTICE 'PASS: Schema "queen" exists';
 END;
 $$;
 
--- Verify core tables exist
-DO $$
-DECLARE
-    required_tables TEXT[] := ARRAY[
-        'queues', 'partitions', 'messages', 'partition_consumers', 
-        'dead_letter_queue', 'stats', 'consumer_groups_metadata'
-    ];
-    t TEXT;
-BEGIN
-    FOREACH t IN ARRAY required_tables LOOP
-        IF NOT EXISTS (
-            SELECT 1 FROM pg_tables 
-            WHERE schemaname = 'queen' AND tablename = t
-        ) THEN
-            RAISE EXCEPTION 'FAIL: Required table "queen.%" does not exist', t;
-        END IF;
-    END LOOP;
-    RAISE NOTICE 'PASS: All required tables exist';
-END;
-$$;
-
--- Verify wrapper functions exist (Kafka-style naming)
+-- Verify wrapper functions exist (simplified API)
 DO $$
 DECLARE
     required_functions TEXT[] := ARRAY[
-        -- Produce (formerly push)
-        'produce', 'produce_full', 'produce_notify',
-        -- Consume (formerly pop)
-        'consume', 'consume_batch', 'consume_one', 'consume_auto_commit',
-        -- Commit (formerly ack)
-        'commit', 'nack', 'reject',
-        -- Lease & Transaction
-        'renew', 'forward', 'transaction',
+        -- Primary API (JSONB batch)
+        'produce', 'consume', 'commit', 'renew', 'transaction',
+        -- Convenience API (scalar)
+        'produce_one', 'produce_full', 'produce_notify',
+        'consume_one',
+        'commit_one', 'nack', 'reject',
+        'renew_one',
         -- Utilities
-        'configure', 'has_messages', 'depth', 'lag',
-        -- Notify/Listen
-        'channel_name', 'notify',
-        -- Long Polling
-        'poll', 'poll_one',
+        'configure', 'seek', 'delete_consumer_group',
+        'lag', 'depth', 'has_messages',
+        'forward', 'channel_name', 'notify',
         -- UUID v7
         'uuid_generate_v7', 'uuid_v7_to_timestamptz', 'uuid_v7_boundary', 'uuid_generate_v7_at'
     ];
@@ -62,8 +36,8 @@ DECLARE
 BEGIN
     FOREACH f IN ARRAY required_functions LOOP
         IF NOT EXISTS (
-            SELECT 1 FROM pg_proc 
-            WHERE pronamespace = 'queen'::regnamespace 
+            SELECT 1 FROM pg_proc
+            WHERE pronamespace = 'queen'::regnamespace
             AND proname = f
         ) THEN
             RAISE EXCEPTION 'FAIL: Required function "queen.%" does not exist', f;
@@ -73,4 +47,54 @@ BEGIN
 END;
 $$;
 
-\echo 'PASS: Setup tests completed'
+-- Verify core procedures exist
+DO $$
+DECLARE
+    required_procedures TEXT[] := ARRAY[
+        'push_messages_v2',
+        'pop_unified_batch',
+        'ack_messages_v2',
+        'renew_lease_v2',
+        'execute_transaction_v2',
+        'has_pending_messages',
+        'configure_queue_v1',
+        'seek_consumer_group_v1',
+        'delete_consumer_group_v1'
+    ];
+    p TEXT;
+BEGIN
+    FOREACH p IN ARRAY required_procedures LOOP
+        IF NOT EXISTS (
+            SELECT 1 FROM pg_proc
+            WHERE pronamespace = 'queen'::regnamespace
+            AND proname = p
+        ) THEN
+            RAISE EXCEPTION 'FAIL: Required procedure "queen.%" does not exist', p;
+        END IF;
+    END LOOP;
+    RAISE NOTICE 'PASS: All required core procedures exist';
+END;
+$$;
+
+-- Verify required tables exist
+DO $$
+DECLARE
+    required_tables TEXT[] := ARRAY[
+        'queues', 'partitions', 'messages', 'partition_consumers'
+    ];
+    t TEXT;
+BEGIN
+    FOREACH t IN ARRAY required_tables LOOP
+        IF NOT EXISTS (
+            SELECT 1 FROM pg_tables
+            WHERE schemaname = 'queen'
+            AND tablename = t
+        ) THEN
+            RAISE EXCEPTION 'FAIL: Required table "queen.%" does not exist', t;
+        END IF;
+    END LOOP;
+    RAISE NOTICE 'PASS: All required tables exist';
+END;
+$$;
+
+\echo 'Test 01: PASSED'

@@ -4,17 +4,25 @@
  * This example demonstrates using pg_qpubsub procedures directly with the
  * native PostgreSQL driver, without the Queen client library.
  * 
- * API follows Kafka-style naming:
- * - produce  (send messages to a queue)
- * - consume  (receive messages from a queue)
- * - commit   (acknowledge message processing)
- * - poll     (consume with wait/long-polling)
+ * TWO-TIER API:
+ * 
+ * PRIMARY (JSONB batch - best for programmatic use):
+ * - produce(items_jsonb)  - Batch produce, one call = guaranteed ordering
+ * - consume(requests_jsonb) - Batch consume  
+ * - commit(acks_jsonb)    - Batch acknowledge
+ * 
+ * CONVENIENCE (scalar params - for SQL/simple cases):
+ * - produce_one(queue, payload, partition, transaction_id, notify)
+ * - consume_one(queue, consumer_group, batch_size, partition, timeout, auto_commit, subscription_mode)
+ * - commit_one(transaction_id, partition_id, lease_id, consumer_group, status, error_message)
  * 
  * Features demonstrated:
  * - Creating/configuring a queue
  * - Producing messages
  * - Consuming from multiple consumer groups (pub/sub fan-out)
  * - Manual consume and commit
+ * - Subscription modes for consumer groups
+ * - Queue lag/depth checking
  * 
  * Prerequisites:
  * - PostgreSQL with pg_qpubsub extension loaded
@@ -22,9 +30,6 @@
  * 
  * Usage:
  *   DATABASE_URL=postgres://user:pass@localhost/dbname node 31-pg-qpubsub-direct.js
- * 
- * NOTE: When using pg driver with PostgreSQL functions, explicit type casts
- * (e.g., $1::text) are required for proper function overload resolution.
  */
 
 import pg from 'pg'
@@ -34,7 +39,7 @@ const { Pool } = pg
 
 // Configuration
 const DATABASE_URL = process.env.DATABASE_URL || 'postgres://postgres:postgres@localhost/postgres'
-const QUEUE_NAME = 'orders-example'  // Fresh queue name
+const QUEUE_NAME = 'orders-demo'
 
 // Create connection pool
 const pool = new Pool({ connectionString: DATABASE_URL })
@@ -51,14 +56,14 @@ function log(consumer, ...args) {
 async function configureQueue() {
   console.log('\n=== Step 1: Configure Queue ===\n')
   
-  // NOTE: Explicit type casts required for pg driver function calls
+  // queen.configure(queue, lease_time, retry_limit, dlq_enabled)
   const result = await pool.query(
     `SELECT queen.configure($1::text, $2::int, $3::int, $4::bool)`,
-    [QUEUE_NAME, 60, 3, true]  // queue, lease_time, retry_limit, dlq_enabled
+    [QUEUE_NAME, 60, 3, true]
   )
   
   console.log(`Queue "${QUEUE_NAME}" configured:`)
-  console.log('  - Lease time: 60 seconds')
+  console.log('  - Lease time: 60 seconds (from queue config, not per-consume)')
   console.log('  - Retry limit: 3')
   console.log('  - DLQ enabled: true')
   
@@ -66,7 +71,7 @@ async function configureQueue() {
 }
 
 // ============================================================================
-// STEP 2: Produce messages (formerly "push")
+// STEP 2: Produce messages
 // ============================================================================
 async function produceMessages() {
   console.log('\n=== Step 2: Produce Messages ===\n')
@@ -80,11 +85,11 @@ async function produceMessages() {
   ]
   
   for (const msg of messages) {
-    // queen.produce(queue, payload, transaction_id)
+    // queen.produce_one(queue, payload, partition, transaction_id, notify)
     const transactionId = uuidv4()
     const result = await pool.query(
-      `SELECT queen.produce($1::text, $2::jsonb, $3::text) AS message_id`,
-      [QUEUE_NAME, JSON.stringify(msg), transactionId]
+      `SELECT queen.produce_one($1::text, $2::jsonb, $3::text, $4::text, $5::bool) AS message_id`,
+      [QUEUE_NAME, JSON.stringify(msg), 'Default', transactionId, false]
     )
     
     console.log(`Produced order ${msg.orderId}: ${result.rows[0].message_id}`)
@@ -96,16 +101,19 @@ async function produceMessages() {
 // ============================================================================
 // STEP 3: Consumer function (used by both consumer groups)
 // ============================================================================
-async function consumeMessages(consumerGroup, processDelay = 100) {
+async function consumeMessages(consumerGroup, subscriptionMode = null, processDelay = 100) {
   log(consumerGroup, `Starting consumer...`)
   
   let processed = 0
   let hasMore = true
+  let isFirstConsume = true
   
   while (hasMore) {
-    // Consume a batch of messages (formerly "pop")
-    // queen.consume(queue, consumer_group, batch_size, lease_seconds)
-    // NOTE: Explicit type casts required!
+    // queen.consume_one(queue, consumer_group, batch_size, partition, timeout, auto_commit, subscription_mode)
+    // subscription_mode only applies on first consume for new consumer groups
+    const subMode = isFirstConsume ? subscriptionMode : null
+    isFirstConsume = false
+    
     const result = await pool.query(`
       SELECT 
         partition_id,
@@ -114,8 +122,16 @@ async function consumeMessages(consumerGroup, processDelay = 100) {
         payload,
         created_at,
         lease_id
-      FROM queen.consume($1::text, $2::text, $3::int, $4::int)
-    `, [QUEUE_NAME, consumerGroup, 2, 60])
+      FROM queen.consume_one($1::text, $2::text, $3::int, $4::text, $5::int, $6::bool, $7::text)
+    `, [
+      QUEUE_NAME, 
+      consumerGroup, 
+      2,        // batch_size
+      null,     // partition (any)
+      0,        // timeout (immediate)
+      false,    // auto_commit
+      subMode   // subscription_mode
+    ])
     
     if (result.rows.length === 0) {
       log(consumerGroup, 'No more messages')
@@ -125,7 +141,6 @@ async function consumeMessages(consumerGroup, processDelay = 100) {
     
     // Process each message
     for (const msg of result.rows) {
-      // payload is already parsed by pg driver (JSONB -> object)
       const order = msg.payload
       
       log(consumerGroup, `Processing order ${order.orderId}:`)
@@ -137,12 +152,10 @@ async function consumeMessages(consumerGroup, processDelay = 100) {
       // Simulate processing time
       await new Promise(resolve => setTimeout(resolve, processDelay))
       
-      // Commit the message (formerly "ack")
-      // queen.commit(transaction_id, partition_id, lease_id, status, consumer_group, error_message)
-      // Using 6-param version to avoid ambiguity with 4-param version
+      // queen.commit_one(transaction_id, partition_id, lease_id, consumer_group, status, error_message)
       const commitResult = await pool.query(
-        `SELECT queen.commit($1::text, $2::uuid, $3::text, $4::text, $5::text, $6::text) AS success`,
-        [msg.transaction_id, msg.partition_id, msg.lease_id, 'completed', consumerGroup, null]
+        `SELECT queen.commit_one($1::text, $2::uuid, $3::text, $4::text, $5::text, $6::text) AS success`,
+        [msg.transaction_id, msg.partition_id, msg.lease_id, consumerGroup, 'completed', null]
       )
       
       if (commitResult.rows[0].success) {
@@ -167,9 +180,10 @@ async function runConsumerGroups() {
   console.log('Both consumer groups will receive ALL messages (fan-out pattern)\n')
   
   // Run both consumers in parallel
+  // Both use subscription_mode='all' to process all messages from beginning
   const [count1, count2] = await Promise.all([
-    consumeMessages('inventory-service', 50),
-    consumeMessages('billing-service', 75),
+    consumeMessages('inventory-service', 'all', 50),
+    consumeMessages('billing-service', 'all', 75),
   ])
   
   console.log(`\n=== Summary ===`)
@@ -178,24 +192,84 @@ async function runConsumerGroups() {
 }
 
 // ============================================================================
-// BONUS: Check queue depth (lag)
+// BONUS: Check queue lag
 // ============================================================================
-async function checkQueueDepth() {
-  console.log('\n=== Bonus: Queue Depth (Lag) ===\n')
+async function checkQueueLag() {
+  console.log('\n=== Bonus: Queue Lag ===\n')
   
-  const result = await pool.query(
-    `SELECT queen.depth($1::text) AS depth`,
-    [QUEUE_NAME]
-  )
-  
-  console.log(`Queue "${QUEUE_NAME}" depth: ${result.rows[0].depth}`)
-  
-  // Can also use queen.lag() which is an alias for depth()
-  const lagResult = await pool.query(
+  // queen.lag(queue, consumer_group)
+  const queueLag = await pool.query(
     `SELECT queen.lag($1::text) AS lag`,
     [QUEUE_NAME]
   )
-  console.log(`Queue "${QUEUE_NAME}" lag: ${lagResult.rows[0].lag}`)
+  console.log(`Queue "${QUEUE_NAME}" lag (queue mode): ${queueLag.rows[0].lag}`)
+  
+  // Check lag for each consumer group
+  const invLag = await pool.query(
+    `SELECT queen.lag($1::text, $2::text) AS lag`,
+    [QUEUE_NAME, 'inventory-service']
+  )
+  console.log(`Queue "${QUEUE_NAME}" lag (inventory-service): ${invLag.rows[0].lag}`)
+  
+  const billLag = await pool.query(
+    `SELECT queen.lag($1::text, $2::text) AS lag`,
+    [QUEUE_NAME, 'billing-service']
+  )
+  console.log(`Queue "${QUEUE_NAME}" lag (billing-service): ${billLag.rows[0].lag}`)
+}
+
+// ============================================================================
+// BONUS: Demonstrate subscription modes
+// ============================================================================
+async function demonstrateSubscriptionModes() {
+  console.log('\n=== Bonus: Subscription Modes ===\n')
+  
+  // Add some new messages
+  for (let i = 1; i <= 3; i++) {
+    await pool.query(
+      `SELECT queen.produce_one($1::text, $2::jsonb)`,
+      [QUEUE_NAME, JSON.stringify({ lateOrder: i })]
+    )
+  }
+  console.log('Added 3 more messages...')
+  
+  // Consumer with 'new' mode starts from NOW (skips existing)
+  console.log('\nConsumer with subscription_mode="new" (skips historical):')
+  const newModeCount = await consumeMessages('new-only-consumer', 'new', 10)
+  console.log(`  → Processed ${newModeCount} messages (should be 0, as no messages after subscription)`)
+}
+
+// ============================================================================
+// BONUS: Seek consumer group
+// ============================================================================
+async function demonstrateSeek() {
+  console.log('\n=== Bonus: Seek Consumer Group ===\n')
+  
+  // First, let the new-only-consumer consume some messages
+  await pool.query(
+    `SELECT queen.produce_one($1::text, $2::jsonb)`,
+    [QUEUE_NAME, JSON.stringify({ seekTest: 1 })]
+  )
+  
+  // Consume one message
+  await pool.query(`
+    SELECT * FROM queen.consume_one($1::text, $2::text, $3::int)
+  `, [QUEUE_NAME, 'seek-demo-consumer', 10])
+  
+  console.log('Created seek-demo-consumer and consumed messages')
+  
+  // Now seek to end (skip all pending)
+  const seekResult = await pool.query(
+    `SELECT queen.seek($1::text, $2::text, $3::bool) AS success`,
+    ['seek-demo-consumer', QUEUE_NAME, true]  // to_end = true
+  )
+  console.log(`Seek to end: ${seekResult.rows[0].success}`)
+  
+  // Verify no messages available
+  const afterSeek = await pool.query(`
+    SELECT COUNT(*) as count FROM queen.consume_one($1::text, $2::text, $3::int)
+  `, [QUEUE_NAME, 'seek-demo-consumer', 10])
+  console.log(`Messages after seek to end: ${afterSeek.rows[0].count}`)
 }
 
 // ============================================================================
@@ -204,8 +278,7 @@ async function checkQueueDepth() {
 async function main() {
   console.log('╔══════════════════════════════════════════════════════════════╗')
   console.log('║       pg_qpubsub Direct Usage Example                        ║')
-  console.log('║       Using native pg driver without Queen client            ║')
-  console.log('║       Kafka-style API: produce, consume, commit              ║')
+  console.log('║       Simplified API: produce, consume, commit               ║')
   console.log('╚══════════════════════════════════════════════════════════════╝')
   
   try {
@@ -218,8 +291,14 @@ async function main() {
     // Step 3: Consume with two consumer groups
     await runConsumerGroups()
     
-    // Bonus: Check remaining depth
-    await checkQueueDepth()
+    // Bonus: Check remaining lag
+    await checkQueueLag()
+    
+    // Bonus: Demonstrate subscription modes
+    await demonstrateSubscriptionModes()
+    
+    // Bonus: Demonstrate seek
+    await demonstrateSeek()
     
     console.log('\n✓ Example completed successfully!')
     

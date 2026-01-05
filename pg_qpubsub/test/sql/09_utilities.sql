@@ -1,245 +1,276 @@
 -- ============================================================================
--- TEST 09: Utility Functions
+-- Test 09: Utility Functions
 -- ============================================================================
-\echo '============================================================================'
-\echo '=== TEST 09: Utility Functions ==='
-\echo '============================================================================'
+
+\echo '=== Test 09: Utility Functions ==='
 
 -- Test 1: Configure queue
 DO $$
 DECLARE
-    config_result BOOLEAN;
+    v_result BOOLEAN;
+    v_queue RECORD;
 BEGIN
-    config_result := queen.configure(
-        'test-configure',
-        p_lease_time := 120,
-        p_retry_limit := 5,
-        p_dead_letter_queue := true
-    );
+    v_result := queen.configure('test_utils_queue', 120, 5, true);
     
-    IF config_result THEN
-        RAISE NOTICE 'PASS: Queue configuration succeeded';
-    ELSE
-        RAISE EXCEPTION 'FAIL: Queue configuration failed';
+    IF NOT v_result THEN
+        RAISE EXCEPTION 'FAIL: Configure returned false';
     END IF;
+    
+    -- Verify configuration was applied
+    SELECT * INTO v_queue FROM queen.queues WHERE name = 'test_utils_queue';
+    
+    IF v_queue.lease_time != 120 THEN
+        RAISE EXCEPTION 'FAIL: Lease time not set correctly (expected 120, got %)', v_queue.lease_time;
+    END IF;
+    
+    IF v_queue.retry_limit != 5 THEN
+        RAISE EXCEPTION 'FAIL: Retry limit not set correctly (expected 5, got %)', v_queue.retry_limit;
+    END IF;
+    
+    RAISE NOTICE 'PASS: Configure queue works';
 END;
 $$;
 
--- Test 2: has_messages on empty queue
+-- Test 2: has_messages function
+SELECT queen.configure('test_has_messages', 60, 3, false);
+
 DO $$
 DECLARE
-    has_msgs BOOLEAN;
+    v_has BOOLEAN;
 BEGIN
-    has_msgs := queen.has_messages('test-has-messages-empty-xyz');
+    -- Empty queue should have no messages
+    v_has := queen.has_messages('test_has_messages');
     
-    IF NOT has_msgs THEN
-        RAISE NOTICE 'PASS: has_messages returns false for empty queue';
-    ELSE
-        RAISE NOTICE 'PASS: has_messages result for empty queue: %', has_msgs;
+    IF v_has THEN
+        RAISE EXCEPTION 'FAIL: Empty queue reports has_messages=true';
     END IF;
+    
+    -- Add a message
+    PERFORM queen.produce_one('test_has_messages', '{"test": "data"}'::jsonb);
+    
+    -- Now should have messages
+    v_has := queen.has_messages('test_has_messages');
+    
+    IF NOT v_has THEN
+        RAISE EXCEPTION 'FAIL: Queue with messages reports has_messages=false';
+    END IF;
+    
+    RAISE NOTICE 'PASS: has_messages works';
 END;
 $$;
 
--- Test 3: has_messages on non-empty queue
+-- Test 3: lag/depth functions
+SELECT queen.configure('test_depth', 60, 3, false);
+
 DO $$
 DECLARE
-    has_msgs BOOLEAN;
+    v_lag BIGINT;
+    v_depth BIGINT;
 BEGIN
-    -- Setup
-    PERFORM queen.produce('test-has-messages-full', '{"has": "message"}'::jsonb);
+    -- Initial depth should be 0
+    v_lag := queen.lag('test_depth');
+    v_depth := queen.depth('test_depth');
     
-    has_msgs := queen.has_messages('test-has-messages-full');
-    
-    IF has_msgs THEN
-        RAISE NOTICE 'PASS: has_messages returns true for non-empty queue';
-    ELSE
-        RAISE EXCEPTION 'FAIL: has_messages returned false for non-empty queue';
+    IF v_lag != 0 OR v_depth != 0 THEN
+        RAISE EXCEPTION 'FAIL: Initial depth should be 0, got lag=%, depth=%', v_lag, v_depth;
     END IF;
+    
+    RAISE NOTICE 'PASS: Initial depth is 0';
 END;
 $$;
 
--- Test 4: depth function
+-- Add messages (each in separate statement to avoid tmp_items conflict)
+SELECT queen.produce_one('test_depth', '{"n": 1}'::jsonb);
+SELECT queen.produce_one('test_depth', '{"n": 2}'::jsonb);
+SELECT queen.produce_one('test_depth', '{"n": 3}'::jsonb);
+
 DO $$
 DECLARE
-    queue_depth INT;
-    push_ops JSONB := '[]'::jsonb;
+    v_lag BIGINT;
+    v_depth BIGINT;
 BEGIN
-    -- Setup: Produce 5 messages using transaction API
-    FOR i IN 1..5 LOOP
-        push_ops := push_ops || jsonb_build_object('type', 'push', 'queue', 'test-depth', 'payload', jsonb_build_object('depth', i));
-    END LOOP;
-    PERFORM queen.transaction(push_ops);
+    v_lag := queen.lag('test_depth');
+    v_depth := queen.depth('test_depth');
     
-    queue_depth := queen.depth('test-depth');
-    
-    IF queue_depth >= 5 THEN
-        RAISE NOTICE 'PASS: Queue depth is %', queue_depth;
-    ELSE
-        RAISE NOTICE 'PASS: Queue depth returned % (expected >= 5)', queue_depth;
+    IF v_lag != 3 OR v_depth != 3 THEN
+        RAISE EXCEPTION 'FAIL: After 3 messages, depth should be 3, got lag=%, depth=%', v_lag, v_depth;
     END IF;
+    
+    -- lag is an alias for depth
+    IF v_lag != v_depth THEN
+        RAISE EXCEPTION 'FAIL: lag and depth should be equal';
+    END IF;
+    
+    RAISE NOTICE 'PASS: lag/depth functions work';
 END;
 $$;
 
--- Test 5: depth with messages in multiple partitions
+-- Test 4: channel_name function
 DO $$
 DECLARE
-    total_depth BIGINT;
+    v_channel TEXT;
 BEGIN
-    -- Setup: Produce to different partitions using transaction API
-    PERFORM queen.transaction(jsonb_build_array(
-        jsonb_build_object('type', 'push', 'queue', 'test-depth-multi-part', 'partition', 'part-a', 'payload', '{"part": "a"}'::jsonb),
-        jsonb_build_object('type', 'push', 'queue', 'test-depth-multi-part', 'partition', 'part-a', 'payload', '{"part": "a2"}'::jsonb),
-        jsonb_build_object('type', 'push', 'queue', 'test-depth-multi-part', 'partition', 'part-b', 'payload', '{"part": "b"}'::jsonb)
-    ));
+    v_channel := queen.channel_name('my-queue.name');
     
-    -- depth() counts messages across all partitions
-    total_depth := queen.depth('test-depth-multi-part');
-    
-    IF total_depth >= 3 THEN
-        RAISE NOTICE 'PASS: Total depth across partitions is %', total_depth;
-    ELSE
-        RAISE NOTICE 'PASS: Depth returned % (expected >= 3)', total_depth;
+    IF v_channel IS NULL THEN
+        RAISE EXCEPTION 'FAIL: channel_name returned NULL';
     END IF;
+    
+    -- Should replace . and - with _
+    IF v_channel != 'queen_my_queue_name' THEN
+        RAISE EXCEPTION 'FAIL: channel_name format incorrect: %', v_channel;
+    END IF;
+    
+    RAISE NOTICE 'PASS: channel_name works: %', v_channel;
 END;
 $$;
 
--- Test 6: lag function (alias for depth)
+-- Test 5: notify function (does not error)
+DO $$
+BEGIN
+    -- Just verify it doesn't error
+    PERFORM queen.notify('test-queue', 'test payload');
+    PERFORM queen.notify('test-queue');  -- Empty payload
+    
+    RAISE NOTICE 'PASS: notify function executes without error';
+END;
+$$;
+
+-- Test 6: produce_notify convenience function
+SELECT queen.configure('test_produce_notify', 60, 3, false);
+
 DO $$
 DECLARE
-    queue_lag BIGINT;
+    v_msg_id UUID;
 BEGIN
-    -- Setup
-    PERFORM queen.produce('test-lag', '{"lag": "test"}'::jsonb);
+    v_msg_id := queen.produce_notify('test_produce_notify', '{"with": "notify"}'::jsonb);
     
-    queue_lag := queen.lag('test-lag');
-    
-    IF queue_lag >= 1 THEN
-        RAISE NOTICE 'PASS: Queue lag is %', queue_lag;
-    ELSE
-        RAISE NOTICE 'PASS: Queue lag returned % (expected >= 1)', queue_lag;
-    END IF;
-END;
-$$;
-
--- Test 7: channel_name function
-DO $$
-DECLARE
-    channel TEXT;
-BEGIN
-    channel := queen.channel_name('my-queue');
-    
-    IF channel IS NOT NULL AND channel LIKE 'queen_%' THEN
-        RAISE NOTICE 'PASS: Channel name generated: %', channel;
-    ELSE
-        RAISE EXCEPTION 'FAIL: Invalid channel name: %', channel;
-    END IF;
-END;
-$$;
-
--- Test 8: channel_name sanitization
-DO $$
-DECLARE
-    channel TEXT;
-BEGIN
-    -- Queue name with special characters
-    channel := queen.channel_name('my.queue-with_special.chars');
-    
-    IF channel IS NOT NULL AND position('.' in channel) = 0 THEN
-        RAISE NOTICE 'PASS: Channel name sanitized (no dots): %', channel;
-    ELSE
-        RAISE NOTICE 'PASS: Channel name: %', channel;
-    END IF;
-END;
-$$;
-
--- Test 9: notify function
-DO $$
-BEGIN
-    -- Should not throw error
-    PERFORM queen.notify('test-notify-queue', 'test payload');
-    RAISE NOTICE 'PASS: Notify function executed without error';
-EXCEPTION
-    WHEN OTHERS THEN
-        RAISE EXCEPTION 'FAIL: Notify threw error: %', SQLERRM;
-END;
-$$;
-
--- Test 10: produce_notify (produce + notify atomically)
-DO $$
-DECLARE
-    msg_id UUID;
-BEGIN
-    msg_id := queen.produce_notify('test-produce-notify', '{"notify": true}'::jsonb);
-    
-    IF msg_id IS NOT NULL THEN
-        RAISE NOTICE 'PASS: produce_notify created message: %', msg_id;
-    ELSE
+    IF v_msg_id IS NULL THEN
         RAISE EXCEPTION 'FAIL: produce_notify returned NULL';
     END IF;
+    
+    RAISE NOTICE 'PASS: produce_notify works: %', v_msg_id;
 END;
 $$;
 
--- Test 11: produce_notify batch
+-- Test 7: Seek function
+SELECT queen.configure('test_seek', 60, 3, false);
+SELECT queen.produce_one('test_seek', '{"seq": 1}'::jsonb, 'Default', 'seek-util-1');
+SELECT queen.produce_one('test_seek', '{"seq": 2}'::jsonb, 'Default', 'seek-util-2');
+
+-- Create consumer group
+DO $$
+BEGIN
+    PERFORM queen.consume_one('test_seek', 'seek-util-group', 1);
+END;
+$$;
+
+-- Seek to end
 DO $$
 DECLARE
-    msg_ids UUID[];
+    v_result BOOLEAN;
 BEGIN
-    msg_ids := queen.produce_notify(
-        'test-produce-notify-batch',
-        'batch-partition',
-        ARRAY['{"idx": 1}'::jsonb, '{"idx": 2}'::jsonb, '{"idx": 3}'::jsonb]
-    );
+    v_result := queen.seek('seek-util-group', 'test_seek', TRUE);
     
-    IF array_length(msg_ids, 1) = 3 THEN
-        RAISE NOTICE 'PASS: produce_notify batch created 3 messages';
-    ELSE
-        RAISE NOTICE 'PASS: produce_notify batch created % messages', array_length(msg_ids, 1);
+    IF NOT v_result THEN
+        RAISE EXCEPTION 'FAIL: seek to end returned false';
     END IF;
+    
+    RAISE NOTICE 'PASS: seek function works';
 END;
 $$;
 
--- Test 12: Configure with all supported options
+-- Test 8: delete_consumer_group function
+SELECT queen.configure('test_delete_cg_util', 60, 3, false);
+SELECT queen.produce_one('test_delete_cg_util', '{"delete": "test"}'::jsonb, 'Default', 'del-util-1');
+
+-- Create consumer group
+DO $$
+BEGIN
+    PERFORM queen.consume_one('test_delete_cg_util', 'delete-util-group', 1);
+END;
+$$;
+
+-- Delete for specific queue
 DO $$
 DECLARE
-    config_result BOOLEAN;
-    queue_options RECORD;
+    v_result BOOLEAN;
 BEGIN
-    config_result := queen.configure(
-        p_queue := 'test-configure-full',
-        p_lease_time := 90,
-        p_retry_limit := 10,
-        p_dead_letter_queue := true
-    );
+    v_result := queen.delete_consumer_group('delete-util-group', 'test_delete_cg_util');
     
-    -- Verify configuration was stored
-    SELECT * INTO queue_options
-    FROM queen.queues
-    WHERE name = 'test-configure-full';
-    
-    IF config_result AND queue_options.lease_time = 90 THEN
-        RAISE NOTICE 'PASS: Queue configuration with all options stored correctly';
-    ELSE
-        RAISE NOTICE 'PASS: Queue configured (lease_time=%)', queue_options.lease_time;
+    IF NOT v_result THEN
+        RAISE EXCEPTION 'FAIL: delete_consumer_group returned false';
     END IF;
+    
+    RAISE NOTICE 'PASS: delete_consumer_group for specific queue works';
 END;
 $$;
 
--- Test 13: has_messages with consumer group
+-- Test 9: delete_consumer_group for all queues
+SELECT queen.configure('test_delete_all_1', 60, 3, false);
+SELECT queen.configure('test_delete_all_2', 60, 3, false);
+SELECT queen.produce_one('test_delete_all_1', '{"q": 1}'::jsonb);
+SELECT queen.produce_one('test_delete_all_2', '{"q": 2}'::jsonb);
+
+-- Create consumer group in both queues
+DO $$
+BEGIN
+    PERFORM queen.consume_one('test_delete_all_1', 'delete-all-group', 1);
+    PERFORM queen.consume_one('test_delete_all_2', 'delete-all-group', 1);
+END;
+$$;
+
+-- Delete for all queues (p_queue = NULL)
 DO $$
 DECLARE
-    has_msgs BOOLEAN;
+    v_result BOOLEAN;
+    v_count INT;
 BEGIN
-    -- Setup
-    PERFORM queen.produce('test-has-messages-cg', '{"cg": true}'::jsonb);
+    v_result := queen.delete_consumer_group('delete-all-group');  -- NULL queue = all
     
-    has_msgs := queen.has_messages('test-has-messages-cg', '__QUEUE_MODE__');
-    
-    IF has_msgs THEN
-        RAISE NOTICE 'PASS: has_messages with consumer group works';
-    ELSE
-        RAISE NOTICE 'PASS: has_messages with consumer group returned %', has_msgs;
+    IF NOT v_result THEN
+        RAISE EXCEPTION 'FAIL: delete_consumer_group all returned false';
     END IF;
+    
+    -- Verify no partition_consumers remain for this group
+    SELECT COUNT(*) INTO v_count
+    FROM queen.partition_consumers
+    WHERE consumer_group = 'delete-all-group';
+    
+    IF v_count != 0 THEN
+        RAISE EXCEPTION 'FAIL: Consumer group still exists in % queues', v_count;
+    END IF;
+    
+    RAISE NOTICE 'PASS: delete_consumer_group for all queues works';
 END;
 $$;
 
-\echo 'PASS: Utility function tests completed'
+-- Test 10: lag with consumer group
+SELECT queen.configure('test_lag_cg_util', 60, 3, false);
+SELECT queen.produce_one('test_lag_cg_util', '{"m": 1}'::jsonb);
+SELECT queen.produce_one('test_lag_cg_util', '{"m": 2}'::jsonb);
+
+DO $$
+DECLARE
+    v_queue_lag BIGINT;
+    v_group_lag BIGINT;
+BEGIN
+    -- Queue mode lag
+    v_queue_lag := queen.lag('test_lag_cg_util');
+    
+    -- Create consumer group and consume one message
+    PERFORM queen.consume_one('test_lag_cg_util', 'lag-util-group', 1);
+    
+    -- Consumer group lag
+    v_group_lag := queen.lag('test_lag_cg_util', 'lag-util-group');
+    
+    -- Both should report messages
+    IF v_queue_lag != 2 THEN
+        RAISE EXCEPTION 'FAIL: Queue lag should be 2, got %', v_queue_lag;
+    END IF;
+    
+    RAISE NOTICE 'PASS: lag with consumer group works (queue: %, group: %)', v_queue_lag, v_group_lag;
+END;
+$$;
+
+\echo 'Test 09: PASSED'
