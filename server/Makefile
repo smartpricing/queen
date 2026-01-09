@@ -31,13 +31,17 @@ ifeq ($(UNAME_S),Darwin)
     # libuv from vendor (built from source) - use static library
     UV_INCLUDES := ./vendor/libuv/include
     UV_STATIC_LIB := ./vendor/libuv/build/libuv.a
-    INCLUDES = -I./include -I./vendor -I./vendor/uSockets/src -I../lib $(addprefix -I,$(PG_INCLUDES)) $(addprefix -I,$(SSL_INCLUDES)) -I$(UV_INCLUDES)
+    # jwt-cpp header-only library
+    JWTCPP_INCLUDES := ./vendor/jwt-cpp/include
+    INCLUDES = -I./include -I./vendor -I./vendor/uSockets/src -I../lib $(addprefix -I,$(PG_INCLUDES)) $(addprefix -I,$(SSL_INCLUDES)) -I$(UV_INCLUDES) -I$(JWTCPP_INCLUDES)
     LIBS = $(addprefix -L,$(PG_LIBS)) $(addprefix -L,$(SSL_LIBS)) -lpq -lssl -lcrypto -lz $(UV_STATIC_LIB)
 else
     # Linux - libuv from vendor (built from source) - use static library
     UV_INCLUDES := ./vendor/libuv/include
     UV_STATIC_LIB := ./vendor/libuv/build/libuv.a
-    INCLUDES = -I./include -I./vendor -I./vendor/uSockets/src -I../lib -I/usr/include/postgresql -I/usr/local/include/postgresql -I$(UV_INCLUDES)
+    # jwt-cpp header-only library
+    JWTCPP_INCLUDES := ./vendor/jwt-cpp/include
+    INCLUDES = -I./include -I./vendor -I./vendor/uSockets/src -I../lib -I/usr/include/postgresql -I/usr/local/include/postgresql -I$(UV_INCLUDES) -I$(JWTCPP_INCLUDES)
     LIBS = -lpq -lssl -lcrypto -lz $(UV_STATIC_LIB)
 endif
 
@@ -54,7 +58,8 @@ SOURCES = $(SRC_DIR)/main_acceptor.cpp \
           $(wildcard $(SRC_DIR)/database/*.cpp) \
           $(wildcard $(SRC_DIR)/managers/*.cpp) \
           $(wildcard $(SRC_DIR)/services/*.cpp) \
-          $(wildcard $(SRC_DIR)/routes/*.cpp)
+          $(wildcard $(SRC_DIR)/routes/*.cpp) \
+          $(wildcard $(SRC_DIR)/auth/*.cpp)
 OBJECTS = $(SOURCES:$(SRC_DIR)/%.cpp=$(BUILD_DIR)/%.o)
 DEPS = $(OBJECTS:.o=.d)
 
@@ -81,6 +86,7 @@ NLOHMANN_JSON_URL = https://github.com/nlohmann/json/releases/download/v3.11.3/j
 CPPHTTPLIB_URL = https://raw.githubusercontent.com/yhirose/cpp-httplib/master/httplib.h
 SPDLOG_URL = https://github.com/gabime/spdlog/archive/refs/tags/v1.14.1.zip
 LIBUV_URL = https://github.com/libuv/libuv/archive/refs/tags/v1.48.0.zip
+JWTCPP_URL = https://github.com/Thalhammer/jwt-cpp/archive/refs/tags/v0.7.0.zip
 
 .PHONY: all clean deps setup test build-only debug-objects
 
@@ -92,7 +98,7 @@ build-only: setup $(TARGET)
 # Create directory structure
 setup:
 	@mkdir -p $(BUILD_DIR) $(BIN_DIR) $(INCLUDE_DIR) $(VENDOR_DIR)
-	@mkdir -p $(SRC_DIR)/database $(SRC_DIR)/managers $(SRC_DIR)/routes $(SRC_DIR)/utils
+	@mkdir -p $(SRC_DIR)/database $(SRC_DIR)/managers $(SRC_DIR)/routes $(SRC_DIR)/utils $(SRC_DIR)/auth
 
 # Download and setup dependencies
 deps: $(VENDOR_DIR)/.deps_ready
@@ -143,6 +149,14 @@ $(VENDOR_DIR)/.deps_ready: setup
 		cd build && \
 		cmake .. -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=OFF -DLIBUV_BUILD_SHARED=OFF && \
 		cmake --build . --target uv_a -j4
+	
+	# Download jwt-cpp (header-only JWT library)
+	@cd $(VENDOR_DIR) && \
+		curl -L $(JWTCPP_URL) -o jwt-cpp.zip && \
+		unzip -qo jwt-cpp.zip && \
+		rm -rf jwt-cpp && \
+		mv jwt-cpp-0.7.0 jwt-cpp && \
+		rm jwt-cpp.zip
 	
 	@touch $(VENDOR_DIR)/.deps_ready
 	@echo "Dependencies ready!"

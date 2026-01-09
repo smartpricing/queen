@@ -14,7 +14,9 @@ namespace routes {
 void setup_maintenance_routes(uWS::App* app, const RouteContext& ctx) {
     // GET maintenance mode status (always fetch fresh from DB)
     app->get("/api/v1/system/maintenance", [ctx](auto* res, auto* req) {
-        (void)req;
+        // Check authentication - ADMIN required for system operations
+        REQUIRE_AUTH(res, req, ctx, auth::AccessLevel::ADMIN);
+        
         try {
             // Force fresh check from database (bypass cache for status endpoint)
             bool current_mode = ctx.async_queue_manager->get_maintenance_mode_fresh();
@@ -42,7 +44,9 @@ void setup_maintenance_routes(uWS::App* app, const RouteContext& ctx) {
     // POST toggle maintenance mode
     // Uses SharedStateManager for cluster-wide propagation via UDP broadcast
     app->post("/api/v1/system/maintenance", [ctx](auto* res, auto* req) {
-        (void)req;
+        // Check authentication - ADMIN required for system operations
+        REQUIRE_AUTH(res, req, ctx, auth::AccessLevel::ADMIN);
+        
         read_json_body(res,
             [res, ctx](const nlohmann::json& body) {
                 try {
@@ -90,7 +94,9 @@ void setup_maintenance_routes(uWS::App* app, const RouteContext& ctx) {
     
     // GET pop maintenance mode status (always fetch fresh from DB)
     app->get("/api/v1/system/maintenance/pop", [ctx](auto* res, auto* req) {
-        (void)req;
+        // Check authentication - ADMIN required for system operations
+        REQUIRE_AUTH(res, req, ctx, auth::AccessLevel::ADMIN);
+        
         try {
             bool current_mode = false;
             if (global_shared_state) {
@@ -113,7 +119,9 @@ void setup_maintenance_routes(uWS::App* app, const RouteContext& ctx) {
     // POST toggle pop maintenance mode
     // Uses SharedStateManager for cluster-wide propagation via UDP broadcast
     app->post("/api/v1/system/maintenance/pop", [ctx](auto* res, auto* req) {
-        (void)req;
+        // Check authentication - ADMIN required for system operations
+        REQUIRE_AUTH(res, req, ctx, auth::AccessLevel::ADMIN);
+        
         read_json_body(res,
             [res, ctx](const nlohmann::json& body) {
                 try {
@@ -154,8 +162,9 @@ void setup_maintenance_routes(uWS::App* app, const RouteContext& ctx) {
     });
     
     // GET shared state / UDPSYNC cache stats
-    app->get("/api/v1/system/shared-state", [](auto* res, auto* req) {
-        (void)req;
+    app->get("/api/v1/system/shared-state", [ctx](auto* res, auto* req) {
+        // Check authentication - ADMIN required for system operations
+        REQUIRE_AUTH(res, req, ctx, auth::AccessLevel::ADMIN);
         
         nlohmann::json stats;
         if (global_shared_state) {

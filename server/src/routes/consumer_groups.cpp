@@ -64,7 +64,9 @@ void setup_consumer_group_routes(uWS::App* app, const RouteContext& ctx) {
     // POST /api/v1/stats/refresh - Trigger immediate stats refresh (for stale data)
     // Uses force=true to bypass the 5-second debounce check
     app->post("/api/v1/stats/refresh", [ctx](auto* res, auto* req) {
-        (void)req;
+        // Check authentication - ADMIN required for stats refresh
+        REQUIRE_AUTH(res, req, ctx, auth::AccessLevel::ADMIN);
+        
         try {
             spdlog::info("[Worker {}] Manual stats refresh triggered (force=true)", ctx.worker_id);
             submit_sp_call(ctx, res, "SELECT queen.refresh_all_stats_v1(true)");
@@ -77,7 +79,9 @@ void setup_consumer_group_routes(uWS::App* app, const RouteContext& ctx) {
     // Uses v3 which leverages partition_lookup metadata (~50x faster than v1)
     // Note: v3 returns approximate time lag and partitionsWithLag instead of exact totalLag count
     app->get("/api/v1/consumer-groups", [ctx](auto* res, auto* req) {
-        (void)req;
+        // Check authentication - READ_ONLY required for viewing consumer groups
+        REQUIRE_AUTH(res, req, ctx, auth::AccessLevel::READ_ONLY);
+        
         try {
             submit_sp_call(ctx, res, "SELECT queen.get_consumer_groups_v3()");
         } catch (const std::exception& e) {
@@ -87,6 +91,9 @@ void setup_consumer_group_routes(uWS::App* app, const RouteContext& ctx) {
     
     // GET /api/v1/consumer-groups/lagging - Get lagging partitions (async via stored procedure)
     app->get("/api/v1/consumer-groups/lagging", [ctx](auto* res, auto* req) {
+        // Check authentication - READ_ONLY required for viewing consumer groups
+        REQUIRE_AUTH(res, req, ctx, auth::AccessLevel::READ_ONLY);
+        
         try {
             int min_lag_seconds = 3600; // Default: 1 hour
             std::string lag_param = get_query_param(req, "minLagSeconds");
@@ -103,6 +110,9 @@ void setup_consumer_group_routes(uWS::App* app, const RouteContext& ctx) {
     
     // GET /api/v1/consumer-groups/:group - Consumer group details (async via stored procedure)
     app->get("/api/v1/consumer-groups/:group", [ctx](auto* res, auto* req) {
+        // Check authentication - READ_ONLY required for viewing consumer groups
+        REQUIRE_AUTH(res, req, ctx, auth::AccessLevel::READ_ONLY);
+        
         try {
             std::string consumer_group = std::string(req->getParameter(0));
             submit_sp_call(ctx, res, 
@@ -115,6 +125,9 @@ void setup_consumer_group_routes(uWS::App* app, const RouteContext& ctx) {
     
     // DELETE /api/v1/consumer-groups/:group - Delete consumer group (async via stored procedure)
     app->del("/api/v1/consumer-groups/:group", [ctx](auto* res, auto* req) {
+        // Check authentication - ADMIN required for deleting consumer groups
+        REQUIRE_AUTH(res, req, ctx, auth::AccessLevel::ADMIN);
+        
         try {
             std::string consumer_group = std::string(req->getParameter(0));
             bool delete_metadata = get_query_param_bool(req, "deleteMetadata", true);
@@ -132,6 +145,9 @@ void setup_consumer_group_routes(uWS::App* app, const RouteContext& ctx) {
     
     // POST /api/v1/consumer-groups/:group/subscription - Update subscription timestamp (async)
     app->post("/api/v1/consumer-groups/:group/subscription", [ctx](auto* res, auto* req) {
+        // Check authentication - READ_WRITE required for subscription changes
+        REQUIRE_AUTH(res, req, ctx, auth::AccessLevel::READ_WRITE);
+        
         std::string consumer_group = std::string(req->getParameter(0));
         
         read_json_body(res,
@@ -162,6 +178,9 @@ void setup_consumer_group_routes(uWS::App* app, const RouteContext& ctx) {
     
     // DELETE /api/v1/consumer-groups/:group/queues/:queue - Delete CG for specific queue only
     app->del("/api/v1/consumer-groups/:group/queues/:queue", [ctx](auto* res, auto* req) {
+        // Check authentication - ADMIN required for consumer group deletion
+        REQUIRE_AUTH(res, req, ctx, auth::AccessLevel::ADMIN);
+        
         try {
             std::string consumer_group = std::string(req->getParameter(0));
             std::string queue_name = std::string(req->getParameter(1));
@@ -180,6 +199,9 @@ void setup_consumer_group_routes(uWS::App* app, const RouteContext& ctx) {
     
     // POST /api/v1/consumer-groups/:group/queues/:queue/seek - Seek cursor to timestamp or end
     app->post("/api/v1/consumer-groups/:group/queues/:queue/seek", [ctx](auto* res, auto* req) {
+        // Check authentication - READ_WRITE required for seek operations
+        REQUIRE_AUTH(res, req, ctx, auth::AccessLevel::READ_WRITE);
+        
         std::string consumer_group = std::string(req->getParameter(0));
         std::string queue_name = std::string(req->getParameter(1));
         

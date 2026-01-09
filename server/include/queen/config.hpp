@@ -332,6 +332,133 @@ struct SharedStateConfig {
     }
 };
 
+// ============================================================================
+// JWT Authentication Configuration
+// ============================================================================
+struct AuthConfig {
+    // Master enable/disable for JWT authentication
+    bool enabled = false;
+    
+    // Algorithm: "HS256", "RS256", or "auto" (try based on token header)
+    std::string algorithm = "HS256";
+    
+    // HS256: Shared secret for HMAC signing (base64 or raw string)
+    std::string secret = "";
+    
+    // RS256: JWKS URL for fetching public keys from identity provider
+    std::string jwks_url = "";
+    
+    // RS256: Static public key in PEM format (alternative to JWKS URL)
+    std::string public_key = "";
+    
+    // Optional token validation settings
+    std::string issuer = "";              // Expected 'iss' claim (empty = any issuer)
+    std::string audience = "";            // Expected 'aud' claim (empty = any audience)
+    int clock_skew_seconds = 30;          // Tolerance for exp/nbf/iat checks
+    
+    // Paths that skip authentication (comma-separated in env var)
+    std::vector<std::string> skip_paths = {"/health", "/metrics", "/"};
+    
+    // JWKS refresh settings (for RS256)
+    int jwks_refresh_interval_seconds = 3600;  // Refresh JWKS every hour
+    int jwks_request_timeout_ms = 5000;        // Timeout for JWKS HTTP requests
+    
+    // Role-based access control settings
+    std::string roles_claim = "role";          // Claim name containing role (proxy uses "role")
+    std::string roles_array_claim = "roles";   // Alternative: claim with array of roles
+    std::string role_admin = "admin";          // Role value for admin access
+    std::string role_read_write = "read-write";// Role value for read-write access
+    std::string role_read_only = "read-only";  // Role value for read-only access
+    
+    static AuthConfig from_env() {
+        AuthConfig config;
+        
+        config.enabled = get_env_bool("JWT_ENABLED", false);
+        config.algorithm = get_env_string("JWT_ALGORITHM", "HS256");
+        config.secret = get_env_string("JWT_SECRET", "");
+        config.jwks_url = get_env_string("JWT_JWKS_URL", "");
+        config.public_key = get_env_string("JWT_PUBLIC_KEY", "");
+        config.issuer = get_env_string("JWT_ISSUER", "");
+        config.audience = get_env_string("JWT_AUDIENCE", "");
+        config.clock_skew_seconds = get_env_int("JWT_CLOCK_SKEW", 30);
+        
+        // Parse skip paths from comma-separated list
+        std::string skip_str = get_env_string("JWT_SKIP_PATHS", "/health,/metrics,/");
+        config.skip_paths.clear();
+        if (!skip_str.empty()) {
+            size_t pos = 0;
+            std::string remaining = skip_str;
+            while ((pos = remaining.find(',')) != std::string::npos) {
+                std::string path = remaining.substr(0, pos);
+                // Trim whitespace
+                size_t start = path.find_first_not_of(" \t");
+                size_t end = path.find_last_not_of(" \t");
+                if (start != std::string::npos) {
+                    config.skip_paths.push_back(path.substr(start, end - start + 1));
+                }
+                remaining = remaining.substr(pos + 1);
+            }
+            // Handle last element
+            if (!remaining.empty()) {
+                size_t start = remaining.find_first_not_of(" \t");
+                size_t end = remaining.find_last_not_of(" \t");
+                if (start != std::string::npos) {
+                    config.skip_paths.push_back(remaining.substr(start, end - start + 1));
+                }
+            }
+        }
+        
+        config.jwks_refresh_interval_seconds = get_env_int("JWT_JWKS_REFRESH_INTERVAL", 3600);
+        config.jwks_request_timeout_ms = get_env_int("JWT_JWKS_TIMEOUT_MS", 5000);
+        
+        config.roles_claim = get_env_string("JWT_ROLES_CLAIM", "role");
+        config.roles_array_claim = get_env_string("JWT_ROLES_ARRAY_CLAIM", "roles");
+        config.role_admin = get_env_string("JWT_ROLE_ADMIN", "admin");
+        config.role_read_write = get_env_string("JWT_ROLE_READ_WRITE", "read-write");
+        config.role_read_only = get_env_string("JWT_ROLE_READ_ONLY", "read-only");
+        
+        return config;
+    }
+    
+    // Validate configuration
+    bool validate() const {
+        if (!enabled) return true;
+        
+        // Must have either secret (HS256) or JWKS URL/public key (RS256)
+        if (algorithm == "HS256" || algorithm == "auto") {
+            if (secret.empty() && jwks_url.empty() && public_key.empty()) {
+                return false;  // Need at least one credential source
+            }
+        }
+        
+        if (algorithm == "RS256") {
+            if (jwks_url.empty() && public_key.empty()) {
+                return false;  // RS256 needs JWKS or public key
+            }
+        }
+        
+        // Validate algorithm value
+        if (algorithm != "HS256" && algorithm != "RS256" && algorithm != "auto") {
+            return false;
+        }
+        
+        return true;
+    }
+    
+    // Check if a path should skip authentication
+    bool should_skip_path(const std::string& path) const {
+        for (const auto& skip : skip_paths) {
+            if (path == skip) return true;
+            // Prefix match for paths like /assets/ (must be longer than just "/")
+            // Skip the root "/" for prefix matching as it would match everything
+            if (skip.length() > 1 && skip.back() == '/' && path.find(skip) == 0) {
+                return true;
+            }
+        }
+        return false;
+    }
+};
+
 struct InterInstanceConfig {
     // UDP peers - host:port or just host (uses default port)
     std::string udp_peers = "";
@@ -430,6 +557,7 @@ struct Config {
     LoggingConfig logging;
     FileBufferConfig file_buffer;
     InterInstanceConfig inter_instance;
+    AuthConfig auth;
     
     static Config load() {
         Config config;
@@ -440,6 +568,7 @@ struct Config {
         config.logging = LoggingConfig::from_env();
         config.file_buffer = FileBufferConfig::from_env();
         config.inter_instance = InterInstanceConfig::from_env();
+        config.auth = AuthConfig::from_env();
         return config;
     }
 };

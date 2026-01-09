@@ -8,15 +8,15 @@ namespace queen {
 namespace routes {
 
 void setup_internal_routes(uWS::App* app, const RouteContext& ctx) {
-    (void)ctx;  // Context not needed for these endpoints
-    
     // ============================================================
     // HTTP endpoint for peer-to-peer notifications (backward compat)
     // Notifications are now primarily sent via UDP through SharedStateManager,
     // but this HTTP endpoint allows external systems to trigger notifications
     // ============================================================
-    app->post("/internal/api/notify", [](auto* res, auto* req) {
-        (void)req;
+    app->post("/internal/api/notify", [ctx](auto* res, auto* req) {
+        // Check authentication - ADMIN required for internal operations
+        REQUIRE_AUTH(res, req, ctx, auth::AccessLevel::ADMIN);
+        
         read_json_body(res,
             [res](const nlohmann::json& body) {
                 try {
@@ -47,8 +47,9 @@ void setup_internal_routes(uWS::App* app, const RouteContext& ctx) {
     // ============================================================
     // Stats endpoint for SharedStateManager (UDPSYNC distributed cache)
     // ============================================================
-    app->get("/internal/api/shared-state/stats", [](auto* res, auto* req) {
-        (void)req;
+    app->get("/internal/api/shared-state/stats", [ctx](auto* res, auto* req) {
+        // Check authentication - ADMIN required for internal operations
+        REQUIRE_AUTH(res, req, ctx, auth::AccessLevel::ADMIN);
         
         nlohmann::json stats;
         if (global_shared_state) {
@@ -61,8 +62,9 @@ void setup_internal_routes(uWS::App* app, const RouteContext& ctx) {
     });
     
     // Legacy alias for backward compatibility
-    app->get("/internal/api/inter-instance/stats", [](auto* res, auto* req) {
-        (void)req;
+    app->get("/internal/api/inter-instance/stats", [ctx](auto* res, auto* req) {
+        // Check authentication - ADMIN required for internal operations
+        REQUIRE_AUTH(res, req, ctx, auth::AccessLevel::ADMIN);
         
         nlohmann::json stats;
         if (global_shared_state) {

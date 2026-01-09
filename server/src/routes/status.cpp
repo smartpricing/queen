@@ -88,6 +88,9 @@ void setup_status_routes(uWS::App* app, const RouteContext& ctx) {
     // GET /api/v1/status - Dashboard overview (async via stored procedure)
     // Uses V3 procedure with worker_metrics for real-time throughput and lag
     app->get("/api/v1/status", [ctx](auto* res, auto* req) {
+        // Check authentication - READ_ONLY required for status
+        REQUIRE_AUTH(res, req, ctx, auth::AccessLevel::READ_ONLY);
+        
         try {
             std::string filters_json = build_filters_json(
                 get_query_param(req, "from"),
@@ -107,6 +110,9 @@ void setup_status_routes(uWS::App* app, const RouteContext& ctx) {
     // GET /api/v1/status/queues - Queues list (async via stored procedure)
     // Uses V2 optimized procedure with pre-computed stats
     app->get("/api/v1/status/queues", [ctx](auto* res, auto* req) {
+        // Check authentication - READ_ONLY required for status
+        REQUIRE_AUTH(res, req, ctx, auth::AccessLevel::READ_ONLY);
+        
         try {
             std::string filters_json = build_filters_json(
                 get_query_param(req, "from"),
@@ -129,6 +135,9 @@ void setup_status_routes(uWS::App* app, const RouteContext& ctx) {
     // GET /api/v1/status/queues/:queue - Queue detail (async via stored procedure)
     // Uses V2 optimized procedure with pre-computed stats
     app->get("/api/v1/status/queues/:queue", [ctx](auto* res, auto* req) {
+        // Check authentication - READ_ONLY required for status
+        REQUIRE_AUTH(res, req, ctx, auth::AccessLevel::READ_ONLY);
+        
         try {
             std::string queue_name = std::string(req->getParameter(0));
             submit_sp_call(ctx, res, 
@@ -141,6 +150,9 @@ void setup_status_routes(uWS::App* app, const RouteContext& ctx) {
     
     // GET /api/v1/status/queues/:queue/messages - Queue messages (async via stored procedure)
     app->get("/api/v1/status/queues/:queue/messages", [ctx](auto* res, auto* req) {
+        // Check authentication - READ_ONLY required for status
+        REQUIRE_AUTH(res, req, ctx, auth::AccessLevel::READ_ONLY);
+        
         try {
             std::string queue_name = std::string(req->getParameter(0));
             int limit = get_query_param_int(req, "limit", 50);
@@ -156,6 +168,9 @@ void setup_status_routes(uWS::App* app, const RouteContext& ctx) {
     
     // GET /api/v1/status/analytics - Analytics (async via stored procedure)
     app->get("/api/v1/status/analytics", [ctx](auto* res, auto* req) {
+        // Check authentication - READ_ONLY required for analytics
+        REQUIRE_AUTH(res, req, ctx, auth::AccessLevel::READ_ONLY);
+        
         try {
             std::string filters_json = build_filters_json(
                 get_query_param(req, "from"),
@@ -175,6 +190,9 @@ void setup_status_routes(uWS::App* app, const RouteContext& ctx) {
     
     // GET /api/v1/analytics/system-metrics - System metrics (async via stored procedure)
     app->get("/api/v1/analytics/system-metrics", [ctx](auto* res, auto* req) {
+        // Check authentication - READ_ONLY required for analytics
+        REQUIRE_AUTH(res, req, ctx, auth::AccessLevel::READ_ONLY);
+        
         try {
             std::string filters_json = build_filters_json(
                 get_query_param(req, "from"),
@@ -193,6 +211,9 @@ void setup_status_routes(uWS::App* app, const RouteContext& ctx) {
     
     // GET /api/v1/analytics/worker-metrics - Worker metrics time series (from libqueen)
     app->get("/api/v1/analytics/worker-metrics", [ctx](auto* res, auto* req) {
+        // Check authentication - READ_ONLY required for analytics
+        REQUIRE_AUTH(res, req, ctx, auth::AccessLevel::READ_ONLY);
+        
         try {
             std::string filters_json = build_filters_json(
                 get_query_param(req, "from"),
@@ -211,7 +232,9 @@ void setup_status_routes(uWS::App* app, const RouteContext& ctx) {
     
     // GET /api/v1/analytics/postgres-stats - PostgreSQL internal stats (async via stored procedure)
     app->get("/api/v1/analytics/postgres-stats", [ctx](auto* res, auto* req) {
-        (void)req;
+        // Check authentication - READ_ONLY required for analytics
+        REQUIRE_AUTH(res, req, ctx, auth::AccessLevel::READ_ONLY);
+        
         try {
             submit_sp_call(ctx, res, 
                 "SELECT queen.get_postgres_stats_v1()");
@@ -222,7 +245,9 @@ void setup_status_routes(uWS::App* app, const RouteContext& ctx) {
     
     // GET /api/v1/status/buffers - File buffer stats (local, not async)
     app->get("/api/v1/status/buffers", [ctx](auto* res, auto* req) {
-        (void)req;
+        // Check authentication - READ_ONLY required for buffer stats
+        REQUIRE_AUTH(res, req, ctx, auth::AccessLevel::READ_ONLY);
+        
         try {
             if (ctx.file_buffer) {
                 nlohmann::json response = {

@@ -20,7 +20,9 @@ namespace routes {
 void setup_transaction_routes(uWS::App* app, const RouteContext& ctx) {
     // ASYNC Transaction API (atomic operations)
     app->post("/api/v1/transaction", [ctx](auto* res, auto* req) {
-        (void)req;
+        // Check authentication - READ_WRITE required for transactions
+        REQUIRE_AUTH(res, req, ctx, auth::AccessLevel::READ_WRITE);
+        
         read_json_body(res,
             [res, ctx](const nlohmann::json& body) {
                 try {

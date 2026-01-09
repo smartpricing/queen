@@ -22,6 +22,9 @@ namespace routes {
 void setup_pop_routes(uWS::App* app, const RouteContext& ctx) {
     // SPECIFIC POP from queue/partition
     app->get("/api/v1/pop/queue/:queue/partition/:partition", [ctx](auto* res, auto* req) {
+        // Check authentication - READ_WRITE required for pop (consumes messages)
+        REQUIRE_AUTH(res, req, ctx, auth::AccessLevel::READ_WRITE);
+        
         try {
             // POP MAINTENANCE MODE: Return empty immediately if enabled
             // Zero-cost check: just reads an atomic bool, no DB hit
@@ -178,6 +181,9 @@ void setup_pop_routes(uWS::App* app, const RouteContext& ctx) {
     
     // POP from queue (any partition)
     app->get("/api/v1/pop/queue/:queue", [ctx](auto* res, auto* req) {
+        // Check authentication - READ_WRITE required for pop (consumes messages)
+        REQUIRE_AUTH(res, req, ctx, auth::AccessLevel::READ_WRITE);
+        
         try {
             // POP MAINTENANCE MODE: Return empty immediately if enabled
             // Zero-cost check: just reads an atomic bool, no DB hit

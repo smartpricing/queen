@@ -27,6 +27,9 @@ curl -sL -o spdlog.zip "https://github.com/gabime/spdlog/archive/refs/tags/v1.14
 echo "  -> libuv.zip"
 curl -sL -o libuv.zip "https://github.com/libuv/libuv/archive/refs/tags/v1.48.0.zip"
 
+echo "  -> jwt-cpp.zip"
+curl -sL -o jwt-cpp.zip "https://github.com/Thalhammer/jwt-cpp/archive/refs/tags/v0.7.0.zip"
+
 echo ""
 echo "✅ All dependencies cached!"
 echo ""

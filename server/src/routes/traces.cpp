@@ -69,7 +69,9 @@ static void submit_sp_call(
 void setup_trace_routes(uWS::App* app, const RouteContext& ctx) {
     // POST /api/v1/traces - Record trace event (async via stored procedure)
     app->post("/api/v1/traces", [ctx](auto* res, auto* req) {
-        (void)req;
+        // Check authentication - READ_WRITE required for trace recording
+        REQUIRE_AUTH(res, req, ctx, auth::AccessLevel::READ_WRITE);
+        
         read_json_body(res,
             [res, ctx](const nlohmann::json& body) {
                 try {
@@ -120,6 +122,9 @@ void setup_trace_routes(uWS::App* app, const RouteContext& ctx) {
     
     // GET /api/v1/traces/:partitionId/:transactionId - Get traces for a message (async via stored procedure)
     app->get("/api/v1/traces/:partitionId/:transactionId", [ctx](auto* res, auto* req) {
+        // Check authentication - READ_ONLY required for trace viewing
+        REQUIRE_AUTH(res, req, ctx, auth::AccessLevel::READ_ONLY);
+        
         try {
             std::string partition_id = std::string(req->getParameter(0));
             std::string transaction_id = std::string(req->getParameter(1));
@@ -135,6 +140,9 @@ void setup_trace_routes(uWS::App* app, const RouteContext& ctx) {
     
     // GET /api/v1/traces/by-name/:traceName - Get traces by any name (async via stored procedure)
     app->get("/api/v1/traces/by-name/:traceName", [ctx](auto* res, auto* req) {
+        // Check authentication - READ_ONLY required for trace viewing
+        REQUIRE_AUTH(res, req, ctx, auth::AccessLevel::READ_ONLY);
+        
         try {
             std::string trace_name = url_decode(std::string(req->getParameter(0)));
             int limit = get_query_param_int(req, "limit", 100);
@@ -151,6 +159,9 @@ void setup_trace_routes(uWS::App* app, const RouteContext& ctx) {
     
     // GET /api/v1/traces/names - Get available trace names (async via stored procedure)
     app->get("/api/v1/traces/names", [ctx](auto* res, auto* req) {
+        // Check authentication - READ_ONLY required for trace viewing
+        REQUIRE_AUTH(res, req, ctx, auth::AccessLevel::READ_ONLY);
+        
         try {
             int limit = get_query_param_int(req, "limit", 50);
             int offset = get_query_param_int(req, "offset", 0);

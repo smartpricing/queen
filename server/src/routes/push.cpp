@@ -23,7 +23,9 @@ namespace routes {
 void setup_push_routes(uWS::App* app, const RouteContext& ctx) {
     // PUSH endpoint - uses per-worker sidecar for true async non-blocking operation
     app->post("/api/v1/push", [ctx](auto* res, auto* req) {
-        (void)req;
+        // Check authentication - READ_WRITE required for push
+        REQUIRE_AUTH(res, req, ctx, auth::AccessLevel::READ_WRITE);
+        
         read_json_body(res,
             [res, ctx](const nlohmann::json& body) {
                 try {

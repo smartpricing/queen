@@ -132,7 +132,14 @@ app.use('/',
       proxyReq.removeHeader('cookie');
       proxyReq.removeHeader('referer');
       
-      // Add user info for Queen server
+      // Forward JWT token to Queen server for authentication
+      // Get token from cookie or Authorization header
+      const token = req.cookies.token || req.headers.authorization?.replace('Bearer ', '');
+      if (token) {
+        proxyReq.setHeader('Authorization', `Bearer ${token}`);
+      }
+      
+      // Also add user info headers for backward compatibility / logging
       proxyReq.setHeader('X-Proxy-User', req.user.username);
       proxyReq.setHeader('X-Proxy-Role', req.user.role);
       

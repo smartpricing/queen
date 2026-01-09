@@ -17,6 +17,9 @@ namespace routes {
 void setup_lease_routes(uWS::App* app, const RouteContext& ctx) {
     // Lease extension
     app->post("/api/v1/lease/:leaseId/extend", [ctx](auto* res, auto* req) {
+        // Check authentication - READ_WRITE required for lease operations
+        REQUIRE_AUTH(res, req, ctx, auth::AccessLevel::READ_WRITE);
+        
         read_json_body(res,
             [res, ctx, req](const nlohmann::json& body) {
                 try {

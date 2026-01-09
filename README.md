@@ -130,6 +130,7 @@ The repository is structured as follows:
 
 | Server Version | Description | Compatible Clients |
 |----------------|-------------|-------------------|
+| **0.12.3** | Added JWT authentication | JS ≥0.7.4, Python ≥0.7.4, 0.12.0 if needs to use proxy auth |
 | **0.12.x** | New frontend and docs | JS ≥0.7.4, Python ≥0.7.4, 0.12.0 if needs to use proxy auth |
 | **0.11.x** | Libqueen 0.11.0; added stats tables and optimized analytics procedures, added DB statement timeout and stats reconcile interval | JS ≥0.7.4, Python ≥0.7.4 |
 | **0.10.x** | Total rewrite of the engine with libuv and stored procedures, removed streaming engine | JS ≥0.7.4, Python ≥0.7.4 |

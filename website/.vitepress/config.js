@@ -42,6 +42,7 @@ export default defineConfig({
           { text: 'Architecture', link: '/server/architecture' },
           { text: 'Installation', link: '/server/installation' },
           { text: 'Deployment', link: '/server/deployment' },
+          { text: 'Authentication', link: '/server/authentication' },
           { text: 'Production Benchmarks', link: '/server/benchmark-results' }
         ]
       },
@@ -116,17 +117,18 @@ export default defineConfig({
           items: [
             { text: 'Architecture', link: '/server/architecture' },
             { text: 'Installation', link: '/server/installation' },
-            { text: 'Deployment', link: '/server/deployment' }
+            { text: 'Deployment', link: '/server/deployment' },
+            { text: 'Authentication', link: '/server/authentication' }
           ]
         },
-      {
-        text: 'Operations',
-        items: [
-
-          { text: 'Production Benchmark Results', link: '/server/benchmark-results' },
-          { text: 'Release History', link: '/server/releases' }
-        ]
-      }
+        {
+          text: 'Operations',
+          items: [
+            { text: 'Monitoring', link: '/server/monitoring' },
+            { text: 'Production Benchmark Results', link: '/server/benchmark-results' },
+            { text: 'Release History', link: '/server/releases' }
+          ]
+        }
       ],
       
       '/webapp/': [

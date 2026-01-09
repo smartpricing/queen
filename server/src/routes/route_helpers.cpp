@@ -18,9 +18,24 @@ void setup_cors_headers(uWS::HttpResponse<false>* res) {
 }
 
 void send_json_response(uWS::HttpResponse<false>* res, const nlohmann::json& json, int status_code) {
+    // Status must be written BEFORE headers in uWebSockets
+    std::string status_text;
+    switch (status_code) {
+        case 200: status_text = "200 OK"; break;
+        case 201: status_text = "201 Created"; break;
+        case 204: status_text = "204 No Content"; break;
+        case 400: status_text = "400 Bad Request"; break;
+        case 401: status_text = "401 Unauthorized"; break;
+        case 403: status_text = "403 Forbidden"; break;
+        case 404: status_text = "404 Not Found"; break;
+        case 409: status_text = "409 Conflict"; break;
+        case 500: status_text = "500 Internal Server Error"; break;
+        case 503: status_text = "503 Service Unavailable"; break;
+        default: status_text = std::to_string(status_code); break;
+    }
+    res->writeStatus(status_text);
     setup_cors_headers(res);
     res->writeHeader("Content-Type", "application/json");
-    res->writeStatus(std::to_string(status_code));
     res->end(json.dump());
 }
 

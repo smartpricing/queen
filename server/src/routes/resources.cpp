@@ -67,7 +67,9 @@ void setup_resource_routes(uWS::App* app, const RouteContext& ctx) {
     // GET /api/v1/resources/queues - List all queues (async via stored procedure)
     // Uses V2 optimized procedure with pre-computed stats
     app->get("/api/v1/resources/queues", [ctx](auto* res, auto* req) {
-        (void)req;
+        // Check authentication - READ_ONLY required for resources
+        REQUIRE_AUTH(res, req, ctx, auth::AccessLevel::READ_ONLY);
+        
         try {
             submit_sp_call(ctx, res, "SELECT queen.get_queues_v2()");
         } catch (const std::exception& e) {
@@ -78,6 +80,9 @@ void setup_resource_routes(uWS::App* app, const RouteContext& ctx) {
     // GET /api/v1/resources/queues/:queue - Get single queue detail (async via stored procedure)
     // Uses V2 optimized procedure with pre-computed stats
     app->get("/api/v1/resources/queues/:queue", [ctx](auto* res, auto* req) {
+        // Check authentication - READ_ONLY required for resources
+        REQUIRE_AUTH(res, req, ctx, auth::AccessLevel::READ_ONLY);
+        
         try {
             std::string queue_name = std::string(req->getParameter(0));
             submit_sp_call(ctx, res, "SELECT queen.get_queue_v2($1)", {queue_name});
@@ -88,6 +93,9 @@ void setup_resource_routes(uWS::App* app, const RouteContext& ctx) {
     
     // DELETE /api/v1/resources/queues/:queue - Delete queue (async via stored procedure)
     app->del("/api/v1/resources/queues/:queue", [ctx](auto* res, auto* req) {
+        // Check authentication - ADMIN required for queue deletion
+        REQUIRE_AUTH(res, req, ctx, auth::AccessLevel::ADMIN);
+        
         try {
             std::string queue_name = std::string(req->getParameter(0));
             
@@ -139,7 +147,9 @@ void setup_resource_routes(uWS::App* app, const RouteContext& ctx) {
     // GET /api/v1/resources/namespaces - List all namespaces (async via stored procedure)
     // Uses V2 optimized procedure with pre-computed stats
     app->get("/api/v1/resources/namespaces", [ctx](auto* res, auto* req) {
-        (void)req;
+        // Check authentication - READ_ONLY required for resources
+        REQUIRE_AUTH(res, req, ctx, auth::AccessLevel::READ_ONLY);
+        
         try {
             submit_sp_call(ctx, res, "SELECT queen.get_namespaces_v2()");
         } catch (const std::exception& e) {
@@ -150,7 +160,9 @@ void setup_resource_routes(uWS::App* app, const RouteContext& ctx) {
     // GET /api/v1/resources/tasks - List all tasks (async via stored procedure)
     // Uses V2 optimized procedure with pre-computed stats
     app->get("/api/v1/resources/tasks", [ctx](auto* res, auto* req) {
-        (void)req;
+        // Check authentication - READ_ONLY required for resources
+        REQUIRE_AUTH(res, req, ctx, auth::AccessLevel::READ_ONLY);
+        
         try {
             submit_sp_call(ctx, res, "SELECT queen.get_tasks_v2()");
         } catch (const std::exception& e) {
@@ -161,7 +173,9 @@ void setup_resource_routes(uWS::App* app, const RouteContext& ctx) {
     // GET /api/v1/resources/overview - System overview (async via stored procedure)
     // Uses V3 procedure with worker_metrics for real-time throughput and lag
     app->get("/api/v1/resources/overview", [ctx](auto* res, auto* req) {
-        (void)req;
+        // Check authentication - READ_ONLY required for resources
+        REQUIRE_AUTH(res, req, ctx, auth::AccessLevel::READ_ONLY);
+        
         try {
             submit_sp_call(ctx, res, "SELECT queen.get_system_overview_v3()");
         } catch (const std::exception& e) {

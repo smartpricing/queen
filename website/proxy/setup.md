@@ -2,6 +2,16 @@
 
 Install and configure the Queen MQ proxy server.
 
+## Deployment Options
+
+| Option | Proxy Auth | Queen JWT | Use Case |
+|--------|------------|-----------|----------|
+| **Proxy Only** | ✅ | ❌ | Simple setup, internal networks |
+| **Proxy + JWT** | ✅ | ✅ | Defense in depth, zero-trust |
+| **Direct JWT** | ❌ | ✅ | IoT devices, microservices (no proxy needed) |
+
+See [Server Authentication](/server/authentication) for direct JWT without proxy.
+
 ## Installation
 
 ```bash
@@ -126,5 +136,87 @@ server {
     }
 }
 ```
+
+## Proxy + JWT (Combined Authentication)
+
+For defense in depth, you can enable JWT authentication on both the proxy and Queen server. The proxy generates JWT tokens on login and forwards them to Queen, which validates them independently.
+
+### Configuration
+
+**Both proxy and Queen must use the same `JWT_SECRET`:**
+
+```bash
+# Start Queen with JWT authentication
+JWT_ENABLED=true \
+JWT_ALGORITHM=HS256 \
+JWT_SECRET=your-shared-secret-key \
+./bin/queen-server
+
+# Start Proxy with same secret
+JWT_SECRET=your-shared-secret-key \
+QUEEN_SERVER_URL=http://localhost:6632 \
+node proxy/src/server.js
+```
+
+### How It Works
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│                                                             │
+│  [User] ──login──> [Proxy] ──generates JWT──> [Cookie]      │
+│                                                             │
+│  [User] ──request with cookie──> [Proxy] ──validates JWT──> │
+│                                      │                      │
+│                                      │ forwards JWT         │
+│                                      ▼                      │
+│                               [Queen Server]                │
+│                                      │                      │
+│                                validates JWT                │
+│                                      │                      │
+│                               [Request processed]           │
+│                                                             │
+└─────────────────────────────────────────────────────────────┘
+```
+
+### Benefits
+
+- **Defense in depth** - Two layers of authentication
+- **Zero-trust** - Queen validates every request even from trusted proxy
+- **Audit trail** - Both services can log authenticated user info
+- **Graceful migration** - Can enable Queen JWT without breaking existing proxy setup
+
+### Docker Compose Example
+
+```yaml
+version: '3.8'
+services:
+  queen:
+    image: smartnessai/queen-mq:latest
+    environment:
+      - PG_HOST=postgres
+      - JWT_ENABLED=true
+      - JWT_ALGORITHM=HS256
+      - JWT_SECRET=${JWT_SECRET}
+    ports:
+      - "6632:6632"
+  
+  proxy:
+    build: ./proxy
+    environment:
+      - QUEEN_SERVER_URL=http://queen:6632
+      - JWT_SECRET=${JWT_SECRET}
+      - PG_HOST=postgres
+    ports:
+      - "3000:3000"
+  
+  postgres:
+    image: postgres:15
+    environment:
+      - POSTGRES_PASSWORD=password
+```
+
+::: tip
+When using Proxy + JWT, users can still log in via the proxy's `/login` page with username/password. The proxy generates a JWT that works for both the proxy's session management and Queen's authentication.
+:::
 
 [Complete guide](https://github.com/smartpricing/queen/tree/master/proxy)

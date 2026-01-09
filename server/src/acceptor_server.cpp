@@ -9,6 +9,7 @@
 #include "queen/eviction_service.hpp"
 #include "queen/stats_service.hpp"
 #include "queen/shared_state_manager.hpp"
+#include "queen/auth/auth_middleware.hpp"
 #include "queen.hpp"
 #include "threadpool.hpp"
 #include "queen/routes/route_registry.hpp"
@@ -661,6 +662,37 @@ bool start_acceptor_server(const Config& config) {
     // Initialize encryption globally
     bool encryption_enabled = init_encryption();
     spdlog::info("Encryption: {}", encryption_enabled ? "enabled" : "disabled");
+    
+    // Initialize JWT authentication middleware
+    if (config.auth.enabled) {
+        if (!config.auth.validate()) {
+            spdlog::error("Invalid JWT authentication configuration");
+            spdlog::error("  - For HS256: set JWT_SECRET");
+            spdlog::error("  - For RS256: set JWT_JWKS_URL or JWT_PUBLIC_KEY");
+            return false;
+        }
+        
+        auth::global_auth_middleware = std::make_shared<auth::AuthMiddleware>(config.auth);
+        spdlog::info("JWT Authentication: ENABLED");
+        spdlog::info("  Algorithm: {}", config.auth.algorithm);
+        if (!config.auth.issuer.empty()) {
+            spdlog::info("  Issuer: {}", config.auth.issuer);
+        }
+        if (!config.auth.audience.empty()) {
+            spdlog::info("  Audience: {}", config.auth.audience);
+        }
+        spdlog::info("  Roles claim: {}", config.auth.roles_claim);
+        spdlog::info("  Skip paths: {}", [&]() {
+            std::string result;
+            for (size_t i = 0; i < config.auth.skip_paths.size(); i++) {
+                if (i > 0) result += ", ";
+                result += config.auth.skip_paths[i];
+            }
+            return result;
+        }());
+    } else {
+        spdlog::info("JWT Authentication: DISABLED");
+    }
     
     // Determine number of workers
     int hardware_threads = static_cast<int>(std::thread::hardware_concurrency());

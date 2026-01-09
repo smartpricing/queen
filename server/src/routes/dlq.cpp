@@ -61,6 +61,9 @@ static void submit_sp_call(
 void setup_dlq_routes(uWS::App* app, const RouteContext& ctx) {
     // GET /api/v1/dlq - Get dead letter queue messages (async via stored procedure)
     app->get("/api/v1/dlq", [ctx](auto* res, auto* req) {
+        // Check authentication - READ_ONLY required for DLQ viewing
+        REQUIRE_AUTH(res, req, ctx, auth::AccessLevel::READ_ONLY);
+        
         try {
             nlohmann::json filters;
             std::string queue = get_query_param(req, "queue");

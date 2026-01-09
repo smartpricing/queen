@@ -6,9 +6,65 @@
 #include <functional>
 #include <map>
 #include <chrono>
+#include "queen/auth/auth_middleware.hpp"
 
 namespace queen {
 namespace routes {
+
+// ============================================================================
+// Authentication Macros
+// ============================================================================
+
+/**
+ * REQUIRE_AUTH - Check authentication and authorization for a route
+ * 
+ * Usage in route handlers:
+ *   REQUIRE_AUTH(res, req, ctx, auth::AccessLevel::READ_WRITE);
+ * 
+ * If auth fails, sends error response and returns from the handler.
+ * If auth is disabled, passes through without checking.
+ * 
+ * @param res  The uWS HttpResponse pointer
+ * @param req  The uWS HttpRequest pointer
+ * @param ctx  The RouteContext reference
+ * @param level The required AccessLevel (PUBLIC, READ_ONLY, READ_WRITE, ADMIN)
+ */
+#define REQUIRE_AUTH(res, req, ctx, level) \
+    do { \
+        if (ctx.config.auth.enabled && queen::auth::global_auth_middleware) { \
+            auto _auth_result = queen::auth::global_auth_middleware->check(req, level); \
+            if (!_auth_result.authorized) { \
+                send_error_response(res, _auth_result.error, _auth_result.status_code); \
+                return; \
+            } \
+        } \
+    } while(0)
+
+/**
+ * REQUIRE_AUTH_WITH_CLAIMS - Check auth and capture claims for use in handler
+ * 
+ * Usage:
+ *   std::optional<auth::JwtClaims> claims;
+ *   REQUIRE_AUTH_WITH_CLAIMS(res, req, ctx, auth::AccessLevel::READ_WRITE, claims);
+ *   // Now 'claims' contains the JWT claims if auth was successful
+ * 
+ * @param res    The uWS HttpResponse pointer
+ * @param req    The uWS HttpRequest pointer
+ * @param ctx    The RouteContext reference
+ * @param level  The required AccessLevel
+ * @param claims Variable to store the claims (std::optional<auth::JwtClaims>)
+ */
+#define REQUIRE_AUTH_WITH_CLAIMS(res, req, ctx, level, claims) \
+    do { \
+        if (ctx.config.auth.enabled && queen::auth::global_auth_middleware) { \
+            auto _auth_result = queen::auth::global_auth_middleware->check(req, level); \
+            if (!_auth_result.authorized) { \
+                send_error_response(res, _auth_result.error, _auth_result.status_code); \
+                return; \
+            } \
+            claims = _auth_result.claims; \
+        } \
+    } while(0)
 
 // ============================================================================
 // CORS and Response Helpers

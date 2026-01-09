@@ -138,6 +138,9 @@ static std::string build_message_filters_json(
 void setup_message_routes(uWS::App* app, const RouteContext& ctx) {
     // GET /api/v1/messages - List messages with filters (async via stored procedure)
     app->get("/api/v1/messages", [ctx](auto* res, auto* req) {
+        // Check authentication - READ_ONLY required for message listing
+        REQUIRE_AUTH(res, req, ctx, auth::AccessLevel::READ_ONLY);
+        
         try {
             std::string filters_json = build_message_filters_json(
                 get_query_param(req, "queue"),
@@ -161,6 +164,9 @@ void setup_message_routes(uWS::App* app, const RouteContext& ctx) {
     
     // GET /api/v1/messages/:partitionId/:transactionId - Get single message detail (async via stored procedure)
     app->get("/api/v1/messages/:partitionId/:transactionId", [ctx](auto* res, auto* req) {
+        // Check authentication - READ_ONLY required for message viewing
+        REQUIRE_AUTH(res, req, ctx, auth::AccessLevel::READ_ONLY);
+        
         try {
             std::string partition_id = std::string(req->getParameter(0));
             std::string transaction_id = std::string(req->getParameter(1));
@@ -175,6 +181,9 @@ void setup_message_routes(uWS::App* app, const RouteContext& ctx) {
     
     // DELETE /api/v1/messages/:partitionId/:transactionId - Delete a message (async via stored procedure)
     app->del("/api/v1/messages/:partitionId/:transactionId", [ctx](auto* res, auto* req) {
+        // Check authentication - READ_WRITE required for message deletion
+        REQUIRE_AUTH(res, req, ctx, auth::AccessLevel::READ_WRITE);
+        
         try {
             std::string partition_id = std::string(req->getParameter(0));
             std::string transaction_id = std::string(req->getParameter(1));

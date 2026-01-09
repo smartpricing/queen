@@ -1,8 +1,9 @@
 import { Queen } from '../client-js/client-v2/index.js';
 
+// Run the server with: NUM_WORKERS=2 JWT_ENABLED=true JWT_ALGORITHM=HS256 JWT_SECRET=your-secret-key bin/queen-server 
 const queen = new Queen({
-  url: 'https://qschat-stage.smartness.com',
-  bearerToken: 'YOUR_BEARER_TOKEN_HERE'
+  url: 'http://localhost:6632',
+  bearerToken: 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJhZG1pbi11c2VyIiwidXNlcm5hbWUiOiJhZG1pbiIsInJvbGUiOiJhZG1pbiIsImlhdCI6MTc2Nzk0OTgyMSwiZXhwIjoxNzY4MDM2MjIxfQ.cwNDgbXMrbQAo-bsCnto7tOSVSxPssXZLTmW2powEK4'
 });
 
 const dlqMessages = await queen.queue('smartchat.router.outgoing').dlq().get();

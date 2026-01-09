@@ -20,7 +20,9 @@ namespace routes {
 void setup_ack_routes(uWS::App* app, const RouteContext& ctx) {
     // ASYNC ACK batch
     app->post("/api/v1/ack/batch", [ctx](auto* res, auto* req) {
-        (void)req;
+        // Check authentication - READ_WRITE required for ack
+        REQUIRE_AUTH(res, req, ctx, auth::AccessLevel::READ_WRITE);
+        
         read_json_body(res,
             [res, ctx](const nlohmann::json& body) {
                 try {
@@ -114,7 +116,9 @@ void setup_ack_routes(uWS::App* app, const RouteContext& ctx) {
     
     // ASYNC Single ACK
     app->post("/api/v1/ack", [ctx](auto* res, auto* req) {
-        (void)req;
+        // Check authentication - READ_WRITE required for ack
+        REQUIRE_AUTH(res, req, ctx, auth::AccessLevel::READ_WRITE);
+        
         read_json_body(res,
             [res, ctx](const nlohmann::json& body) {
                 try {
