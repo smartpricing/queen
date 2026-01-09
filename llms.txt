@@ -1,0 +1,81 @@
+# Queen MQ
+
+> A PostgreSQL-backed partitioned message queue with unlimited FIFO partitions, consumer groups, transactional delivery, message replay, and ACID-guaranteed durability.
+
+Queen MQ provides Kafka-like semantics on PostgreSQL using stateless clients that speak HTTP to a stateless C++ server. Key features include:
+
+- **Unlimited FIFO Partitions**: Messages within a partition are strictly ordered; different partitions process independently in parallel
+- **Consumer Groups**: Kafka-style groups where multiple groups can independently consume the same messages with replay support
+- **Transactional Delivery**: Atomic push/ack operations with exactly-once, at-least-once, or at-most-once semantics
+- **PostgreSQL Backend**: ACID guarantees, familiar ops, zero message loss with automatic failover buffering
+- **High Performance**: 10k+ req/s sustained throughput
+
+The repository includes a C++ server, client libraries (JavaScript, Python, C++), a PostgreSQL extension, authentication proxy, and Vue.js dashboard.
+
+## Getting Started
+
+- [README.md](README.md): Project overview, quick start with Docker, repository structure
+- [Quick Start Guide](website/guide/quickstart.md): Step-by-step tutorial to run Queen and send your first message
+- [Basic Concepts](website/guide/concepts.md): Queues, partitions, consumer groups, leases, acknowledgments
+
+## Server
+
+- [Server README](server/README.md): Architecture overview, build instructions, performance tuning, PostgreSQL configuration
+- [HTTP API Reference](server/API.md): Complete REST API with curl examples for all endpoints
+- [Environment Variables](server/ENV_VARIABLES.md): 100+ configuration options for server, database, queue processing, logging
+- [Server Deployment](website/server/deployment.md): Docker, Kubernetes, systemd service setup
+
+## Core Library
+
+- [lib/queen.hpp](lib/queen.hpp): C++ core library header - libuv event loop, async PostgreSQL, job processing
+- [lib/schema/schema.sql](lib/schema/schema.sql): PostgreSQL schema - tables for queues, partitions, messages, consumer groups, DLQ
+- [lib/schema/procedures/](lib/schema/procedures/): Stored procedures for push, pop, ack, transactions, analytics
+
+## Client Libraries
+
+- [JavaScript Client](client-js/README.md): Node.js/browser client with fluent API (npm install queen-mq)
+- [JavaScript Client Implementation](client-js/client-v2/Queen.js): Main client class with queue builder, transactions, buffering
+- [Python Client](client-py/README.md): Async Python client (pip install queen-mq)
+- [Python Client Implementation](client-py/queen/client.py): Main client class with async/await API
+- [C++ Client](client-cpp/README.md): Header-only C++17 client with examples
+
+## PostgreSQL Extension
+
+- [pg_qpubsub README](pg_qpubsub/README.md): Native PostgreSQL extension for Queen semantics directly in SQL
+- [pg_qpubsub SQL](pg_qpubsub/pg_qpubsub--1.0.sql): Extension source - produce/consume/commit functions
+
+## Authentication Proxy
+
+- [Proxy README](proxy/README.md): JWT authentication proxy with role-based access control (admin, read-write, read-only)
+
+## Dashboard
+
+- [app/](app/): Vue.js web dashboard for monitoring queues, messages, traces, and system metrics
+- [Dashboard Overview](website/webapp/overview.md): Features and usage guide
+
+## Guides
+
+- [Queues & Partitions](website/guide/queues-partitions.md): Deep dive into partitioning strategies and FIFO ordering
+- [Consumer Groups](website/guide/consumer-groups.md): Scaling consumers, subscription modes, replay
+- [Transactions](website/guide/transactions.md): Atomic operations for exactly-once delivery
+- [Long Polling](website/guide/long-polling.md): Efficient message waiting, clustered deployments
+- [Dead Letter Queue](website/guide/dlq.md): Handling failed messages
+- [Message Tracing](website/guide/tracing.md): Debugging distributed workflows
+- [Lease Management](website/guide/lease-management.md): Message locks and renewals
+- [Failover](website/guide/failover.md): Zero-message-loss failover with file buffering
+- [Retention](website/guide/retention.md): Message cleanup policies
+- [Comparison](website/guide/comparison.md): Queen vs RabbitMQ, Kafka, Redis, SQS
+
+## Configuration
+
+- [Server Config](server/include/queen/config.hpp): C++ configuration structs for server, database, queues, jobs, auth
+- [Client Defaults JS](client-js/client-v2/utils/defaults.js): JavaScript client default settings
+- [Client Defaults Python](client-py/queen/utils/defaults.py): Python client default settings
+
+## Optional
+
+- [Examples](examples/): 40+ JavaScript examples covering all features
+- [Test](client-v2/test-v2): All the test suite in node.js
+- [Benchmark](benchmark/README.md): C++ performance testing tools
+- [License](LICENSE.md): Apache 2.0 License
+

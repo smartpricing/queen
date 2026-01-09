@@ -1,0 +1,828 @@
+# Queen MQ
+
+> A PostgreSQL-backed partitioned message queue with unlimited FIFO partitions, consumer groups, transactional delivery, message replay, and ACID-guaranteed durability.
+
+Queen MQ provides Kafka-like semantics on PostgreSQL using stateless clients that speak HTTP to a stateless C++ server. Key features include:
+
+- **Unlimited FIFO Partitions**: Messages within a partition are strictly ordered; different partitions process independently in parallel
+- **Consumer Groups**: Kafka-style groups where multiple groups can independently consume the same messages with replay support
+- **Transactional Delivery**: Atomic push/ack operations with exactly-once, at-least-once, or at-most-once semantics
+- **PostgreSQL Backend**: ACID guarantees, familiar ops, zero message loss with automatic failover buffering
+- **High Performance**: 10k+ req/s sustained throughput
+
+The repository includes a C++ server (built with libuv, uWebSockets, libpq), client libraries (JavaScript, Python, C++), a PostgreSQL extension, authentication proxy, and Vue.js dashboard.
+
+---
+
+## Quick Start with Docker
+
+```bash
+# Create a Docker network for Queen components
+docker network create queen
+
+# Start PostgreSQL
+docker run --name qpg --network queen -e POSTGRES_PASSWORD=postgres -p 5433:5432 -d postgres
+
+# Wait for PostgreSQL to start
+sleep 2
+
+# Start Queen Server
+docker run -p 6632:6632 --network queen \
+  -e PG_HOST=qpg \
+  -e PG_PORT=5432 \
+  -e PG_PASSWORD=postgres \
+  -e NUM_WORKERS=2 \
+  -e DB_POOL_SIZE=5 \
+  smartnessai/queen-mq
+```
+
+---
+
+## HTTP API Reference
+
+All examples tested against a running Queen server at localhost:6632.
+
+### Health Check
+
+```bash
+curl http://localhost:6632/health
+```
+
+Response:
+```json
+{
+  "status": "healthy",
+  "database": "connected",
+  "server": "C++ Queen Server (libqueen)",
+  "version": "1.0.0"
+}
+```
+
+### Configure/Create Queue
+
+```bash
+curl -X POST http://localhost:6632/api/v1/configure \
+  -H "Content-Type: application/json" \
+  -d '{
+    "queue": "my-queue",
+    "options": {
+      "leaseTime": 60,
+      "retryLimit": 3,
+      "priority": 5,
+      "encryptionEnabled": false
+    }
+  }'
+```
+
+Response:
+```json
+{
+  "configured": true,
+  "queue": "my-queue",
+  "queueId": "uuid",
+  "partitionId": "uuid",
+  "options": {
+    "leaseTime": 60,
+    "retryLimit": 3,
+    "priority": 5,
+    ...
+  }
+}
+```
+
+**Queue Options:**
+- `leaseTime` (int): Seconds before message lease expires (default: 300)
+- `retryLimit` (int): Max retry attempts (default: 3)
+- `retryDelay` (int): Delay in ms between retries (default: 1000)
+- `priority` (int): Queue priority for multi-queue consumers (default: 0)
+- `delayedProcessing` (int): Seconds before message is available (default: 0)
+- `retentionSeconds` (int): Retention time for pending messages (default: 0 = forever)
+- `completedRetentionSeconds` (int): Retention for completed messages (default: 0)
+- `encryptionEnabled` (bool): Encrypt message payloads at rest (default: false)
+- `deadLetterQueue` (bool): Enable DLQ functionality (default: false)
+- `dlqAfterMaxRetries` (bool): Auto-move to DLQ after max retries (default: false)
+
+### Push Messages
+
+```bash
+curl -X POST http://localhost:6632/api/v1/push \
+  -H "Content-Type: application/json" \
+  -d '{
+    "items": [
+      {
+        "queue": "my-queue",
+        "partition": "Default",
+        "payload": {"hello": "world", "count": 123}
+      }
+    ]
+  }'
+```
+
+Response:
+```json
+[
+  {
+    "index": 0,
+    "message_id": "019ba2fb-d001-7000-8dfa-dabcf8291573",
+    "partition_id": "9a86c3f5-6810-44f3-a00d-873da1b27462",
+    "status": "queued",
+    "transaction_id": "2d6b16c8-645c-438e-820b-5d7ac8c7a069"
+  }
+]
+```
+
+**Push Item Fields:**
+- `queue` (required): Queue name
+- `partition` (optional): Partition name (default: "Default")
+- `payload` (required): JSON message data
+- `transactionId` (optional): Custom ID for exactly-once semantics
+
+### Pop Messages
+
+```bash
+# Pop from any partition
+curl "http://localhost:6632/api/v1/pop/queue/my-queue?batch=10"
+
+# Pop from specific partition
+curl "http://localhost:6632/api/v1/pop/queue/my-queue/partition/user-123?batch=5"
+
+# Pop with consumer group (bus mode)
+curl "http://localhost:6632/api/v1/pop/queue/my-queue?consumerGroup=workers&batch=10"
+
+# Pop with auto-acknowledgment (no manual ack needed)
+curl "http://localhost:6632/api/v1/pop/queue/my-queue?autoAck=true&batch=10"
+
+# Long polling (wait for messages)
+curl "http://localhost:6632/api/v1/pop/queue/my-queue?wait=true&timeout=30000"
+```
+
+Response:
+```json
+{
+  "success": true,
+  "queue": "my-queue",
+  "partition": "Default",
+  "partitionId": "9a86c3f5-6810-44f3-a00d-873da1b27462",
+  "leaseId": "019ba2fb-e057-7000-970f-622644047e3a",
+  "consumerGroup": "__QUEUE_MODE__",
+  "messages": [
+    {
+      "id": "019ba2fb-d001-7000-8dfa-dabcf8291573",
+      "transactionId": "2d6b16c8-645c-438e-820b-5d7ac8c7a069",
+      "partitionId": "9a86c3f5-6810-44f3-a00d-873da1b27462",
+      "leaseId": "019ba2fb-e057-7000-970f-622644047e3a",
+      "data": {"hello": "world", "count": 123},
+      "createdAt": "2026-01-09T13:39:30.440204Z"
+    }
+  ]
+}
+```
+
+**Query Parameters:**
+- `batch` (int): Number of messages to retrieve (default: 1)
+- `wait` (bool): Wait for messages if queue empty (default: false)
+- `timeout` (int): Timeout in ms for long polling (default: 30000)
+- `consumerGroup` (string): Consumer group name for bus mode (default: "__QUEUE_MODE__")
+- `autoAck` (bool): Auto-acknowledge messages on delivery (default: false)
+
+### Acknowledge Messages
+
+**IMPORTANT:** `partitionId` is required to ensure the correct message is acknowledged.
+
+```bash
+# Acknowledge as completed
+curl -X POST http://localhost:6632/api/v1/ack \
+  -H "Content-Type: application/json" \
+  -d '{
+    "transactionId": "msg-transaction-id",
+    "partitionId": "partition-uuid",
+    "status": "completed"
+  }'
+
+# Acknowledge as failed (will retry)
+curl -X POST http://localhost:6632/api/v1/ack \
+  -H "Content-Type: application/json" \
+  -d '{
+    "transactionId": "msg-transaction-id",
+    "partitionId": "partition-uuid",
+    "status": "failed",
+    "error": "Processing error message"
+  }'
+```
+
+Response:
+```json
+[
+  {
+    "index": 0,
+    "success": true,
+    "transactionId": "msg-transaction-id",
+    "queueName": "my-queue",
+    "partitionName": "Default",
+    "leaseReleased": true,
+    "dlq": false
+  }
+]
+```
+
+### Batch Acknowledge
+
+```bash
+curl -X POST http://localhost:6632/api/v1/ack/batch \
+  -H "Content-Type: application/json" \
+  -d '{
+    "acknowledgments": [
+      {"transactionId": "tx-1", "partitionId": "part-uuid-1", "status": "completed"},
+      {"transactionId": "tx-2", "partitionId": "part-uuid-2", "status": "failed", "error": "Validation error"}
+    ]
+  }'
+```
+
+### Atomic Transactions
+
+Execute multiple operations atomically (push + ack):
+
+```bash
+curl -X POST http://localhost:6632/api/v1/transaction \
+  -H "Content-Type: application/json" \
+  -d '{
+    "operations": [
+      {
+        "type": "ack",
+        "transactionId": "original-msg-id",
+        "partitionId": "partition-uuid",
+        "status": "completed"
+      },
+      {
+        "type": "push",
+        "items": [
+          {"queue": "next-queue", "payload": {"processed": true}}
+        ]
+      }
+    ]
+  }'
+```
+
+Response:
+```json
+{
+  "success": true,
+  "transactionId": "87eeed51-36c8-4fd4-8d9e-9d714afcd484",
+  "results": [
+    {"index": 0, "type": "ack", "success": true, "transactionId": "original-msg-id"},
+    {"index": 1, "type": "push", "success": true, "messageId": "new-msg-id", "partitionId": "uuid"}
+  ]
+}
+```
+
+### Extend Message Lease
+
+```bash
+curl -X POST http://localhost:6632/api/v1/lease/LEASE_ID/extend \
+  -H "Content-Type: application/json" \
+  -d '{"seconds": 60}'
+```
+
+Response:
+```json
+[
+  {
+    "index": 0,
+    "success": true,
+    "leaseId": "019ba303-7390-7000-821f-1d040a3601d5",
+    "expiresAt": "2026-01-09T13:48:51.081Z"
+  }
+]
+```
+
+### Resources & Status
+
+```bash
+# System overview
+curl http://localhost:6632/api/v1/resources/overview
+
+# List queues
+curl http://localhost:6632/api/v1/resources/queues
+
+# Queue details
+curl http://localhost:6632/api/v1/resources/queues/my-queue
+
+# Delete queue
+curl -X DELETE http://localhost:6632/api/v1/resources/queues/my-queue
+
+# Queue statistics
+curl http://localhost:6632/api/v1/status/queues/my-queue
+
+# Messages list
+curl "http://localhost:6632/api/v1/messages?queue=my-queue&status=pending&limit=50"
+
+# Dead letter queue
+curl "http://localhost:6632/api/v1/dlq?queue=my-queue&limit=50"
+
+# Consumer groups
+curl http://localhost:6632/api/v1/consumer-groups
+
+# Metrics
+curl http://localhost:6632/metrics
+```
+
+---
+
+## JavaScript Client
+
+### Installation
+
+```bash
+npm install queen-mq
+```
+
+Requires Node.js 22+
+
+### Basic Usage
+
+```javascript
+import { Queen } from 'queen-mq'
+
+// Connect to Queen server
+const queen = new Queen('http://localhost:6632')
+
+// Create a queue
+await queen.queue('tasks').create()
+
+// Push messages
+await queen.queue('tasks').push([
+  { data: { task: 'send-email', to: 'alice@example.com' } }
+])
+
+// Consume messages (long-running worker)
+await queen.queue('tasks').consume(async (message) => {
+  console.log('Processing:', message.data)
+  // Auto-ack on success, auto-retry on error
+})
+```
+
+### Queue Configuration
+
+```javascript
+await queen.queue('orders')
+  .config({
+    leaseTime: 300,        // 5 minutes
+    retryLimit: 3,
+    priority: 5,
+    encryptionEnabled: false
+  })
+  .create()
+```
+
+### Partitions (Ordered Processing)
+
+```javascript
+// All messages for user-123 are processed in order
+await queen.queue('user-events')
+  .partition('user-123')
+  .push([
+    { data: { event: 'login' } },
+    { data: { event: 'view-page' } },
+    { data: { event: 'logout' } }
+  ])
+```
+
+### Consumer Groups
+
+```javascript
+// Worker 1 & 2 share the load
+await queen.queue('emails')
+  .group('processors')
+  .consume(async (message) => {
+    await sendEmail(message.data)
+  })
+
+// Separate group processes same messages independently
+await queen.queue('emails')
+  .group('analytics')
+  .consume(async (message) => {
+    await logMetrics(message.data)
+  })
+```
+
+### Subscription Modes
+
+```javascript
+// Skip history, only new messages
+await queen.queue('events')
+  .group('realtime-monitor')
+  .subscriptionMode('new')
+  .consume(async (message) => { /* new only */ })
+
+// Start from specific timestamp
+await queen.queue('events')
+  .group('replay')
+  .subscriptionFrom('2025-10-28T10:00:00.000Z')
+  .consume(async (message) => { /* from timestamp */ })
+```
+
+### Manual Pop and Ack
+
+```javascript
+// Grab messages manually
+const messages = await queen.queue('tasks')
+  .batch(10)
+  .wait(true)  // Long polling
+  .pop()
+
+// Manual acknowledgment
+for (const message of messages) {
+  try {
+    await processMessage(message.data)
+    await queen.ack(message, true)  // Success
+  } catch (error) {
+    await queen.ack(message, false)  // Retry
+  }
+}
+```
+
+### Transactions
+
+```javascript
+// Pop from queue A
+const messages = await queen.queue('input').pop()
+
+// Atomically: ack input AND push output
+await queen.transaction()
+  .ack(messages[0])
+  .queue('output')
+  .push([{ data: processedResult }])
+  .commit()
+
+// If commit fails, nothing happens - message stays in input queue
+```
+
+### Client-Side Buffering (High Throughput)
+
+```javascript
+// Buffer messages locally, batch to server
+for (let i = 0; i < 10000; i++) {
+  await queen.queue('events')
+    .buffer({ messageCount: 500, timeMillis: 1000 })
+    .push([{ data: { id: i } }])
+}
+
+// Flush remaining buffered messages
+await queen.flushAllBuffers()
+
+// Result: 10x-100x faster than individual pushes
+```
+
+### Lease Renewal (Long-Running Tasks)
+
+```javascript
+await queen.queue('video-processing')
+  .renewLease(true, 60000)  // Renew every 60 seconds
+  .consume(async (message) => {
+    // Can take hours - lease keeps renewing automatically
+    await processVideo(message.data)
+  })
+```
+
+### Concurrency
+
+```javascript
+await queen.queue('tasks')
+  .concurrency(10)        // 10 parallel workers
+  .batch(20)              // Fetch 20 at a time
+  .consume(async (message) => {
+    await processTask(message.data)
+  })
+```
+
+### Dead Letter Queue
+
+```javascript
+// Query failed messages
+const dlq = await queen.queue('risky')
+  .dlq()
+  .limit(10)
+  .get()
+
+console.log(`Found ${dlq.total} failed messages`)
+for (const msg of dlq.messages) {
+  console.log('Error:', msg.errorMessage)
+}
+```
+
+### Graceful Shutdown
+
+```javascript
+await queen.close()  // Flush buffers and close connections
+```
+
+---
+
+## Python Client
+
+### Installation
+
+```bash
+pip install queen-mq
+```
+
+Requires Python 3.8+
+
+### Basic Usage
+
+```python
+import asyncio
+from queen import Queen
+
+async def main():
+    # Connect to Queen server
+    async with Queen('http://localhost:6632') as queen:
+        # Create a queue
+        await queen.queue('tasks').create()
+        
+        # Push messages
+        await queen.queue('tasks').push([
+            {'data': {'task': 'send-email', 'to': 'alice@example.com'}}
+        ])
+        
+        # Pop and process
+        messages = await queen.queue('tasks').pop()
+        print('Received:', messages[0]['data'])
+        
+        # Acknowledge
+        await queen.ack(messages[0], True)
+
+asyncio.run(main())
+```
+
+### Queue Configuration
+
+```python
+await queen.queue('orders').config({
+    'leaseTime': 300,          # 5 minutes
+    'retryLimit': 3,
+    'priority': 5,
+    'encryptionEnabled': False
+}).create()
+```
+
+### Partitions
+
+```python
+# All messages for user-123 are processed in order
+await queen.queue('user-events').partition('user-123').push([
+    {'data': {'event': 'login'}},
+    {'data': {'event': 'view-page'}},
+    {'data': {'event': 'logout'}}
+])
+```
+
+### Consumer Groups
+
+```python
+# Multiple consumers share the load
+await queen.queue('emails').group('processors').consume(handler)
+
+# Separate group processes same messages independently
+await queen.queue('emails').group('analytics').consume(analytics_handler)
+```
+
+### Subscription Modes
+
+```python
+# Skip history, only new messages
+await queen.queue('events').group('realtime').subscription_mode('new').consume(handler)
+
+# Start from specific timestamp
+await queen.queue('events').group('replay').subscription_from('2025-10-28T10:00:00.000Z').consume(handler)
+```
+
+### Manual Pop and Ack
+
+```python
+# Grab messages manually
+messages = await queen.queue('tasks').batch(10).wait(True).pop()
+
+# Manual acknowledgment
+for message in messages:
+    try:
+        await process_message(message['data'])
+        await queen.ack(message, True)  # Success
+    except Exception as error:
+        await queen.ack(message, False)  # Retry
+```
+
+### Transactions
+
+```python
+# Pop from queue A
+messages = await queen.queue('input').pop()
+
+# Atomically: ack input AND push output
+await (queen.transaction()
+    .ack(messages[0])
+    .queue('output')
+    .push([{'data': processed_result}])
+    .commit())
+```
+
+### Client-Side Buffering
+
+```python
+# Buffer messages locally, batch to server
+for i in range(10000):
+    await queen.queue('events').buffer({'message_count': 500, 'time_millis': 1000}).push([
+        {'data': {'id': i}}
+    ])
+
+# Flush remaining buffered messages
+await queen.flush_all_buffers()
+```
+
+### Consume with Batch
+
+```python
+# batch=1 (default): handler receives single message
+await queen.queue('tasks').consume(handler)
+
+# batch>1: handler receives array of messages
+await queen.queue('tasks').batch(10).consume(batch_handler)
+```
+
+---
+
+## Core Concepts
+
+### Queues
+
+Queues are containers for messages with configurable settings like lease time, retry limit, and encryption.
+
+### Partitions
+
+Partitions are separate lanes within a queue:
+- Messages in the same partition are processed **in order**
+- Messages in different partitions can be processed **in parallel**
+- Only one consumer can process a partition at a time
+- Use partitions for per-user, per-tenant, or per-entity ordering
+
+```
+┌─────────────┐
+│   Queue     │
+├─────────────┤
+│ Partition A │ ──→ Consumer 1
+│ Partition B │ ──→ Consumer 2
+│ Partition C │ ──→ Consumer 3
+└─────────────┘
+```
+
+### Consumer Groups
+
+- **Queue Mode (default)**: Messages distributed across consumers, each message processed by ONE consumer only
+- **Consumer Group Mode**: Each group processes ALL messages independently (fan-out)
+
+### Leases
+
+When a consumer receives a message, it gets a lease (exclusive lock) for a specific time period:
+1. Consumer pops message → Gets lease
+2. Processing...
+3. Success: ACK message → Lease released
+4. Timeout: After lease expires → Message available again
+
+### Transaction IDs
+
+Every message has a unique transaction ID for:
+- **Idempotency**: Safe to retry push operations
+- **Exactly-Once**: Prevent duplicate message processing
+- **Tracing**: Track messages across queues
+
+---
+
+## Environment Variables
+
+### Server Configuration
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `PORT` | 6632 | HTTP server port |
+| `HOST` | 0.0.0.0 | HTTP server host |
+| `NUM_WORKERS` | 10 | Number of worker threads |
+
+### Database Configuration
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `PG_HOST` | localhost | PostgreSQL host |
+| `PG_PORT` | 5432 | PostgreSQL port |
+| `PG_DB` | postgres | PostgreSQL database |
+| `PG_USER` | postgres | PostgreSQL username |
+| `PG_PASSWORD` | postgres | PostgreSQL password |
+| `DB_POOL_SIZE` | 150 | Connection pool size |
+| `DB_STATEMENT_TIMEOUT` | 30000 | Statement timeout (ms) |
+| `PG_USE_SSL` | false | Enable SSL connection |
+
+### Queue Processing
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `DEFAULT_TIMEOUT` | 30000 | Default pop timeout (ms) |
+| `DEFAULT_BATCH_SIZE` | 1 | Default batch size |
+| `DEFAULT_SUBSCRIPTION_MODE` | "" | Default subscription mode ("", "new") |
+
+### Background Jobs
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `RETENTION_INTERVAL` | 300000 | Retention service interval (ms) |
+| `RETENTION_BATCH_SIZE` | 1000 | Retention batch size |
+| `EVICTION_INTERVAL` | 60000 | Eviction service interval (ms) |
+| `METRICS_RETENTION_DAYS` | 90 | Days to keep metrics data |
+
+### Logging
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `LOG_LEVEL` | info | Log level (trace, debug, info, warn, error) |
+
+---
+
+## PostgreSQL Schema
+
+Queen stores data in the `queen` schema with these core tables:
+
+- `queen.queues` - Queue configurations
+- `queen.partitions` - Partitions within queues
+- `queen.messages` - Message data with payloads
+- `queen.partition_consumers` - Consumer group state per partition
+- `queen.dead_letter_queue` - Failed messages
+- `queen.message_traces` - Tracing events
+- `queen.stats` - Pre-computed statistics
+
+Key stored procedures:
+- `queen.push_messages_v2(jsonb)` - Push messages
+- `queen.pop_unified_batch(jsonb)` - Pop messages
+- `queen.ack_messages_v2(jsonb)` - Acknowledge messages
+- `queen.execute_transaction_v2(jsonb)` - Atomic transactions
+- `queen.renew_lease_v2(jsonb)` - Extend leases
+
+---
+
+## Building from Source
+
+### Prerequisites
+
+**Ubuntu/Debian:**
+```bash
+sudo apt-get install build-essential libpq-dev libssl-dev zlib1g-dev
+```
+
+**macOS:**
+```bash
+brew install postgresql openssl
+```
+
+### Build Server
+
+```bash
+cd server
+make all
+./bin/queen-server
+```
+
+### Run Tests
+
+```bash
+cd server
+make test
+```
+
+---
+
+## Repository Structure
+
+```
+queen/
+├── lib/                    # C++ core library (libqueen)
+│   ├── queen.hpp          # Main header - libuv event loop, async PG
+│   └── schema/            # SQL schema and stored procedures
+├── server/                 # HTTP server (uWebSockets)
+│   ├── src/               # C++ source files
+│   ├── include/           # Header files
+│   └── API.md             # API documentation
+├── client-js/              # JavaScript client
+│   └── client-v2/         # Modern fluent API
+├── client-py/              # Python client
+│   └── queen/             # Package source
+├── client-cpp/             # C++ client
+├── pg_qpubsub/            # PostgreSQL extension
+├── proxy/                  # Authentication proxy
+├── app/                    # Vue.js dashboard
+├── website/                # Documentation (VitePress)
+└── examples/               # Usage examples
+```
+
+---
+
+## License
+
+Apache 2.0 - See LICENSE.md
+
