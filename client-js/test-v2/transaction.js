@@ -503,3 +503,69 @@ export async function transactionRollback(client) {
     }
 }
 
+export async function transactionAckWithConsumerGroup(client) {
+    const queueA = await client.queue('test-queue-v2-txn-cg-a').create()
+    const queueB = await client.queue('test-queue-v2-txn-cg-b').create()
+    if (!queueA.configured || !queueB.configured) {
+        return { success: false, message: 'Queues not created' }
+    }
+
+    const consumerGroup = 'test-consumer-group-txn'
+
+    // Push messages to queue A
+    await client.queue('test-queue-v2-txn-cg-a').push([
+        { data: { value: 1 } },
+        { data: { value: 2 } }
+    ])
+
+    // Pop with consumer group
+    const messages = await client.queue('test-queue-v2-txn-cg-a')
+        .group(consumerGroup)
+        .batch(2)
+        .wait(false)
+        .pop()
+
+    if (messages.length !== 2) {
+        return { success: false, message: `Expected 2 messages, got ${messages.length}` }
+    }
+
+    // Transaction: ACK with consumer group context, push to B
+    await client
+        .transaction()
+        .ack(messages[0], 'completed', { consumerGroup })
+        .ack(messages[1], 'completed', { consumerGroup })
+        .queue('test-queue-v2-txn-cg-b')
+        .push([{ data: { sum: messages[0].data.value + messages[1].data.value } }])
+        .commit()
+
+    // Verify: Pop again with same consumer group should get no messages
+    // (consumer group cursor should have advanced)
+    const messagesAfterAck = await client.queue('test-queue-v2-txn-cg-a')
+        .group(consumerGroup)
+        .batch(2)
+        .wait(false)
+        .pop()
+
+    // Verify: Queue B has the result
+    const resultB = await client.queue('test-queue-v2-txn-cg-b').batch(1).wait(false).pop()
+
+    // Verify: Using a different consumer group should still see the messages
+    const messagesOtherGroup = await client.queue('test-queue-v2-txn-cg-a')
+        .group('other-consumer-group')
+        .batch(2)
+        .wait(false)
+        .pop()
+
+    const success = messagesAfterAck.length === 0 && 
+                    resultB.length === 1 && 
+                    resultB[0].data.sum === 3 &&
+                    messagesOtherGroup.length === 2
+
+    return { 
+        success,
+        message: success 
+            ? 'Transaction ack with consumer group completed - cursor advanced correctly'
+            : `Failed: afterAck=${messagesAfterAck.length} (expected 0), resultB=${resultB.length} (expected 1), otherGroup=${messagesOtherGroup.length} (expected 2)`
+    }
+}
+

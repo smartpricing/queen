@@ -890,7 +890,7 @@ public:
         : http_client_(http_client) {
     }
     
-    TransactionBuilder& ack(const json& message, const std::string& status = "completed") {
+    TransactionBuilder& ack(const json& message, const std::string& status = "completed", const json& context = json::object()) {
         std::vector<json> messages;
         if (message.is_array()) {
             messages = message.get<std::vector<json>>();
@@ -922,6 +922,11 @@ public:
                 {"partitionId", partition_id},
                 {"status", status}
             };
+            
+            // Add consumerGroup if provided in context
+            if (context.contains("consumerGroup") && !context["consumerGroup"].is_null()) {
+                ack_op["consumerGroup"] = context["consumerGroup"].get<std::string>();
+            }
             
             if (msg.contains("leaseId") && !msg["leaseId"].is_null()) {
                 std::string lease_id = msg["leaseId"].get<std::string>();

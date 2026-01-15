@@ -13,10 +13,10 @@ export class TransactionBuilder {
     this.#httpClient = httpClient
   }
 
-  ack(messages, status = 'completed') {
+  ack(messages, status = 'completed', context = {}) {
     const msgs = Array.isArray(messages) ? messages : [messages]
     
-    logger.log('TransactionBuilder.ack', { count: msgs.length, status })
+    logger.log('TransactionBuilder.ack', { count: msgs.length, status, consumerGroup: context.consumerGroup })
 
     msgs.forEach(msg => {
       const transactionId = typeof msg === 'string' ? msg : (msg.transactionId || msg.id)
@@ -32,12 +32,19 @@ export class TransactionBuilder {
         throw new Error('Message must have partitionId property to ensure message uniqueness')
       }
 
-      this.#operations.push({
+      const operation = {
         type: 'ack',
         transactionId,
         partitionId,
         status
-      })
+      }
+
+      // Add consumerGroup if provided in context
+      if (context.consumerGroup) {
+        operation.consumerGroup = context.consumerGroup
+      }
+
+      this.#operations.push(operation)
 
       if (leaseId) {
         this.#requiredLeases.push(leaseId)

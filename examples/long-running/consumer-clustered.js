@@ -17,7 +17,7 @@ function generateRequests() {
   for (let i = 0; i <= MAX_PARTITION; i++) {
     requests.push({
       method: 'GET',
-      path: `/api/v1/pop/queue/${QUEUE_NAME}/partition/${i}?batch=${batchSize}&wait=true&autoAck=true`,
+      path: `/api/v1/pop/queue/${QUEUE_NAME}/partition/${i}?batch=${batchSize}&wait=false&autoAck=true`,
       headers: { 'Content-Type': 'application/json' }
     });
   }

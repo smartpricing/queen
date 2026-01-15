@@ -141,11 +141,9 @@ The repository is structured as follows:
 
 --- 
 
-## TODO
+## Bug fixing and improvements 
 
-- Evaluate to replace udp sync with tcp with libuv
-- Deploy pipeline
-- Manually test pg_qpubsub extension
+- Clients 0.12.1: Fixed bug in transaction with consumer groups
 
 ---
 

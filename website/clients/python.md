@@ -18,6 +18,21 @@ pip install queen-mq
 
 ## Getting Started
 
+### To run the tests 
+
+```bash
+cd client-py
+
+# 1. Setup venv and install dependencies
+python3 -m venv venv
+source venv/bin/activate
+pip install -e ".[dev]"
+pip install build twine
+
+# 2. Run all tests
+pytest tests/ -v
+```
+
 ### Import and Connect
 
 ```python

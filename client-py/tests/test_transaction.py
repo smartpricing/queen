@@ -431,3 +431,61 @@ async def test_transaction_rollback(client):
     
     print("✅ Transaction test completed successfully")
 
+
+@pytest.mark.asyncio
+async def test_transaction_ack_with_consumer_group(client):
+    """Test transaction ack with consumer group context"""
+    queue_a = await client.queue("test-queue-v2-txn-cg-a").create()
+    queue_b = await client.queue("test-queue-v2-txn-cg-b").create()
+    assert queue_a.get("configured") and queue_b.get("configured")
+
+    consumer_group = "test-consumer-group-txn"
+
+    # Push messages to queue A
+    await client.queue("test-queue-v2-txn-cg-a").push([
+        {"data": {"value": 1}},
+        {"data": {"value": 2}}
+    ])
+
+    # Pop with consumer group
+    messages = await (client.queue("test-queue-v2-txn-cg-a")
+        .group(consumer_group)
+        .batch(2)
+        .wait(False)
+        .pop())
+
+    assert len(messages) == 2, f"Expected 2 messages, got {len(messages)}"
+
+    # Transaction: ACK with consumer group context, push to B
+    await (client.transaction()
+        .ack(messages[0], "completed", {"consumer_group": consumer_group})
+        .ack(messages[1], "completed", {"consumer_group": consumer_group})
+        .queue("test-queue-v2-txn-cg-b")
+        .push([{"data": {"sum": messages[0]["data"]["value"] + messages[1]["data"]["value"]}}])
+        .commit())
+
+    # Verify: Pop again with same consumer group should get no messages
+    # (consumer group cursor should have advanced)
+    messages_after_ack = await (client.queue("test-queue-v2-txn-cg-a")
+        .group(consumer_group)
+        .batch(2)
+        .wait(False)
+        .pop())
+
+    # Verify: Queue B has the result
+    result_b = await client.queue("test-queue-v2-txn-cg-b").batch(1).wait(False).pop()
+
+    # Verify: Using a different consumer group should still see the messages
+    messages_other_group = await (client.queue("test-queue-v2-txn-cg-a")
+        .group("other-consumer-group")
+        .batch(2)
+        .wait(False)
+        .pop())
+
+    assert len(messages_after_ack) == 0, f"Consumer group cursor should have advanced, got {len(messages_after_ack)} messages"
+    assert len(result_b) == 1, f"Queue B should have 1 message, got {len(result_b)}"
+    assert result_b[0]["data"]["sum"] == 3, f"Sum should be 3, got {result_b[0]['data']['sum']}"
+    assert len(messages_other_group) == 2, f"Other consumer group should see 2 messages, got {len(messages_other_group)}"
+
+    print("✅ Transaction ack with consumer group completed - cursor advanced correctly")
+

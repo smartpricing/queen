@@ -22,7 +22,10 @@ class TransactionBuilder:
         self._required_leases: List[str] = []
 
     def ack(
-        self, messages: Union[Any, List[Any]], status: str = "completed"
+        self,
+        messages: Union[Any, List[Any]],
+        status: str = "completed",
+        context: Optional[Dict[str, Any]] = None,
     ) -> "TransactionBuilder":
         """
         Add ack operation
@@ -30,13 +33,18 @@ class TransactionBuilder:
         Args:
             messages: Single message or list of messages
             status: Status to ack with ('completed', 'failed', etc.)
+            context: Optional context dict with 'consumer_group' key for consumer group acking
 
         Returns:
             Self for chaining
         """
         msgs = messages if isinstance(messages, list) else [messages]
+        context = context or {}
 
-        logger.log("TransactionBuilder.ack", {"count": len(msgs), "status": status})
+        logger.log(
+            "TransactionBuilder.ack",
+            {"count": len(msgs), "status": status, "consumer_group": context.get("consumer_group")},
+        )
 
         for msg in msgs:
             transaction_id = msg if isinstance(msg, str) else (msg.get("transactionId") or msg.get("id"))
@@ -52,9 +60,18 @@ class TransactionBuilder:
                     "Message must have partitionId property to ensure message uniqueness"
                 )
 
-            self._operations.append(
-                {"type": "ack", "transactionId": transaction_id, "partitionId": partition_id, "status": status}
-            )
+            operation: Dict[str, Any] = {
+                "type": "ack",
+                "transactionId": transaction_id,
+                "partitionId": partition_id,
+                "status": status,
+            }
+
+            # Add consumerGroup if provided in context
+            if context.get("consumer_group"):
+                operation["consumerGroup"] = context["consumer_group"]
+
+            self._operations.append(operation)
 
             if lease_id:
                 self._required_leases.append(lease_id)

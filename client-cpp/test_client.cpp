@@ -848,6 +848,76 @@ bool test_transaction_empty_commit(const std::string& server_url) {
     return error_thrown;
 }
 
+bool test_transaction_ack_with_consumer_group(const std::string& server_url) {
+    QueenClient client(server_url);
+    
+    // Use unique queue names for C++ tests with timestamp to avoid state from previous runs
+    auto now = std::chrono::system_clock::now();
+    auto timestamp = std::chrono::duration_cast<std::chrono::milliseconds>(now.time_since_epoch()).count();
+    
+    std::string queue_a = "test-queue-cpp-txn-cg-a-" + std::to_string(timestamp);
+    std::string queue_b = "test-queue-cpp-txn-cg-b-" + std::to_string(timestamp);
+    
+    client.queue(queue_a).create();
+    client.queue(queue_b).create();
+    
+    std::string consumer_group = "test-cg-txn-cpp-" + std::to_string(timestamp);
+    
+    // Push messages to queue A
+    client.queue(queue_a).push({
+        {{"data", {{"value", 1}}}},
+        {{"data", {{"value", 2}}}}
+    });
+    
+    // Small delay to ensure messages are written
+    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    
+    // Pop with consumer group
+    auto messages = client.queue(queue_a)
+        .group(consumer_group)
+        .batch(2)
+        .wait(false)
+        .pop();
+    
+    if (messages.size() != 2) {
+        std::cerr << "Expected 2 messages, got " << messages.size() << std::endl;
+        return false;
+    }
+    
+    int sum = messages[0]["data"]["value"].get<int>() + messages[1]["data"]["value"].get<int>();
+    
+    // Transaction: ACK with consumer group context, push to B
+    json context = {{"consumerGroup", consumer_group}};
+    client.transaction()
+        .ack(messages[0], "completed", context)
+        .ack(messages[1], "completed", context)
+        .queue(queue_b)
+        .push({{{"data", {{"sum", sum}}}}})
+        .commit();
+    
+    // Verify: Pop again with same consumer group should get no messages
+    auto messages_after_ack = client.queue(queue_a)
+        .group(consumer_group)
+        .batch(2)
+        .wait(false)
+        .pop();
+    
+    // Verify: Queue B has the result
+    auto result_b = client.queue(queue_b).batch(1).wait(false).pop();
+    
+    // Verify: Using a different consumer group should still see the messages
+    auto messages_other_group = client.queue(queue_a)
+        .group("other-consumer-group-cpp")
+        .batch(2)
+        .wait(false)
+        .pop();
+    
+    return messages_after_ack.empty() && 
+           result_b.size() == 1 && 
+           result_b[0]["data"]["sum"].get<int>() == 3 &&
+           messages_other_group.size() == 2;
+}
+
 // ============================================================================
 // DLQ TEST
 // ============================================================================
@@ -1096,6 +1166,7 @@ int main(int argc, char** argv) {
     runner.run_test("Transaction Multiple Pushes", [&]() { return test_transaction_multiple_pushes(server_url); });
     runner.run_test("Transaction Multiple ACKs", [&]() { return test_transaction_multiple_acks(server_url); });
     runner.run_test("Transaction Empty Commit (Error)", [&]() { return test_transaction_empty_commit(server_url); });
+    runner.run_test("Transaction ACK with Consumer Group", [&]() { return test_transaction_ack_with_consumer_group(server_url); });
     
     // DLQ TEST
     std::cout << YELLOW << "\n=== DLQ TESTS ===" << RESET << "\n" << std::endl;
