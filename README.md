@@ -29,6 +29,8 @@ Queen MQ is a partitioned message queue backed by PostgreSQL, built with uWebSoc
 
 For a experimental PostgreSQL extension version of Queen MQ, see [pg_qpubsub](pg_qpubsub/README.md).
 
+See [examples/base.js](examples/base.js) for a complete (push, consume, transactionally ack and push to another queue) example.
+
 ## Why Queen?
 
 Born at [Smartness](https://www.linkedin.com/company/smartness-com/) to power **Smartchat**, Queen solves a unique problem: **unlimited FIFO partitions** where slow processing in one partition doesn't block others.
