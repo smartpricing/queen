@@ -16,8 +16,10 @@
 #   - deps-cache/usockets.zip
 #   - deps-cache/spdlog.zip
 #   - deps-cache/libuv.zip
+#   - deps-cache/jwt-cpp.zip
 #   - deps-cache/json.hpp
 #   - deps-cache/httplib.h
+# Run: cd deps-cache && ./download-deps.sh
 #
 # Stage 1: Build Frontend
 FROM node:22-alpine AS frontend-builder
@@ -37,7 +39,7 @@ COPY app/ ./
 RUN npm run build
 
 # Stage 2: Build C++ Server
-FROM ubuntu:24.04 as cpp-builder
+FROM ubuntu:24.04 AS cpp-builder
 
 ENV DEBIAN_FRONTEND=noninteractive
 RUN apt-get update && apt-get install -y build-essential libpq-dev libssl-dev zlib1g-dev curl unzip ca-certificates cmake
@@ -51,6 +53,7 @@ RUN if [ -f /usr/build/deps-cache/uws.zip ] && \
        [ -f /usr/build/deps-cache/usockets.zip ] && \
        [ -f /usr/build/deps-cache/spdlog.zip ] && \
        [ -f /usr/build/deps-cache/libuv.zip ] && \
+       [ -f /usr/build/deps-cache/jwt-cpp.zip ] && \
        [ -f /usr/build/deps-cache/json.hpp ] && \
        [ -f /usr/build/deps-cache/httplib.h ]; then \
         echo "Using cached dependencies from deps-cache/"; \
@@ -62,6 +65,7 @@ RUN if [ -f /usr/build/deps-cache/uws.zip ] && \
         cp /usr/build/deps-cache/usockets.zip . && unzip -qo usockets.zip && rm -rf uSockets && mv uSockets-master uSockets && rm usockets.zip && \
         cp /usr/build/deps-cache/spdlog.zip . && unzip -qo spdlog.zip && rm -rf spdlog && mv spdlog-1.14.1 spdlog && rm spdlog.zip && \
         cp /usr/build/deps-cache/libuv.zip . && unzip -qo libuv.zip && rm -rf libuv && mv libuv-1.48.0 libuv && rm libuv.zip && \
+        cp /usr/build/deps-cache/jwt-cpp.zip . && unzip -qo jwt-cpp.zip && rm -rf jwt-cpp && mv jwt-cpp-0.7.0 jwt-cpp && rm jwt-cpp.zip && \
         echo "Building libuv..." && \
         cd libuv && mkdir -p build && cd build && \
         cmake .. -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=OFF -DLIBUV_BUILD_SHARED=OFF && \
@@ -75,7 +79,7 @@ RUN if [ -f /usr/build/deps-cache/uws.zip ] && \
     fi
 
 # Now build (wildcards will work because vendor/uSockets exists)
-RUN make build-only -j 8
+RUN make build-only -j 14
 
 # Verify
 RUN test -f bin/queen-server && echo "✅ Build successful"
