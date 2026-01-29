@@ -35,6 +35,7 @@ await queen
 await queen
 .queue(queueName)
 .group('analytics')
+.renewLease(true, 2) // Renew lease every 2 seconds
 .autoAck(false) 
 .batch(10)
 .each()

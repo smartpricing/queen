@@ -57,6 +57,8 @@ DECLARE
     v_sub_ts TIMESTAMPTZ;
     v_last_msg_id UUID;
     v_last_msg_ts TIMESTAMPTZ;
+    -- Window buffer debounce support
+    v_partition_last_msg_ts TIMESTAMPTZ;
 BEGIN
     -- Process requests in partition_id order to prevent deadlocks
     -- We use a cursor over the sorted requests
@@ -83,10 +85,11 @@ BEGIN
         -- =====================================================================
         -- STEP 1: Resolve partition and get queue settings
         -- =====================================================================
-        SELECT p.id, q.id, q.lease_time, q.window_buffer, q.delayed_processing
-        INTO v_partition_id, v_queue_id, v_lease_time, v_window_buffer, v_delayed_processing
+        SELECT p.id, q.id, q.lease_time, q.window_buffer, q.delayed_processing, pl.last_message_created_at
+        INTO v_partition_id, v_queue_id, v_lease_time, v_window_buffer, v_delayed_processing, v_partition_last_msg_ts
         FROM queen.queues q
         JOIN queen.partitions p ON p.queue_id = q.id
+        LEFT JOIN queen.partition_lookup pl ON pl.partition_id = p.id
         WHERE q.name = v_req.queue_name AND p.name = v_req.partition_name;
         
         IF v_partition_id IS NULL THEN
@@ -96,6 +99,28 @@ BEGIN
                     'success', false,
                     'error', 'partition_not_found',
                     'messages', '[]'::jsonb
+                )
+            );
+            v_results := v_results || v_result;
+            CONTINUE;
+        END IF;
+        
+        -- WINDOW BUFFER DEBOUNCE: Check if window has expired
+        -- If not expired, return empty result (debounce still active)
+        IF v_window_buffer IS NOT NULL AND v_window_buffer > 0 
+           AND v_partition_last_msg_ts IS NOT NULL
+           AND v_partition_last_msg_ts > v_now - (v_window_buffer || ' seconds')::interval THEN
+            v_result := jsonb_build_object(
+                'idx', v_req.idx,
+                'result', jsonb_build_object(
+                    'success', true,
+                    'queue', v_req.queue_name,
+                    'partition', v_req.partition_name,
+                    'partitionId', v_partition_id::text,
+                    'leaseId', '',
+                    'consumerGroup', v_req.consumer_group,
+                    'messages', '[]'::jsonb,
+                    'windowBufferActive', true
                 )
             );
             v_results := v_results || v_result;
@@ -206,8 +231,8 @@ BEGIN
             FROM queen.messages m
             WHERE m.partition_id = v_partition_id
               AND (v_cursor_ts IS NULL OR (m.created_at, m.id) > (v_cursor_ts, COALESCE(v_cursor_id, '00000000-0000-0000-0000-000000000000'::uuid)))
-              AND (v_window_buffer IS NULL OR v_window_buffer = 0 
-                   OR m.created_at <= v_now - (v_window_buffer || ' seconds')::interval)
+              -- NOTE: window_buffer is checked at partition level (debounce), not per-message
+              -- delayed_processing: per-message delay
               AND (v_delayed_processing IS NULL OR v_delayed_processing = 0 
                    OR m.created_at <= v_now - (v_delayed_processing || ' seconds')::interval)
             ORDER BY m.created_at, m.id
@@ -380,6 +405,9 @@ BEGIN
                OR pl.last_message_created_at > pc.last_consumed_created_at
                OR (pl.last_message_created_at = pc.last_consumed_created_at 
                    AND pl.last_message_id > pc.last_consumed_id))
+          -- WINDOW BUFFER DEBOUNCE: Only select partitions where window has expired
+          AND (q.window_buffer IS NULL OR q.window_buffer = 0
+               OR pl.last_message_created_at <= v_now - (q.window_buffer || ' seconds')::interval)
         -- Fair distribution: prefer least-recently consumed partitions
         ORDER BY pc.last_consumed_at ASC NULLS FIRST
         LIMIT 1
@@ -508,8 +536,8 @@ BEGIN
             FROM queen.messages m
             WHERE m.partition_id = v_partition_id
               AND (v_cursor_ts IS NULL OR (m.created_at, m.id) > (v_cursor_ts, COALESCE(v_cursor_id, '00000000-0000-0000-0000-000000000000'::uuid)))
-              AND (v_window_buffer IS NULL OR v_window_buffer = 0 
-                   OR m.created_at <= v_now - (v_window_buffer || ' seconds')::interval)
+              -- NOTE: window_buffer is checked at partition level (debounce), not per-message
+              -- delayed_processing: per-message delay
               AND (v_delayed_processing IS NULL OR v_delayed_processing = 0 
                    OR m.created_at <= v_now - (v_delayed_processing || ' seconds')::interval)
             ORDER BY m.created_at, m.id
@@ -646,6 +674,8 @@ DECLARE
     v_last_msg JSONB;
     v_last_msg_id UUID;
     v_last_msg_ts TIMESTAMPTZ;
+    -- Window buffer debounce support: track last message timestamp for partition
+    v_partition_last_msg_ts TIMESTAMPTZ;
 BEGIN
     -- ==========================================================================
     -- Process all requests in a single pass
@@ -698,8 +728,9 @@ BEGIN
                 q.id,
                 q.lease_time,
                 q.window_buffer,
-                q.delayed_processing
-            INTO v_partition_id, v_partition_name, v_queue_id, v_lease_time, v_window_buffer, v_delayed_processing
+                q.delayed_processing,
+                pl.last_message_created_at
+            INTO v_partition_id, v_partition_name, v_queue_id, v_lease_time, v_window_buffer, v_delayed_processing, v_partition_last_msg_ts
             FROM queen.partition_lookup pl
             JOIN queen.partitions p ON p.id = pl.partition_id
             JOIN queen.queues q ON q.id = p.queue_id
@@ -712,6 +743,10 @@ BEGIN
                    OR pl.last_message_created_at > pc.last_consumed_created_at
                    OR (pl.last_message_created_at = pc.last_consumed_created_at 
                        AND pl.last_message_id > pc.last_consumed_id))
+              -- WINDOW BUFFER DEBOUNCE: Only select partitions where window has expired
+              -- (time since last message >= window_buffer seconds)
+              AND (q.window_buffer IS NULL OR q.window_buffer = 0
+                   OR pl.last_message_created_at <= v_now - (q.window_buffer || ' seconds')::interval)
             ORDER BY pc.last_consumed_at ASC NULLS FIRST
             LIMIT 1
             FOR UPDATE OF pl SKIP LOCKED;
@@ -734,23 +769,46 @@ BEGIN
             -- =================================================================
             v_partition_name := v_req.partition_name;
             
-            SELECT p.id, q.id, q.lease_time, q.window_buffer, q.delayed_processing
-            INTO v_partition_id, v_queue_id, v_lease_time, v_window_buffer, v_delayed_processing
+            SELECT p.id, q.id, q.lease_time, q.window_buffer, q.delayed_processing, pl.last_message_created_at
+            INTO v_partition_id, v_queue_id, v_lease_time, v_window_buffer, v_delayed_processing, v_partition_last_msg_ts
             FROM queen.queues q
             JOIN queen.partitions p ON p.queue_id = q.id
+            LEFT JOIN queen.partition_lookup pl ON pl.partition_id = p.id
             WHERE q.name = v_req.queue_name AND p.name = v_req.partition_name;
         
-        IF v_partition_id IS NULL THEN
+            IF v_partition_id IS NULL THEN
                 v_result := jsonb_build_object(
-                'idx', v_req.idx, 
+                    'idx', v_req.idx, 
                     'result', jsonb_build_object(
-                'success', false, 
+                        'success', false, 
                         'error', 'partition_not_found',
                         'messages', '[]'::jsonb
                     )
                 );
                 v_results := v_results || v_result;
-            CONTINUE;
+                CONTINUE;
+            END IF;
+            
+            -- WINDOW BUFFER DEBOUNCE: Check if window has expired for specific partition
+            -- If not expired, return empty result (debounce still active)
+            IF v_window_buffer IS NOT NULL AND v_window_buffer > 0 
+               AND v_partition_last_msg_ts IS NOT NULL
+               AND v_partition_last_msg_ts > v_now - (v_window_buffer || ' seconds')::interval THEN
+                v_result := jsonb_build_object(
+                    'idx', v_req.idx,
+                    'result', jsonb_build_object(
+                        'success', true,
+                        'queue', v_req.queue_name,
+                        'partition', v_partition_name,
+                        'partitionId', v_partition_id::text,
+                        'leaseId', '',
+                        'consumerGroup', v_req.consumer_group,
+                        'messages', '[]'::jsonb,
+                        'windowBufferActive', true
+                    )
+                );
+                v_results := v_results || v_result;
+                CONTINUE;
             END IF;
         END IF;
         
@@ -841,6 +899,8 @@ BEGIN
         END IF;
         
         -- Fetch messages
+        -- NOTE: window_buffer is now checked at partition level (debounce), not per-message
+        -- Only delayed_processing applies per-message delay
         SELECT COALESCE(jsonb_agg(
             jsonb_build_object(
                 'id', sub.id::text,
@@ -856,8 +916,7 @@ BEGIN
             FROM queen.messages m
             WHERE m.partition_id = v_partition_id
               AND (v_cursor_ts IS NULL OR (m.created_at, m.id) > (v_cursor_ts, COALESCE(v_cursor_id, '00000000-0000-0000-0000-000000000000'::uuid)))
-              AND (v_window_buffer IS NULL OR v_window_buffer = 0 
-                   OR m.created_at <= v_now - (v_window_buffer || ' seconds')::interval)
+              -- delayed_processing: per-message delay (each message waits N seconds after creation)
               AND (v_delayed_processing IS NULL OR v_delayed_processing = 0 
                    OR m.created_at <= v_now - (v_delayed_processing || ' seconds')::interval)
             ORDER BY m.created_at, m.id
