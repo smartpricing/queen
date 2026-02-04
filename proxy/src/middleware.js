@@ -1,7 +1,14 @@
 import { verifyToken } from './auth.js';
 
 // Authentication middleware - checks if user has valid JWT
+// Supports both internal (proxy-generated) and external (SSO) tokens
+// Note: If req.user is already set by global middleware, skip re-verification
 export function requireAuth(req, res, next) {
+  // Already authenticated by global middleware (handles both internal and external tokens)
+  if (req.user) {
+    return next();
+  }
+
   const token = req.cookies.token || req.headers.authorization?.replace('Bearer ', '');
 
   if (!token) {

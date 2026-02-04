@@ -1,0 +1,289 @@
+// Package queen provides a Go client for Queen MQ - a high-performance message queue.
+package queen
+
+import (
+	"context"
+	"time"
+)
+
+// Message represents a message from Queen MQ.
+type Message struct {
+	TransactionID string                 `json:"transactionId"`
+	PartitionID   string                 `json:"partitionId"`
+	LeaseID       string                 `json:"leaseId,omitempty"`
+	Queue         string                 `json:"queue"`
+	Partition     string                 `json:"partition"`
+	Data          map[string]interface{} `json:"data"`
+	CreatedAt     string                 `json:"createdAt"`
+	ErrorMessage  string                 `json:"errorMessage,omitempty"`
+	RetryCount    int                    `json:"retryCount"`
+
+	// trace is the function to add traces to this message
+	trace TraceFunc
+}
+
+// Trace adds a trace to this message. Never panics - errors are logged and returned gracefully.
+func (m *Message) Trace(ctx context.Context, config TraceConfig) (*TraceResponse, error) {
+	if m.trace == nil {
+		return &TraceResponse{Success: false, Error: "trace function not set"}, nil
+	}
+	return m.trace(ctx, config)
+}
+
+// SetTrace sets the trace function for this message (internal use).
+func (m *Message) SetTrace(fn TraceFunc) {
+	m.trace = fn
+}
+
+// TraceFunc is the function signature for message tracing.
+type TraceFunc func(ctx context.Context, config TraceConfig) (*TraceResponse, error)
+
+// TraceConfig contains configuration for a trace operation.
+type TraceConfig struct {
+	TraceName string                 `json:"traceName,omitempty"`
+	TraceNames []string              `json:"traceNames,omitempty"`
+	EventType string                 `json:"eventType,omitempty"`
+	Data      map[string]interface{} `json:"data"`
+}
+
+// TraceResponse is the response from a trace operation.
+type TraceResponse struct {
+	Success bool   `json:"success"`
+	Error   string `json:"error,omitempty"`
+}
+
+// ClientConfig contains configuration for the Queen client.
+type ClientConfig struct {
+	// URLs is the list of Queen server URLs
+	URLs []string
+	// URL is a single Queen server URL (convenience, converted to URLs)
+	URL string
+	// TimeoutMillis is the HTTP request timeout in milliseconds
+	TimeoutMillis int
+	// RetryAttempts is the number of retry attempts for failed requests
+	RetryAttempts int
+	// RetryDelayMillis is the initial retry delay in milliseconds (exponential backoff)
+	RetryDelayMillis int
+	// LoadBalancingStrategy is the strategy for load balancing ("round-robin", "session", "affinity")
+	LoadBalancingStrategy string
+	// AffinityHashRing is the number of virtual nodes per server for affinity strategy
+	AffinityHashRing int
+	// EnableFailover enables automatic failover to other servers
+	EnableFailover bool
+	// HealthRetryAfterMillis is the delay before retrying unhealthy backends
+	HealthRetryAfterMillis int
+	// BearerToken is the bearer token for authentication
+	BearerToken string
+}
+
+// QueueConfig contains configuration for queue creation.
+type QueueConfig struct {
+	// LeaseTime is the lease duration in seconds
+	LeaseTime int `json:"leaseTime,omitempty"`
+	// RetryLimit is the maximum number of retries before moving to DLQ
+	RetryLimit int `json:"retryLimit,omitempty"`
+	// Priority is the queue priority (higher = processed first)
+	Priority int `json:"priority,omitempty"`
+	// DelayedProcessing is the delay in seconds before messages are available
+	DelayedProcessing int `json:"delayedProcessing,omitempty"`
+	// WindowBuffer is the window buffer in seconds
+	WindowBuffer int `json:"windowBuffer,omitempty"`
+	// MaxSize is the maximum number of messages in the queue (0 = unlimited)
+	MaxSize int `json:"maxSize,omitempty"`
+	// RetentionSeconds is the retention period for pending messages (0 = forever)
+	RetentionSeconds int `json:"retentionSeconds,omitempty"`
+	// CompletedRetentionSeconds is the retention period for completed messages
+	CompletedRetentionSeconds int `json:"completedRetentionSeconds,omitempty"`
+	// EncryptionEnabled enables payload encryption
+	EncryptionEnabled bool `json:"encryptionEnabled,omitempty"`
+}
+
+// BufferConfig contains configuration for client-side message buffering.
+type BufferConfig struct {
+	// MessageCount is the number of messages to buffer before flushing
+	MessageCount int
+	// TimeMillis is the time in milliseconds to wait before flushing
+	TimeMillis int
+}
+
+// ConsumeOptions contains options for consuming messages.
+type ConsumeOptions struct {
+	Queue                   string
+	Partition               string
+	Namespace               string
+	Task                    string
+	Group                   string
+	Concurrency             int
+	Batch                   int
+	Limit                   int
+	IdleMillis              int
+	AutoAck                 bool
+	Wait                    bool
+	TimeoutMillis           int
+	RenewLease              bool
+	RenewLeaseIntervalMillis int
+	SubscriptionMode        string
+	SubscriptionFrom        string
+	Each                    bool
+}
+
+// PopOptions contains options for popping messages.
+type PopOptions struct {
+	Batch            int
+	Wait             bool
+	TimeoutMillis    int
+	AutoAck          bool
+	ConsumerGroup    string
+	SubscriptionMode string
+	SubscriptionFrom string
+}
+
+// AckOptions contains options for acknowledging messages.
+type AckOptions struct {
+	ConsumerGroup string
+	Error         string
+}
+
+// AckResponse is the response from an acknowledgment operation.
+type AckResponse struct {
+	Success bool   `json:"success"`
+	Error   string `json:"error,omitempty"`
+}
+
+// RenewResponse is the response from a lease renewal operation.
+type RenewResponse struct {
+	LeaseID      string    `json:"leaseId"`
+	Success      bool      `json:"success"`
+	NewExpiresAt time.Time `json:"newExpiresAt,omitempty"`
+	Error        string    `json:"error,omitempty"`
+}
+
+// BufferStats contains statistics about message buffers.
+type BufferStats struct {
+	ActiveBuffers         int     `json:"activeBuffers"`
+	TotalBufferedMessages int     `json:"totalBufferedMessages"`
+	OldestBufferAge       float64 `json:"oldestBufferAge"`
+	FlushesPerformed      int     `json:"flushesPerformed"`
+}
+
+// DLQResponse is the response from a DLQ query.
+type DLQResponse struct {
+	Messages []Message `json:"messages"`
+	Total    int       `json:"total"`
+}
+
+// TransactionResponse is the response from a transaction commit.
+type TransactionResponse struct {
+	Success bool   `json:"success"`
+	Error   string `json:"error,omitempty"`
+}
+
+// PushItem represents an item to be pushed to a queue.
+type PushItem struct {
+	Queue         string                 `json:"queue"`
+	Partition     string                 `json:"partition,omitempty"`
+	Payload       interface{}            `json:"payload"`
+	TransactionID string                 `json:"transactionId,omitempty"`
+	TraceID       string                 `json:"traceId,omitempty"`
+}
+
+// PushResponse is the response for a single pushed item.
+type PushResponse struct {
+	Status        string `json:"status"` // "queued", "duplicate", "failed"
+	TransactionID string `json:"transactionId"`
+	Error         string `json:"error,omitempty"`
+}
+
+// MessageHandler is the function signature for handling a single message.
+type MessageHandler func(ctx context.Context, msg *Message) error
+
+// BatchMessageHandler is the function signature for handling a batch of messages.
+type BatchMessageHandler func(ctx context.Context, msgs []*Message) error
+
+// Operation represents an operation in a transaction.
+type Operation struct {
+	Type          string      `json:"type"` // "ack" or "push"
+	TransactionID string      `json:"transactionId,omitempty"`
+	PartitionID   string      `json:"partitionId,omitempty"`
+	Status        string      `json:"status,omitempty"`
+	ConsumerGroup string      `json:"consumerGroup,omitempty"`
+	Items         []PushItem  `json:"items,omitempty"`
+}
+
+// HealthResponse is the response from a health check.
+type HealthResponse struct {
+	Status string `json:"status"`
+}
+
+// QueueInfo contains information about a queue.
+type QueueInfo struct {
+	Name      string      `json:"name"`
+	Namespace string      `json:"namespace,omitempty"`
+	Task      string      `json:"task,omitempty"`
+	Config    QueueConfig `json:"config,omitempty"`
+}
+
+// ConsumerGroupInfo contains information about a consumer group.
+type ConsumerGroupInfo struct {
+	Name                  string    `json:"name"`
+	SubscriptionTimestamp time.Time `json:"subscriptionTimestamp,omitempty"`
+}
+
+// popResponse is the internal response structure for pop operations.
+type popResponse struct {
+	Messages []Message `json:"messages"`
+}
+
+// pushRequest is the internal request structure for push operations.
+type pushRequest struct {
+	Items []pushRequestItem `json:"items"`
+}
+
+// pushRequestItem is an item in a push request.
+type pushRequestItem struct {
+	Queue         string      `json:"queue"`
+	Partition     string      `json:"partition,omitempty"`
+	Payload       interface{} `json:"payload"`
+	TransactionID string      `json:"transactionId,omitempty"`
+	TraceID       string      `json:"traceId,omitempty"`
+}
+
+// ackRequest is the internal request structure for single ack operations.
+type ackRequest struct {
+	TransactionID string `json:"transactionId"`
+	PartitionID   string `json:"partitionId"`
+	LeaseID       string `json:"leaseId,omitempty"`
+	Status        string `json:"status"`
+	Error         string `json:"error,omitempty"`
+	ConsumerGroup string `json:"consumerGroup,omitempty"`
+}
+
+// batchAckRequest is the internal request structure for batch ack operations.
+type batchAckRequest struct {
+	Acknowledgments []ackRequest `json:"acknowledgments"`
+	ConsumerGroup   string       `json:"consumerGroup,omitempty"`
+}
+
+// transactionRequest is the internal request structure for transaction operations.
+type transactionRequest struct {
+	Operations     []Operation `json:"operations"`
+	RequiredLeases []string    `json:"requiredLeases"`
+}
+
+// configureRequest is the internal request structure for queue configuration.
+type configureRequest struct {
+	Queue     string                 `json:"queue"`
+	Namespace string                 `json:"namespace,omitempty"`
+	Task      string                 `json:"task,omitempty"`
+	Options   map[string]interface{} `json:"options,omitempty"`
+}
+
+// traceRequest is the internal request structure for trace operations.
+type traceRequest struct {
+	TransactionID string                 `json:"transactionId"`
+	PartitionID   string                 `json:"partitionId"`
+	ConsumerGroup string                 `json:"consumerGroup"`
+	TraceNames    []string               `json:"traceNames,omitempty"`
+	EventType     string                 `json:"eventType"`
+	Data          map[string]interface{} `json:"data"`
+}

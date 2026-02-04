@@ -52,8 +52,8 @@ bool JwtClaims::is_read_only(const AuthConfig& config) const {
 JwtValidator::JwtValidator(const AuthConfig& config) : config_(config) {
     spdlog::info("[JwtValidator] Initialized with algorithm: {}", config_.algorithm);
     
-    // If RS256 with JWKS URL, do initial fetch
-    if ((config_.algorithm == "RS256" || config_.algorithm == "auto") && 
+    // If RS256/EdDSA/auto with JWKS URL, do initial fetch
+    if ((config_.algorithm == "RS256" || config_.algorithm == "EdDSA" || config_.algorithm == "auto") && 
         !config_.jwks_url.empty()) {
         spdlog::info("[JwtValidator] Pre-fetching JWKS from: {}", config_.jwks_url);
         if (fetch_jwks()) {
@@ -82,9 +82,16 @@ ValidationResult JwtValidator::validate(const std::string& token) {
                 return validate_hs256(token);
             } else if (alg == "RS256" || alg == "RS384" || alg == "RS512") {
                 return validate_rs256(token);
+            } else if (alg == "EdDSA") {
+                return validate_eddsa(token);
             } else {
                 return {false, std::nullopt, "Unsupported algorithm: " + alg, 401};
             }
+        } else if (config_.algorithm == "EdDSA") {
+            if (alg != "EdDSA") {
+                return {false, std::nullopt, "Token uses " + alg + ", expected EdDSA", 401};
+            }
+            return validate_eddsa(token);
         } else if (config_.algorithm == "HS256") {
             if (alg != "HS256") {
                 return {false, std::nullopt, "Token uses " + alg + ", expected HS256", 401};
@@ -373,6 +380,145 @@ ValidationResult JwtValidator::validate_rs256(const std::string& token) {
     }
 }
 
+ValidationResult JwtValidator::validate_eddsa(const std::string& token) {
+    try {
+        auto decoded = jwt::decode(token);
+        
+        // Get the key ID from token header
+        std::string kid;
+        if (decoded.has_key_id()) {
+            kid = decoded.get_key_id();
+        }
+        
+        spdlog::debug("[JwtValidator] EdDSA token with kid: {}", kid.empty() ? "(none)" : kid);
+        
+        // Get public key
+        std::optional<std::string> pem;
+        
+        // First try static public key if configured
+        if (!config_.public_key.empty()) {
+            pem = config_.public_key;
+            spdlog::debug("[JwtValidator] Using static public key for EdDSA");
+        } else {
+            // Try to get from JWKS cache
+            pem = get_public_key_for_kid(kid);
+            
+            if (!pem) {
+                // Key not found, try refreshing JWKS
+                spdlog::debug("[JwtValidator] Key '{}' not in cache, refreshing JWKS", kid);
+                if (!refresh_jwks()) {
+                    return {false, std::nullopt, "Failed to fetch JWKS", 500};
+                }
+                
+                pem = get_public_key_for_kid(kid);
+                if (!pem) {
+                    return {false, std::nullopt, "Unknown key ID: " + kid, 401};
+                }
+            }
+        }
+        
+        // Build verifier with Ed25519 public key
+        auto verifier = jwt::verify()
+            .allow_algorithm(jwt::algorithm::ed25519{*pem, "", "", ""})
+            .leeway(config_.clock_skew_seconds);
+        
+        // Add issuer check if configured
+        if (!config_.issuer.empty()) {
+            verifier.with_issuer(config_.issuer);
+        }
+        
+        // Add audience check if configured
+        if (!config_.audience.empty()) {
+            verifier.with_audience(config_.audience);
+        }
+        
+        // Verify signature and standard claims
+        verifier.verify(decoded);
+        
+        // Extract claims (same as RS256)
+        JwtClaims claims;
+        
+        if (decoded.has_subject()) {
+            claims.subject = decoded.get_subject();
+        }
+        if (decoded.has_issuer()) {
+            claims.issuer = decoded.get_issuer();
+        }
+        if (decoded.has_audience()) {
+            auto aud_set = decoded.get_audience();
+            if (!aud_set.empty()) {
+                claims.audience = *aud_set.begin();
+            }
+        }
+        if (decoded.has_expires_at()) {
+            claims.expires_at = std::chrono::duration_cast<std::chrono::seconds>(
+                decoded.get_expires_at().time_since_epoch()).count();
+        }
+        if (decoded.has_issued_at()) {
+            claims.issued_at = std::chrono::duration_cast<std::chrono::seconds>(
+                decoded.get_issued_at().time_since_epoch()).count();
+        }
+        if (decoded.has_not_before()) {
+            claims.not_before = std::chrono::duration_cast<std::chrono::seconds>(
+                decoded.get_not_before().time_since_epoch()).count();
+        }
+        
+        // Custom claims
+        if (decoded.has_payload_claim("id")) {
+            try {
+                claims.user_id = decoded.get_payload_claim("id").as_string();
+            } catch (...) {}
+        }
+        if (decoded.has_payload_claim("username")) {
+            try {
+                claims.username = decoded.get_payload_claim("username").as_string();
+            } catch (...) {}
+        }
+        
+        // Role claims
+        if (decoded.has_payload_claim(config_.roles_claim)) {
+            try {
+                claims.role = decoded.get_payload_claim(config_.roles_claim).as_string();
+            } catch (...) {
+                // Not a string, ignore
+            }
+        }
+        
+        if (decoded.has_payload_claim(config_.roles_array_claim)) {
+            try {
+                auto roles_json = decoded.get_payload_claim(config_.roles_array_claim);
+                auto roles_set = roles_json.as_set();
+                for (const auto& r : roles_set) {
+                    claims.roles.push_back(r);
+                }
+            } catch (...) {
+                try {
+                    auto claim_json = decoded.get_payload_claim(config_.roles_array_claim).to_json();
+                    if (claim_json.is<picojson::array>()) {
+                        const auto& arr = claim_json.get<picojson::array>();
+                        for (const auto& item : arr) {
+                            if (item.is<std::string>()) {
+                                claims.roles.push_back(item.get<std::string>());
+                            }
+                        }
+                    }
+                } catch (...) {}
+            }
+        }
+        
+        spdlog::debug("[JwtValidator] EdDSA validation successful for subject: {}", claims.subject);
+        
+        return {true, claims, "", 200};
+        
+    } catch (const jwt::error::token_verification_exception& e) {
+        std::string err_msg = e.what();
+        spdlog::debug("[JwtValidator] EdDSA verification failed: {}", err_msg);
+        return {false, std::nullopt, err_msg, 401};
+    } catch (const std::exception& e) {
+        return {false, std::nullopt, std::string("EdDSA validation error: ") + e.what(), 401};
+    }
+}
+
 bool JwtValidator::refresh_jwks() {
     if (config_.jwks_url.empty()) {
         spdlog::warn("[JwtValidator] No JWKS URL configured");
@@ -477,25 +623,51 @@ bool JwtValidator::fetch_jwks() {
         jwks_cache_.clear();
         
         for (const auto& key : jwks["keys"]) {
-            if (!key.contains("kty") || key["kty"] != "RSA") {
-                continue;  // Only support RSA keys for now
+            if (!key.contains("kty")) {
+                continue;
             }
             
-            if (!key.contains("n") || !key.contains("e")) {
-                continue;  // Need modulus and exponent
-            }
-            
+            std::string kty = key["kty"];
             JwkEntry entry;
             entry.kid = key.value("kid", "");
-            entry.algorithm = key.value("alg", "RS256");
+            entry.kty = kty;
             entry.fetched_at = current_timestamp();
             
-            // Convert JWK to PEM
-            entry.pem = jwk_to_pem(key["n"], key["e"]);
+            if (kty == "RSA") {
+                // RSA key - need modulus (n) and exponent (e)
+                if (!key.contains("n") || !key.contains("e")) {
+                    spdlog::debug("[JwtValidator] Skipping RSA key without n/e: kid={}", entry.kid);
+                    continue;
+                }
+                
+                entry.algorithm = key.value("alg", "RS256");
+                entry.pem = jwk_to_pem(key["n"], key["e"]);
+                
+            } else if (kty == "OKP") {
+                // Octet Key Pair - Ed25519/Ed448
+                std::string crv = key.value("crv", "");
+                if (crv != "Ed25519") {
+                    spdlog::debug("[JwtValidator] Skipping OKP key with unsupported curve: crv={}", crv);
+                    continue;
+                }
+                
+                if (!key.contains("x")) {
+                    spdlog::debug("[JwtValidator] Skipping Ed25519 key without x parameter: kid={}", entry.kid);
+                    continue;
+                }
+                
+                entry.algorithm = key.value("alg", "EdDSA");
+                entry.pem = jwk_to_pem_ed25519(key["x"]);
+                
+            } else {
+                // Unsupported key type
+                spdlog::debug("[JwtValidator] Skipping unsupported key type: kty={}", kty);
+                continue;
+            }
             
             if (!entry.pem.empty()) {
                 jwks_cache_[entry.kid] = entry;
-                spdlog::debug("[JwtValidator] Cached key: kid={}, alg={}", entry.kid, entry.algorithm);
+                spdlog::debug("[JwtValidator] Cached key: kid={}, kty={}, alg={}", entry.kid, entry.kty, entry.algorithm);
             }
         }
         
@@ -600,6 +772,83 @@ std::string JwtValidator::jwk_to_pem(const std::string& n_b64url, const std::str
 #if defined(__GNUC__) || defined(__clang__)
 #pragma GCC diagnostic pop
 #endif
+
+std::string JwtValidator::jwk_to_pem_ed25519(const std::string& x_b64url) {
+    try {
+        // Decode base64url to binary (32 bytes for Ed25519 public key)
+        std::string x_bytes = base64url_decode(x_b64url);
+        
+        if (x_bytes.size() != 32) {
+            spdlog::error("[JwtValidator] Ed25519 public key must be 32 bytes, got {}", x_bytes.size());
+            return "";
+        }
+        
+        // Ed25519 public key ASN.1 DER structure:
+        // SEQUENCE {
+        //   SEQUENCE {
+        //     OBJECT IDENTIFIER 1.3.101.112 (Ed25519)
+        //   }
+        //   BIT STRING (public key)
+        // }
+        // 
+        // The fixed prefix for Ed25519 public keys is:
+        // 30 2a 30 05 06 03 2b 65 70 03 21 00
+        // (12 bytes) followed by the 32-byte public key
+        
+        const unsigned char prefix[] = {
+            0x30, 0x2a,             // SEQUENCE, 42 bytes total
+            0x30, 0x05,             // SEQUENCE, 5 bytes (algorithm identifier)
+            0x06, 0x03, 0x2b, 0x65, 0x70,  // OID 1.3.101.112 (Ed25519)
+            0x03, 0x21, 0x00        // BIT STRING, 33 bytes (00 prefix + 32 byte key)
+        };
+        
+        // Combine prefix + public key bytes
+        std::vector<unsigned char> der_bytes;
+        der_bytes.insert(der_bytes.end(), prefix, prefix + sizeof(prefix));
+        der_bytes.insert(der_bytes.end(), 
+                         reinterpret_cast<const unsigned char*>(x_bytes.data()),
+                         reinterpret_cast<const unsigned char*>(x_bytes.data()) + x_bytes.size());
+        
+        // Convert DER to PEM using OpenSSL
+        BIO* bio = BIO_new(BIO_s_mem());
+        if (!bio) {
+            return "";
+        }
+        
+        // Create EVP_PKEY from DER
+        const unsigned char* der_ptr = der_bytes.data();
+        EVP_PKEY* pkey = d2i_PUBKEY(nullptr, &der_ptr, static_cast<long>(der_bytes.size()));
+        
+        if (!pkey) {
+            BIO_free(bio);
+            spdlog::error("[JwtValidator] Failed to parse Ed25519 public key DER");
+            return "";
+        }
+        
+        // Write to PEM
+        if (PEM_write_bio_PUBKEY(bio, pkey) != 1) {
+            EVP_PKEY_free(pkey);
+            BIO_free(bio);
+            spdlog::error("[JwtValidator] Failed to write Ed25519 public key to PEM");
+            return "";
+        }
+        
+        // Read PEM string
+        char* pem_data = nullptr;
+        long pem_len = BIO_get_mem_data(bio, &pem_data);
+        
+        std::string pem(pem_data, pem_len);
+        
+        EVP_PKEY_free(pkey);
+        BIO_free(bio);
+        
+        return pem;
+        
+    } catch (const std::exception& e) {
+        spdlog::error("[JwtValidator] Ed25519 JWK to PEM conversion error: {}", e.what());
+        return "";
+    }
+}
 
 std::string JwtValidator::base64url_decode(const std::string& input) {
     // Convert base64url to standard base64

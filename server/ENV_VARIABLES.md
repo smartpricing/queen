@@ -219,10 +219,10 @@ Queen supports optional JWT-based authentication for securing API endpoints.
 | Variable | Type | Default | Description |
 |----------|------|---------|-------------|
 | `JWT_ENABLED` | bool | `false` | Enable JWT authentication |
-| `JWT_ALGORITHM` | string | `HS256` | Algorithm: `HS256`, `RS256`, or `auto` |
+| `JWT_ALGORITHM` | string | `HS256` | Algorithm: `HS256`, `RS256`, `EdDSA`, or `auto` |
 | `JWT_SECRET` | string | - | HS256 shared secret (required for HS256) |
-| `JWT_JWKS_URL` | string | - | RS256 JWKS endpoint URL (for external IDPs) |
-| `JWT_PUBLIC_KEY` | string | - | RS256 public key in PEM format |
+| `JWT_JWKS_URL` | string | - | JWKS endpoint URL (for RS256/EdDSA with external IDPs) |
+| `JWT_PUBLIC_KEY` | string | - | Public key in PEM format (RS256 or EdDSA) |
 
 ### Token Validation
 
@@ -233,7 +233,7 @@ Queen supports optional JWT-based authentication for securing API endpoints.
 | `JWT_CLOCK_SKEW` | int | `30` | Tolerance in seconds for time claims |
 | `JWT_SKIP_PATHS` | string | `/health,/metrics,/` | Comma-separated paths to skip auth |
 
-### JWKS Settings (RS256)
+### JWKS Settings (RS256/EdDSA)
 
 | Variable | Type | Default | Description |
 |----------|------|---------|-------------|
@@ -281,6 +281,31 @@ export JWT_ALGORITHM=RS256
 export JWT_JWKS_URL=https://your-idp.com/.well-known/jwks.json
 export JWT_ISSUER=https://your-idp.com/
 export JWT_AUDIENCE=queen-api
+```
+
+### EdDSA Example (Ed25519)
+
+For identity providers using Ed25519 keys (BetterAuth, etc.):
+
+```bash
+export JWT_ENABLED=true
+export JWT_ALGORITHM=EdDSA
+export JWT_JWKS_URL=https://your-idp.com/api/auth/jwks
+export JWT_ISSUER=https://your-idp.com/
+export JWT_AUDIENCE=queen-api
+```
+
+**Note:** EdDSA/Ed25519 requires OpenSSL 1.1.1 or later. The JWKS endpoint must provide keys with `kty: "OKP"` and `crv: "Ed25519"`.
+
+### Auto Algorithm Detection
+
+Use `auto` to accept tokens signed with any supported algorithm (HS256, RS256, EdDSA):
+
+```bash
+export JWT_ENABLED=true
+export JWT_ALGORITHM=auto
+export JWT_SECRET=your-secret-for-hs256
+export JWT_JWKS_URL=https://your-idp.com/.well-known/jwks.json
 ```
 
 ### Compatible with Queen Proxy

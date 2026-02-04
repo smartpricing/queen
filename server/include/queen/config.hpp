@@ -339,7 +339,7 @@ struct AuthConfig {
     // Master enable/disable for JWT authentication
     bool enabled = false;
     
-    // Algorithm: "HS256", "RS256", or "auto" (try based on token header)
+    // Algorithm: "HS256", "RS256", "EdDSA", or "auto" (try based on token header)
     std::string algorithm = "HS256";
     
     // HS256: Shared secret for HMAC signing (base64 or raw string)
@@ -424,21 +424,21 @@ struct AuthConfig {
     bool validate() const {
         if (!enabled) return true;
         
-        // Must have either secret (HS256) or JWKS URL/public key (RS256)
+        // Must have either secret (HS256) or JWKS URL/public key (RS256/EdDSA)
         if (algorithm == "HS256" || algorithm == "auto") {
             if (secret.empty() && jwks_url.empty() && public_key.empty()) {
                 return false;  // Need at least one credential source
             }
         }
         
-        if (algorithm == "RS256") {
+        if (algorithm == "RS256" || algorithm == "EdDSA") {
             if (jwks_url.empty() && public_key.empty()) {
-                return false;  // RS256 needs JWKS or public key
+                return false;  // RS256/EdDSA needs JWKS or public key
             }
         }
         
         // Validate algorithm value
-        if (algorithm != "HS256" && algorithm != "RS256" && algorithm != "auto") {
+        if (algorithm != "HS256" && algorithm != "RS256" && algorithm != "EdDSA" && algorithm != "auto") {
             return false;
         }
         
