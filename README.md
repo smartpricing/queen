@@ -132,6 +132,7 @@ The repository is structured as follows:
 
 | Server Version | Description | Compatible Clients |
 |----------------|-------------|-------------------|
+| **0.12.6** | Improved slow cg discovery when there are tons of partitions | JS ≥0.7.4, Python ≥0.7.4, 0.12.0 if needs to use |
 | **0.12.5** | Fixed cg lag calculation for "new" cg at first message | JS ≥0.7.4, Python ≥0.7.4, 0.12.0 if needs to use |
 | **0.12.4** | Fixed window buffer debounce behavior | JS ≥0.7.4, Python ≥0.7.4, 0.12.0 if needs to use proxy auth |
 | **0.12.3** | Added JWT authentication | JS ≥0.7.4, Python ≥0.7.4, 0.12.0 if needs to use proxy auth |
@@ -147,6 +148,7 @@ The repository is structured as follows:
 
 ## Bug fixing and improvements 
 
+- Server 0.12.6: Improved slow cg discovery when there are tons of partitions
 - Server 0.12.5: Fixed cg lag calculation for "new" cg at first message
 - Server 0.12.4: Fixed window buffer debounce behavior
 - Clients 0.12.1: Fixed bug in transaction with consumer groups

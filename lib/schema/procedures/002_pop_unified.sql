@@ -357,6 +357,7 @@ DECLARE
     v_consumer_row_id UUID;
     v_last_msg_id UUID;
     v_last_msg_ts TIMESTAMPTZ;
+    v_seeded INT;
 BEGIN
     -- Process each request - order doesn't matter for discovery since SKIP LOCKED
     FOR v_req IN 
@@ -409,7 +410,10 @@ BEGIN
           AND (q.window_buffer IS NULL OR q.window_buffer = 0
                OR pl.last_message_created_at <= v_now - (q.window_buffer || ' seconds')::interval)
         -- Fair distribution: prefer least-recently consumed partitions
-        ORDER BY pc.last_consumed_at ASC NULLS FIRST
+        -- NULLS LAST ensures new consumer groups prioritize already-discovered
+        -- partitions (with pending messages) over undiscovered ones, preventing
+        -- starvation of known partitions during the discovery phase.
+        ORDER BY pc.last_consumed_at ASC NULLS LAST
         LIMIT 1
         -- CRITICAL: FOR UPDATE SKIP LOCKED prevents race conditions
         -- Other concurrent workers will skip this row and get a different partition
@@ -499,6 +503,17 @@ BEGIN
                         v_req.consumer_group, v_req.queue_name, COALESCE(v_partition_name, ''), 'timestamp', v_cursor_ts
                     )
                     ON CONFLICT (consumer_group, queue_name, partition_name, namespace, task) DO NOTHING;
+                    
+                    -- Bootstrap: if this is a new registration, pre-seed partition_consumers
+                    -- for ALL existing partitions to avoid slow one-at-a-time discovery
+                    GET DIAGNOSTICS v_seeded = ROW_COUNT;
+                    IF v_seeded > 0 THEN
+                        INSERT INTO queen.partition_consumers (partition_id, consumer_group, last_consumed_at)
+                        SELECT pl.partition_id, v_req.consumer_group, v_now
+                        FROM queen.partition_lookup pl
+                        WHERE pl.queue_name = v_req.queue_name
+                        ON CONFLICT (partition_id, consumer_group) DO NOTHING;
+                    END IF;
                 EXCEPTION WHEN OTHERS THEN
                     -- Invalid timestamp format - fall through to default behavior
                     NULL;
@@ -515,6 +530,17 @@ BEGIN
                     v_req.consumer_group, v_req.queue_name, COALESCE(v_partition_name, ''), 'new', v_now
                 )
                 ON CONFLICT (consumer_group, queue_name, partition_name, namespace, task) DO NOTHING;
+                
+                -- Bootstrap: if this is a new registration, pre-seed partition_consumers
+                -- for ALL existing partitions to avoid slow one-at-a-time discovery
+                GET DIAGNOSTICS v_seeded = ROW_COUNT;
+                IF v_seeded > 0 THEN
+                    INSERT INTO queen.partition_consumers (partition_id, consumer_group, last_consumed_at)
+                    SELECT pl.partition_id, v_req.consumer_group, v_now
+                    FROM queen.partition_lookup pl
+                    WHERE pl.queue_name = v_req.queue_name
+                    ON CONFLICT (partition_id, consumer_group) DO NOTHING;
+                END IF;
             END IF;
         END IF;
         
@@ -676,6 +702,7 @@ DECLARE
     v_last_msg_ts TIMESTAMPTZ;
     -- Window buffer debounce support: track last message timestamp for partition
     v_partition_last_msg_ts TIMESTAMPTZ;
+    v_seeded INT;
 BEGIN
     -- ==========================================================================
     -- Process all requests in a single pass
@@ -747,7 +774,7 @@ BEGIN
               -- (time since last message >= window_buffer seconds)
               AND (q.window_buffer IS NULL OR q.window_buffer = 0
                    OR pl.last_message_created_at <= v_now - (q.window_buffer || ' seconds')::interval)
-            ORDER BY pc.last_consumed_at ASC NULLS FIRST
+            ORDER BY pc.last_consumed_at ASC NULLS LAST
             LIMIT 1
             FOR UPDATE OF pl SKIP LOCKED;
             
@@ -879,6 +906,17 @@ BEGIN
                         v_req.consumer_group, v_req.queue_name, COALESCE(v_partition_name, ''), 'timestamp', v_cursor_ts
                     )
                     ON CONFLICT (consumer_group, queue_name, partition_name, namespace, task) DO NOTHING;
+                    
+                    -- Bootstrap: if this is a new registration, pre-seed partition_consumers
+                    -- for ALL existing partitions to avoid slow one-at-a-time discovery
+                    GET DIAGNOSTICS v_seeded = ROW_COUNT;
+                    IF v_seeded > 0 THEN
+                        INSERT INTO queen.partition_consumers (partition_id, consumer_group, last_consumed_at)
+                        SELECT pl.partition_id, v_req.consumer_group, v_now
+                        FROM queen.partition_lookup pl
+                        WHERE pl.queue_name = v_req.queue_name
+                        ON CONFLICT (partition_id, consumer_group) DO NOTHING;
+                    END IF;
                 EXCEPTION WHEN OTHERS THEN
                     -- Invalid timestamp format - fall through to default behavior
                     NULL;
@@ -895,6 +933,17 @@ BEGIN
                     v_req.consumer_group, v_req.queue_name, COALESCE(v_partition_name, ''), 'new', v_now
                 )
                 ON CONFLICT (consumer_group, queue_name, partition_name, namespace, task) DO NOTHING;
+                
+                -- Bootstrap: if this is a new registration, pre-seed partition_consumers
+                -- for ALL existing partitions to avoid slow one-at-a-time discovery
+                GET DIAGNOSTICS v_seeded = ROW_COUNT;
+                IF v_seeded > 0 THEN
+                    INSERT INTO queen.partition_consumers (partition_id, consumer_group, last_consumed_at)
+                    SELECT pl.partition_id, v_req.consumer_group, v_now
+                    FROM queen.partition_lookup pl
+                    WHERE pl.queue_name = v_req.queue_name
+                    ON CONFLICT (partition_id, consumer_group) DO NOTHING;
+                END IF;
             END IF;
         END IF;
         

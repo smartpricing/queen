@@ -45,6 +45,13 @@ else
     LIBS = -lpq -lssl -lcrypto -lz $(UV_STATIC_LIB)
 endif
 
+# Full include flags (shared between PCH and source compilation)
+ALL_INCLUDES = $(INCLUDES) -I$(VENDOR_DIR)/uWebSockets/src -I$(VENDOR_DIR)/spdlog/include -I$(VENDOR_DIR)
+
+# Precompiled header (spdlog + json.hpp parsed once instead of 30+ times)
+PCH_SRC = include/pch.hpp
+PCH_OUT = $(BUILD_DIR)/pch.hpp.gch
+
 # Directories
 SRC_DIR = src
 INCLUDE_DIR = include
@@ -93,7 +100,7 @@ JWTCPP_URL = https://github.com/Thalhammer/jwt-cpp/archive/refs/tags/v0.7.0.zip
 all: setup deps $(TARGET)
 
 # Build without downloading dependencies (assumes deps already exist)
-build-only: setup $(TARGET)
+build-only: setup $(PCH_OUT) $(TARGET)
 
 # Create directory structure
 setup:
@@ -161,17 +168,24 @@ $(VENDOR_DIR)/.deps_ready: setup
 	@touch $(VENDOR_DIR)/.deps_ready
 	@echo "Dependencies ready!"
 
+# Compile precompiled header (spdlog + json.hpp - parsed once, reused by all TUs)
+# Order-only dep on .deps_ready ensures vendors exist before PCH compilation (safe with -j)
+$(PCH_OUT): $(PCH_SRC) | $(VENDOR_DIR)/.deps_ready
+	@mkdir -p $(dir $@)
+	@echo "Compiling precompiled header..."
+	@$(CXX) $(CXXFLAGS) $(ALL_INCLUDES) -x c++-header $< -o $@
+
 # Build queen-server (Acceptor/Worker pattern - cross-platform)
 $(TARGET): $(OBJECTS) $(USOCKETS_OBJECTS)
 	@echo "Linking $(TARGET) with $(words $(OBJECTS)) Queen objects and $(words $(USOCKETS_OBJECTS)) uSockets objects..."
 	@$(CXX) $(OBJECTS) $(USOCKETS_OBJECTS) -o $@ $(LIBS)
 	@echo "✅ Build complete! (Acceptor/Worker pattern - works on all platforms)"
 
-# Compile C++ source files (with automatic dependency generation)
-$(BUILD_DIR)/%.o: $(SRC_DIR)/%.cpp
+# Compile C++ source files (with PCH and automatic dependency generation)
+$(BUILD_DIR)/%.o: $(SRC_DIR)/%.cpp $(PCH_OUT)
 	@mkdir -p $(dir $@)
 	@echo "Compiling $<..."
-	@$(CXX) $(CXXFLAGS) $(DEPFLAGS) $(INCLUDES) -I$(VENDOR_DIR)/uWebSockets/src -I$(VENDOR_DIR)/spdlog/include -I$(VENDOR_DIR) -c $< -o $@
+	@$(CXX) $(CXXFLAGS) $(DEPFLAGS) -I$(BUILD_DIR) $(ALL_INCLUDES) -include pch.hpp -c $< -o $@
 
 # Include generated dependency files (silently ignore if they don't exist yet)
 -include $(DEPS)

@@ -1,7 +1,7 @@
 # Multi-stage Dockerfile for Queen Message Queue
 #
 # This Dockerfile builds the complete Queen Message Queue system:
-# - C++ server with full C++17 support (using g++-12)
+# - C++ server with full C++17 support
 # - Vue.js frontend dashboard
 # - Optimized runtime image (~250MB final size)
 #
@@ -10,16 +10,13 @@
 #
 # For full stack with PostgreSQL, use docker-compose.yml
 #
-# Dependency Caching:
-# To avoid re-downloading dependencies, place zip files in deps-cache/:
-#   - deps-cache/uws.zip
-#   - deps-cache/usockets.zip
-#   - deps-cache/spdlog.zip
-#   - deps-cache/libuv.zip
-#   - deps-cache/jwt-cpp.zip
-#   - deps-cache/json.hpp
-#   - deps-cache/httplib.h
-# Run: cd deps-cache && ./download-deps.sh
+# Build optimizations:
+# - Layered COPY: Makefile+deps cached separately from source code
+# - Precompiled headers: spdlog + json.hpp parsed once, not 30+ times
+# - ccache: compiler cache persisted across builds via BuildKit mount
+# - Auto parallelism: uses $(nproc) instead of hardcoded -j value
+#
+# Requires BuildKit: DOCKER_BUILDKIT=1 docker build -t queen-mq .
 #
 # Stage 1: Build Frontend
 FROM node:22-alpine AS frontend-builder
@@ -42,47 +39,34 @@ RUN npm run build
 FROM ubuntu:24.04 AS cpp-builder
 
 ENV DEBIAN_FRONTEND=noninteractive
-RUN apt-get update && apt-get install -y build-essential libpq-dev libssl-dev zlib1g-dev curl unzip ca-certificates cmake
+RUN apt-get update && apt-get install -y \
+    build-essential libpq-dev libssl-dev zlib1g-dev \
+    curl unzip ca-certificates cmake ccache \
+    && rm -rf /var/lib/apt/lists/*
 
-COPY ./ /usr/build/
+# Enable ccache - wraps g++/gcc transparently for compilation caching
+ENV PATH="/usr/lib/ccache:${PATH}"
 
 WORKDIR /usr/build/server
 
-# Setup dependencies: use cached zips if available, otherwise run make deps
-RUN if [ -f /usr/build/deps-cache/uws.zip ] && \
-       [ -f /usr/build/deps-cache/usockets.zip ] && \
-       [ -f /usr/build/deps-cache/spdlog.zip ] && \
-       [ -f /usr/build/deps-cache/libuv.zip ] && \
-       [ -f /usr/build/deps-cache/jwt-cpp.zip ] && \
-       [ -f /usr/build/deps-cache/json.hpp ] && \
-       [ -f /usr/build/deps-cache/httplib.h ]; then \
-        echo "Using cached dependencies from deps-cache/"; \
-        mkdir -p vendor; \
-        cp /usr/build/deps-cache/json.hpp vendor/json.hpp; \
-        cp /usr/build/deps-cache/httplib.h vendor/httplib.h; \
-        cd vendor && \
-        cp /usr/build/deps-cache/uws.zip . && unzip -qo uws.zip && rm -rf uWebSockets && mv uWebSockets-master uWebSockets && rm uws.zip && \
-        cp /usr/build/deps-cache/usockets.zip . && unzip -qo usockets.zip && rm -rf uSockets && mv uSockets-master uSockets && rm usockets.zip && \
-        cp /usr/build/deps-cache/spdlog.zip . && unzip -qo spdlog.zip && rm -rf spdlog && mv spdlog-1.14.1 spdlog && rm spdlog.zip && \
-        cp /usr/build/deps-cache/libuv.zip . && unzip -qo libuv.zip && rm -rf libuv && mv libuv-1.48.0 libuv && rm libuv.zip && \
-        cp /usr/build/deps-cache/jwt-cpp.zip . && unzip -qo jwt-cpp.zip && rm -rf jwt-cpp && mv jwt-cpp-0.7.0 jwt-cpp && rm jwt-cpp.zip && \
-        echo "Building libuv..." && \
-        cd libuv && mkdir -p build && cd build && \
-        cmake .. -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=OFF -DLIBUV_BUILD_SHARED=OFF && \
-        cmake --build . --target uv_a -j4 && \
-        cd /usr/build/server && \
-        touch vendor/.deps_ready && \
-        echo "Dependencies ready (from cache)!"; \
-    else \
-        echo "No cache found, downloading dependencies..."; \
-        make deps; \
-    fi
+# Layer 1: Copy only the Makefile (changes rarely - only when dep URLs change)
+# This layer caches the dependency download so source code changes don't re-download
+COPY server/Makefile ./Makefile
 
-# Now build (wildcards will work because vendor/uSockets exists)
-RUN make build-only -j 14
+# Download and build dependencies (cached unless Makefile changes)
+RUN make deps
+
+# Layer 2: Copy source code (changes frequently, only triggers recompile)
+COPY server/src/ ./src/
+COPY server/include/ ./include/
+COPY lib/ /usr/build/lib/
+
+# Build with ccache persistent cache and auto-detected parallelism
+RUN --mount=type=cache,target=/root/.ccache \
+    make -j$(nproc) build-only
 
 # Verify
-RUN test -f bin/queen-server && echo "✅ Build successful"
+RUN test -f bin/queen-server && echo "Build successful"
 
 # Stage 3: Runtime Image
 FROM ubuntu:24.04
