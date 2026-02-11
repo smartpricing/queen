@@ -29,24 +29,32 @@ BEGIN
             pc.lease_acquired_at,
             -- Calculate lag: count messages after last consumed
             -- NOTE: Must use exact timestamp comparison (not DATE_TRUNC) to preserve microsecond precision
+            -- Uses COALESCE to respect subscription_timestamp for "new" mode consumers
             (
                 SELECT COUNT(*)
                 FROM queen.messages m
                 WHERE m.partition_id = pc.partition_id
                   AND (
-                      pc.last_consumed_created_at IS NULL
-                      OR (m.created_at, m.id) > (pc.last_consumed_created_at, pc.last_consumed_id)
+                      COALESCE(pc.last_consumed_created_at, cgm.subscription_timestamp) IS NULL
+                      OR (m.created_at, m.id) > (
+                          COALESCE(pc.last_consumed_created_at, cgm.subscription_timestamp),
+                          COALESCE(pc.last_consumed_id, '00000000-0000-0000-0000-000000000000'::uuid)
+                      )
                   )
             )::integer as offset_lag,
             -- Calculate time lag: age of oldest unprocessed message
             -- NOTE: Must use exact timestamp comparison (not DATE_TRUNC) to preserve microsecond precision
+            -- Uses COALESCE to respect subscription_timestamp for "new" mode consumers
             (
                 SELECT EXTRACT(EPOCH FROM (NOW() - m.created_at))::integer
                 FROM queen.messages m
                 WHERE m.partition_id = pc.partition_id
                   AND (
-                      pc.last_consumed_created_at IS NULL
-                      OR (m.created_at, m.id) > (pc.last_consumed_created_at, pc.last_consumed_id)
+                      COALESCE(pc.last_consumed_created_at, cgm.subscription_timestamp) IS NULL
+                      OR (m.created_at, m.id) > (
+                          COALESCE(pc.last_consumed_created_at, cgm.subscription_timestamp),
+                          COALESCE(pc.last_consumed_id, '00000000-0000-0000-0000-000000000000'::uuid)
+                      )
                   )
                 ORDER BY m.created_at ASC
                 LIMIT 1
@@ -128,24 +136,32 @@ BEGIN
             pc.lease_expires_at,
             -- Calculate lag
             -- NOTE: Must use exact timestamp comparison (not DATE_TRUNC) to preserve microsecond precision
+            -- Uses COALESCE to respect subscription_timestamp for "new" mode consumers
             (
                 SELECT COUNT(*)
                 FROM queen.messages m
                 WHERE m.partition_id = pc.partition_id
                   AND (
-                      pc.last_consumed_created_at IS NULL
-                      OR (m.created_at, m.id) > (pc.last_consumed_created_at, pc.last_consumed_id)
+                      COALESCE(pc.last_consumed_created_at, cgm.subscription_timestamp) IS NULL
+                      OR (m.created_at, m.id) > (
+                          COALESCE(pc.last_consumed_created_at, cgm.subscription_timestamp),
+                          COALESCE(pc.last_consumed_id, '00000000-0000-0000-0000-000000000000'::uuid)
+                      )
                   )
             )::integer as offset_lag,
             -- Calculate time lag
             -- NOTE: Must use exact timestamp comparison (not DATE_TRUNC) to preserve microsecond precision
+            -- Uses COALESCE to respect subscription_timestamp for "new" mode consumers
             (
                 SELECT EXTRACT(EPOCH FROM (NOW() - m.created_at))::integer
                 FROM queen.messages m
                 WHERE m.partition_id = pc.partition_id
                   AND (
-                      pc.last_consumed_created_at IS NULL
-                      OR (m.created_at, m.id) > (pc.last_consumed_created_at, pc.last_consumed_id)
+                      COALESCE(pc.last_consumed_created_at, cgm.subscription_timestamp) IS NULL
+                      OR (m.created_at, m.id) > (
+                          COALESCE(pc.last_consumed_created_at, cgm.subscription_timestamp),
+                          COALESCE(pc.last_consumed_id, '00000000-0000-0000-0000-000000000000'::uuid)
+                      )
                   )
                 ORDER BY m.created_at ASC
                 LIMIT 1
@@ -153,6 +169,14 @@ BEGIN
         FROM queen.partition_consumers pc
         JOIN queen.partitions p ON p.id = pc.partition_id
         JOIN queen.queues q ON q.id = p.queue_id
+        LEFT JOIN queen.consumer_groups_metadata cgm 
+            ON cgm.consumer_group = pc.consumer_group
+            AND (
+                (cgm.queue_name = q.name AND cgm.partition_name = p.name)
+                OR (cgm.queue_name = q.name AND cgm.partition_name = '')
+                OR (cgm.queue_name = '' AND cgm.namespace = q.namespace)
+                OR (cgm.queue_name = '' AND cgm.task = q.task)
+            )
         WHERE pc.consumer_group = p_consumer_group
         ORDER BY q.name, p.name
     )
@@ -198,17 +222,29 @@ BEGIN
             pc.worker_id,
             pc.last_consumed_at,
             -- Find oldest unconsumed message
+            -- Uses COALESCE to respect subscription_timestamp for "new" mode consumers
             MIN(m.created_at) as oldest_unconsumed_at,
             COUNT(m.id) as unconsumed_count,
             EXTRACT(EPOCH FROM (NOW() - MIN(m.created_at)))::integer as lag_seconds
         FROM queen.partition_consumers pc
         JOIN queen.partitions p ON p.id = pc.partition_id
         JOIN queen.queues q ON q.id = p.queue_id
+        LEFT JOIN queen.consumer_groups_metadata cgm 
+            ON cgm.consumer_group = pc.consumer_group
+            AND (
+                (cgm.queue_name = q.name AND cgm.partition_name = p.name)
+                OR (cgm.queue_name = q.name AND cgm.partition_name = '')
+                OR (cgm.queue_name = '' AND cgm.namespace = q.namespace)
+                OR (cgm.queue_name = '' AND cgm.task = q.task)
+            )
         -- NOTE: Must use exact timestamp comparison (not DATE_TRUNC) to preserve microsecond precision
         LEFT JOIN queen.messages m ON m.partition_id = pc.partition_id
             AND (
-                pc.last_consumed_created_at IS NULL
-                OR (m.created_at, m.id) > (pc.last_consumed_created_at, pc.last_consumed_id)
+                COALESCE(pc.last_consumed_created_at, cgm.subscription_timestamp) IS NULL
+                OR (m.created_at, m.id) > (
+                    COALESCE(pc.last_consumed_created_at, cgm.subscription_timestamp),
+                    COALESCE(pc.last_consumed_id, '00000000-0000-0000-0000-000000000000'::uuid)
+                )
             )
         GROUP BY pc.consumer_group, q.name, p.name, p.id, pc.worker_id, pc.last_consumed_at
     )
@@ -481,11 +517,17 @@ BEGIN
             -- Use pre-computed stats instead of expensive COUNT(*)
             COALESCE(s.pending_messages, 0)::integer as offset_lag,
             -- Use oldest_pending_at for time lag (with fallback for NULL cases)
+            -- Respects subscription_timestamp for "new" mode consumers
             CASE 
                 WHEN s.oldest_pending_at IS NOT NULL THEN
                     EXTRACT(EPOCH FROM (NOW() - s.oldest_pending_at))::integer
+                WHEN s.pending_messages > 0 AND pc.last_consumed_created_at IS NULL AND cgm.subscription_timestamp IS NOT NULL THEN
+                    -- "new" mode consumer never consumed: use oldest message AFTER subscription
+                    (SELECT EXTRACT(EPOCH FROM (NOW() - MIN(m.created_at)))::integer
+                     FROM queen.messages m WHERE m.partition_id = pc.partition_id
+                       AND (m.created_at, m.id) > (cgm.subscription_timestamp, '00000000-0000-0000-0000-000000000000'::uuid))
                 WHEN s.pending_messages > 0 AND pc.last_consumed_created_at IS NULL THEN
-                    -- Consumer never consumed, use oldest message in partition
+                    -- Consumer never consumed, no subscription: use oldest message in partition
                     (SELECT EXTRACT(EPOCH FROM (NOW() - MIN(m.created_at)))::integer
                      FROM queen.messages m WHERE m.partition_id = pc.partition_id)
                 ELSE NULL
@@ -585,25 +627,37 @@ BEGIN
             pc.lease_expires_at,
             pc.lease_acquired_at,
             -- Detect if partition has unconsumed messages (fast comparison)
+            -- Uses COALESCE to respect subscription_timestamp for "new" mode consumers
             CASE 
                 WHEN pl.last_message_id IS NULL THEN FALSE  -- Empty partition
-                WHEN pc.last_consumed_created_at IS NULL THEN TRUE  -- Never consumed
-                WHEN (pl.last_message_created_at, pl.last_message_id) > 
-                     (pc.last_consumed_created_at, pc.last_consumed_id) THEN TRUE
-                ELSE FALSE
+                WHEN pc.last_consumed_created_at IS NOT NULL THEN
+                    (pl.last_message_created_at, pl.last_message_id) > 
+                    (pc.last_consumed_created_at, pc.last_consumed_id)
+                WHEN cgm.subscription_timestamp IS NOT NULL THEN
+                    -- "new" mode: only has lag if latest message is after subscription time
+                    (pl.last_message_created_at, pl.last_message_id) > 
+                    (cgm.subscription_timestamp, '00000000-0000-0000-0000-000000000000'::uuid)
+                ELSE TRUE  -- Never consumed, no subscription = all messages
             END as has_lag,
             -- Approximate time lag: age of newest unconsumed message (lower bound for actual lag)
             -- This tells you "consumer is at least X seconds behind the latest message"
+            -- Respects subscription_timestamp for "new" mode consumers
             CASE 
                 WHEN pl.last_message_id IS NULL THEN NULL  -- Empty partition
-                WHEN pc.last_consumed_created_at IS NULL THEN 
-                    -- Never consumed: use age of newest message
+                WHEN pc.last_consumed_created_at IS NOT NULL THEN
+                    CASE WHEN (pl.last_message_created_at, pl.last_message_id) > 
+                              (pc.last_consumed_created_at, pc.last_consumed_id)
+                         THEN EXTRACT(EPOCH FROM (NOW() - pl.last_message_created_at))::integer
+                         ELSE 0 END
+                WHEN cgm.subscription_timestamp IS NOT NULL THEN
+                    -- "new" mode: only show lag if latest message is after subscription
+                    CASE WHEN (pl.last_message_created_at, pl.last_message_id) > 
+                              (cgm.subscription_timestamp, '00000000-0000-0000-0000-000000000000'::uuid)
+                         THEN EXTRACT(EPOCH FROM (NOW() - pl.last_message_created_at))::integer
+                         ELSE 0 END
+                ELSE 
+                    -- Never consumed, no subscription: use age of newest message
                     EXTRACT(EPOCH FROM (NOW() - pl.last_message_created_at))::integer
-                WHEN (pl.last_message_created_at, pl.last_message_id) > 
-                     (pc.last_consumed_created_at, pc.last_consumed_id) THEN
-                    -- Has pending: use age of newest message (lower bound for lag)
-                    EXTRACT(EPOCH FROM (NOW() - pl.last_message_created_at))::integer
-                ELSE 0  -- Caught up
             END as time_lag_seconds,
             -- Join subscription metadata
             cgm.subscription_mode,

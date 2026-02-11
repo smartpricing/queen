@@ -767,7 +767,16 @@ LANGUAGE plpgsql
 AS $$
 DECLARE
     v_count BIGINT;
+    v_sub_ts TIMESTAMPTZ;
 BEGIN
+    -- Get subscription timestamp for "new" mode consumers (NULL for "all" mode)
+    SELECT cgm.subscription_timestamp INTO v_sub_ts
+    FROM queen.consumer_groups_metadata cgm
+    WHERE cgm.consumer_group = p_consumer_group
+      AND cgm.queue_name = p_queue
+      AND cgm.subscription_timestamp IS NOT NULL
+    LIMIT 1;
+
     SELECT COUNT(*) INTO v_count
     FROM queen.messages m
     JOIN queen.partitions p ON m.partition_id = p.id
@@ -775,8 +784,11 @@ BEGIN
     LEFT JOIN queen.partition_consumers pc 
         ON pc.partition_id = p.id AND pc.consumer_group = p_consumer_group
     WHERE q.name = p_queue
-      AND (pc.last_consumed_created_at IS NULL 
-           OR (m.created_at, m.id) > (pc.last_consumed_created_at, pc.last_consumed_id));
+      AND (COALESCE(pc.last_consumed_created_at, v_sub_ts) IS NULL 
+           OR (m.created_at, m.id) > (
+               COALESCE(pc.last_consumed_created_at, v_sub_ts),
+               COALESCE(pc.last_consumed_id, '00000000-0000-0000-0000-000000000000'::uuid)
+           ));
     
     RETURN COALESCE(v_count, 0);
 END;

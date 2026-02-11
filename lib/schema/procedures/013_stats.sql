@@ -152,6 +152,7 @@ BEGIN
     -- STEP 2: Calculate pending from ACTUAL cursor position (accurate, avoids race conditions)
     -- OPTIMIZED: Uses a single batched join instead of correlated subqueries (7x faster)
     -- This scans the messages table once instead of once per partition×consumer
+    -- Uses COALESCE with subscription_timestamp to respect "new" mode consumers
     WITH cursor_positions AS (
         SELECT 
             s.stat_key,
@@ -162,10 +163,21 @@ BEGIN
             pc.total_messages_consumed,
             pc.lease_expires_at,
             pc.batch_size,
-            pc.acked_count
+            pc.acked_count,
+            cgm.subscription_timestamp
         FROM queen.stats s
         JOIN queen.partition_consumers pc 
             ON pc.partition_id = s.partition_id AND pc.consumer_group = s.consumer_group
+        JOIN queen.partitions p ON p.id = s.partition_id
+        JOIN queen.queues q ON q.id = p.queue_id
+        LEFT JOIN queen.consumer_groups_metadata cgm 
+            ON cgm.consumer_group = pc.consumer_group
+            AND (
+                (cgm.queue_name = q.name AND cgm.partition_name = p.name)
+                OR (cgm.queue_name = q.name AND cgm.partition_name = '')
+                OR (cgm.queue_name = '' AND cgm.namespace = q.namespace)
+                OR (cgm.queue_name = '' AND cgm.task = q.task)
+            )
         WHERE s.stat_type = 'partition'
     ),
     pending_counts AS (
@@ -181,9 +193,10 @@ BEGIN
         FROM cursor_positions cp
         LEFT JOIN queen.messages m 
             ON m.partition_id = cp.partition_id
-           AND (cp.last_consumed_created_at IS NULL 
-                OR m.created_at > cp.last_consumed_created_at
-                OR (m.created_at = cp.last_consumed_created_at AND m.id > cp.last_consumed_id))
+           AND (COALESCE(cp.last_consumed_created_at, cp.subscription_timestamp) IS NULL 
+                OR m.created_at > COALESCE(cp.last_consumed_created_at, cp.subscription_timestamp)
+                OR (m.created_at = COALESCE(cp.last_consumed_created_at, cp.subscription_timestamp) 
+                    AND m.id > COALESCE(cp.last_consumed_id, '00000000-0000-0000-0000-000000000000'::uuid)))
         GROUP BY cp.stat_key, cp.partition_id, cp.consumer_group,
                  cp.last_consumed_created_at, cp.lease_expires_at, cp.batch_size, cp.acked_count
     )
@@ -420,6 +433,7 @@ BEGIN
     ),
     cursor_positions AS (
         -- Only get cursors for dirty partitions
+        -- Includes subscription_timestamp for "new" mode consumers
         SELECT 
             dp.stat_key,
             dp.partition_id,
@@ -429,14 +443,26 @@ BEGIN
             pc.total_messages_consumed,
             pc.lease_expires_at,
             pc.batch_size,
-            pc.acked_count
+            pc.acked_count,
+            cgm.subscription_timestamp
         FROM dirty_partitions dp
         JOIN queen.partition_consumers pc 
             ON pc.partition_id = dp.partition_id 
             AND pc.consumer_group = dp.consumer_group
+        JOIN queen.partitions p ON p.id = dp.partition_id
+        JOIN queen.queues q ON q.id = p.queue_id
+        LEFT JOIN queen.consumer_groups_metadata cgm 
+            ON cgm.consumer_group = pc.consumer_group
+            AND (
+                (cgm.queue_name = q.name AND cgm.partition_name = p.name)
+                OR (cgm.queue_name = q.name AND cgm.partition_name = '')
+                OR (cgm.queue_name = '' AND cgm.namespace = q.namespace)
+                OR (cgm.queue_name = '' AND cgm.task = q.task)
+            )
     ),
     pending_counts AS (
         -- Expensive message scan ONLY for dirty partitions
+        -- Uses COALESCE with subscription_timestamp to respect "new" mode consumers
         SELECT 
             cp.stat_key,
             cp.partition_id,
@@ -450,9 +476,10 @@ BEGIN
         FROM cursor_positions cp
         LEFT JOIN queen.messages m 
             ON m.partition_id = cp.partition_id
-           AND (cp.last_consumed_created_at IS NULL 
-                OR m.created_at > cp.last_consumed_created_at
-                OR (m.created_at = cp.last_consumed_created_at AND m.id > cp.last_consumed_id))
+           AND (COALESCE(cp.last_consumed_created_at, cp.subscription_timestamp) IS NULL 
+                OR m.created_at > COALESCE(cp.last_consumed_created_at, cp.subscription_timestamp)
+                OR (m.created_at = COALESCE(cp.last_consumed_created_at, cp.subscription_timestamp) 
+                    AND m.id > COALESCE(cp.last_consumed_id, '00000000-0000-0000-0000-000000000000'::uuid)))
         GROUP BY cp.stat_key, cp.partition_id, cp.consumer_group,
                  cp.last_consumed_created_at, cp.total_messages_consumed, cp.lease_expires_at, cp.batch_size, cp.acked_count
     )
