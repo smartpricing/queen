@@ -6,6 +6,7 @@ This page documents Queen MQ server releases and their compatible client version
 
 | Server Version | Description | Compatible Clients |
 |----------------|-------------|-------------------|
+| **0.12.7** | Optimized cg metadata creation for new consumer groups | JS ≥0.7.4, Python ≥0.7.4, 0.12.0 if needs to use |
 | **0.12.6** | Improved slow cg discovery when there are tons of partitions | JS ≥0.7.4, Python ≥0.7.4, 0.12.0 if needs to use |
 | **0.12.5** | Fixed cg lag calculation for "new" cg at first message | JS ≥0.7.4, Python ≥0.7.4, 0.12.0 if needs to use |
 | **0.12.4** | Fixed window buffer debounce behavior | JS ≥0.7.4, Python ≥0.7.4, 0.12.0 if needs to use proxy auth |
@@ -18,6 +19,7 @@ This page documents Queen MQ server releases and their compatible client version
 
 ## Bug fixing and improvements 
 
+- Server 0.12.7: Optimized cg metadata creation for new consumer groups
 - Server 0.12.6: Improved slow cg discovery when there are tons of partitions
 - Server 0.12.5: Fixed cg lag calculation for "new" cg at first message
 - Server 0.12.4: Fixed window buffer debounce behavior

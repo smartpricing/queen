@@ -497,10 +497,12 @@ BEGIN
                     v_cursor_id := '00000000-0000-0000-0000-000000000000'::uuid;
                     
                     -- Insert subscription metadata with explicit timestamp
+                    -- Use partition_name = '' (queue-wide) so ALL partitions share
+                    -- the same subscription timestamp via the metadata lookup
                     INSERT INTO queen.consumer_groups_metadata (
                         consumer_group, queue_name, partition_name, subscription_mode, subscription_timestamp
                     ) VALUES (
-                        v_req.consumer_group, v_req.queue_name, COALESCE(v_partition_name, ''), 'timestamp', v_cursor_ts
+                        v_req.consumer_group, v_req.queue_name, '', 'timestamp', v_cursor_ts
                     )
                     ON CONFLICT (consumer_group, queue_name, partition_name, namespace, task) DO NOTHING;
                     
@@ -524,10 +526,12 @@ BEGIN
                 v_cursor_id := '00000000-0000-0000-0000-000000000000'::uuid;
                 
                 -- Insert subscription metadata (idempotent - ON CONFLICT ignores duplicates)
+                -- Use partition_name = '' (queue-wide) so ALL partitions share
+                -- the same subscription timestamp via the metadata lookup
                 INSERT INTO queen.consumer_groups_metadata (
                     consumer_group, queue_name, partition_name, subscription_mode, subscription_timestamp
                 ) VALUES (
-                    v_req.consumer_group, v_req.queue_name, COALESCE(v_partition_name, ''), 'new', v_now
+                    v_req.consumer_group, v_req.queue_name, '', 'new', v_now
                 )
                 ON CONFLICT (consumer_group, queue_name, partition_name, namespace, task) DO NOTHING;
                 
@@ -900,10 +904,14 @@ BEGIN
                     v_cursor_id := '00000000-0000-0000-0000-000000000000'::uuid;
                     
                     -- Insert subscription metadata with explicit timestamp
+                    -- Wildcard: use '' (queue-wide) so ALL partitions share the timestamp
+                    -- Specific: use the partition name for per-partition subscriptions
                     INSERT INTO queen.consumer_groups_metadata (
                         consumer_group, queue_name, partition_name, subscription_mode, subscription_timestamp
                     ) VALUES (
-                        v_req.consumer_group, v_req.queue_name, COALESCE(v_partition_name, ''), 'timestamp', v_cursor_ts
+                        v_req.consumer_group, v_req.queue_name,
+                        CASE WHEN v_is_wildcard THEN '' ELSE COALESCE(v_partition_name, '') END,
+                        'timestamp', v_cursor_ts
                     )
                     ON CONFLICT (consumer_group, queue_name, partition_name, namespace, task) DO NOTHING;
                     
@@ -927,10 +935,14 @@ BEGIN
                 v_cursor_id := '00000000-0000-0000-0000-000000000000'::uuid;
                 
                 -- Insert subscription metadata (idempotent - ON CONFLICT ignores duplicates)
+                -- Wildcard: use '' (queue-wide) so ALL partitions share the timestamp
+                -- Specific: use the partition name for per-partition subscriptions
                 INSERT INTO queen.consumer_groups_metadata (
                     consumer_group, queue_name, partition_name, subscription_mode, subscription_timestamp
                 ) VALUES (
-                    v_req.consumer_group, v_req.queue_name, COALESCE(v_partition_name, ''), 'new', v_now
+                    v_req.consumer_group, v_req.queue_name,
+                    CASE WHEN v_is_wildcard THEN '' ELSE COALESCE(v_partition_name, '') END,
+                    'new', v_now
                 )
                 ON CONFLICT (consumer_group, queue_name, partition_name, namespace, task) DO NOTHING;
                 

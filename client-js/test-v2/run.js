@@ -11,13 +11,7 @@ import * as transactionTests from './transaction.js'
 import * as subscriptionTests from './subscription.js'
 import * as maintenanceTests from './maintenance.js'
 import * as retentionTests from './retention.js'
-import * as errorHandlingTests from './ai_error_handling.js'
-import * as leaseRenewalTests from './ai_lease_renewal.js'
-import * as resourcesTests from './ai_resources.js'
-import * as bufferingTests from './ai_buffering.js'
-import * as priorityTests from './ai_priority.js'
-import * as ttlRetentionTests from './ai_ttl_retention.js'
-import * as mixedScenariosTests from './ai_mixed_scenarios.js'
+import * as bootstrapTests from './bootstrap.js'
 import { LoadBalancer } from '../client-v2/http/LoadBalancer.js';
 
 
@@ -118,17 +112,12 @@ async function main() {
         transactionTests,
         subscriptionTests,
         retentionTests,
-        maintenanceTests
+        maintenanceTests,
+        bootstrapTests
     ]
     
     const aiTests = [
-        errorHandlingTests,
-        leaseRenewalTests,
-        resourcesTests,
-        bufferingTests,
-        priorityTests,
-        ttlRetentionTests,
-        mixedScenariosTests
+
     ]
 
     const allTests = [...humanTests, ...aiTests]
