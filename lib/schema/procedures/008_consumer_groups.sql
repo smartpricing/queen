@@ -847,6 +847,76 @@ BEGIN
 END;
 $$;
 
+-- ============================================================================
+-- queen.seek_partition_v1: Move cursor to end for a SINGLE partition
+-- ============================================================================
+-- Advances the cursor for one specific partition to the latest message,
+-- effectively skipping all pending messages on that partition.
+-- Used from the "lagging partitions" UI to fix stuck/stale partitions.
+-- ============================================================================
+CREATE OR REPLACE FUNCTION queen.seek_partition_v1(
+    p_consumer_group TEXT,
+    p_queue_name TEXT,
+    p_partition_name TEXT
+)
+RETURNS JSONB
+LANGUAGE plpgsql
+AS $$
+DECLARE
+    v_partition_id UUID;
+    v_last_msg_id UUID;
+    v_last_msg_ts TIMESTAMPTZ;
+    v_updated BOOLEAN := FALSE;
+BEGIN
+    -- Find the partition
+    SELECT p.id INTO v_partition_id
+    FROM queen.partitions p
+    JOIN queen.queues q ON q.id = p.queue_id
+    WHERE p.name = p_partition_name
+      AND q.name = p_queue_name;
+    
+    IF v_partition_id IS NULL THEN
+        RETURN jsonb_build_object(
+            'success', false,
+            'error', 'Partition not found'
+        );
+    END IF;
+    
+    -- Get the latest message from partition_lookup
+    SELECT pl.last_message_id, pl.last_message_created_at
+    INTO v_last_msg_id, v_last_msg_ts
+    FROM queen.partition_lookup pl
+    WHERE pl.partition_id = v_partition_id;
+    
+    IF v_last_msg_id IS NOT NULL THEN
+        -- Advance cursor to latest message
+        UPDATE queen.partition_consumers
+        SET last_consumed_id = v_last_msg_id,
+            last_consumed_created_at = v_last_msg_ts,
+            last_consumed_at = NOW(),
+            lease_expires_at = NULL,
+            lease_acquired_at = NULL,
+            worker_id = NULL,
+            batch_size = 0,
+            acked_count = 0
+        WHERE partition_id = v_partition_id
+          AND consumer_group = p_consumer_group;
+        
+        v_updated := FOUND;
+    END IF;
+    
+    RETURN jsonb_build_object(
+        'success', true,
+        'consumerGroup', p_consumer_group,
+        'queueName', p_queue_name,
+        'partitionName', p_partition_name,
+        'updated', v_updated,
+        'cursorMovedTo', CASE WHEN v_last_msg_ts IS NOT NULL 
+            THEN to_char(v_last_msg_ts, 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"') ELSE NULL END
+    );
+END;
+$$;
+
 -- Grant execute permissions
 GRANT EXECUTE ON FUNCTION queen.get_consumer_groups_v1() TO PUBLIC;
 GRANT EXECUTE ON FUNCTION queen.get_consumer_groups_v2() TO PUBLIC;
@@ -858,4 +928,5 @@ GRANT EXECUTE ON FUNCTION queen.delete_consumer_group_v1(TEXT, BOOLEAN) TO PUBLI
 GRANT EXECUTE ON FUNCTION queen.update_consumer_group_subscription_v1(TEXT, TEXT) TO PUBLIC;
 GRANT EXECUTE ON FUNCTION queen.delete_consumer_group_for_queue_v1(TEXT, TEXT, BOOLEAN) TO PUBLIC;
 GRANT EXECUTE ON FUNCTION queen.seek_consumer_group_v1(TEXT, TEXT, TIMESTAMPTZ, BOOLEAN) TO PUBLIC;
+GRANT EXECUTE ON FUNCTION queen.seek_partition_v1(TEXT, TEXT, TEXT) TO PUBLIC;
 

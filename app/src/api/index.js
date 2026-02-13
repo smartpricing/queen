@@ -88,6 +88,8 @@ export const consumers = {
     }),
   seek: (name, queue, options) => 
     client.post(`/api/v1/consumer-groups/${encodeURIComponent(name)}/queues/${encodeURIComponent(queue)}/seek`, options),
+  seekPartition: (name, queue, partition) => 
+    client.post(`/api/v1/consumer-groups/${encodeURIComponent(name)}/queues/${encodeURIComponent(queue)}/partitions/${encodeURIComponent(partition)}/seek`),
 }
 
 // ============================================

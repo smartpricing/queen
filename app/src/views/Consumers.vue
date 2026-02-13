@@ -105,6 +105,7 @@
                 <th class="text-right px-3 py-2 text-xs font-semibold text-light-500 uppercase">Time Lag</th>
                 <th class="text-right px-3 py-2 text-xs font-semibold text-light-500 uppercase">Lag Hours</th>
                 <th class="text-left px-3 py-2 text-xs font-semibold text-light-500 uppercase">Oldest Unconsumed</th>
+                <th class="text-right px-3 py-2 text-xs font-semibold text-light-500 uppercase">Actions</th>
               </tr>
             </thead>
             <tbody>
@@ -138,6 +139,16 @@
                 </td>
                 <td class="px-3 py-2 text-xs text-light-600 dark:text-light-400">
                   {{ formatTimestamp(partition.oldest_unconsumed_at) }}
+                </td>
+                <td class="px-3 py-2 text-right">
+                  <button
+                    @click="handleSkipPartition(partition)"
+                    class="px-2 py-1 text-xs font-medium rounded bg-amber-100 text-amber-700 hover:bg-amber-200 dark:bg-amber-900/30 dark:text-amber-400 dark:hover:bg-amber-900/50 transition-colors"
+                    :disabled="skippingPartition === `${partition.consumer_group}-${partition.queue_name}-${partition.partition_name}`"
+                  >
+                    <span v-if="skippingPartition === `${partition.consumer_group}-${partition.queue_name}-${partition.partition_name}`">Skipping...</span>
+                    <span v-else>Skip to End</span>
+                  </button>
                 </td>
               </tr>
             </tbody>
@@ -545,6 +556,9 @@ const laggingPartitions = ref([])
 const laggingLoading = ref(false)
 const lagThreshold = ref(3600) // Default: 1 hour in seconds
 
+// Skip partition state
+const skippingPartition = ref(null)
+
 // Hard refresh state
 const hardRefreshLoading = ref(false)
 
@@ -708,6 +722,26 @@ const handleMoveToNow = async (consumer) => {
     console.error('Failed to move to now:', err)
   } finally {
     actionLoading.value = false
+  }
+}
+
+const handleSkipPartition = async (partition) => {
+  const key = `${partition.consumer_group}-${partition.queue_name}-${partition.partition_name}`
+  
+  if (!confirm(`Skip to end for partition "${partition.partition_name}" on queue "${partition.queue_name}" (group: ${partition.consumer_group})?\n\nThis will advance the cursor to the latest message, skipping all pending messages on this partition.`)) {
+    return
+  }
+  
+  skippingPartition.value = key
+  try {
+    await consumersApi.seekPartition(partition.consumer_group, partition.queue_name, partition.partition_name)
+    // Refresh lagging partitions list
+    await loadLaggingPartitions()
+  } catch (err) {
+    console.error('Failed to skip partition:', err)
+    alert('Failed to skip partition: ' + (err.response?.data?.error || err.message))
+  } finally {
+    skippingPartition.value = null
   }
 }
 

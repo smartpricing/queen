@@ -238,6 +238,22 @@ void setup_consumer_group_routes(uWS::App* app, const RouteContext& ctx) {
             }
         );
     });
+    
+    // POST /api/v1/consumer-groups/:group/queues/:queue/partitions/:partition/seek - Seek single partition to end
+    app->post("/api/v1/consumer-groups/:group/queues/:queue/partitions/:partition/seek", [ctx](auto* res, auto* req) {
+        REQUIRE_AUTH(res, req, ctx, auth::AccessLevel::READ_WRITE);
+        
+        std::string consumer_group = std::string(req->getParameter(0));
+        std::string queue_name = std::string(req->getParameter(1));
+        std::string partition_name = std::string(req->getParameter(2));
+        
+        spdlog::info("[Worker {}] SEEK PARTITION: {} / {} / {}", 
+            ctx.worker_id, consumer_group, queue_name, partition_name);
+        
+        submit_sp_call(ctx, res, 
+            "SELECT queen.seek_partition_v1($1, $2, $3)",
+            {consumer_group, queue_name, partition_name});
+    });
 }
 
 } // namespace routes
