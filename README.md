@@ -132,6 +132,7 @@ The repository is structured as follows:
 
 | Server Version | Description | Compatible Clients |
 |----------------|-------------|-------------------|
+| **0.12.8** | Added single partition move to now to frontend | JS ≥0.7.4, Python ≥0.7.4, 0.12.0 if needs to use |
 | **0.12.7** | Optimized cg metadata creation for new consumer groups | JS ≥0.7.4, Python ≥0.7.4, 0.12.0 if needs to use |
 | **0.12.6** | Improved slow cg discovery when there are tons of partitions | JS ≥0.7.4, Python ≥0.7.4, 0.12.0 if needs to use |
 | **0.12.5** | Fixed cg lag calculation for "new" cg at first message | JS ≥0.7.4, Python ≥0.7.4, 0.12.0 if needs to use |
@@ -149,6 +150,7 @@ The repository is structured as follows:
 
 ## Bug fixing and improvements 
 
+- Server 0.12.8: Added single partition move to now to frontend
 - Server 0.12.7: Optimized cg metadata creation for new consumer groups
 - Server 0.12.6: Improved slow cg discovery when there are tons of partitions
 - Server 0.12.5: Fixed cg lag calculation for "new" cg at first message
