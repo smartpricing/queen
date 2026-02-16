@@ -35,6 +35,7 @@ await queen
   .batch(1)
   .limit(10)
   .autoAck(false)  // Disable auto-ack for manual transaction control
+  .each()          // Process messages one by one
   .consume(async (message) => {
     // Transform the message
     const processed = {

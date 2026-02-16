@@ -230,9 +230,6 @@ await queen
     
     console.log('✅ Processed:', message.data)
   })
-  .onError(async (message, error) => {
-    console.error('❌ Error processing message:', error)
-  })
 
 // The consumer will keep running...
 ```

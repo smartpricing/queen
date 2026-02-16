@@ -38,6 +38,8 @@ const analytics1 = queen
   .queue(queueName)
   .group('analytics')
   .limit(10)
+  .idleMillis(3000)  // Stop after 3s of no messages (workers share the load)
+  .each()            // Process messages one by one
   .consume(async (message) => {
     analyticsCount1++
     console.log(`Analytics Worker 1: Processing event ${message.data.eventId}`)
@@ -48,6 +50,8 @@ const analytics2 = queen
   .queue(queueName)
   .group('analytics')
   .limit(10)
+  .idleMillis(3000)  // Stop after 3s of no messages (workers share the load)
+  .each()            // Process messages one by one
   .consume(async (message) => {
     analyticsCount2++
     console.log(`Analytics Worker 2: Processing event ${message.data.eventId}`)
@@ -77,6 +81,8 @@ await queen
   .queue(queueName)
   .group('email-notifications')
   .limit(10)
+  .idleMillis(3000)  // Stop after 3s of no messages
+  .each()            // Process messages one by one
   .consume(async (message) => {
     emailCount++
     console.log(`Email Worker: Sending notification for event ${message.data.eventId}`)
@@ -98,6 +104,7 @@ await queen
   .queue(queueName)
   .group('user-specific-analytics')
   .limit(1)
+  .each()            // Process messages one by one
   .consume(async (message) => {
     console.log(`Processing user-123 events:`, message.data)
   })
@@ -108,6 +115,7 @@ await queen
   .group('user-specific-analytics')
   .limit(1)
   .autoAck(false)
+  .each()            // Process messages one by one
   .consume(async (message) => {
     console.log(`Processing user-456 events:`, message.data)
   })
