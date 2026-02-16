@@ -77,7 +77,8 @@ struct ValidationResult {
  */
 struct JwkEntry {
     std::string kid;                        // Key ID
-    std::string algorithm;                  // Algorithm (RS256, RS384, RS512, etc.)
+    std::string kty;                        // Key type (RSA, OKP)
+    std::string algorithm;                  // Algorithm (RS256, RS384, RS512, EdDSA, etc.)
     std::string pem;                        // Public key in PEM format
     int64_t fetched_at;                     // When this key was fetched (unix timestamp)
 };
@@ -87,11 +88,12 @@ struct JwkEntry {
 // ============================================================================
 
 /**
- * JWT token validator supporting HS256 and RS256 algorithms
+ * JWT token validator supporting HS256, RS256, and EdDSA algorithms
  * 
  * Features:
  * - HS256 validation with shared secret
  * - RS256 validation with JWKS URL or static public key
+ * - EdDSA (Ed25519) validation with JWKS URL or static public key
  * - JWKS key caching with automatic refresh
  * - Claim validation (exp, iat, nbf, iss, aud)
  * - Role extraction from multiple claim formats
@@ -140,11 +142,13 @@ private:
     // Internal validation methods
     ValidationResult validate_hs256(const std::string& token);
     ValidationResult validate_rs256(const std::string& token);
+    ValidationResult validate_eddsa(const std::string& token);
     
     // JWKS helpers
     std::optional<std::string> get_public_key_for_kid(const std::string& kid);
     bool fetch_jwks();
     std::string jwk_to_pem(const std::string& n, const std::string& e);
+    std::string jwk_to_pem_ed25519(const std::string& x);
     
     // Claim extraction and validation
     JwtClaims extract_claims(const std::string& payload_json);

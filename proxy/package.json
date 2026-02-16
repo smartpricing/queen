@@ -1,6 +1,6 @@
 {
   "name": "queen-mq-proxy",
-  "version": "0.0.8",
+  "version": "0.0.9-exp-jwks",
   "type": "module",
   "description": "Secure proxy for Queen message queue",
   "main": "src/server.js",
@@ -13,6 +13,7 @@
     "pg": "^8.11.3",
     "bcrypt": "^5.1.1",
     "jsonwebtoken": "^9.0.2",
+    "jose": "^5.2.0",
     "http-proxy-middleware": "^2.0.6",
     "cookie-parser": "^1.4.6"
   }

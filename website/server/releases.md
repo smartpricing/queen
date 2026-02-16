@@ -6,6 +6,8 @@ This page documents Queen MQ server releases and their compatible client version
 
 | Server Version | Description | Compatible Clients |
 |----------------|-------------|-------------------|
+| **0.12.9** | Fixed server crash (SIGSEGV) on lease renewal, added EdDSA/JWKS auth, fixed examples | JS ≥0.7.4, Python ≥0.7.4, 0.12.0 if needs to use |
+| **0.12.8** | Added single partition move to now to frontend | JS ≥0.7.4, Python ≥0.7.4, 0.12.0 if needs to use |
 | **0.12.7** | Optimized cg metadata creation for new consumer groups | JS ≥0.7.4, Python ≥0.7.4, 0.12.0 if needs to use |
 | **0.12.6** | Improved slow cg discovery when there are tons of partitions | JS ≥0.7.4, Python ≥0.7.4, 0.12.0 if needs to use |
 | **0.12.5** | Fixed cg lag calculation for "new" cg at first message | JS ≥0.7.4, Python ≥0.7.4, 0.12.0 if needs to use |
@@ -19,6 +21,11 @@ This page documents Queen MQ server releases and their compatible client version
 
 ## Bug fixing and improvements 
 
+- Server 0.12.9: Fixed server crash (SIGSEGV) on lease renewal caused by use-after-free of HttpRequest pointer
+- Server 0.12.9: Added native EdDSA and JWKS JWT authentication (auto-discovery via JWT_JWKS_URL)
+- Server 0.12.9: Fixed quickstart consumer example (autoAck + onError silent conflict)
+- Server 0.12.9: Fixed examples 03-transactional-pipeline.js and 08-consumer-groups.js (missing .each())
+- Server 0.12.8: Added single partition move to now to frontend
 - Server 0.12.7: Optimized cg metadata creation for new consumer groups
 - Server 0.12.6: Improved slow cg discovery when there are tons of partitions
 - Server 0.12.5: Fixed cg lag calculation for "new" cg at first message
@@ -26,6 +33,16 @@ This page documents Queen MQ server releases and their compatible client version
 - Clients 0.12.1: Fixed bug in transaction with consumer groups
 
 ## Release Details
+
+### Version 0.12.9
+**Highlights:**
+- **Fixed server crash (SIGSEGV):** The lease renewal endpoint (`/api/v1/lease/:leaseId/extend`) captured the uWebSockets `HttpRequest*` pointer inside an async body callback, causing a use-after-free when the body arrived. This crash was triggered by clients using `renewLease()` with any interval. Fixed by extracting URL parameters synchronously before the async body read.
+- **Native EdDSA and JWKS authentication:** Added support for EdDSA (Ed25519) JWT tokens and automatic JWKS key discovery. Configure with `JWT_ENABLED=true`, `JWT_ALGORITHM=auto` (or `EdDSA` for strict mode), and `JWT_JWKS_URL` pointing to your JWKS endpoint. This replaces the experimental `-exp-jwks` build and is now part of the main release.
+- **Fixed documentation and examples:** Fixed the quickstart Step 4 consumer example where `.autoAck(true)` combined with `.onError()` silently disabled auto-acknowledgment. Fixed `03-transactional-pipeline.js` and `08-consumer-groups.js` examples that were missing `.each()` before `.consume()`, causing handlers to receive arrays instead of single messages.
+
+**Compatible Clients:**
+- JavaScript Client: `queen-mq` >=0.7.4
+- Python Client: `queen-mq` >=0.7.4
 
 ### Version 0.12.0
 **Highlights:**

@@ -1,7 +1,7 @@
 import express from 'express';
 import cookieParser from 'cookie-parser';
 import { createProxyMiddleware } from 'http-proxy-middleware';
-import { authenticateUser, generateToken, verifyToken } from './auth.js';
+import { authenticateUser, generateToken, verifyToken, verifyExternalToken, isExternalAuthEnabled } from './auth.js';
 import { requireAuth, checkMethodAccess } from './middleware.js';
 import { initDatabase } from './db.js';
 import path from 'path';
@@ -88,7 +88,8 @@ app.get('/api/me', requireAuth, (req, res) => {
 });
 
 // Middleware to check if user is authenticated, redirect to login if not
-app.use((req, res, next) => {
+// Supports both internal (proxy-generated) and external (SSO/IDP) tokens
+app.use(async (req, res, next) => {
   // Skip auth check for login page and API endpoints
   if (req.path === '/login' || req.path.startsWith('/api/login')) {
     return next();
@@ -105,6 +106,17 @@ app.use((req, res, next) => {
     return res.redirect('/login');
   }
 
+  // Try external token verification first (SSO passthrough)
+  if (isExternalAuthEnabled()) {
+    const externalUser = await verifyExternalToken(token);
+    if (externalUser) {
+      req.user = externalUser;
+      req.originalToken = token;  // Keep original token for passthrough
+      return next();
+    }
+  }
+
+  // Fall back to internal (proxy-generated) token verification
   const user = verifyToken(token);
 
   if (!user) {
@@ -133,15 +145,27 @@ app.use('/',
       proxyReq.removeHeader('referer');
       
       // Forward JWT token to Queen server for authentication
-      // Get token from cookie or Authorization header
-      const token = req.cookies.token || req.headers.authorization?.replace('Bearer ', '');
+      // For external tokens (SSO), pass through the original token unchanged
+      // For internal tokens, get from cookie
+      let token;
+      if (req.originalToken) {
+        // External SSO token - pass through as-is
+        token = req.originalToken;
+      } else {
+        // Internal proxy token
+        token = req.cookies.token || req.headers.authorization?.replace('Bearer ', '');
+      }
+      
       if (token) {
         proxyReq.setHeader('Authorization', `Bearer ${token}`);
       }
       
       // Also add user info headers for backward compatibility / logging
-      proxyReq.setHeader('X-Proxy-User', req.user.username);
-      proxyReq.setHeader('X-Proxy-Role', req.user.role);
+      proxyReq.setHeader('X-Proxy-User', req.user.username || req.user.subject || 'unknown');
+      proxyReq.setHeader('X-Proxy-Role', req.user.role || 'read-only');
+      if (req.user.isExternal) {
+        proxyReq.setHeader('X-Proxy-External', 'true');
+      }
       
       // Re-stream body if it was consumed by express.json()
       if (req.body && Object.keys(req.body).length > 0) {
@@ -164,6 +188,13 @@ async function startServer() {
     
     app.listen(PORT, () => {
       console.log(`Queen Proxy listening on port ${PORT}`);
+      console.log(`  Target: ${QUEEN_SERVER_URL}`);
+      if (isExternalAuthEnabled()) {
+        console.log(`  External SSO: enabled (JWKS passthrough)`);
+        console.log(`    JWKS URL: ${process.env.EXTERNAL_JWKS_URL || process.env.JWT_JWKS_URL}`);
+      } else {
+        console.log(`  External SSO: disabled (internal auth only)`);
+      }
     });
   } catch (error) {
     console.error('Failed to start server:', error);
