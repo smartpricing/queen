@@ -20,10 +20,16 @@ void setup_lease_routes(uWS::App* app, const RouteContext& ctx) {
         // Check authentication - READ_WRITE required for lease operations
         REQUIRE_AUTH(res, req, ctx, auth::AccessLevel::READ_WRITE);
         
+        // CRITICAL: Extract URL parameters BEFORE read_json_body.
+        // In uWebSockets, HttpRequest* req is only valid during the synchronous
+        // scope of the route handler. Once read_json_body sets up the async onData
+        // callback and returns, req is recycled. Capturing req in the body callback
+        // causes use-after-free (SIGSEGV).
+        std::string lease_id = std::string(req->getParameter(0));
+        
         read_json_body(res,
-            [res, ctx, req](const nlohmann::json& body) {
+            [res, ctx, lease_id](const nlohmann::json& body) {
                 try {
-                    std::string lease_id = std::string(req->getParameter(0));
                     int seconds = body.value("seconds", 60);
                     
                     spdlog::debug("[Worker {}] Extending lease: {}, seconds: {}", ctx.worker_id, lease_id, seconds);
