@@ -74,6 +74,8 @@ type ClientConfig struct {
 	HealthRetryAfterMillis int
 	// BearerToken is the bearer token for authentication
 	BearerToken string
+	// Headers is a map of custom headers to include in every request
+	Headers map[string]string
 }
 
 // QueueConfig contains configuration for queue creation.

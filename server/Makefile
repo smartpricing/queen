@@ -2,7 +2,7 @@
 # Requires C++17 or later
 
 CXX = g++
-CXXFLAGS = -std=c++17 -O3 -Wall -Wextra -pthread -DWITH_OPENSSL=1
+CXXFLAGS = -std=c++17 -O3 -Wall -Wextra -pthread -DWITH_OPENSSL=1 -DCPPHTTPLIB_OPENSSL_SUPPORT
 # Automatic dependency generation
 DEPFLAGS = -MMD -MP
 # Auto-detect include and library paths

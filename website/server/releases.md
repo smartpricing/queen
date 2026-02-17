@@ -6,6 +6,7 @@ This page documents Queen MQ server releases and their compatible client version
 
 | Server Version | Description | Compatible Clients |
 |----------------|-------------|-------------------|
+| **0.12.10** | Fixed JWKS fetch over HTTPS (cpp-httplib TLS support) | JS ≥0.7.4, Python ≥0.7.4, 0.12.0 if needs to use |
 | **0.12.9** | Fixed server crash (SIGSEGV) on lease renewal, added EdDSA/JWKS auth, fixed examples | JS ≥0.7.4, Python ≥0.7.4, 0.12.0 if needs to use |
 | **0.12.8** | Added single partition move to now to frontend | JS ≥0.7.4, Python ≥0.7.4, 0.12.0 if needs to use |
 | **0.12.7** | Optimized cg metadata creation for new consumer groups | JS ≥0.7.4, Python ≥0.7.4, 0.12.0 if needs to use |
@@ -21,6 +22,8 @@ This page documents Queen MQ server releases and their compatible client version
 
 ## Bug fixing and improvements 
 
+- Clients 0.12.2: Added custom `headers` option to JS, Python, and Go clients for API gateway authentication
+- Server 0.12.10: Fixed JWKS fetch over HTTPS (added CPPHTTPLIB_OPENSSL_SUPPORT to enable TLS in cpp-httplib)
 - Server 0.12.9: Fixed server crash (SIGSEGV) on lease renewal caused by use-after-free of HttpRequest pointer
 - Server 0.12.9: Added native EdDSA and JWKS JWT authentication (auto-discovery via JWT_JWKS_URL)
 - Server 0.12.9: Fixed quickstart consumer example (autoAck + onError silent conflict)
@@ -33,6 +36,55 @@ This page documents Queen MQ server releases and their compatible client version
 - Clients 0.12.1: Fixed bug in transaction with consumer groups
 
 ## Release Details
+
+### Clients 0.12.2
+**Highlights:**
+- **Custom request headers:** All three client libraries (JS, Python, Go) now accept a `headers` option in the constructor. This allows passing arbitrary HTTP headers (e.g., `x-api-key`, custom `Authorization`) that are included in every request to the Queen server. This is essential for corporate environments where services are hosted behind an API gateway that requires its own authentication headers.
+
+**Usage:**
+
+JavaScript:
+```javascript
+const queen = new Queen({
+  url: 'https://queen.example.com',
+  headers: {
+    'x-api-key': 'some-key',
+    'Authorization': 'Bearer my-JWT-Key'
+  }
+})
+```
+
+Python:
+```python
+queen = Queen(
+    url='https://queen.example.com',
+    headers={
+        'x-api-key': 'some-key',
+        'Authorization': 'Bearer my-JWT-Key'
+    }
+)
+```
+
+Go:
+```go
+client, _ := queen.New(queen.ClientConfig{
+    URL: "https://queen.example.com",
+    Headers: map[string]string{
+        "x-api-key":    "some-key",
+        "Authorization": "Bearer my-JWT-Key",
+    },
+})
+```
+
+Custom headers are merged after `bearerToken`, so explicit `headers.Authorization` overrides `bearerToken` if both are set.
+
+### Version 0.12.10
+**Highlights:**
+- **Fixed JWKS fetch over HTTPS:** The JWKS endpoint fetcher used `cpp-httplib` which was compiled without TLS support, causing `'https' scheme is not supported` errors when `JWT_JWKS_URL` pointed to an HTTPS endpoint. Added `CPPHTTPLIB_OPENSSL_SUPPORT` compile flag to enable HTTPS. HTTP endpoints were unaffected.
+
+**Compatible Clients:**
+- JavaScript Client: `queen-mq` >=0.7.4
+- Python Client: `queen-mq` >=0.7.4
 
 ### Version 0.12.9
 **Highlights:**

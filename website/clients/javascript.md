@@ -84,6 +84,22 @@ const queen = new Queen('http://queen-server:6632')
 ```
 :::
 
+### Custom Headers (API Gateway)
+
+If Queen is behind an API gateway that requires its own authentication headers, use the `headers` option:
+
+```javascript
+const queen = new Queen({
+  url: process.env.QUEEN_BASE_URL,
+  headers: {
+    'x-api-key': 'some-key',
+    'Authorization': 'Bearer my-JWT-Key'
+  }
+})
+```
+
+Custom headers are merged after `bearerToken`, so explicit `headers.Authorization` overrides `bearerToken` if both are set.
+
 ## Load Balancing & Affinity Routing
 
 When connecting to multiple Queen servers, you can choose how requests are distributed. The client supports three load balancing strategies.
@@ -1014,7 +1030,8 @@ try {
   loadBalancingStrategy: 'affinity',    // 'affinity', 'round-robin', or 'session'
   affinityHashRing: 150,                // Virtual nodes per server
   enableFailover: true,
-  bearerToken: null                     // For proxy authentication
+  bearerToken: null,                    // For proxy authentication
+  headers: {}                           // Custom headers for every request
 }
 ```
 

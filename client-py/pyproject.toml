@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "queen-mq"
-version = "0.12.1"
+version = "0.12.2"
 description = "High-performance message queue client for Python backed by PostgreSQL"
 readme = "README.md"
 authors = [
@@ -71,5 +71,6 @@ target-version = "py38"
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "session"
 testpaths = ["tests"]
 

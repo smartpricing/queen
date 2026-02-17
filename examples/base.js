@@ -35,7 +35,7 @@ await queen
 await queen
 .queue(queueName)
 .group('analytics')
-.renewLease(true, 2) // Renew lease every 2 seconds
+.renewLease(true, 2000) // Renew lease every 2 seconds
 .autoAck(false) 
 .batch(10)
 .each()
@@ -51,7 +51,7 @@ await queen
     .transaction()
     .ack(message, 'completed', { consumerGroup: 'analytics' })
     .queue(trxQueue)
-    .partition(message.nextPartition)
+    .partition(result.nextPartition)
     .push([{
           data: {
             ...result

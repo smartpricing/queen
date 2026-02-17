@@ -6,7 +6,7 @@ Equivalent to the Node.js test-v2/run.js
 import asyncio
 import os
 import sys
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import List, Dict, Any, Callable
 import asyncpg
 
@@ -45,7 +45,7 @@ async def close_db():
 
 def log(success: bool, *args):
     """Log test result"""
-    timestamp = datetime.utcnow().isoformat() + "Z"
+    timestamp = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
     icon = "✅" if success else "❌"
     print(timestamp, icon, *args)
 

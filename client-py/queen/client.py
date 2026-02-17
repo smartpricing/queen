@@ -39,6 +39,7 @@ class Queen:
         enable_failover: Optional[bool] = None,
         health_retry_after_millis: Optional[int] = None,
         bearer_token: Optional[str] = None,
+        headers: Optional[Dict[str, str]] = None,
     ):
         """
         Initialize Queen client
@@ -55,6 +56,7 @@ class Queen:
             enable_failover: Enable automatic failover
             health_retry_after_millis: Retry unhealthy backends after N ms
             bearer_token: Bearer token for proxy authentication
+            headers: Custom headers to include in every request
         """
         logger.log(
             "Queen.constructor",
@@ -80,6 +82,7 @@ class Queen:
             enable_failover=enable_failover,
             health_retry_after_millis=health_retry_after_millis,
             bearer_token=bearer_token,
+            headers=headers,
         )
 
         # Create HTTP client
@@ -144,6 +147,7 @@ class Queen:
         health_retry_after_millis = self._config["health_retry_after_millis"]
         enable_failover = self._config["enable_failover"]
         bearer_token = self._config.get("bearer_token")
+        custom_headers = self._config.get("headers") or {}
 
         if len(urls) == 1:
             # Single server
@@ -153,6 +157,7 @@ class Queen:
                 retry_attempts=retry_attempts,
                 retry_delay_millis=retry_delay_millis,
                 bearer_token=bearer_token,
+                headers=custom_headers,
             )
 
         # Multiple servers with load balancing
@@ -169,6 +174,7 @@ class Queen:
             retry_delay_millis=retry_delay_millis,
             enable_failover=enable_failover,
             bearer_token=bearer_token,
+            headers=custom_headers,
         )
 
     def _setup_graceful_shutdown(self) -> None:

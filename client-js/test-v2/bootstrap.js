@@ -216,11 +216,12 @@ export async function testCgBootstrapTimestamp(client) {
     console.log(`  Push complete: ${PARTITION_COUNT} partitions in ${pushTime}ms`)
 
     // 3. Record cutoff timestamp (after historical, before new messages)
+    //    Wait before capturing the cutoff to handle clock skew between the
+    //    client (Date.now) and PostgreSQL (NOW()). Without this, the last
+    //    push batch may have a PG created_at AFTER the client-side cutoff.
+    await new Promise(resolve => setTimeout(resolve, 2000))
     const cutoffTimestamp = new Date().toISOString()
     console.log(`  Cutoff timestamp: ${cutoffTimestamp}`)
-
-    // Small delay to ensure timestamp separation
-    await new Promise(resolve => setTimeout(resolve, 100))
 
     // 4. Register a new CG with subscriptionFrom(timestamp)
     //    The first pop triggers metadata registration + bootstrap (seeds all partition_consumers)

@@ -7,7 +7,7 @@ They work with any server DEFAULT_SUBSCRIPTION_MODE configuration.
 
 import asyncio
 import pytest
-from datetime import datetime
+from datetime import datetime, timezone
 
 
 @pytest.mark.asyncio
@@ -241,7 +241,7 @@ async def test_subscription_from_timestamp(client):
     await asyncio.sleep(0.5)
     
     # Record timestamp
-    cutoff_timestamp = datetime.utcnow().isoformat() + "Z"
+    cutoff_timestamp = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
     
     await asyncio.sleep(0.5)
     

@@ -6,7 +6,7 @@ Controlled by QUEEN_CLIENT_LOG environment variable
 import os
 import sys
 import json
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any, Union
 
 LOG_ENABLED = os.environ.get("QUEEN_CLIENT_LOG", "").lower() == "true"
@@ -14,7 +14,7 @@ LOG_ENABLED = os.environ.get("QUEEN_CLIENT_LOG", "").lower() == "true"
 
 def _get_timestamp() -> str:
     """Get formatted timestamp"""
-    return datetime.utcnow().isoformat() + "Z"
+    return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
 
 
 def _format_log(operation: str, details: Union[str, dict[str, Any]], level: str = "INFO") -> str:

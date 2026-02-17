@@ -139,6 +139,9 @@ func (hc *HttpClient) doRequest(ctx context.Context, method, path string, body i
 		if hc.config.BearerToken != "" {
 			req.Header.Set("Authorization", "Bearer "+hc.config.BearerToken)
 		}
+		for key, value := range hc.config.Headers {
+			req.Header.Set(key, value)
+		}
 
 		logDebug("HttpClient.doRequest", map[string]interface{}{
 			"method":  method,

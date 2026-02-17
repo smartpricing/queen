@@ -116,6 +116,22 @@ queen = Queen('http://queen-server:6632')
 ```
 :::
 
+### Custom Headers (API Gateway)
+
+If Queen is behind an API gateway that requires its own authentication headers, use the `headers` option:
+
+```python
+queen = Queen(
+    url=os.environ.get('QUEEN_BASE_URL'),
+    headers={
+        'x-api-key': 'some-key',
+        'Authorization': 'Bearer my-JWT-Key'
+    }
+)
+```
+
+Custom headers are merged after `bearer_token`, so explicit `headers['Authorization']` overrides `bearer_token` if both are set.
+
 ## Load Balancing & Affinity Routing
 
 When connecting to multiple Queen servers, you can choose how requests are distributed. The client supports three load balancing strategies.
@@ -1299,7 +1315,8 @@ await asyncio.gather(stage1(), stage2())
     'affinity_hash_ring': 128,
     'enable_failover': True,
     'health_retry_after_millis': 5000,
-    'bearer_token': None                   # For proxy authentication
+    'bearer_token': None,                  # For proxy authentication
+    'headers': {}                          # Custom headers for every request
 }
 ```
 

@@ -14,7 +14,8 @@ export const CLIENT_DEFAULTS = {
   affinityHashRing: 128,               // Number of virtual nodes per server for affinity strategy
   enableFailover: true,                // Auto-failover to other servers
   healthRetryAfterMillis: 5000,        // Retry unhealthy backends after 5 seconds
-  bearerToken: null                    // Bearer token for proxy authentication
+  bearerToken: null,                   // Bearer token for proxy authentication
+  headers: {}                          // Custom headers to include in every request
 }
 
 export const QUEUE_DEFAULTS = {

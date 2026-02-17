@@ -12,6 +12,7 @@ export class HttpClient {
   #retryDelayMillis
   #enableFailover
   #bearerToken
+  #headers
 
   constructor(options = {}) {
     const {
@@ -21,7 +22,8 @@ export class HttpClient {
       retryAttempts = 3,
       retryDelayMillis = 1000,
       enableFailover = true,
-      bearerToken = null
+      bearerToken = null,
+      headers = {}
     } = options
 
     this.#baseUrl = baseUrl
@@ -31,6 +33,7 @@ export class HttpClient {
     this.#retryDelayMillis = retryDelayMillis
     this.#enableFailover = enableFailover
     this.#bearerToken = bearerToken
+    this.#headers = headers || {}
     
     logger.log('HttpClient.constructor', { 
       hasLoadBalancer: !!loadBalancer, 
@@ -38,7 +41,8 @@ export class HttpClient {
       timeoutMillis, 
       retryAttempts,
       enableFailover,
-      hasAuth: !!bearerToken
+      hasAuth: !!bearerToken,
+      customHeaders: Object.keys(this.#headers).length
     })
   }
 
@@ -54,6 +58,7 @@ export class HttpClient {
       if (this.#bearerToken) {
         headers['Authorization'] = `Bearer ${this.#bearerToken}`
       }
+      Object.assign(headers, this.#headers)
 
       const options = {
         method,
