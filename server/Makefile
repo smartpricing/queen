@@ -100,7 +100,9 @@ JWTCPP_URL = https://github.com/Thalhammer/jwt-cpp/archive/refs/tags/v0.7.0.zip
 all: setup deps $(TARGET)
 
 # Build without downloading dependencies (assumes deps already exist)
-build-only: setup $(PCH_OUT) $(TARGET)
+build-only: setup
+	@test -f $(VENDOR_DIR)/.deps_ready || (echo "❌ Dependencies not found. Run 'make deps' first." && exit 1)
+	@$(MAKE) --no-print-directory $(PCH_OUT) $(TARGET)
 
 # Create directory structure
 setup:
@@ -169,8 +171,8 @@ $(VENDOR_DIR)/.deps_ready: setup
 	@echo "Dependencies ready!"
 
 # Compile precompiled header (spdlog + json.hpp - parsed once, reused by all TUs)
-# Order-only dep on .deps_ready ensures vendors exist before PCH compilation (safe with -j)
-$(PCH_OUT): $(PCH_SRC) | $(VENDOR_DIR)/.deps_ready
+# No dep on .deps_ready here: 'all' already calls deps first; 'build-only' assumes deps exist.
+$(PCH_OUT): $(PCH_SRC)
 	@mkdir -p $(dir $@)
 	@echo "Compiling precompiled header..."
 	@$(CXX) $(CXXFLAGS) $(ALL_INCLUDES) -x c++-header $< -o $@

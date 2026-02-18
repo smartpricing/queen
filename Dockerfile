@@ -71,13 +71,21 @@ RUN test -f bin/queen-server && echo "Build successful"
 # Stage 3: Runtime Image
 FROM ubuntu:24.04
 
-# Install runtime dependencies only
+# Install runtime dependencies + PostgreSQL 18 client tools (pg_dump, pg_restore)
+# The PGDG repo is required because Ubuntu 24.04 only ships up to PG 16.
 RUN apt-get update && apt-get install -y \
-    libpq5 \
     libssl3 \
     zlib1g \
     ca-certificates \
     curl \
+    gnupg \
+    lsb-release \
+    && curl -fsSL https://www.postgresql.org/media/keys/ACCC4CF8.asc \
+       | gpg --dearmor -o /usr/share/keyrings/pgdg.gpg \
+    && echo "deb [signed-by=/usr/share/keyrings/pgdg.gpg] https://apt.postgresql.org/pub/repos/apt \
+       $(lsb_release -cs)-pgdg main" > /etc/apt/sources.list.d/pgdg.list \
+    && apt-get update \
+    && apt-get install -y postgresql-client-18 \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app

@@ -49,6 +49,12 @@ const routes = [
     component: () => import('@/views/System.vue'),
     meta: { title: 'System', subtitle: 'Server health and resources' }
   },
+  {
+    path: '/migration',
+    name: 'Migration',
+    component: () => import('@/views/Migration.vue'),
+    meta: { title: 'Migration', subtitle: 'Database migration tools' }
+  },
 ]
 
 const router = createRouter({
