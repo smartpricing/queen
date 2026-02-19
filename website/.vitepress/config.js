@@ -43,6 +43,7 @@ export default defineConfig({
           { text: 'Installation', link: '/server/installation' },
           { text: 'Deployment', link: '/server/deployment' },
           { text: 'Authentication', link: '/server/authentication' },
+          { text: 'Database Migration', link: '/server/migration' },
           { text: 'Production Benchmarks', link: '/server/benchmark-results' }
         ]
       },
@@ -85,6 +86,7 @@ export default defineConfig({
             { text: 'Message Retention', link: '/guide/retention' },
             { text: 'Failover & Recovery', link: '/guide/failover' },
             { text: 'Message Tracing', link: '/guide/tracing' },
+            { text: 'Encryption', link: '/guide/encryption' },
             { text: 'Maintenance Operations', link: '/guide/maintenance-operations' }
           ]
         }
@@ -125,6 +127,7 @@ export default defineConfig({
           text: 'Operations',
           items: [
             { text: 'Monitoring', link: '/server/monitoring' },
+            { text: 'Database Migration', link: '/server/migration' },
             { text: 'Production Benchmark Results', link: '/server/benchmark-results' },
             { text: 'Release History', link: '/server/releases' }
           ]

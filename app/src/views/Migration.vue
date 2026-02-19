@@ -162,12 +162,61 @@
       </div>
     </div>
 
-    <!-- Step 3: Start Migration -->
+    <!-- Step 3: Select Data -->
+    <div class="card">
+      <div class="card-header">
+        <h3 class="font-semibold text-light-900 dark:text-white">Step 3: Select Data to Migrate</h3>
+        <p class="text-xs text-light-500 mt-0.5">Table structures are always created. Uncheck groups to skip their row data (faster migration, smaller transfer)</p>
+      </div>
+      <div class="card-body space-y-4">
+
+        <!-- Core tables — always migrated -->
+        <div class="p-3 bg-light-50 dark:bg-dark-300 rounded-lg">
+          <p class="text-xs font-semibold text-light-700 dark:text-light-300 mb-1.5">Always migrated (core operational state)</p>
+          <p class="text-xs font-mono text-light-500 leading-relaxed">
+            queues, partitions, partition_consumers, partition_lookup,<br/>
+            consumer_groups_metadata, system_state, dead_letter_queue
+          </p>
+        </div>
+
+        <!-- Optional groups -->
+        <div class="space-y-2">
+          <label
+            v-for="group in tableGroups"
+            :key="group.key"
+            class="flex items-start gap-3 cursor-pointer p-2 rounded-lg hover:bg-light-50 dark:hover:bg-dark-300 transition-colors"
+            :class="isMigrating ? 'opacity-50 pointer-events-none' : ''"
+          >
+            <input
+              v-model="group.include"
+              type="checkbox"
+              class="mt-0.5 rounded border-light-300 dark:border-dark-50 text-queen-500 focus:ring-queen-500"
+            />
+            <div class="flex-1 min-w-0">
+              <div class="flex items-center gap-2">
+                <span class="text-sm font-medium text-light-900 dark:text-white">{{ group.label }}</span>
+                <span v-if="!group.include" class="text-xs text-amber-600 dark:text-amber-400 font-medium">skipped — table created empty</span>
+              </div>
+              <p class="text-xs text-light-500 mt-0.5">{{ group.description }}</p>
+              <p class="text-xs font-mono text-light-400 mt-0.5">{{ group.tables.join(', ') }}</p>
+            </div>
+          </label>
+        </div>
+
+        <div class="pt-1 flex justify-end gap-3">
+          <button @click="selectAllGroups" :disabled="isMigrating" class="text-xs text-queen-500 hover:text-queen-600 disabled:opacity-40">Select all</button>
+          <span class="text-xs text-light-300">|</span>
+          <button @click="selectNoneGroups" :disabled="isMigrating" class="text-xs text-queen-500 hover:text-queen-600 disabled:opacity-40">Schema only</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Step 4: Start Migration -->
     <div class="card">
       <div class="card-header flex items-center justify-between">
         <div>
-          <h3 class="font-semibold text-light-900 dark:text-white">Step 3: Migrate</h3>
-          <p class="text-xs text-light-500 mt-0.5">Dump source database and restore to target using pg_dump/pg_restore</p>
+          <h3 class="font-semibold text-light-900 dark:text-white">Step 4: Migrate</h3>
+          <p class="text-xs text-light-500 mt-0.5">Stream pg_dump directly into pg_restore (no temp file)</p>
         </div>
         <button
           v-if="migrationStatus?.status === 'complete' || migrationStatus?.status === 'error'"
@@ -263,10 +312,10 @@
       </div>
     </div>
 
-    <!-- Step 4: Validate -->
+    <!-- Step 5: Validate -->
     <div class="card">
       <div class="card-header">
-        <h3 class="font-semibold text-light-900 dark:text-white">Step 4: Validate</h3>
+        <h3 class="font-semibold text-light-900 dark:text-white">Step 5: Validate</h3>
         <p class="text-xs text-light-500 mt-0.5">Compare row counts between source and target databases</p>
       </div>
       <div class="card-body">
@@ -340,10 +389,10 @@
       </div>
     </div>
 
-    <!-- Step 5: Post-migration instructions -->
+    <!-- Step 6: Post-migration instructions -->
     <div class="card">
       <div class="card-header">
-        <h3 class="font-semibold text-light-900 dark:text-white">Step 5: Switch Deployment</h3>
+        <h3 class="font-semibold text-light-900 dark:text-white">Step 6: Switch Deployment</h3>
         <p class="text-xs text-light-500 mt-0.5">After validation, redeploy Queen pointing to the new database</p>
       </div>
       <div class="card-body">
@@ -381,6 +430,47 @@ const targetConfig = reactive({
   ssl: false,
 })
 
+// Table data groups — uncheck to skip row data (DDL always migrated for all tables)
+const tableGroups = reactive([
+  {
+    key: 'messages',
+    label: 'Messages',
+    description: 'Queue payloads. Skip to start with an empty queue on the new DB.',
+    tables: ['messages', 'dead_letter_queue'],
+    include: true,
+  },
+  {
+    key: 'traces',
+    label: 'Traces',
+    description: 'Message trace debug data. No operational impact if skipped.',
+    tables: ['message_traces', 'message_trace_names'],
+    include: true,
+  },
+  {
+    key: 'history',
+    label: 'Consumption history',
+    description: 'Audit log of consumed messages. Consumers work fine without it.',
+    tables: ['messages_consumed'],
+    include: true,
+  },
+  {
+    key: 'metrics',
+    label: 'Metrics & stats',
+    description: 'Time-series metrics and stats. Starts accumulating fresh on the new DB.',
+    tables: ['stats', 'stats_history', 'system_metrics', 'worker_metrics', 'worker_metrics_summary', 'queue_lag_metrics', 'retention_history'],
+    include: true,
+  },
+])
+
+const excludeTableData = computed(() =>
+  tableGroups
+    .filter(g => !g.include)
+    .flatMap(g => g.tables)
+)
+
+const selectAllGroups = () => tableGroups.forEach(g => { g.include = true })
+const selectNoneGroups = () => tableGroups.forEach(g => { g.include = false })
+
 // Connection test
 const testingConnection = ref(false)
 const connectionResult = ref(null)
@@ -410,8 +500,8 @@ const canStartMigration = computed(() =>
 const statusLabel = computed(() => {
   if (!migrationStatus.value) return ''
   switch (migrationStatus.value.status) {
-    case 'dumping': return 'Dumping source database...'
-    case 'restoring': return 'Restoring to target database...'
+    case 'dumping': return 'Preparing target schema...'
+    case 'restoring': return 'Streaming pg_dump → pg_restore (no temp file)...'
     case 'complete': return 'Migration complete'
     case 'error': return 'Migration failed'
     default: return ''
@@ -421,8 +511,8 @@ const statusLabel = computed(() => {
 const progressPercent = computed(() => {
   if (!migrationStatus.value) return 0
   switch (migrationStatus.value.status) {
-    case 'dumping': return 35
-    case 'restoring': return 70
+    case 'dumping': return 10   // schema prep only — completes in seconds
+    case 'restoring': return 60 // streaming phase — bulk of the time
     case 'complete': return 100
     case 'error': return 100
     default: return 0
@@ -514,16 +604,22 @@ const startMigration = async () => {
     ? '\n\n⚠️  WARNING: Maintenance modes are NOT enabled.\nData written to the source during migration will NOT be copied to the target.'
     : ''
 
+  const skipped = tableGroups.filter(g => !g.include).map(g => g.label)
+  const skippedMsg = skipped.length
+    ? `\n\nSkipping data for: ${skipped.join(', ')}`
+    : ''
+
   if (!confirm(
     'Start database migration?\n\n' +
     'This will:\n' +
-    '1. pg_dump the entire queen schema from the source database\n' +
-    '2. pg_restore it to the target database\n' +
+    '1. Drop and recreate the queen schema on the target\n' +
+    '2. Stream pg_dump | pg_restore directly (no temp file)\n' +
+    skippedMsg +
     maintenanceWarning
   )) return
 
   try {
-    await migration.start(targetConfig)
+    await migration.start({ ...targetConfig, excludeTableData: excludeTableData.value })
     startPolling()
   } catch (error) {
     alert('Failed to start migration: ' + error.message)

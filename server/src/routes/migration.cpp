@@ -269,6 +269,32 @@ void setup_migration_routes(uWS::App* app, const RouteContext& ctx) {
                         return;
                     }
 
+                    // Parse optional table data exclusions.
+                    // --exclude-table-data keeps the CREATE TABLE DDL (so FK constraints
+                    // are always satisfied) but skips the row data for selected tables.
+                    // Only a fixed whitelist of known table names is accepted to prevent
+                    // shell injection via the --exclude-table-data flag.
+                    static const std::vector<std::string> SKIPPABLE_TABLES = {
+                        "messages", "dead_letter_queue",
+                        "message_traces", "message_trace_names",
+                        "messages_consumed",
+                        "stats", "stats_history", "system_metrics",
+                        "worker_metrics", "worker_metrics_summary",
+                        "queue_lag_metrics", "retention_history"
+                    };
+                    std::string exclude_flags;
+                    if (body.contains("excludeTableData") && body["excludeTableData"].is_array()) {
+                        for (const auto& t : body["excludeTableData"]) {
+                            if (!t.is_string()) continue;
+                            std::string tbl = t.get<std::string>();
+                            if (std::find(SKIPPABLE_TABLES.begin(), SKIPPABLE_TABLES.end(), tbl)
+                                    != SKIPPABLE_TABLES.end()) {
+                                exclude_flags += " --exclude-table-data=" + schema + "." + tbl;
+                                spdlog::info("[Migration] Skipping data for table: {}.{}", schema, tbl);
+                            }
+                        }
+                    }
+
                     // Build source URI from server config
                     const auto& src = ctx.config.database;
                     std::string source_uri = build_pg_uri(
@@ -281,7 +307,7 @@ void setup_migration_routes(uWS::App* app, const RouteContext& ctx) {
                     g_migration_state.reset();
                     g_migration_state.status.store(static_cast<int>(MigrationStatus::DUMPING));
                     g_migration_state.start_time = std::chrono::steady_clock::now();
-                    g_migration_state.set_step("Starting pg_dump...");
+                    g_migration_state.set_step("Preparing target schema...");
 
                     spdlog::info("[Migration] Starting migration to {}:{}/{}", target_host, target_port, target_db);
 
@@ -297,39 +323,9 @@ void setup_migration_routes(uWS::App* app, const RouteContext& ctx) {
                         target_user, target_password, target_host, target_port, target_db, target_ssl);
 
                     // Run migration in background thread
-                    ctx.db_thread_pool->push([source_uri, target_uri, target_connstr, schema, target_host, target_port, target_db]() {
-                        std::string dump_file = "/tmp/queen_migration_" +
-                            std::to_string(std::chrono::system_clock::now().time_since_epoch().count()) + ".dump";
+                    ctx.db_thread_pool->push([source_uri, target_uri, target_connstr, schema, exclude_flags, target_host, target_port, target_db]() {
 
-                        // Step 1: pg_dump
-                        g_migration_state.set_step("Running pg_dump (exporting schema and data)...");
-                        spdlog::info("[Migration] Running pg_dump to {}", dump_file);
-
-                        std::string dump_cmd = "pg_dump --format=custom"
-                            " --schema=" + schema +
-                            " --no-owner"
-                            " --no-privileges"
-                            " --dbname=\"" + source_uri + "\""
-                            " --file=\"" + dump_file + "\"";
-
-                        std::string dump_output;
-                        int dump_exit = run_command(dump_cmd, dump_output);
-
-                        {
-                            std::lock_guard<std::mutex> lock(g_migration_state.mtx);
-                            g_migration_state.dump_output = dump_output;
-                        }
-
-                        if (dump_exit != 0) {
-                            spdlog::error("[Migration] pg_dump failed (exit {}): {}", dump_exit, dump_output);
-                            g_migration_state.set_error("pg_dump failed (exit " + std::to_string(dump_exit) + "): " + dump_output);
-                            std::remove(dump_file.c_str());
-                            return;
-                        }
-
-                        spdlog::info("[Migration] pg_dump complete, preparing target schema");
-
-                        // Step 2: Ensure schema exists on target before restore
+                        // Step 1: Prepare target schema via libpq before streaming starts
                         g_migration_state.set_step("Preparing target database (creating schema)...");
                         {
                             PGconn* target_conn = PQconnectdb(target_connstr.c_str());
@@ -338,7 +334,6 @@ void setup_migration_routes(uWS::App* app, const RouteContext& ctx) {
                                 PQfinish(target_conn);
                                 spdlog::error("[Migration] Cannot connect to target for schema prep: {}", err);
                                 g_migration_state.set_error("Cannot connect to target: " + err);
-                                std::remove(dump_file.c_str());
                                 return;
                             }
 
@@ -351,51 +346,61 @@ void setup_migration_routes(uWS::App* app, const RouteContext& ctx) {
                                 PQfinish(target_conn);
                                 spdlog::error("[Migration] Failed to create schema on target: {}", err);
                                 g_migration_state.set_error("Failed to create schema on target: " + err);
-                                std::remove(dump_file.c_str());
                                 return;
                             }
                             PQclear(r);
                             PQfinish(target_conn);
-                            spdlog::info("[Migration] Target schema '{}' ready, starting pg_restore", schema);
+                            spdlog::info("[Migration] Target schema '{}' ready, starting stream", schema);
                         }
 
-                        // Step 3: pg_restore into target (schema already exists)
+                        // Step 2: Stream pg_dump directly into pg_restore via kernel pipe.
+                        //
+                        // No temp file is written — data flows through a pipe buffer in memory.
+                        // This avoids the /tmp disk space requirement (a compressed dump of 40GB
+                        // source data can reach 8-13GB, overflowing container ephemeral storage).
+                        //
+                        // -Z 0 (no compression): compression wastes CPU when data never touches
+                        // disk. Raw throughput through the pipe is faster without it.
+                        //
+                        // set -o pipefail: bash exits non-zero if pg_dump fails, even though
+                        // pg_restore is the last command in the pipe.
+                        //
+                        // --exit-on-error: pg_restore stops on first error instead of continuing
+                        // with partial data. The schema is always dropped+recreated before this
+                        // step, so a failed migration is always safely retried via Reset.
                         g_migration_state.status.store(static_cast<int>(MigrationStatus::RESTORING));
-                        g_migration_state.set_step("Running pg_restore (importing to target)...");
+                        g_migration_state.set_step("Streaming: pg_dump | pg_restore" +
+                            std::string(exclude_flags.empty() ? "" : " (partial — some table data skipped)") +
+                            "...");
 
-                        // --single-transaction is intentionally omitted:
-                        // for large databases it causes WAL space explosion, prevents
-                        // parallel restore (--jobs), and breaks PgBouncer in transaction
-                        // pooling mode. The schema was already dropped+recreated above,
-                        // so a failed restore is always safely retried via reset.
-                        // --exit-on-error stops on the first real error instead.
-                        std::string restore_cmd = "pg_restore"
-                            " --no-owner"
-                            " --no-privileges"
-                            " --exit-on-error"
+                        std::string pipe_cmd = "bash -c 'set -o pipefail; "
+                            "pg_dump --format=custom -Z 0"
                             " --schema=" + schema +
-                            " --dbname=\"" + target_uri + "\""
-                            " \"" + dump_file + "\"";
+                            " --no-owner --no-privileges"
+                            + exclude_flags +
+                            " --dbname=\"" + source_uri + "\""
+                            " | pg_restore"
+                            " --no-owner --no-privileges --exit-on-error"
+                            " --schema=" + schema +
+                            " --dbname=\"" + target_uri + "\"'";
 
-                        std::string restore_output;
-                        int restore_exit = run_command(restore_cmd, restore_output);
+                        spdlog::info("[Migration] Streaming pg_dump | pg_restore to {}:{}/{} exclude_flags='{}'",
+                            target_host, target_port, target_db, exclude_flags);
+
+                        std::string pipe_output;
+                        int pipe_exit = run_command(pipe_cmd, pipe_output);
 
                         {
                             std::lock_guard<std::mutex> lock(g_migration_state.mtx);
-                            g_migration_state.restore_output = restore_output;
+                            g_migration_state.restore_output = pipe_output;
                         }
 
-                        if (restore_exit != 0) {
-                            // With --exit-on-error, any non-zero exit is a real failure (no warnings-only exits).
-                            spdlog::error("[Migration] pg_restore failed (exit {}): {}", restore_exit, restore_output);
-                            g_migration_state.set_error("pg_restore failed (exit " +
-                                std::to_string(restore_exit) + "): " + restore_output);
-                            std::remove(dump_file.c_str());
+                        if (pipe_exit != 0) {
+                            spdlog::error("[Migration] Stream failed (exit {}): {}", pipe_exit, pipe_output);
+                            g_migration_state.set_error("Migration failed (exit " +
+                                std::to_string(pipe_exit) + "): " + pipe_output);
                             return;
                         }
-
-                        // Clean up dump file
-                        std::remove(dump_file.c_str());
 
                         // Done
                         {

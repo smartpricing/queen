@@ -6,6 +6,7 @@ This page documents Queen MQ server releases and their compatible client version
 
 | Server Version | Description | Compatible Clients |
 |----------------|-------------|-------------------|
+| **0.12.12** | Built-in database migration (pg_dump \| pg_restore, no temp file, selective table groups, row count validation) | JS ≥0.7.4, Python ≥0.7.4 |
 | **0.12.10** | Fixed JWKS fetch over HTTPS (cpp-httplib TLS support) | JS ≥0.7.4, Python ≥0.7.4, 0.12.0 if needs to use |
 | **0.12.9** | Fixed server crash (SIGSEGV) on lease renewal, added EdDSA/JWKS auth, fixed examples | JS ≥0.7.4, Python ≥0.7.4, 0.12.0 if needs to use |
 | **0.12.8** | Added single partition move to now to frontend | JS ≥0.7.4, Python ≥0.7.4, 0.12.0 if needs to use |
@@ -22,6 +23,7 @@ This page documents Queen MQ server releases and their compatible client version
 
 ## Bug fixing and improvements 
 
+- Server 0.12.12: Added built-in database migration (pg_dump | pg_restore stream, no temp file, selective table groups, row count validation, PG 18 client in Docker image)
 - Clients 0.12.2: Added custom `headers` option to JS, Python, and Go clients for API gateway authentication
 - Server 0.12.10: Fixed JWKS fetch over HTTPS (added CPPHTTPLIB_OPENSSL_SUPPORT to enable TLS in cpp-httplib)
 - Server 0.12.9: Fixed server crash (SIGSEGV) on lease renewal caused by use-after-free of HttpRequest pointer
@@ -36,6 +38,16 @@ This page documents Queen MQ server releases and their compatible client version
 - Clients 0.12.1: Fixed bug in transaction with consumer groups
 
 ## Release Details
+
+### Version 0.12.12
+**Highlights:**
+- **Built-in database migration:** Queen now includes a full PostgreSQL-to-PostgreSQL migration tool accessible from the web dashboard. No external scripts or sidecars needed. The migration streams `pg_dump` directly into `pg_restore` via a kernel pipe — no temp file is written regardless of database size. Supports selective table group migration (skip messages, traces, history, or metrics independently), row count validation against the target, and safe retry on failure.
+- **PostgreSQL 18 client in Docker image:** The runtime image now installs `postgresql-client-18` from the official PGDG apt repository, enabling migration to/from PostgreSQL 18 servers without version mismatch errors.
+- **Migration API:** New endpoints at `/api/v1/migration/` — `test-connection`, `start`, `status`, `validate`, `reset`.
+
+**Compatible Clients:**
+- JavaScript Client: `queen-mq` >=0.7.4
+- Python Client: `queen-mq` >=0.7.4
 
 ### Clients 0.12.2
 **Highlights:**
