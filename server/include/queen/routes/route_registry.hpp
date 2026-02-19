@@ -148,6 +148,17 @@ void setup_consumer_group_routes(uWS::App* app, const RouteContext& ctx);
 void setup_static_file_routes(uWS::App* app, const RouteContext& ctx);
 
 /**
+ * Setup database migration endpoints
+ * Routes:
+ *   POST /api/v1/migration/test-connection
+ *   POST /api/v1/migration/start
+ *   GET /api/v1/migration/status
+ *   POST /api/v1/migration/validate
+ *   POST /api/v1/migration/reset
+ */
+void setup_migration_routes(uWS::App* app, const RouteContext& ctx);
+
+/**
  * Setup internal endpoints for inter-instance communication
  * Routes:
  *   WS /internal/ws/peer - WebSocket for peer notifications

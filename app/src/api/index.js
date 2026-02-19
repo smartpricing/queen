@@ -111,6 +111,17 @@ export const system = {
   getPostgresStats: () => client.get('/api/v1/analytics/postgres-stats'),
 }
 
+// ============================================
+// MIGRATION API
+// ============================================
+export const migration = {
+  testConnection: (config) => client.post('/api/v1/migration/test-connection', config),
+  start: (config) => client.post('/api/v1/migration/start', config),
+  getStatus: () => client.get('/api/v1/migration/status'),
+  validate: (config) => client.post('/api/v1/migration/validate', config),
+  reset: () => client.post('/api/v1/migration/reset'),
+}
+
 // Export all APIs
 export default {
   resources,
@@ -120,5 +131,6 @@ export default {
   analytics,
   consumers,
   system,
+  migration,
 }
 

@@ -172,6 +172,9 @@ static void setup_worker_routes(uWS::App* app,
     spdlog::debug("[Worker {}] Setting up consumer group routes...", worker_id);
     queen::routes::setup_consumer_group_routes(app, ctx);
     
+    spdlog::debug("[Worker {}] Setting up migration routes...", worker_id);
+    queen::routes::setup_migration_routes(app, ctx);
+    
     spdlog::debug("[Worker {}] Setting up internal routes (peer notification)...", worker_id);
     queen::routes::setup_internal_routes(app, ctx);
     
