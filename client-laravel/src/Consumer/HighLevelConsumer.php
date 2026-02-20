@@ -1,0 +1,360 @@
+<?php
+
+namespace Queen\Consumer;
+
+use Queen\Http\HttpClient;
+use Queen\Queen;
+
+/**
+ * High-level consumer inspired by php-rdkafka's KafkaConsumer.
+ *
+ * Usage:
+ *   $consumer = $queen->queue('orders')->group('processors')->batch(10)->getConsumer();
+ *   $consumer->subscribe();
+ *
+ *   while (true) {
+ *       $message = $consumer->consume(1000);
+ *       if ($message === null) continue;
+ *       processMessage($message);
+ *       $consumer->ack($message);
+ *   }
+ *
+ *   $consumer->close();
+ */
+class HighLevelConsumer
+{
+    private HttpClient $httpClient;
+    private Queen $queen;
+    private array $options;
+    private bool $subscribed = false;
+    private bool $closed = false;
+
+    private string $popPath;
+    private string $baseParams;
+    private ?string $affinityKey;
+
+    public function __construct(HttpClient $httpClient, Queen $queen, array $options)
+    {
+        $this->httpClient = $httpClient;
+        $this->queen = $queen;
+        $this->options = $options;
+    }
+
+    /**
+     * Subscribe to the queue (start consuming).
+     * Must be called before consume().
+     */
+    public function subscribe(): void
+    {
+        $queue = $this->options['queue'] ?? null;
+        $partition = $this->options['partition'] ?? null;
+        $namespace = $this->options['namespace'] ?? null;
+        $task = $this->options['task'] ?? null;
+        $group = $this->options['group'] ?? null;
+        $batch = $this->options['batch'] ?? 1;
+        $wait = $this->options['wait'] ?? true;
+        $timeoutMillis = $this->options['timeoutMillis'] ?? 30000;
+        $subscriptionMode = $this->options['subscriptionMode'] ?? null;
+        $subscriptionFrom = $this->options['subscriptionFrom'] ?? null;
+
+        $this->popPath = $this->buildPath($queue, $partition, $namespace, $task);
+        $this->baseParams = $this->buildParams($batch, $wait, $timeoutMillis, $group, $subscriptionMode, $subscriptionFrom, $namespace, $task);
+        $this->affinityKey = $this->getAffinityKey($queue, $partition, $namespace, $task, $group);
+        $this->subscribed = true;
+
+        // Install signal handlers for graceful shutdown
+        if (function_exists('pcntl_signal')) {
+            pcntl_signal(SIGINT, function () {
+                $this->closed = true;
+            });
+            pcntl_signal(SIGTERM, function () {
+                $this->closed = true;
+            });
+        }
+    }
+
+    /**
+     * Consume a single message from the queue.
+     * Returns null if no message available within timeout.
+     *
+     * @param int $timeoutMs Timeout in milliseconds to wait for a message
+     * @return array|null A single message array, or null if no message
+     */
+    public function consume(int $timeoutMs = 1000): ?array
+    {
+        $this->ensureSubscribed();
+
+        if ($this->closed) {
+            return null;
+        }
+
+        if (function_exists('pcntl_signal_dispatch')) {
+            pcntl_signal_dispatch();
+        }
+
+        if ($this->closed) {
+            return null;
+        }
+
+        // Override batch=1 and use the provided timeout
+        $params = $this->baseParams;
+        // Replace batch and timeout in params
+        $parsedParams = [];
+        parse_str($params, $parsedParams);
+        $parsedParams['batch'] = '1';
+        $parsedParams['timeout'] = (string) $timeoutMs;
+        $parsedParams['wait'] = 'true';
+        $queryString = http_build_query($parsedParams);
+
+        try {
+            $clientTimeout = $timeoutMs + 5000;
+            $result = $this->httpClient->get("{$this->popPath}?{$queryString}", $clientTimeout, $this->affinityKey);
+
+            if (!$result || !isset($result['messages']) || empty($result['messages'])) {
+                return null;
+            }
+
+            $messages = array_filter($result['messages'], fn($msg) => $msg !== null);
+            $messages = array_values($messages);
+
+            if (empty($messages)) {
+                return null;
+            }
+
+            $message = $messages[0];
+            $this->enhanceMessageWithTrace($message);
+
+            return $message;
+        } catch (\Throwable $error) {
+            // Timeouts are normal for long polling
+            if (str_contains($error->getMessage(), 'timeout') || str_contains($error->getMessage(), 'timed out')) {
+                return null;
+            }
+
+            // Network errors — return null, caller can retry
+            if (str_contains($error->getMessage(), 'Connection refused') || str_contains($error->getMessage(), 'cURL error')) {
+                return null;
+            }
+
+            throw $error;
+        }
+    }
+
+    /**
+     * Consume a batch of messages from the queue.
+     * Returns empty array if no messages available within timeout.
+     *
+     * @param int $timeoutMs Timeout in milliseconds
+     * @param int $maxMessages Maximum number of messages to return
+     * @return array Array of message arrays
+     */
+    public function consumeBatch(int $timeoutMs = 1000, int $maxMessages = 10): array
+    {
+        $this->ensureSubscribed();
+
+        if ($this->closed) {
+            return [];
+        }
+
+        if (function_exists('pcntl_signal_dispatch')) {
+            pcntl_signal_dispatch();
+        }
+
+        if ($this->closed) {
+            return [];
+        }
+
+        $parsedParams = [];
+        parse_str($this->baseParams, $parsedParams);
+        $parsedParams['batch'] = (string) $maxMessages;
+        $parsedParams['timeout'] = (string) $timeoutMs;
+        $parsedParams['wait'] = 'true';
+        $queryString = http_build_query($parsedParams);
+
+        try {
+            $clientTimeout = $timeoutMs + 5000;
+            $result = $this->httpClient->get("{$this->popPath}?{$queryString}", $clientTimeout, $this->affinityKey);
+
+            if (!$result || !isset($result['messages']) || empty($result['messages'])) {
+                return [];
+            }
+
+            $messages = array_values(array_filter($result['messages'], fn($msg) => $msg !== null));
+
+            foreach ($messages as &$msg) {
+                $this->enhanceMessageWithTrace($msg);
+            }
+            unset($msg);
+
+            return $messages;
+        } catch (\Throwable $error) {
+            if (str_contains($error->getMessage(), 'timeout') || str_contains($error->getMessage(), 'timed out')) {
+                return [];
+            }
+            if (str_contains($error->getMessage(), 'Connection refused') || str_contains($error->getMessage(), 'cURL error')) {
+                return [];
+            }
+            throw $error;
+        }
+    }
+
+    /**
+     * Acknowledge a message (or array of messages).
+     *
+     * @param array $message A single message or array of messages
+     * @param bool $success Whether processing succeeded
+     */
+    public function ack(array $message, bool $success = true): array
+    {
+        $context = [];
+        $group = $this->options['group'] ?? null;
+        if ($group !== null) {
+            $context['group'] = $group;
+        }
+
+        return $this->queen->ack($message, $success, $context);
+    }
+
+    /**
+     * Negative-acknowledge a message (mark as failed).
+     */
+    public function nack(array $message): array
+    {
+        return $this->ack($message, false);
+    }
+
+    /**
+     * Renew lease for a message (or array of messages).
+     */
+    public function renewLease(array|string $messageOrLeaseId): array
+    {
+        return $this->queen->renew($messageOrLeaseId);
+    }
+
+    /**
+     * Check if the consumer has been closed (via signal or close()).
+     */
+    public function isClosed(): bool
+    {
+        if (function_exists('pcntl_signal_dispatch')) {
+            pcntl_signal_dispatch();
+        }
+        return $this->closed;
+    }
+
+    /**
+     * Close the consumer.
+     */
+    public function close(): void
+    {
+        $this->closed = true;
+        $this->subscribed = false;
+    }
+
+    private function ensureSubscribed(): void
+    {
+        if ($this->closed) {
+            return; // Allow graceful exit
+        }
+        if (!$this->subscribed) {
+            throw new \RuntimeException('Consumer not subscribed. Call subscribe() before consume().');
+        }
+    }
+
+    private function enhanceMessageWithTrace(array &$message): void
+    {
+        $httpClient = $this->httpClient;
+        $consumerGroup = $this->options['group'] ?? '__QUEUE_MODE__';
+
+        $message['trace'] = function (array $traceConfig) use ($httpClient, $consumerGroup, $message): array {
+            try {
+                if (!isset($traceConfig['data'])) {
+                    return ['success' => false, 'error' => 'Invalid trace config: requires data key'];
+                }
+
+                $traceNames = null;
+                if (isset($traceConfig['traceName'])) {
+                    $traceNames = is_array($traceConfig['traceName'])
+                        ? array_filter($traceConfig['traceName'], fn($n) => is_string($n) && strlen($n) > 0)
+                        : [$traceConfig['traceName']];
+                    if (empty($traceNames)) {
+                        $traceNames = null;
+                    }
+                }
+
+                $response = $httpClient->post('/api/v1/traces', [
+                    'transactionId' => $message['transactionId'],
+                    'partitionId' => $message['partitionId'],
+                    'consumerGroup' => $consumerGroup,
+                    'traceNames' => $traceNames,
+                    'eventType' => $traceConfig['eventType'] ?? 'info',
+                    'data' => $traceConfig['data'],
+                ]);
+
+                return array_merge(['success' => true], $response ?? []);
+            } catch (\Throwable $error) {
+                return ['success' => false, 'error' => $error->getMessage()];
+            }
+        };
+    }
+
+    private function getAffinityKey(?string $queue, ?string $partition, ?string $namespace, ?string $task, ?string $group): ?string
+    {
+        if ($queue !== null) {
+            return "{$queue}:" . ($partition ?? '*') . ':' . ($group ?? '__QUEUE_MODE__');
+        }
+        if ($namespace !== null || $task !== null) {
+            return ($namespace ?? '*') . ':' . ($task ?? '*') . ':' . ($group ?? '__QUEUE_MODE__');
+        }
+        return null;
+    }
+
+    private function buildPath(?string $queue, ?string $partition, ?string $namespace, ?string $task): string
+    {
+        if ($queue !== null) {
+            if ($partition !== null) {
+                return "/api/v1/pop/queue/{$queue}/partition/{$partition}";
+            }
+            return "/api/v1/pop/queue/{$queue}";
+        }
+        if ($namespace !== null || $task !== null) {
+            return '/api/v1/pop';
+        }
+        throw new \RuntimeException('Must specify queue, namespace, or task');
+    }
+
+    private function buildParams(
+        int $batch,
+        bool $wait,
+        int $timeoutMillis,
+        ?string $group,
+        ?string $subscriptionMode,
+        ?string $subscriptionFrom,
+        ?string $namespace,
+        ?string $task,
+    ): string {
+        $params = [
+            'batch' => (string) $batch,
+            'wait' => $wait ? 'true' : 'false',
+            'timeout' => (string) $timeoutMillis,
+        ];
+
+        if ($group !== null) {
+            $params['consumerGroup'] = $group;
+        }
+        if ($subscriptionMode !== null) {
+            $params['subscriptionMode'] = $subscriptionMode;
+        }
+        if ($subscriptionFrom !== null) {
+            $params['subscriptionFrom'] = $subscriptionFrom;
+        }
+        if ($namespace !== null) {
+            $params['namespace'] = $namespace;
+        }
+        if ($task !== null) {
+            $params['task'] = $task;
+        }
+
+        return http_build_query($params);
+    }
+}
