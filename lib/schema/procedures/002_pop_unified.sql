@@ -6,7 +6,7 @@
 --
 -- Two specialized procedures handle the fundamentally different cases:
 --   1. pop_specific_batch  - Known partitions (deterministic, no races)
---   2. pop_discover_batch  - Wildcard discovery (uses SKIP LOCKED for safety)
+--   2. pop_discover_batch  - Wildcard discovery (lease-based concurrency)
 --
 -- Both return the same result format for uniform C++ handling.
 -- ============================================================================
@@ -128,8 +128,25 @@ BEGIN
         END IF;
         
         -- =====================================================================
-        -- STEP 2: Ensure consumer row exists & try to acquire lease (atomic)
+        -- STEP 2: Advisory lock + ensure consumer row exists + acquire lease
         -- =====================================================================
+        -- Non-blocking advisory lock prevents INSERT deadlocks when specific
+        -- and wildcard pop transactions run concurrently.
+        IF NOT pg_try_advisory_xact_lock(
+            ('x' || substr(md5(v_partition_id::text || v_req.consumer_group), 1, 16))::bit(64)::bigint
+        ) THEN
+            v_result := jsonb_build_object(
+                'idx', v_req.idx,
+                'result', jsonb_build_object(
+                    'success', false,
+                    'error', 'lease_held',
+                    'messages', '[]'::jsonb
+                )
+            );
+            v_results := v_results || v_result;
+            CONTINUE;
+        END IF;
+        
         INSERT INTO queen.partition_consumers (partition_id, consumer_group)
         VALUES (v_partition_id, v_req.consumer_group)
         ON CONFLICT (partition_id, consumer_group) DO NOTHING;
@@ -324,11 +341,14 @@ $$;
 -- 2. pop_discover_batch: Complete POP with WILDCARD partition discovery
 -- ============================================================================
 -- Use when: partition_name is NULL/empty (discover available partition)
--- Guarantees: Uses FOR UPDATE SKIP LOCKED to avoid race conditions
+-- Guarantees: Lease-based concurrency prevents duplicate consumption
 --
 -- Key difference from specific:
---   - Multiple workers calling simultaneously will each get DIFFERENT partitions
---   - SKIP LOCKED ensures no blocking on contested partitions
+--   - Discovery query finds the best available partition (no row locks taken)
+--   - Concurrency is handled by the lease UPDATE: only one worker can acquire
+--     a lease per partition+consumer_group, others get lease_race_condition
+--   - This avoids lock contention with push transactions (whose trigger locks
+--     partition_lookup rows via FOR UPDATE)
 --   - If no available partition, returns success=false with error='no_available_partition'
 --
 -- Input/Output format: Same as pop_specific_batch
@@ -359,7 +379,7 @@ DECLARE
     v_last_msg_ts TIMESTAMPTZ;
     v_seeded INT;
 BEGIN
-    -- Process each request - order doesn't matter for discovery since SKIP LOCKED
+    -- Process each request - order doesn't matter for discovery
     FOR v_req IN 
         SELECT 
             (r->>'idx')::INT AS idx,
@@ -381,8 +401,8 @@ BEGIN
         v_messages := '[]'::jsonb;
         
         -- =====================================================================
-        -- STEP 1: Discover available partition using SKIP LOCKED
-        -- This is the key difference - atomically finds AND locks an available partition
+        -- STEP 1: Discover available partition (lock-free)
+        -- Finds the best candidate; concurrency handled by lease acquisition
         -- =====================================================================
         SELECT 
             pl.partition_id,
@@ -414,10 +434,12 @@ BEGIN
         -- partitions (with pending messages) over undiscovered ones, preventing
         -- starvation of known partitions during the discovery phase.
         ORDER BY pc.last_consumed_at ASC NULLS LAST
-        LIMIT 1
-        -- CRITICAL: FOR UPDATE SKIP LOCKED prevents race conditions
-        -- Other concurrent workers will skip this row and get a different partition
-        FOR UPDATE OF pl SKIP LOCKED;
+        LIMIT 1;
+        -- NOTE: No FOR UPDATE lock on this discovery query. The previous
+        -- FOR UPDATE OF pl SKIP LOCKED caused contention with push transactions
+        -- (whose trigger locks partition_lookup rows). Concurrent pop workers may
+        -- discover the same partition, but the lease UPDATE in the common path
+        -- serializes access: only one succeeds, others get lease_race_condition.
         
         IF v_partition_id IS NULL THEN
             v_result := jsonb_build_object(
@@ -433,14 +455,31 @@ BEGIN
         END IF;
         
         -- =====================================================================
-        -- STEP 2: Ensure consumer row exists
+        -- STEP 2: Advisory lock + ensure consumer row exists
         -- =====================================================================
+        -- Non-blocking advisory lock prevents INSERT deadlocks between concurrent
+        -- batches and provides SKIP LOCKED-like partition distribution.
+        IF NOT pg_try_advisory_xact_lock(
+            ('x' || substr(md5(v_partition_id::text || v_req.consumer_group), 1, 16))::bit(64)::bigint
+        ) THEN
+            v_result := jsonb_build_object(
+                'idx', v_req.idx,
+                'result', jsonb_build_object(
+                    'success', false,
+                    'error', 'partition_busy',
+                    'messages', '[]'::jsonb
+                )
+            );
+            v_results := v_results || v_result;
+            CONTINUE;
+        END IF;
+        
         INSERT INTO queen.partition_consumers (partition_id, consumer_group)
         VALUES (v_partition_id, v_req.consumer_group)
         ON CONFLICT (partition_id, consumer_group) DO NOTHING;
         
         -- =====================================================================
-        -- STEP 3: Acquire lease (should succeed since we have SKIP LOCKED)
+        -- STEP 3: Acquire lease (may fail if another worker got here first)
         -- =====================================================================
         v_effective_lease := COALESCE(NULLIF(v_req.lease_seconds, 0), NULLIF(v_lease_time, 0), 60);
         
@@ -459,8 +498,7 @@ BEGIN
         INTO v_cursor_id, v_cursor_ts;
         
         IF NOT FOUND THEN
-            -- Edge case: lease was acquired between our check and update
-            -- This shouldn't happen with proper SKIP LOCKED, but safety first
+            -- Edge case: another worker acquired the lease between discovery and this update
             v_result := jsonb_build_object(
                 'idx', v_req.idx,
                 'result', jsonb_build_object(
@@ -751,7 +789,7 @@ BEGIN
         -- =====================================================================
         IF v_is_wildcard THEN
             -- =================================================================
-            -- WILDCARD: Discover available partition with SKIP LOCKED
+            -- WILDCARD: Discover available partition (lock-free discovery)
             -- =================================================================
             SELECT 
                 pl.partition_id,
@@ -779,8 +817,12 @@ BEGIN
               AND (q.window_buffer IS NULL OR q.window_buffer = 0
                    OR pl.last_message_created_at <= v_now - (q.window_buffer || ' seconds')::interval)
             ORDER BY pc.last_consumed_at ASC NULLS LAST
-            LIMIT 1
-            FOR UPDATE OF pl SKIP LOCKED;
+            LIMIT 1;
+            -- NOTE: No FOR UPDATE lock on this discovery query. The previous
+            -- FOR UPDATE OF pl SKIP LOCKED caused contention with push transactions
+            -- (whose trigger locks partition_lookup rows). Concurrent pop workers may
+            -- discover the same partition, but the lease UPDATE in the common path
+            -- serializes access: only one succeeds, others get lease_race_condition.
             
             IF v_partition_id IS NULL THEN
                 v_result := jsonb_build_object(
@@ -846,6 +888,24 @@ BEGIN
         -- =====================================================================
         -- COMMON PATH: Lease acquisition, fetch, cleanup
         -- =====================================================================
+        
+        -- Advisory lock prevents INSERT deadlocks between concurrent batches.
+        -- Non-blocking: returns false if another transaction holds it (skip partition).
+        -- Same key as ack_messages_v2 for consistent pop/ack serialization.
+        IF NOT pg_try_advisory_xact_lock(
+            ('x' || substr(md5(v_partition_id::text || v_req.consumer_group), 1, 16))::bit(64)::bigint
+        ) THEN
+            v_result := jsonb_build_object(
+                'idx', v_req.idx,
+                'result', jsonb_build_object(
+                    'success', false,
+                    'error', CASE WHEN v_is_wildcard THEN 'partition_busy' ELSE 'lease_held' END,
+                    'messages', '[]'::jsonb
+                )
+            );
+            v_results := v_results || v_result;
+            CONTINUE;
+        END IF;
         
         -- Ensure consumer row exists
         INSERT INTO queen.partition_consumers (partition_id, consumer_group)
@@ -1116,7 +1176,7 @@ SELECT queen.pop_discover_batch('[
     {"idx": 0, "queue_name": "orders", "consumer_group": "processor", "batch_size": 10, "worker_id": "worker-1"},
     {"idx": 1, "queue_name": "orders", "consumer_group": "processor", "batch_size": 10, "worker_id": "worker-2"}
 ]'::jsonb);
--- ^ Each will get a DIFFERENT partition due to SKIP LOCKED
+-- ^ Each will typically get a DIFFERENT partition (lease-based concurrency)
 
 -- Example 3: UNIFIED - Mix of specific and wildcard in one call
 SELECT queen.pop_unified_batch('[
