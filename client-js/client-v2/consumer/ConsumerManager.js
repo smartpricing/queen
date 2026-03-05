@@ -119,6 +119,7 @@ export class ConsumerManager {
     
     let processedCount = 0
     let lastMessageTime = idleMillis ? Date.now() : null
+    let consecutiveNetworkErrors = 0
 
     while (true) {
       // Check abort signal
@@ -163,6 +164,9 @@ export class ConsumerManager {
         if (messages.length === 0) {
           continue
         }
+
+        // Reset network error counter on successful receive
+        consecutiveNetworkErrors = 0
 
         logger.log('ConsumerManager.worker', { workerId, status: 'messages-received', count: messages.length })
 
@@ -221,10 +225,11 @@ export class ConsumerManager {
                               error.code === 'ECONNREFUSED'
 
         if (isNetworkError) {
-          logger.warn('ConsumerManager.worker', { workerId, error: 'network', message: error.message })
-          console.warn(`Worker ${workerId}: Network error - ${error.message}`)
-          // Wait before retry
-          await new Promise(resolve => setTimeout(resolve, 1000))
+          consecutiveNetworkErrors++
+          const backoffDelay = Math.min(1000 * Math.pow(2, consecutiveNetworkErrors - 1), 30000)
+          logger.warn('ConsumerManager.worker', { workerId, error: 'network', message: error.message, backoffDelay, consecutiveErrors: consecutiveNetworkErrors })
+          console.warn(`Worker ${workerId}: Network error (attempt ${consecutiveNetworkErrors}) - ${error.message}, retrying in ${backoffDelay}ms`)
+          await new Promise(resolve => setTimeout(resolve, backoffDelay))
           continue
         }
 
@@ -292,11 +297,22 @@ export class ConsumerManager {
 
     if (leaseIds.length === 0) return null
 
+    let consecutiveFailures = 0
+
     return setInterval(async () => {
       try {
         await this.#queen.renew(messages)
+        consecutiveFailures = 0
       } catch (error) {
-        console.error('Lease renewal failed:', error)
+        consecutiveFailures++
+        logger.warn('ConsumerManager.leaseRenewal', {
+          error: error.message,
+          consecutiveFailures,
+          leaseCount: leaseIds.length
+        })
+        if (consecutiveFailures >= 3) {
+          console.error(`Lease renewal failed ${consecutiveFailures} consecutive times: ${error.message}`)
+        }
       }
     }, intervalMillis)
   }

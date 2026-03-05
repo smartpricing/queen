@@ -347,24 +347,24 @@ export class Queen {
       logger.warn('Queen.renew', 'No valid lease IDs found for renewal')
       return { success: false, error: 'No valid lease IDs found for renewal' }
     }
-    
+
     logger.log('Queen.renew', { count: leaseIds.length })
 
-    const results = []
-    for (const leaseId of leaseIds) {
+    // Batch renewal: send all lease IDs in parallel for better performance
+    const results = await Promise.all(leaseIds.map(async (leaseId) => {
       try {
         const result = await this.#httpClient.post(`/api/v1/lease/${leaseId}/extend`, {})
-        results.push({
+        logger.log('Queen.renew', { leaseId, success: true })
+        return {
           leaseId,
           success: true,
           newExpiresAt: result.leaseId ? result.newExpiresAt : result.lease_expires_at
-        })
-        logger.log('Queen.renew', { leaseId, success: true })
+        }
       } catch (error) {
-        results.push({ leaseId, success: false, error: error.message })
         logger.error('Queen.renew', { leaseId, error: error.message })
+        return { leaseId, success: false, error: error.message }
       }
-    }
+    }))
 
     logger.log('Queen.renew', { total: results.length, successful: results.filter(r => r.success).length })
     return Array.isArray(messageOrLeaseId) ? results : results[0]

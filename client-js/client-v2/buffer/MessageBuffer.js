@@ -71,15 +71,22 @@ export class MessageBuffer {
 
     // Extract a batch of messages
     const messages = this.#messages.splice(0, batchSize)
-    
+
     // If buffer is now empty, reset state
     if (this.#messages.length === 0) {
       this.#firstMessageTime = null
       this.#flushing = false
-      
+
       if (this.#timer) {
         clearTimeout(this.#timer)
         this.#timer = null
+      }
+    } else {
+      // Messages remain after partial extraction - restart timer
+      // to ensure they get flushed within timeMillis
+      if (!this.#timer) {
+        this.#firstMessageTime = Date.now()
+        this.#startTimer()
       }
     }
 
@@ -117,6 +124,19 @@ export class MessageBuffer {
 
   get firstMessageAge() {
     return this.#firstMessageTime ? Date.now() - this.#firstMessageTime : 0
+  }
+
+  requeue(messages) {
+    // Prepend messages back to the buffer (they were extracted from the front)
+    this.#messages.unshift(...messages)
+    if (!this.#firstMessageTime) {
+      this.#firstMessageTime = Date.now()
+    }
+    this.#flushing = false
+    // Restart timer if not running
+    if (!this.#timer && this.#messages.length > 0) {
+      this.#startTimer()
+    }
   }
 
   cleanup() {

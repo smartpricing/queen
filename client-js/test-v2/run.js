@@ -12,6 +12,7 @@ import * as subscriptionTests from './subscription.js'
 import * as maintenanceTests from './maintenance.js'
 import * as retentionTests from './retention.js'
 import * as bootstrapTests from './bootstrap.js'
+import * as benchmarkTests from './benchmark.js'
 import { LoadBalancer } from '../client-v2/http/LoadBalancer.js';
 
 
@@ -117,7 +118,7 @@ async function main() {
     ]
     
     const aiTests = [
-
+        benchmarkTests
     ]
 
     const allTests = [...humanTests, ...aiTests]
