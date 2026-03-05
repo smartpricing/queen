@@ -187,14 +187,37 @@ export class ConsumerManager {
         try {
           // Process messages
           if (each) {
-            // Process one at a time
+            // Process one at a time, but batch acks for performance
+            const successMessages = []
+            const failedMessages = []
+
             for (const message of messages) {
               if (signal && signal.aborted) break
 
-              await this.#processMessage(message, handler, autoAck, group)
+              try {
+                await handler(message)
+                successMessages.push(message)
+              } catch (error) {
+                failedMessages.push(message)
+                logger.error('ConsumerManager.processMessage', { transactionId: message.transactionId, error: error.message })
+                if (!autoAck) throw error
+              }
               processedCount++
 
               if (limit && processedCount >= limit) break
+            }
+
+            // Batch ack all processed messages in one call instead of per-message
+            if (autoAck) {
+              const context = group ? { group } : {}
+              if (successMessages.length > 0) {
+                await this.#queen.ack(successMessages, true, context)
+                logger.log('ConsumerManager.processMessage', { status: 'batch-acked', count: successMessages.length })
+              }
+              if (failedMessages.length > 0) {
+                await this.#queen.ack(failedMessages, false, context)
+                logger.error('ConsumerManager.processMessage', { status: 'batch-nacked', count: failedMessages.length })
+              }
             }
           } else {
             // Process as batch

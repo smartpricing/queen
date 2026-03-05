@@ -102,6 +102,22 @@ void SharedStateManager::stop() {
     spdlog::info("SharedStateManager: Stopped");
 }
 
+void SharedStateManager::reliable_broadcast(UDPSyncMessageType type, const nlohmann::json& payload,
+                                            int retries, int delay_ms) {
+    if (!running_ || !transport_) return;
+
+    // First broadcast (immediate)
+    transport_->broadcast(type, payload);
+
+    // Additional retransmissions with short delays
+    // This significantly increases delivery probability over unreliable UDP
+    // without adding excessive overhead (2 extra sends at 50ms intervals = 100ms total)
+    for (int i = 0; i < retries && running_; i++) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(delay_ms));
+        transport_->broadcast(type, payload);
+    }
+}
+
 // ============================================================
 // Queue Config Cache
 // ============================================================
@@ -251,16 +267,16 @@ void SharedStateManager::set_queue_config(const std::string& queue, const caches
             {"version", config.version}
         };
         
-        transport_->broadcast(UDPSyncMessageType::QUEUE_CONFIG_SET, payload);
+        reliable_broadcast(UDPSyncMessageType::QUEUE_CONFIG_SET, payload);
     }
 }
 
 void SharedStateManager::delete_queue_config(const std::string& queue) {
     queue_configs_.remove(queue);
-    
+
     if (running_ && transport_) {
         nlohmann::json payload = {{"queue", queue}};
-        transport_->broadcast(UDPSyncMessageType::QUEUE_CONFIG_DELETE, payload);
+        reliable_broadcast(UDPSyncMessageType::QUEUE_CONFIG_DELETE, payload);
     }
 }
 
@@ -720,7 +736,7 @@ void SharedStateManager::set_maintenance_mode(bool enabled) {
             {"enabled", enabled},
             {"ts", now_ms()}
         };
-        transport_->broadcast(UDPSyncMessageType::MAINTENANCE_MODE_SET, payload);
+        reliable_broadcast(UDPSyncMessageType::MAINTENANCE_MODE_SET, payload);
     }
 }
 
@@ -761,7 +777,7 @@ void SharedStateManager::set_pop_maintenance_mode(bool enabled) {
             {"enabled", enabled},
             {"ts", now_ms()}
         };
-        transport_->broadcast(UDPSyncMessageType::POP_MAINTENANCE_MODE_SET, payload);
+        reliable_broadcast(UDPSyncMessageType::POP_MAINTENANCE_MODE_SET, payload);
     }
 }
 

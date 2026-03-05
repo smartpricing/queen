@@ -183,13 +183,26 @@ public:
 
     /**
      * @brief Acquires a connection from the pool.
-     * 
+     *
      * If no connections are available, this function will block the
      * calling thread until one is released.
-     * 
+     *
      * @return PooledConnection RAII wrapper that returns connection on destruction
+     * @throws std::runtime_error if no healthy connection can be acquired after backoff
      */
     PooledConnection acquire();
+
+    /**
+     * @brief Tries to acquire a connection with a timeout.
+     *
+     * Unlike acquire(), this will not block indefinitely. If no connection
+     * becomes available within the timeout, returns nullptr.
+     * Useful to prevent one worker from starving others.
+     *
+     * @param timeout_ms Maximum time to wait in milliseconds
+     * @return PooledConnection, or nullptr if timeout expired
+     */
+    PooledConnection try_acquire(int timeout_ms);
 
     /**
      * @brief Gets current pool size.

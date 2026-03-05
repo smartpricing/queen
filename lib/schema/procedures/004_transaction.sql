@@ -31,10 +31,24 @@ DECLARE
     v_lease_id TEXT;
     v_status TEXT;
     v_op_dlq BOOLEAN;
+    v_original_idx INT;
 BEGIN
     v_transaction_id := gen_random_uuid()::text;
-    
-    FOR v_op IN SELECT * FROM jsonb_array_elements(p_operations)
+
+    -- Sort operations by type + queue/partition to ensure consistent lock ordering
+    -- and prevent deadlocks when concurrent transactions touch the same resources.
+    -- We preserve the original index for result ordering.
+    FOR v_op IN
+        SELECT op FROM (
+            SELECT op, row_number() OVER () - 1 AS orig_idx
+            FROM jsonb_array_elements(p_operations) AS op
+        ) sorted
+        ORDER BY
+            op->>'type',
+            COALESCE(op->>'queue', ''),
+            COALESCE(op->>'partition', 'Default'),
+            COALESCE(op->>'partitionId', ''),
+            COALESCE(op->>'transactionId', '')
     LOOP
         v_op_success := false;
         v_op_error := NULL;

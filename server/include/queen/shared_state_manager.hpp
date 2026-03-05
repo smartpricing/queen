@@ -220,6 +220,20 @@ private:
     void refresh_queue_configs_from_db();
     void refresh_maintenance_mode_from_db();
     void refresh_pop_maintenance_mode_from_db();
+
+    /**
+     * Broadcast a critical message with retries.
+     * For messages like MAINTENANCE_MODE_SET and QUEUE_CONFIG_SET where
+     * delivery is important, retransmit with short delays to increase
+     * the probability of reception over unreliable UDP.
+     *
+     * @param type Message type
+     * @param payload JSON payload
+     * @param retries Number of additional retransmissions (default: 2)
+     * @param delay_ms Delay between retransmissions in ms (default: 50)
+     */
+    void reliable_broadcast(UDPSyncMessageType type, const nlohmann::json& payload,
+                           int retries = 2, int delay_ms = 50);
 };
 
 // Global instance

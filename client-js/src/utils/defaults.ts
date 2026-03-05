@@ -32,7 +32,7 @@ export const QUEUE_DEFAULTS = {
 
 export const CONSUME_DEFAULTS = {
   concurrency: 1,
-  batch: 1,
+  batch: 10,
   autoAck: true,
   wait: true,
   timeoutMillis: 30000,

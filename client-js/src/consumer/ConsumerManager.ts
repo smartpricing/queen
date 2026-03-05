@@ -169,13 +169,36 @@ export class ConsumerManager {
 
         try {
           if (each) {
+            const successMessages: QueenMessage[] = []
+            const failedMessages: QueenMessage[] = []
+
             for (const message of messages) {
               if (signal && signal.aborted) break
 
-              await this.processMessage(message, handler, autoAck, group)
+              try {
+                await handler(message)
+                successMessages.push(message)
+              } catch (error) {
+                failedMessages.push(message)
+                logger.error('ConsumerManager.processMessage', { transactionId: message.transactionId, error: (error as Error).message })
+                if (!autoAck) throw error
+              }
               processedCount++
 
               if (limit && processedCount >= limit) break
+            }
+
+            // Batch ack all processed messages in one call instead of per-message
+            if (autoAck) {
+              const context = group ? { group } : {}
+              if (successMessages.length > 0) {
+                await this.queen.ack(successMessages, true, context)
+                logger.log('ConsumerManager.processMessage', { status: 'batch-acked', count: successMessages.length })
+              }
+              if (failedMessages.length > 0) {
+                await this.queen.ack(failedMessages, false, context)
+                logger.error('ConsumerManager.processMessage', { status: 'batch-nacked', count: failedMessages.length })
+              }
             }
           } else {
             await this.processBatch(messages, handler, autoAck, group)
@@ -217,27 +240,6 @@ export class ConsumerManager {
     }
 
     logger.log('ConsumerManager.worker', { workerId, status: 'stopped', processedCount })
-  }
-
-  private async processMessage(message: QueenMessage, handler: (msgOrMsgs: QueenMessage | QueenMessage[]) => Promise<unknown>, autoAck: boolean, group: string | null): Promise<void> {
-    try {
-      await handler(message)
-
-      if (autoAck) {
-        const context = group ? { group } : {}
-        await this.queen.ack(message, true, context)
-        logger.log('ConsumerManager.processMessage', { transactionId: message.transactionId, status: 'acked' })
-      }
-    } catch (error) {
-      if (autoAck) {
-        const context = group ? { group } : {}
-        await this.queen.ack(message, false, context)
-        logger.error('ConsumerManager.processMessage', { transactionId: message.transactionId, error: (error as Error).message, status: 'nacked' })
-        return
-      }
-      logger.error('ConsumerManager.processMessage', { transactionId: message.transactionId, error: (error as Error).message })
-      throw error
-    }
   }
 
   private async processBatch(messages: QueenMessage[], handler: (msgOrMsgs: QueenMessage | QueenMessage[]) => Promise<unknown>, autoAck: boolean, group: string | null): Promise<void> {

@@ -464,46 +464,92 @@ AsyncDbPool::~AsyncDbPool() {
 }
 
 AsyncDbPool::PooledConnection AsyncDbPool::acquire() {
-    // Try to get a healthy connection, with a limit to prevent infinite loops
-    // When DB is down, trying each connection once is enough (they'll all fail fast)
-    const int MAX_HEALTH_CHECK_ATTEMPTS = static_cast<int>(all_connections_.size());
-    int attempts = 0;
-    
-    while (attempts < MAX_HEALTH_CHECK_ATTEMPTS) {
-        std::unique_lock<std::mutex> lock(mtx_);
+    // Retry with exponential backoff when all connections are unhealthy (DB down).
+    // This prevents callers from failing immediately during brief DB hiccups.
+    const int MAX_BACKOFF_ROUNDS = 5;         // Total rounds of full-pool scans
+    const int INITIAL_BACKOFF_MS = 200;       // Starting backoff between rounds
+    const int MAX_BACKOFF_MS = 5000;          // Maximum backoff between rounds
 
-        // Wait until a connection is available
-        cv_.wait(lock, [this] { return !idle_connections_.empty(); });
+    for (int round = 0; round < MAX_BACKOFF_ROUNDS; round++) {
+        // Try each connection in the pool once per round
+        const int MAX_HEALTH_CHECK_ATTEMPTS = static_cast<int>(all_connections_.size());
+        int attempts = 0;
 
-        // We have the lock, and the queue is not empty
-        PGconn* conn = idle_connections_.front();
-        idle_connections_.pop();
+        while (attempts < MAX_HEALTH_CHECK_ATTEMPTS) {
+            std::unique_lock<std::mutex> lock(mtx_);
 
-        spdlog::debug("[AsyncDbPool] Connection acquired ({} remaining)", 
-                     idle_connections_.size());
+            // Wait until a connection is available
+            cv_.wait(lock, [this] { return !idle_connections_.empty(); });
 
-        // Release the lock before health check to avoid blocking other threads
-        lock.unlock();
+            // We have the lock, and the queue is not empty
+            PGconn* conn = idle_connections_.front();
+            idle_connections_.pop();
 
-        // Proactive health check - catch stale connections before use
-        if (ensureConnectionHealthy(conn)) {
-            // Connection is healthy, return it
-            return PooledConnection(conn, [this](PGconn* returned_conn) {
-                this->release(returned_conn);
-            });
+            spdlog::debug("[AsyncDbPool] Connection acquired ({} remaining)",
+                         idle_connections_.size());
+
+            // Release the lock before health check to avoid blocking other threads
+            lock.unlock();
+
+            // Proactive health check - catch stale connections before use
+            if (ensureConnectionHealthy(conn)) {
+                // Connection is healthy, return it
+                if (round > 0) {
+                    spdlog::info("[AsyncDbPool] Connection recovered after {} backoff round(s)", round);
+                }
+                return PooledConnection(conn, [this](PGconn* returned_conn) {
+                    this->release(returned_conn);
+                });
+            }
+
+            // Connection is unhealthy, return to pool and try next
+            spdlog::debug("[AsyncDbPool] Connection health check failed (round {}, attempt {}/{})",
+                         round + 1, attempts + 1, MAX_HEALTH_CHECK_ATTEMPTS);
+            release(conn);
+            attempts++;
         }
-        
-        // Connection is unhealthy, return to pool and try again
-        spdlog::debug("[AsyncDbPool] Connection health check failed (attempt {}/{}), trying next connection", 
-                     attempts + 1, MAX_HEALTH_CHECK_ATTEMPTS);
-        release(conn);
-        attempts++;
+
+        // All connections unhealthy in this round - backoff before retrying
+        if (round < MAX_BACKOFF_ROUNDS - 1) {
+            int backoff_ms = std::min(INITIAL_BACKOFF_MS * (1 << round), MAX_BACKOFF_MS);
+            spdlog::warn("[AsyncDbPool] All connections unhealthy (round {}/{}), retrying in {}ms...",
+                        round + 1, MAX_BACKOFF_ROUNDS, backoff_ms);
+            std::this_thread::sleep_for(std::chrono::milliseconds(backoff_ms));
+        }
     }
-    
-    // All attempts exhausted - database is likely down
-    spdlog::error("[AsyncDbPool] Failed to acquire healthy connection after {} attempts. Database may be unavailable.", 
-                 MAX_HEALTH_CHECK_ATTEMPTS);
-    throw std::runtime_error("Failed to acquire healthy database connection: all connections unhealthy. Database may be down.");
+
+    // All backoff rounds exhausted - database is down for an extended period
+    spdlog::error("[AsyncDbPool] Failed to acquire healthy connection after {} backoff rounds. Database is unavailable.",
+                 MAX_BACKOFF_ROUNDS);
+    throw std::runtime_error("Failed to acquire healthy database connection: all connections unhealthy after backoff. Database may be down.");
+}
+
+AsyncDbPool::PooledConnection AsyncDbPool::try_acquire(int timeout_ms) {
+    std::unique_lock<std::mutex> lock(mtx_);
+
+    // Wait with timeout for a connection to become available
+    bool available = cv_.wait_for(lock, std::chrono::milliseconds(timeout_ms),
+                                  [this] { return !idle_connections_.empty(); });
+
+    if (!available) {
+        spdlog::warn("[AsyncDbPool] try_acquire timed out after {}ms ({} total connections in use)",
+                    timeout_ms, all_connections_.size());
+        return PooledConnection(nullptr, [](PGconn*) {});
+    }
+
+    PGconn* conn = idle_connections_.front();
+    idle_connections_.pop();
+    lock.unlock();
+
+    if (ensureConnectionHealthy(conn)) {
+        return PooledConnection(conn, [this](PGconn* returned_conn) {
+            this->release(returned_conn);
+        });
+    }
+
+    // Unhealthy - return to pool
+    release(conn);
+    return PooledConnection(nullptr, [](PGconn*) {});
 }
 
 void AsyncDbPool::release(PGconn* conn) {

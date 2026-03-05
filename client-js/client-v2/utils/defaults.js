@@ -32,7 +32,7 @@ export const QUEUE_DEFAULTS = {
 
 export const CONSUME_DEFAULTS = {
   concurrency: 1,                      // Single worker
-  batch: 1,                            // One message at a time
+  batch: 10,                            // 10 messages per pop (reduces round-trips)
   autoAck: true,                       // Client-side auto-ack (NOT sent to server)
   wait: true,                          // Long polling enabled
   timeoutMillis: 30000,                // 30 seconds long poll timeout
