@@ -3,19 +3,39 @@
   "version": "0.12.2",
   "type": "module",
   "description": "High-performance C++ message queue backed by PostgreSQL",
-  "main": "client-v2/index.js",
+  "main": "./dist/index.cjs",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "import": {
+        "types": "./dist/index.d.ts",
+        "default": "./dist/index.js"
+      },
+      "require": {
+        "types": "./dist/index.d.cts",
+        "default": "./dist/index.cjs"
+      }
+    }
+  },
   "scripts": {
+    "build": "tsup",
+    "typecheck": "tsc --noEmit",
     "test": "node test-v2/run.js human"
   },
   "files": [
-    "client-v2/**/*",
-    "test-v2/**/*",
+    "dist/**/*",
     "README.md"
   ],
   "dependencies": {
-    "axios": "^1.12.2",
-    "pg": "^8.16.3",
     "uuid": "^13.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "^25.3.3",
+    "pg": "^8.19.0",
+    "tsup": "^8.4.0",
+    "tsx": "^4.21.0",
+    "typescript": "^5.7.0"
   },
   "engines": {
     "node": ">=22.0.0"

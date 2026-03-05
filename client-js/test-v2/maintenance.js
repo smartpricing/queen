@@ -1,5 +1,4 @@
 import { Queen } from '../client-v2/index.js';
-import axios from 'axios';
 
 export async function test_maintenance_mode(client = null) {
   console.log('🧪 Testing Maintenance Mode with File Buffer\n');
@@ -19,13 +18,13 @@ export async function test_maintenance_mode(client = null) {
   try {
     // 0. Ensure maintenance mode is OFF before starting
     console.log('🧹 Step 0: Ensuring clean state...');
-    await axios.post(`${API_URL}/api/v1/system/maintenance`, { enabled: false });
+    await fetch(`${API_URL}/api/v1/system/maintenance`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ enabled: false }) });
+
+    let initialStatus = await (await fetch(`${API_URL}/api/v1/system/maintenance`)).json();
+    console.log(`   Initial status:`, initialStatus);
     
-    let initialStatus = await axios.get(`${API_URL}/api/v1/system/maintenance`);
-    console.log(`   Initial status:`, initialStatus.data);
-    
-    if (initialStatus.data.bufferedMessages > 0) {
-      console.log(`   ⚠️  Found ${initialStatus.data.bufferedMessages} buffered messages from previous runs`);
+    if (initialStatus.bufferedMessages > 0) {
+      console.log(`   ⚠️  Found ${initialStatus.bufferedMessages} buffered messages from previous runs`);
       console.log('   Waiting for buffer to drain (checking every 2 seconds)...');
       
       // Wait for buffer to drain completely
@@ -34,10 +33,10 @@ export async function test_maintenance_mode(client = null) {
       while (waitTime < maxWait) {
         await sleep(2000);
         waitTime += 2;
-        const status = await axios.get(`${API_URL}/api/v1/system/maintenance`);
-        console.log(`   ${waitTime}s - Buffered: ${status.data.bufferedMessages}`);
-        
-        if (status.data.bufferedMessages === 0) {
+        const status = await (await fetch(`${API_URL}/api/v1/system/maintenance`)).json();
+        console.log(`   ${waitTime}s - Buffered: ${status.bufferedMessages}`);
+
+        if (status.bufferedMessages === 0) {
           console.log('   ✅ Buffer drained completely');
           break;
         }
@@ -128,10 +127,8 @@ export async function test_maintenance_mode(client = null) {
     
     // 4. Enable maintenance mode
     console.log('🔧 Step 5: Enabling MAINTENANCE MODE...');
-    const maintenanceResponse = await axios.post(`${API_URL}/api/v1/system/maintenance`, {
-      enabled: true
-    });
-    console.log(`   Response:`, maintenanceResponse.data);
+    const maintenanceResponse = await (await fetch(`${API_URL}/api/v1/system/maintenance`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ enabled: true }) })).json();
+    console.log(`   Response:`, maintenanceResponse);
     console.log('✅ Maintenance mode enabled\n');
     
     // Wait 2 seconds and check that consumer stops receiving
@@ -157,16 +154,14 @@ export async function test_maintenance_mode(client = null) {
     
     // 6. Check maintenance status
     console.log('📊 Step 8: Checking maintenance status...');
-    const statusResponse = await axios.get(`${API_URL}/api/v1/system/maintenance`);
-    console.log(`   Status:`, statusResponse.data);
+    const statusResponse = await (await fetch(`${API_URL}/api/v1/system/maintenance`)).json();
+    console.log(`   Status:`, statusResponse);
     console.log('');
     
     // 7. Disable maintenance mode
     console.log('✅ Step 9: Disabling MAINTENANCE MODE...');
-    const disableResponse = await axios.post(`${API_URL}/api/v1/system/maintenance`, {
-      enabled: false
-    });
-    console.log(`   Response:`, disableResponse.data);
+    const disableResponse = await (await fetch(`${API_URL}/api/v1/system/maintenance`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ enabled: false }) })).json();
+    console.log(`   Response:`, disableResponse);
     console.log('   (File buffer should start draining to database)\n');
     
     // 8. Wait for messages to resume and stop producer
@@ -226,8 +221,8 @@ export async function test_maintenance_mode(client = null) {
       console.log('   Check /var/lib/queen/buffers/ for remaining files.\n');
       
       // Check buffer status
-      const finalStatus = await axios.get(`${API_URL}/api/v1/system/maintenance`);
-      console.log('   Buffer status:', finalStatus.data);
+      const finalStatus = await (await fetch(`${API_URL}/api/v1/system/maintenance`)).json();
+      console.log('   Buffer status:', finalStatus);
       
       return { 
         success: false, 
