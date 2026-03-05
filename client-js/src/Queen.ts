@@ -334,21 +334,21 @@ export class Queen {
 
     logger.log('Queen.renew', { count: leaseIds.length })
 
-    const results: RenewResult[] = []
-    for (const leaseId of leaseIds) {
+    // Batch renewal: send all lease IDs in parallel for better performance
+    const results: RenewResult[] = await Promise.all(leaseIds.map(async (leaseId) => {
       try {
         const result = await this.httpClient.post(`/api/v1/lease/${leaseId}/extend`, {}) as { leaseId?: string; newExpiresAt?: string; lease_expires_at?: string }
-        results.push({
+        logger.log('Queen.renew', { leaseId, success: true })
+        return {
           leaseId,
           success: true,
           newExpiresAt: result.leaseId ? result.newExpiresAt : result.lease_expires_at
-        })
-        logger.log('Queen.renew', { leaseId, success: true })
+        }
       } catch (error) {
-        results.push({ leaseId, success: false, error: (error as Error).message })
         logger.error('Queen.renew', { leaseId, error: (error as Error).message })
+        return { leaseId, success: false, error: (error as Error).message }
       }
-    }
+    }))
 
     logger.log('Queen.renew', { total: results.length, successful: results.filter(r => r.success).length })
     return Array.isArray(messageOrLeaseId) ? results : results[0]

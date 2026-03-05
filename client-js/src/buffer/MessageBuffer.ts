@@ -76,6 +76,13 @@ export class MessageBuffer {
         clearTimeout(this.timer)
         this.timer = null
       }
+    } else {
+      // Messages remain after partial extraction - restart timer
+      // to ensure they get flushed within timeMillis
+      if (!this.timer) {
+        this.firstMessageTime = Date.now()
+        this.startTimer()
+      }
     }
 
     return messages
@@ -110,6 +117,19 @@ export class MessageBuffer {
 
   get firstMessageAge(): number {
     return this.firstMessageTime ? Date.now() - this.firstMessageTime : 0
+  }
+
+  requeue(messages: FormattedPushItem[]): void {
+    // Prepend messages back to the buffer (they were extracted from the front)
+    this.messages.unshift(...messages)
+    if (!this.firstMessageTime) {
+      this.firstMessageTime = Date.now()
+    }
+    this.flushing = false
+    // Restart timer if not running
+    if (!this.timer && this.messages.length > 0) {
+      this.startTimer()
+    }
   }
 
   cleanup(): void {
