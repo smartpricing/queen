@@ -34,10 +34,12 @@ export class Queen {
     // Create buffer manager
     this.#bufferManager = new BufferManager(this.#httpClient)
 
-    // Setup graceful shutdown
-    this.#setupGracefulShutdown()
+    // Setup graceful shutdown (opt-out via handleSignals: false)
+    if (this.#config.handleSignals) {
+      this.#setupGracefulShutdown()
+    }
     
-    logger.log('Queen.constructor', { status: 'initialized', urls: this.#config.urls.length })
+    logger.log('Queen.constructor', { status: 'initialized', urls: this.#config.urls.length, handleSignals: this.#config.handleSignals })
   }
 
   #normalizeConfig(config) {
@@ -453,6 +455,28 @@ export class Queen {
   // ===========================
   // Graceful Shutdown
   // ===========================
+
+  /**
+   * Register SIGINT/SIGTERM handlers so the client flushes buffers before exit.
+   * Called automatically unless handleSignals is set to false.
+   */
+  enableGracefulShutdown() {
+    if (this.#shutdownHandlers.length > 0) return this
+    this.#setupGracefulShutdown()
+    return this
+  }
+
+  /**
+   * Remove previously registered SIGINT/SIGTERM handlers.
+   * Use this when Queen is embedded in a larger application that manages its own lifecycle.
+   */
+  disableGracefulShutdown() {
+    for (const cleanup of this.#shutdownHandlers) {
+      cleanup()
+    }
+    this.#shutdownHandlers = []
+    return this
+  }
 
   async close() {
     logger.log('Queen.close', 'Starting shutdown')

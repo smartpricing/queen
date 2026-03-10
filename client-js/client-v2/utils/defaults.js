@@ -15,7 +15,8 @@ export const CLIENT_DEFAULTS = {
   enableFailover: true,                // Auto-failover to other servers
   healthRetryAfterMillis: 5000,        // Retry unhealthy backends after 5 seconds
   bearerToken: null,                   // Bearer token for proxy authentication
-  headers: {}                          // Custom headers to include in every request
+  headers: {},                         // Custom headers to include in every request
+  handleSignals: true                  // Register SIGINT/SIGTERM handlers (disable when used as a library)
 }
 
 export const QUEUE_DEFAULTS = {
