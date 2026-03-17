@@ -7,7 +7,7 @@ const connections = 5;
 const batchSize = 1000;
 const maxPartition = 500;
 const workers = 5;
-const duration = 10 * 60 ; // 10 minutes
+const duration = 2 * 60 ; // 10 minutes
 
 // Pre-generate requests array with different partitions
 const requests = [];

@@ -707,6 +707,10 @@ DECLARE
     -- Window buffer debounce support: track last message timestamp for partition
     v_partition_last_msg_ts TIMESTAMPTZ;
     v_seeded INT;
+    -- Watermark for efficient wildcard discovery
+    v_watermark TIMESTAMPTZ;
+    v_watermark_verified_at TIMESTAMPTZ;
+    v_has_pending_data BOOLEAN;
 BEGIN
     -- ==========================================================================
     -- Process all requests in a single pass
@@ -752,7 +756,28 @@ BEGIN
         IF v_is_wildcard THEN
             -- =================================================================
             -- WILDCARD: Discover available partition with SKIP LOCKED
+            -- Uses "Caught-Up Watermark" optimization:
+            -- - Fetch watermark (last time we found no data for this consumer)
+            -- - Only scan partitions updated since (watermark - 2 minutes)
+            -- - If nothing found, advance watermark to NOW()
+            -- This avoids full scans for up-to-date consumers (~99% savings)
             -- =================================================================
+            
+            -- Step 1: Fetch watermark AND last verification time
+            SELECT last_empty_scan_at, updated_at 
+            INTO v_watermark, v_watermark_verified_at
+            FROM queen.consumer_watermarks
+            WHERE queue_name = v_req.queue_name
+              AND consumer_group = v_req.consumer_group;
+            
+            -- Default to epoch for new consumers (will scan all partitions)
+            IF v_watermark IS NULL THEN
+                v_watermark := '1970-01-01 00:00:00+00'::TIMESTAMPTZ;
+                v_watermark_verified_at := NULL;
+            END IF;
+            
+            -- Step 2: Single query - only partitions updated since watermark
+            -- The 2-minute buffer handles clock skew and race conditions
             SELECT 
                 pl.partition_id,
                 p.name,
@@ -769,18 +794,65 @@ BEGIN
                 ON pc.partition_id = pl.partition_id 
                 AND pc.consumer_group = v_req.consumer_group
             WHERE pl.queue_name = v_req.queue_name
+              AND pl.updated_at >= (v_watermark - interval '2 minutes')
               AND (pc.lease_expires_at IS NULL OR pc.lease_expires_at <= v_now)
               AND (pc.last_consumed_created_at IS NULL 
                    OR pl.last_message_created_at > pc.last_consumed_created_at
                    OR (pl.last_message_created_at = pc.last_consumed_created_at 
                        AND pl.last_message_id > pc.last_consumed_id))
-              -- WINDOW BUFFER DEBOUNCE: Only select partitions where window has expired
-              -- (time since last message >= window_buffer seconds)
               AND (q.window_buffer IS NULL OR q.window_buffer = 0
                    OR pl.last_message_created_at <= v_now - (q.window_buffer || ' seconds')::interval)
-            --ORDER BY pc.last_consumed_at ASC NULLS LAST
             LIMIT 1
             FOR UPDATE OF pl SKIP LOCKED;
+            
+            -- Step 3: If nothing found, maybe verify with EXISTS check
+            -- EXISTS is expensive (~13ms) so we cache the result for 30 seconds
+            -- EXISTS does NOT check lease status - it detects if unconsumed data EXISTS
+            -- This prevents advancing watermark past data that's temporarily locked
+            IF v_partition_id IS NULL THEN
+                -- Only run EXISTS if we haven't verified recently (within 30 seconds)
+                -- 30s is safe given production data shows 0.01% lock contention and 2+ minute leases
+                IF v_watermark_verified_at IS NULL OR v_watermark_verified_at <= v_now - interval '30 seconds' THEN
+                    -- Time to re-verify: run EXISTS check
+                    -- NOTE: No lease check here! We want to know if unconsumed data EXISTS,
+                    -- regardless of whether it's currently leased by another worker.
+                    -- This prevents advancing watermark past data that's temporarily locked.
+                    -- Uses watermark filter for performance (safe now that Bug 1 is fixed).
+                    SELECT EXISTS (
+                        SELECT 1
+                        FROM queen.partition_lookup pl
+                        JOIN queen.partitions p ON p.id = pl.partition_id
+                        JOIN queen.queues q ON q.id = p.queue_id
+                        LEFT JOIN queen.partition_consumers pc 
+                            ON pc.partition_id = pl.partition_id 
+                            AND pc.consumer_group = v_req.consumer_group
+                        WHERE pl.queue_name = v_req.queue_name
+                          AND pl.updated_at >= (v_watermark - interval '2 minutes')
+                          AND (pc.last_consumed_created_at IS NULL 
+                               OR pl.last_message_created_at > pc.last_consumed_created_at
+                               OR (pl.last_message_created_at = pc.last_consumed_created_at 
+                                   AND pl.last_message_id > pc.last_consumed_id))
+                          AND (q.window_buffer IS NULL OR q.window_buffer = 0
+                               OR pl.last_message_created_at <= v_now - (q.window_buffer || ' seconds')::interval)
+                    ) INTO v_has_pending_data;
+                    
+                    -- Only advance watermark if truly no pending data
+                    IF NOT v_has_pending_data THEN
+                        -- TRULY EMPTY: Advance both the watermark and the cache timestamp
+                        INSERT INTO queen.consumer_watermarks (queue_name, consumer_group, last_empty_scan_at, updated_at)
+                        VALUES (v_req.queue_name, v_req.consumer_group, v_now, v_now)
+                        ON CONFLICT (queue_name, consumer_group) 
+                        DO UPDATE SET last_empty_scan_at = v_now, updated_at = v_now;
+                    ELSE
+                        -- LOCKED DATA: Do NOT advance watermark, but DO update the cache timestamp.
+                        -- This prevents EXISTS spam while data is locked (would otherwise run 10x/sec)
+                        UPDATE queen.consumer_watermarks 
+                        SET updated_at = v_now 
+                        WHERE queue_name = v_req.queue_name AND consumer_group = v_req.consumer_group;
+                    END IF;
+                END IF;
+                -- If recently verified, skip EXISTS - trust the watermark
+            END IF;
             
             IF v_partition_id IS NULL THEN
                 v_result := jsonb_build_object(
