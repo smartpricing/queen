@@ -110,6 +110,19 @@ CREATE TABLE IF NOT EXISTS queen.consumer_groups_metadata (
 CREATE INDEX IF NOT EXISTS idx_consumer_groups_metadata_lookup 
 ON queen.consumer_groups_metadata(consumer_group, queue_name, namespace, task);
 
+-- Watermark tracking for efficient wildcard POP discovery
+-- Tracks the timestamp of the last "empty scan" per (queue, consumer_group)
+-- When a consumer finds no pending data, we update their watermark to NOW()
+-- On next POP, we only scan partitions updated since the watermark
+-- This avoids expensive full scans for up-to-date consumers
+CREATE TABLE IF NOT EXISTS queen.consumer_watermarks (
+    queue_name VARCHAR(255) NOT NULL,
+    consumer_group VARCHAR(255) NOT NULL DEFAULT '__QUEUE_MODE__',
+    last_empty_scan_at TIMESTAMPTZ NOT NULL DEFAULT '1970-01-01 00:00:00+00',
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    PRIMARY KEY (queue_name, consumer_group)
+);
+
 CREATE TABLE IF NOT EXISTS queen.messages_consumed (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     partition_id UUID REFERENCES queen.partitions(id) ON DELETE CASCADE,
