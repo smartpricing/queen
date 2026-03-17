@@ -778,7 +778,7 @@ BEGIN
               -- (time since last message >= window_buffer seconds)
               AND (q.window_buffer IS NULL OR q.window_buffer = 0
                    OR pl.last_message_created_at <= v_now - (q.window_buffer || ' seconds')::interval)
-            ORDER BY pc.last_consumed_at ASC NULLS LAST
+            --ORDER BY pc.last_consumed_at ASC NULLS LAST
             LIMIT 1
             FOR UPDATE OF pl SKIP LOCKED;
             
