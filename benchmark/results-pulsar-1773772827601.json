@@ -1,0 +1,164 @@
+{
+  "system": "Apache Pulsar",
+  "timestamp": "2026-03-17T18:39:00.954Z",
+  "config": {
+    "partitions": 5000,
+    "batchingEnabled": false,
+    "syncWrites": true,
+    "messageSize": 256
+  },
+  "benchmarks": {
+    "latency": {
+      "name": "Pulsar - Latency",
+      "duration": {
+        "ms": 16902.606125,
+        "formatted": "16.90s"
+      },
+      "messages": {
+        "sent": 1000,
+        "received": 0,
+        "errors": 0
+      },
+      "throughput": {
+        "messagesPerSecond": 59,
+        "mbPerSecond": "0.01"
+      },
+      "latency": {
+        "min": "3.287",
+        "max": "40.790",
+        "mean": "6.015",
+        "p50": "5.571",
+        "p75": "6.747",
+        "p90": "7.739",
+        "p95": "8.623",
+        "p99": "12.967",
+        "p999": "36.447",
+        "unit": "ms"
+      }
+    },
+    "throughput": {
+      "name": "Pulsar - Throughput",
+      "duration": {
+        "ms": 10022.548875,
+        "formatted": "10.02s"
+      },
+      "messages": {
+        "sent": 199040,
+        "received": 0,
+        "errors": 0
+      },
+      "throughput": {
+        "messagesPerSecond": 19859,
+        "mbPerSecond": "4.60"
+      },
+      "latency": {
+        "min": "1.113",
+        "max": "117.422",
+        "mean": "4.494",
+        "p50": "3.825",
+        "p75": "4.903",
+        "p90": "6.695",
+        "p95": "8.551",
+        "p99": "18.527",
+        "p999": "47.263",
+        "unit": "ms"
+      }
+    },
+    "partitionFanout": {
+      "name": "Pulsar - Partition Fanout",
+      "duration": {
+        "ms": 10801.966416,
+        "formatted": "10.80s"
+      },
+      "messages": {
+        "sent": 679,
+        "received": 0,
+        "errors": 0
+      },
+      "throughput": {
+        "messagesPerSecond": 63,
+        "mbPerSecond": "0.01"
+      },
+      "latency": {
+        "min": "2.723",
+        "max": "2876.218",
+        "mean": "14.740",
+        "p50": "5.011",
+        "p75": "7.791",
+        "p90": "16.039",
+        "p95": "25.279",
+        "p99": "57.343",
+        "p999": "2877.439",
+        "unit": "ms"
+      }
+    },
+    "consumer": {
+      "name": "Pulsar - Consumer",
+      "duration": {
+        "ms": 662.49875,
+        "formatted": "0.66s"
+      },
+      "messages": {
+        "sent": 0,
+        "received": 2636,
+        "errors": 0
+      },
+      "throughput": {
+        "messagesPerSecond": 0,
+        "mbPerSecond": "0.00"
+      },
+      "latency": {
+        "min": "101.868",
+        "max": "133.908",
+        "mean": "113.558",
+        "p50": "113.919",
+        "p75": "116.863",
+        "p90": "125.183",
+        "p95": "132.735",
+        "p99": "134.015",
+        "p999": "134.015",
+        "unit": "ms"
+      }
+    }
+  },
+  "dockerMetrics": {
+    "containers": {
+      "pulsar-broker": {
+        "cpu": {
+          "min": 12.08,
+          "max": 413.56,
+          "avg": 128.12,
+          "p95": 403.04
+        },
+        "memoryPercent": {
+          "min": 56.81,
+          "max": 62.85,
+          "avg": 58.73,
+          "p95": 60.95
+        },
+        "memoryMB": {
+          "min": 4654.08,
+          "max": 5148.67,
+          "avg": 4811.09,
+          "p95": 4993.02
+        }
+      }
+    },
+    "combined": {
+      "cpu": {
+        "min": 12.08,
+        "max": 413.56,
+        "avg": 129.65,
+        "p95": 403.04
+      },
+      "memoryMB": {
+        "min": 4654.08,
+        "max": 9590.78,
+        "avg": 4868.36,
+        "p95": 5003.26
+      }
+    },
+    "sampleCount": 85,
+    "durationMs": 84637
+  }
+}

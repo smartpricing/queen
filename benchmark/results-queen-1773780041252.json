@@ -1,0 +1,183 @@
+{
+  "system": "Queen MQ",
+  "timestamp": "2026-03-17T20:34:43.629Z",
+  "config": {
+    "partitions": 10000,
+    "lingerMs": 0,
+    "messageSize": 256
+  },
+  "benchmarks": {
+    "latency": {
+      "name": "Queen - Latency",
+      "duration": {
+        "ms": 140308.304916,
+        "formatted": "140.31s"
+      },
+      "messages": {
+        "sent": 6000,
+        "received": 0,
+        "errors": 0
+      },
+      "throughput": {
+        "messagesPerSecond": 43,
+        "mbPerSecond": "0.01"
+      },
+      "latency": {
+        "min": "4.102",
+        "max": "126.701",
+        "mean": "12.444",
+        "p50": "12.351",
+        "p75": "13.567",
+        "p90": "14.903",
+        "p95": "16.007",
+        "p99": "24.159",
+        "p999": "76.607",
+        "unit": "ms"
+      }
+    },
+    "throughput": {
+      "name": "Queen - Throughput",
+      "duration": {
+        "ms": 60013.057791,
+        "formatted": "60.01s"
+      },
+      "messages": {
+        "sent": 286910,
+        "received": 0,
+        "errors": 0
+      },
+      "throughput": {
+        "messagesPerSecond": 4781,
+        "mbPerSecond": "1.11"
+      },
+      "latency": {
+        "min": "7.157",
+        "max": "254.464",
+        "mean": "20.282",
+        "p50": "18.159",
+        "p75": "21.055",
+        "p90": "26.319",
+        "p95": "37.279",
+        "p99": "52.575",
+        "p999": "148.863",
+        "unit": "ms"
+      }
+    },
+    "partitionFanout": {
+      "name": "Queen - Partition Fanout",
+      "duration": {
+        "ms": 60003.725334,
+        "formatted": "60.00s"
+      },
+      "messages": {
+        "sent": 30583,
+        "received": 0,
+        "errors": 0
+      },
+      "throughput": {
+        "messagesPerSecond": 510,
+        "mbPerSecond": "0.12"
+      },
+      "latency": {
+        "min": "3.183",
+        "max": "252.348",
+        "mean": "8.970",
+        "p50": "7.603",
+        "p75": "10.255",
+        "p90": "12.159",
+        "p95": "13.487",
+        "p99": "30.863",
+        "p999": "94.527",
+        "unit": "ms"
+      }
+    },
+    "consumer": {
+      "name": "Queen - Consumer",
+      "duration": {
+        "ms": 97244.323458,
+        "formatted": "97.24s"
+      },
+      "messages": {
+        "sent": 0,
+        "received": 128086,
+        "errors": 0
+      },
+      "throughput": {
+        "messagesPerSecond": 0,
+        "mbPerSecond": "0.00"
+      },
+      "latency": {
+        "min": "6.069",
+        "max": "3378.379",
+        "mean": "237.908",
+        "p50": "220.543",
+        "p75": "238.591",
+        "p90": "265.215",
+        "p95": "285.183",
+        "p99": "425.471",
+        "p999": "3319.807",
+        "unit": "ms"
+      }
+    }
+  },
+  "dockerMetrics": {
+    "containers": {
+      "queen-postgres": {
+        "cpu": {
+          "min": 23.39,
+          "max": 154.37,
+          "avg": 36.95,
+          "p95": 60.23
+        },
+        "memoryPercent": {
+          "min": 9.53,
+          "max": 18.87,
+          "avg": 14.48,
+          "p95": 18.76
+        },
+        "memoryMB": {
+          "min": 390.5,
+          "max": 773,
+          "avg": 592.95,
+          "p95": 768.2
+        }
+      },
+      "queen-server": {
+        "cpu": {
+          "min": 0,
+          "max": 65.04,
+          "avg": 17.18,
+          "p95": 55.08
+        },
+        "memoryPercent": {
+          "min": 0,
+          "max": 0.9,
+          "avg": 0.55,
+          "p95": 0.72
+        },
+        "memoryMB": {
+          "min": 0,
+          "max": 36.83,
+          "avg": 22.35,
+          "p95": 29.68
+        }
+      }
+    },
+    "combined": {
+      "cpu": {
+        "min": 26.1,
+        "max": 184.55,
+        "avg": 54.6,
+        "p95": 103.01
+      },
+      "memoryMB": {
+        "min": 410.06,
+        "max": 1559.39,
+        "avg": 620.54,
+        "p95": 793.5
+      }
+    },
+    "sampleCount": 710,
+    "durationMs": 354928
+  }
+}

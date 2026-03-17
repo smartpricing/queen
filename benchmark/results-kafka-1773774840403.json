@@ -1,0 +1,164 @@
+{
+  "system": "Apache Kafka",
+  "timestamp": "2026-03-17T19:10:23.466Z",
+  "config": {
+    "partitions": 5000,
+    "lingerMs": 0,
+    "acks": -1,
+    "messageSize": 256
+  },
+  "benchmarks": {
+    "latency": {
+      "name": "Kafka - Latency",
+      "duration": {
+        "ms": 79207.518917,
+        "formatted": "79.21s"
+      },
+      "messages": {
+        "sent": 6000,
+        "received": 0,
+        "errors": 0
+      },
+      "throughput": {
+        "messagesPerSecond": 76,
+        "mbPerSecond": "0.02"
+      },
+      "latency": {
+        "min": "0.263",
+        "max": "4788.555",
+        "mean": "2.963",
+        "p50": "1.939",
+        "p75": "2.597",
+        "p90": "3.187",
+        "p95": "3.603",
+        "p99": "4.843",
+        "p999": "15.839",
+        "unit": "ms"
+      }
+    },
+    "throughput": {
+      "name": "Kafka - Throughput",
+      "duration": {
+        "ms": 60000.305625,
+        "formatted": "60.00s"
+      },
+      "messages": {
+        "sent": 823440,
+        "received": 0,
+        "errors": 0
+      },
+      "throughput": {
+        "messagesPerSecond": 13724,
+        "mbPerSecond": "3.18"
+      },
+      "latency": {
+        "min": "0.394",
+        "max": "1069.268",
+        "mean": "6.077",
+        "p50": "4.007",
+        "p75": "4.831",
+        "p90": "7.343",
+        "p95": "8.359",
+        "p99": "15.127",
+        "p999": "379.391",
+        "unit": "ms"
+      }
+    },
+    "partitionFanout": {
+      "name": "Kafka - Partition Fanout",
+      "duration": {
+        "ms": 59999.364625,
+        "formatted": "60.00s"
+      },
+      "messages": {
+        "sent": 28591,
+        "received": 0,
+        "errors": 0
+      },
+      "throughput": {
+        "messagesPerSecond": 477,
+        "mbPerSecond": "0.11"
+      },
+      "latency": {
+        "min": "0.149",
+        "max": "42.891",
+        "mean": "0.836",
+        "p50": "0.784",
+        "p75": "1.038",
+        "p90": "1.269",
+        "p95": "1.403",
+        "p99": "1.965",
+        "p999": "8.951",
+        "unit": "ms"
+      }
+    },
+    "consumer": {
+      "name": "Kafka - Consumer",
+      "duration": {
+        "ms": 17553.885417,
+        "formatted": "17.55s"
+      },
+      "messages": {
+        "sent": 0,
+        "received": 858031,
+        "errors": 0
+      },
+      "throughput": {
+        "messagesPerSecond": 0,
+        "mbPerSecond": "0.00"
+      },
+      "latency": {
+        "min": "0.003",
+        "max": "0.507",
+        "mean": "0.024",
+        "p50": "0.021",
+        "p75": "0.023",
+        "p90": "0.026",
+        "p95": "0.029",
+        "p99": "0.090",
+        "p999": "0.222",
+        "unit": "ms"
+      }
+    }
+  },
+  "dockerMetrics": {
+    "containers": {
+      "kafka-broker": {
+        "cpu": {
+          "min": 1.76,
+          "max": 473.81,
+          "avg": 84.6,
+          "p95": 405.1
+        },
+        "memoryPercent": {
+          "min": 7.54,
+          "max": 99.99,
+          "avg": 33.46,
+          "p95": 83.42
+        },
+        "memoryMB": {
+          "min": 617.9,
+          "max": 8190.98,
+          "avg": 2741.2,
+          "p95": 6834.18
+        }
+      }
+    },
+    "combined": {
+      "cpu": {
+        "min": 1.76,
+        "max": 473.81,
+        "avg": 85.4,
+        "p95": 405.1
+      },
+      "memoryMB": {
+        "min": 617.9,
+        "max": 8190.98,
+        "avg": 2766.94,
+        "p95": 6834.18
+      }
+    },
+    "sampleCount": 215,
+    "durationMs": 214199
+  }
+}

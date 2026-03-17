@@ -1,0 +1,42 @@
+version: '3.8'
+
+# Apache Pulsar Benchmark Stack (Standalone mode)
+# Resource limits: 4 cores, 8GB RAM total
+
+services:
+  pulsar:
+    image: apachepulsar/pulsar:3.2.0
+    container_name: pulsar-broker
+    command: bin/pulsar standalone
+    environment:
+      # JVM settings
+      PULSAR_MEM: "-Xms4g -Xmx4g -XX:MaxDirectMemorySize=2g"
+      
+      # Standalone mode optimizations
+      PULSAR_STANDALONE_USE_ZOOKEEPER: "false"
+    ports:
+      - "6650:6650"   # Binary protocol
+      - "8080:8080"   # HTTP admin
+    volumes:
+      - pulsar_data:/pulsar/data
+      - ./pulsar-standalone.conf:/pulsar/conf/standalone.conf:ro
+    deploy:
+      resources:
+        limits:
+          cpus: '4'
+          memory: 8G
+    healthcheck:
+      test: ["CMD-SHELL", "bin/pulsar-admin brokers healthcheck || exit 1"]
+      interval: 10s
+      timeout: 10s
+      retries: 10
+      start_period: 60s
+    networks:
+      - pulsar-net
+
+volumes:
+  pulsar_data:
+
+networks:
+  pulsar-net:
+    driver: bridge

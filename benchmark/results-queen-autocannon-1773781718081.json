@@ -1,0 +1,30 @@
+{
+  "system": "Queen MQ (Autocannon)",
+  "timestamp": "2026-03-17T21:08:38.081Z",
+  "config": {
+    "partitions": 10000,
+    "workers": 10,
+    "connectionsPerWorker": 50,
+    "totalConnections": 500,
+    "messagesPerRequest": 10,
+    "messageSize": 256,
+    "duration": 60
+  },
+  "results": {
+    "duration": 60,
+    "requests": 4568,
+    "totalMessages": 45680,
+    "requestsPerSecond": 76,
+    "messagesPerSecond": 762,
+    "latency": {
+      "mean": 1495.2220000000002,
+      "p50": 573.4,
+      "p90": 4158.5,
+      "p99": 7665.6,
+      "max": 9990
+    },
+    "errors": 2515,
+    "non2xx": 0,
+    "timeouts": 2515
+  }
+}

@@ -1,0 +1,33 @@
+{
+  "name": "queen-kafka-pulsar-benchmark",
+  "version": "1.0.0",
+  "description": "Benchmark comparing Queen MQ, Apache Kafka, and Apache Pulsar",
+  "type": "module",
+  "scripts": {
+    "start:queen": "docker compose -f docker-compose.queen.yml up -d",
+    "start:kafka": "docker compose -f docker-compose.kafka.yml up -d",
+    "start:pulsar": "docker compose -f docker-compose.pulsar.yml up -d",
+    "stop:queen": "docker compose -f docker-compose.queen.yml down -v",
+    "stop:kafka": "docker compose -f docker-compose.kafka.yml down -v",
+    "stop:pulsar": "docker compose -f docker-compose.pulsar.yml down -v",
+    "setup:kafka": "node scripts/setup-kafka.js",
+    "setup:pulsar": "node scripts/setup-pulsar.js",
+    "setup:queen": "node scripts/setup-queen.js",
+    "bench:queen": "node benchmark-queen.js",
+    "bench:kafka": "node benchmark-kafka.js",
+    "bench:pulsar": "node benchmark-pulsar.js",
+    "bench:all": "node run-all-benchmarks.js",
+    "report": "node run-all-benchmarks.js report"
+  },
+  "dependencies": {
+    "autocannon": "^8.0.0",
+    "cli-table3": "^0.6.3",
+    "hdr-histogram-js": "^3.0.0",
+    "kafkajs": "^2.2.4",
+    "pulsar-client": "^1.10.0",
+    "queen-mq": "^0.12.2"
+  },
+  "engines": {
+    "node": ">=22.0.0"
+  }
+}

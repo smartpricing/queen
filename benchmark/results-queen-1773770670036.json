@@ -1,0 +1,123 @@
+{
+  "system": "Queen MQ",
+  "timestamp": "2026-03-17T18:03:47.267Z",
+  "config": {
+    "partitions": 5000,
+    "lingerMs": 0,
+    "messageSize": 256
+  },
+  "benchmarks": {
+    "latency": {
+      "name": "Queen - Latency",
+      "duration": {
+        "ms": 21602.325917,
+        "formatted": "21.60s"
+      },
+      "messages": {
+        "sent": 1000,
+        "received": 0,
+        "errors": 0
+      },
+      "throughput": {
+        "messagesPerSecond": 46,
+        "mbPerSecond": "0.01"
+      },
+      "latency": {
+        "min": "4.553",
+        "max": "54.744",
+        "mean": "10.693",
+        "p50": "11.063",
+        "p75": "12.415",
+        "p90": "13.663",
+        "p95": "14.855",
+        "p99": "26.975",
+        "p999": "52.991",
+        "unit": "ms"
+      }
+    },
+    "throughput": {
+      "name": "Queen - Throughput",
+      "duration": {
+        "ms": 10009.281292,
+        "formatted": "10.01s"
+      },
+      "messages": {
+        "sent": 32730,
+        "received": 0,
+        "errors": 0
+      },
+      "throughput": {
+        "messagesPerSecond": 3270,
+        "mbPerSecond": "0.76"
+      },
+      "latency": {
+        "min": "4.132",
+        "max": "285.976",
+        "mean": "25.104",
+        "p50": "14.831",
+        "p75": "23.791",
+        "p90": "65.983",
+        "p95": "77.823",
+        "p99": "95.551",
+        "p999": "183.423",
+        "unit": "ms"
+      }
+    },
+    "partitionFanout": {
+      "name": "Queen - Partition Fanout",
+      "duration": {
+        "ms": 10017.367041,
+        "formatted": "10.02s"
+      },
+      "messages": {
+        "sent": 6016,
+        "received": 0,
+        "errors": 0
+      },
+      "throughput": {
+        "messagesPerSecond": 601,
+        "mbPerSecond": "0.14"
+      },
+      "latency": {
+        "min": "1.922",
+        "max": "50.441",
+        "mean": "6.465",
+        "p50": "6.415",
+        "p75": "7.511",
+        "p90": "8.351",
+        "p95": "8.951",
+        "p99": "13.287",
+        "p999": "45.215",
+        "unit": "ms"
+      }
+    },
+    "consumer": {
+      "name": "Queen - Consumer",
+      "duration": {
+        "ms": 1117.18425,
+        "formatted": "1.12s"
+      },
+      "messages": {
+        "sent": 0,
+        "received": 0,
+        "errors": 0
+      },
+      "throughput": {
+        "messagesPerSecond": 0,
+        "mbPerSecond": "0.00"
+      },
+      "latency": {
+        "min": "9007199254740.990",
+        "max": "0.000",
+        "mean": "0.000",
+        "p50": "0.000",
+        "p75": "0.000",
+        "p90": "0.000",
+        "p95": "0.000",
+        "p99": "0.000",
+        "p999": "0.000",
+        "unit": "ms"
+      }
+    }
+  }
+}

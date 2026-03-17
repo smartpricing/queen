@@ -1,0 +1,70 @@
+version: '3.8'
+
+# Apache Kafka Benchmark Stack (KRaft mode - no ZooKeeper)
+# Resource limits: 4 cores, 8GB RAM total for broker
+
+services:
+  kafka:
+    image: apache/kafka:3.7.0
+    container_name: kafka-broker
+    environment:
+      # KRaft settings
+      KAFKA_NODE_ID: 1
+      KAFKA_PROCESS_ROLES: broker,controller
+      KAFKA_LISTENERS: PLAINTEXT://:9092,CONTROLLER://:9093
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://localhost:9092
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka:9093
+      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+      
+      # Cluster settings
+      CLUSTER_ID: 'benchmark-cluster-001'
+      
+      # Performance tuning for benchmark
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_NUM_PARTITIONS: 1
+      KAFKA_DEFAULT_REPLICATION_FACTOR: 1
+      
+      # Durability settings (fair comparison)
+      KAFKA_ACKS: all
+      KAFKA_MIN_INSYNC_REPLICAS: 1
+      
+      # Memory settings
+      KAFKA_HEAP_OPTS: "-Xmx4G -Xms4G"
+      
+      # Log settings
+      KAFKA_LOG_RETENTION_HOURS: 1
+      KAFKA_LOG_SEGMENT_BYTES: 1073741824
+      KAFKA_LOG_RETENTION_CHECK_INTERVAL_MS: 300000
+      
+      # Allow many partitions
+      KAFKA_NUM_IO_THREADS: 8
+      KAFKA_NUM_NETWORK_THREADS: 4
+      KAFKA_NUM_REPLICA_FETCHERS: 2
+    ports:
+      - "9092:9092"
+    volumes:
+      - kafka_data:/var/lib/kafka/data
+    deploy:
+      resources:
+        limits:
+          cpus: '4'
+          memory: 8G
+    healthcheck:
+      test: ["CMD-SHELL", "/opt/kafka/bin/kafka-broker-api-versions.sh --bootstrap-server localhost:9092 || exit 1"]
+      interval: 10s
+      timeout: 10s
+      retries: 10
+      start_period: 30s
+    networks:
+      - kafka-net
+
+volumes:
+  kafka_data:
+
+networks:
+  kafka-net:
+    driver: bridge
