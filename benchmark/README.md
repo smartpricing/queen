@@ -33,7 +33,7 @@ This workload pattern is typical for:
 
 #### Throughput at 10K Partitions (Queen vs Pulsar)
 
-![Throughput 10K Chart](https://quickchart.io/chart?c=%7Btype%3A%27bar%27%2Cdata%3A%7Blabels%3A%5B%27Queen%20(10K)%27%2C%27Pulsar%20(10K)%27%2C%27Kafka%20(5K)%27%5D%2Cdatasets%3A%5B%7Blabel%3A%27Throughput%20(msg%2Fs)%27%2Cdata%3A%5B5824%2C10564%2C13724%5D%2CbackgroundColor%3A%5B%27rgba(33%2C150%2C243%2C0.7)%27%2C%27rgba(156%2C39%2C176%2C0.7)%27%2C%27rgba(255%2C152%2C0%2C0.7)%27%5D%2CborderColor%3A%5B%27rgb(33%2C150%2C243)%27%2C%27rgb(156%2C39%2C176)%27%2C%27rgb(255%2C152%2C0)%27%5D%2CborderWidth%3A2%7D%5D%7D%2Coptions%3A%7Bplugins%3A%7Btitle%3A%7Bdisplay%3Atrue%2Ctext%3A%27Throughput%20Comparison%20(no%20batching)%27%7D%7D%2Cscales%3A%7By%3A%7BbeginAtZero%3Atrue%2Ctitle%3A%7Bdisplay%3Atrue%2Ctext%3A%27msg%2Fs%27%7D%7D%7D%7D%7D&w=600&h=300&bkg=white)
+![Throughput 10K Chart](https://quickchart.io/chart?c=%7Btype%3A%27bar%27%2Cdata%3A%7Blabels%3A%5B%27Queen%20(10K)%27%2C%27Pulsar%20(10K)%27%2C%27Kafka%20(5K)%27%5D%2Cdatasets%3A%5B%7Blabel%3A%27Throughput%20(msg%2Fs)%27%2Cdata%3A%5B5824%2C10564%2C13724%5D%2CbackgroundColor%3A%5B%27rgba(33%2C150%2C243%2C0.7)%27%2C%27rgba(156%2C39%2C176%2C0.7)%27%2C%27rgba(255%2C152%2C0%2C0.7)%27%5D%2CborderColor%3A%5B%27rgb(33%2C150%2C243)%27%2C%27rgb(156%2C39%2C176)%27%2C%27rgb(255%2C152%2C0)%27%5D%2CborderWidth%3A2%7D%5D%7D%2Coptions%3A%7Bplugins%3A%7Btitle%3A%7Bdisplay%3Atrue%2Ctext%3A%27Throughput%20Comparison%20(no%20batching)%27%7D%7D%2Cscales%3A%7By%3A%7Bmin%3A0%2CbeginAtZero%3Atrue%2Ctitle%3A%7Bdisplay%3Atrue%2Ctext%3A%27msg%2Fs%27%7D%7D%7D%7D%7D&w=600&h=300&bkg=white)
 
 | System | Partitions | Throughput | p99 Latency |
 |--------|------------|------------|-------------|
@@ -45,7 +45,7 @@ This workload pattern is typical for:
 
 #### Partition Fanout at 10K Partitions
 
-![Fanout 10K Chart](https://quickchart.io/chart?c=%7Btype%3A%27bar%27%2Cdata%3A%7Blabels%3A%5B%27Queen%20(10K)%27%2C%27Pulsar%20(10K)%27%2C%27Kafka%20(5K)%27%5D%2Cdatasets%3A%5B%7Blabel%3A%27Fanout%20(msg%2Fs)%27%2Cdata%3A%5B550%2C558%2C477%5D%2CbackgroundColor%3A%5B%27rgba(33%2C150%2C243%2C0.7)%27%2C%27rgba(156%2C39%2C176%2C0.7)%27%2C%27rgba(255%2C152%2C0%2C0.7)%27%5D%2CborderColor%3A%5B%27rgb(33%2C150%2C243)%27%2C%27rgb(156%2C39%2C176)%27%2C%27rgb(255%2C152%2C0)%27%5D%2CborderWidth%3A2%7D%5D%7D%2Coptions%3A%7Bplugins%3A%7Btitle%3A%7Bdisplay%3Atrue%2Ctext%3A%27Partition%20Fanout%20Throughput%27%7D%7D%2Cscales%3A%7By%3A%7BbeginAtZero%3Atrue%2Ctitle%3A%7Bdisplay%3Atrue%2Ctext%3A%27msg%2Fs%27%7D%7D%7D%7D%7D&w=600&h=300&bkg=white)
+![Fanout 10K Chart](https://quickchart.io/chart?c=%7Btype%3A%27bar%27%2Cdata%3A%7Blabels%3A%5B%27Queen%20(10K)%27%2C%27Pulsar%20(10K)%27%2C%27Kafka%20(5K)%27%5D%2Cdatasets%3A%5B%7Blabel%3A%27Fanout%20(msg%2Fs)%27%2Cdata%3A%5B550%2C558%2C477%5D%2CbackgroundColor%3A%5B%27rgba(33%2C150%2C243%2C0.7)%27%2C%27rgba(156%2C39%2C176%2C0.7)%27%2C%27rgba(255%2C152%2C0%2C0.7)%27%5D%2CborderColor%3A%5B%27rgb(33%2C150%2C243)%27%2C%27rgb(156%2C39%2C176)%27%2C%27rgb(255%2C152%2C0)%27%5D%2CborderWidth%3A2%7D%5D%7D%2Coptions%3A%7Bplugins%3A%7Btitle%3A%7Bdisplay%3Atrue%2Ctext%3A%27Partition%20Fanout%20Throughput%27%7D%7D%2Cscales%3A%7By%3A%7Bmin%3A0%2CbeginAtZero%3Atrue%2Ctitle%3A%7Bdisplay%3Atrue%2Ctext%3A%27msg%2Fs%27%7D%7D%7D%7D%7D&w=600&h=300&bkg=white)
 
 | System | Partitions | Throughput | p99 Latency |
 |--------|------------|------------|-------------|
@@ -57,7 +57,7 @@ This workload pattern is typical for:
 
 #### Latency Comparison
 
-![Latency Chart](https://quickchart.io/chart?c=%7Btype%3A%27bar%27%2Cdata%3A%7Blabels%3A%5B%27p50%27%2C%27p95%27%2C%27p99%27%5D%2Cdatasets%3A%5B%7Blabel%3A%27Queen%20(10K)%27%2Cdata%3A%5B12.31%2C15.73%2C19.84%5D%2CbackgroundColor%3A%27rgba(33%2C150%2C243%2C0.7)%27%2CborderColor%3A%27rgb(33%2C150%2C243)%27%2CborderWidth%3A2%7D%2C%7Blabel%3A%27Pulsar%20(10K)%27%2Cdata%3A%5B5.98%2C8.82%2C17.79%5D%2CbackgroundColor%3A%27rgba(156%2C39%2C176%2C0.7)%27%2CborderColor%3A%27rgb(156%2C39%2C176)%27%2CborderWidth%3A2%7D%2C%7Blabel%3A%27Kafka%20(5K)%27%2Cdata%3A%5B1.94%2C3.60%2C4.84%5D%2CbackgroundColor%3A%27rgba(255%2C152%2C0%2C0.7)%27%2CborderColor%3A%27rgb(255%2C152%2C0)%27%2CborderWidth%3A2%7D%5D%7D%2Coptions%3A%7Bplugins%3A%7Btitle%3A%7Bdisplay%3Atrue%2Ctext%3A%27Latency%20at%20100%20msg%2Fs%20Sustained%20Load%27%7D%7D%2Cscales%3A%7By%3A%7BbeginAtZero%3Atrue%2Ctitle%3A%7Bdisplay%3Atrue%2Ctext%3A%27ms%27%7D%7D%7D%7D%7D&w=600&h=300&bkg=white)
+![Latency Chart](https://quickchart.io/chart?c=%7Btype%3A%27bar%27%2Cdata%3A%7Blabels%3A%5B%27p50%27%2C%27p95%27%2C%27p99%27%5D%2Cdatasets%3A%5B%7Blabel%3A%27Queen%20(10K)%27%2Cdata%3A%5B12.31%2C15.73%2C19.84%5D%2CbackgroundColor%3A%27rgba(33%2C150%2C243%2C0.7)%27%2CborderColor%3A%27rgb(33%2C150%2C243)%27%2CborderWidth%3A2%7D%2C%7Blabel%3A%27Pulsar%20(10K)%27%2Cdata%3A%5B5.98%2C8.82%2C17.79%5D%2CbackgroundColor%3A%27rgba(156%2C39%2C176%2C0.7)%27%2CborderColor%3A%27rgb(156%2C39%2C176)%27%2CborderWidth%3A2%7D%2C%7Blabel%3A%27Kafka%20(5K)%27%2Cdata%3A%5B1.94%2C3.60%2C4.84%5D%2CbackgroundColor%3A%27rgba(255%2C152%2C0%2C0.7)%27%2CborderColor%3A%27rgb(255%2C152%2C0)%27%2CborderWidth%3A2%7D%5D%7D%2Coptions%3A%7Bplugins%3A%7Btitle%3A%7Bdisplay%3Atrue%2Ctext%3A%27Latency%20at%20100%20msg%2Fs%20Sustained%20Load%27%7D%7D%2Cscales%3A%7By%3A%7Bmin%3A0%2CbeginAtZero%3Atrue%2Ctitle%3A%7Bdisplay%3Atrue%2Ctext%3A%27ms%27%7D%7D%7D%7D%7D&w=600&h=300&bkg=white)
 
 | System | Partitions | p50 | p99 |
 |--------|------------|-----|-----|
@@ -67,7 +67,7 @@ This workload pattern is typical for:
 
 ### Resource Usage at 10K Partitions
 
-![Memory 10K Chart](https://quickchart.io/chart?c=%7Btype%3A%27bar%27%2Cdata%3A%7Blabels%3A%5B%27Queen%20(10K)%27%2C%27Pulsar%20(10K)%27%2C%27Kafka%20(5K)%27%5D%2Cdatasets%3A%5B%7Blabel%3A%27Avg%20Memory%20(MB)%27%2Cdata%3A%5B868%2C5445%2C2767%5D%2CbackgroundColor%3A%5B%27rgba(33%2C150%2C243%2C0.7)%27%2C%27rgba(156%2C39%2C176%2C0.7)%27%2C%27rgba(255%2C152%2C0%2C0.7)%27%5D%2CborderColor%3A%5B%27rgb(33%2C150%2C243)%27%2C%27rgb(156%2C39%2C176)%27%2C%27rgb(255%2C152%2C0)%27%5D%2CborderWidth%3A2%7D%5D%7D%2Coptions%3A%7Bplugins%3A%7Btitle%3A%7Bdisplay%3Atrue%2Ctext%3A%27Average%20Memory%20Usage%27%7D%7D%2Cscales%3A%7By%3A%7BbeginAtZero%3Atrue%2Ctitle%3A%7Bdisplay%3Atrue%2Ctext%3A%27MB%27%7D%7D%7D%7D%7D&w=600&h=300&bkg=white)
+![Memory 10K Chart](https://quickchart.io/chart?c=%7Btype%3A%27bar%27%2Cdata%3A%7Blabels%3A%5B%27Queen%20(10K)%27%2C%27Pulsar%20(10K)%27%2C%27Kafka%20(5K)%27%5D%2Cdatasets%3A%5B%7Blabel%3A%27Avg%20Memory%20(MB)%27%2Cdata%3A%5B868%2C5445%2C2767%5D%2CbackgroundColor%3A%5B%27rgba(33%2C150%2C243%2C0.7)%27%2C%27rgba(156%2C39%2C176%2C0.7)%27%2C%27rgba(255%2C152%2C0%2C0.7)%27%5D%2CborderColor%3A%5B%27rgb(33%2C150%2C243)%27%2C%27rgb(156%2C39%2C176)%27%2C%27rgb(255%2C152%2C0)%27%5D%2CborderWidth%3A2%7D%5D%7D%2Coptions%3A%7Bplugins%3A%7Btitle%3A%7Bdisplay%3Atrue%2Ctext%3A%27Average%20Memory%20Usage%27%7D%7D%2Cscales%3A%7By%3A%7Bmin%3A0%2CbeginAtZero%3Atrue%2Ctitle%3A%7Bdisplay%3Atrue%2Ctext%3A%27MB%27%7D%7D%7D%7D%7D&w=600&h=300&bkg=white)
 
 | System | Partitions | Avg CPU | Avg Memory | Peak Memory |
 |--------|------------|---------|------------|-------------|
@@ -79,7 +79,7 @@ This workload pattern is typical for:
 
 ### Queen Scaling: 5K vs 10K Partitions
 
-![Queen Scaling](https://quickchart.io/chart?c=%7Btype%3A%27bar%27%2Cdata%3A%7Blabels%3A%5B%27Throughput%20(msg%2Fs)%27%2C%27Fanout%20(msg%2Fs)%27%2C%27Avg%20Memory%20(MB)%27%5D%2Cdatasets%3A%5B%7Blabel%3A%27Queen%205K%20partitions%27%2Cdata%3A%5B5947%2C544%2C830%5D%2CbackgroundColor%3A%27rgba(33%2C150%2C243%2C0.4)%27%2CborderColor%3A%27rgb(33%2C150%2C243)%27%2CborderWidth%3A2%7D%2C%7Blabel%3A%27Queen%2010K%20partitions%27%2Cdata%3A%5B5824%2C550%2C868%5D%2CbackgroundColor%3A%27rgba(33%2C150%2C243%2C0.8)%27%2CborderColor%3A%27rgb(33%2C150%2C243)%27%2CborderWidth%3A2%7D%5D%7D%2Coptions%3A%7Bplugins%3A%7Btitle%3A%7Bdisplay%3Atrue%2Ctext%3A%27Queen%20Performance%20at%205K%20vs%2010K%20Partitions%27%7D%7D%2Cscales%3A%7By%3A%7BbeginAtZero%3Atrue%7D%7D%7D%7D&w=600&h=300&bkg=white)
+![Queen Scaling](https://quickchart.io/chart?c=%7Btype%3A%27bar%27%2Cdata%3A%7Blabels%3A%5B%27Throughput%20(msg%2Fs)%27%2C%27Fanout%20(msg%2Fs)%27%2C%27Avg%20Memory%20(MB)%27%5D%2Cdatasets%3A%5B%7Blabel%3A%27Queen%205K%20partitions%27%2Cdata%3A%5B5947%2C544%2C830%5D%2CbackgroundColor%3A%27rgba(33%2C150%2C243%2C0.4)%27%2CborderColor%3A%27rgb(33%2C150%2C243)%27%2CborderWidth%3A2%7D%2C%7Blabel%3A%27Queen%2010K%20partitions%27%2Cdata%3A%5B5824%2C550%2C868%5D%2CbackgroundColor%3A%27rgba(33%2C150%2C243%2C0.8)%27%2CborderColor%3A%27rgb(33%2C150%2C243)%27%2CborderWidth%3A2%7D%5D%7D%2Coptions%3A%7Bplugins%3A%7Btitle%3A%7Bdisplay%3Atrue%2Ctext%3A%27Queen%20Performance%20at%205K%20vs%2010K%20Partitions%27%7D%7D%2Cscales%3A%7By%3A%7Bmin%3A0%2CbeginAtZero%3Atrue%7D%7D%7D%7D&w=600&h=300&bkg=white)
 
 | Metric | 5K Partitions | 10K Partitions | Change |
 |--------|---------------|----------------|--------|
@@ -92,7 +92,7 @@ This workload pattern is typical for:
 
 ### Pulsar Performance Degradation: 5K vs 10K
 
-![Pulsar Scaling](https://quickchart.io/chart?c=%7Btype%3A%27bar%27%2Cdata%3A%7Blabels%3A%5B%27Throughput%20(msg%2Fs)%27%2C%27Fanout%20(msg%2Fs)%27%5D%2Cdatasets%3A%5B%7Blabel%3A%27Pulsar%205K%20partitions%27%2Cdata%3A%5B19150%2C550%5D%2CbackgroundColor%3A%27rgba(156%2C39%2C176%2C0.4)%27%2CborderColor%3A%27rgb(156%2C39%2C176)%27%2CborderWidth%3A2%7D%2C%7Blabel%3A%27Pulsar%2010K%20partitions%27%2Cdata%3A%5B10564%2C558%5D%2CbackgroundColor%3A%27rgba(156%2C39%2C176%2C0.8)%27%2CborderColor%3A%27rgb(156%2C39%2C176)%27%2CborderWidth%3A2%7D%5D%7D%2Coptions%3A%7Bplugins%3A%7Btitle%3A%7Bdisplay%3Atrue%2Ctext%3A%27Pulsar%20Performance%20at%205K%20vs%2010K%20Partitions%27%7D%7D%2Cscales%3A%7By%3A%7BbeginAtZero%3Atrue%7D%7D%7D%7D&w=600&h=300&bkg=white)
+![Pulsar Scaling](https://quickchart.io/chart?c=%7Btype%3A%27bar%27%2Cdata%3A%7Blabels%3A%5B%27Throughput%20(msg%2Fs)%27%2C%27Fanout%20(msg%2Fs)%27%5D%2Cdatasets%3A%5B%7Blabel%3A%27Pulsar%205K%20partitions%27%2Cdata%3A%5B19150%2C550%5D%2CbackgroundColor%3A%27rgba(156%2C39%2C176%2C0.4)%27%2CborderColor%3A%27rgb(156%2C39%2C176)%27%2CborderWidth%3A2%7D%2C%7Blabel%3A%27Pulsar%2010K%20partitions%27%2Cdata%3A%5B10564%2C558%5D%2CbackgroundColor%3A%27rgba(156%2C39%2C176%2C0.8)%27%2CborderColor%3A%27rgb(156%2C39%2C176)%27%2CborderWidth%3A2%7D%5D%7D%2Coptions%3A%7Bplugins%3A%7Btitle%3A%7Bdisplay%3Atrue%2Ctext%3A%27Pulsar%20Performance%20at%205K%20vs%2010K%20Partitions%27%7D%7D%2Cscales%3A%7By%3A%7Bmin%3A0%2CbeginAtZero%3Atrue%7D%7D%7D%7D&w=600&h=300&bkg=white)
 
 | Metric | 5K Partitions | 10K Partitions | Change |
 |--------|---------------|----------------|--------|
