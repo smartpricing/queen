@@ -16,7 +16,8 @@ export const CLIENT_DEFAULTS = {
   healthRetryAfterMillis: 5000,        // Retry unhealthy backends after 5 seconds
   bearerToken: null,                   // Bearer token for proxy authentication
   headers: {},                         // Custom headers to include in every request
-  handleSignals: true                  // Register SIGINT/SIGTERM handlers (disable when used as a library)
+  handleSignals: true,                 // Register SIGINT/SIGTERM handlers (disable when used as a library)
+  logger: null                         // Custom logger instance (must implement info/warn/error)
 }
 
 export const QUEUE_DEFAULTS = {

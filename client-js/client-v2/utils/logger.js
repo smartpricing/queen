@@ -1,7 +1,10 @@
 /**
  * Logger utility for Queen Client v2
- * Controlled by QUEEN_CLIENT_LOG environment variable (Node.js)
- * or window.QUEEN_CLIENT_LOG (Browser)
+ * 
+ * Supports pluggable logger backends (pino, winston, bunyan, etc.).
+ * When no custom logger is configured, falls back to console-based logging
+ * gated by the QUEEN_CLIENT_LOG environment variable (Node.js)
+ * or window.QUEEN_CLIENT_LOG (Browser).
  */
 
 const LOG_ENABLED = (() => {
@@ -16,9 +19,8 @@ const LOG_ENABLED = (() => {
   return false
 })()
 
-/**
- * Get formatted timestamp
- */
+let customLogger = null
+
 function getTimestamp() {
   return new Date().toISOString()
 }
@@ -33,25 +35,56 @@ function formatLog(operation, details, level = 'INFO') {
 }
 
 /**
- * Log an operation
+ * Configure a custom logger backend.
+ * The logger must implement: info(msg), warn(msg), error(msg).
+ * debug(msg) is optional and falls back to info(msg) if missing.
+ * When a custom logger is set, it is always active (no env var gating).
+ * @param {object} logger - Logger instance (e.g. pino(), winston.createLogger())
  */
+export function configure(logger) {
+  if (logger && typeof logger.info !== 'function') {
+    throw new Error('Custom logger must implement info(), warn(), and error() methods')
+  }
+  customLogger = logger
+}
+
 export function log(operation, details) {
+  if (customLogger) {
+    const detailsStr = typeof details === 'object' ? JSON.stringify(details) : details
+    customLogger.info(`[${operation}] ${detailsStr}`)
+    return
+  }
   if (!LOG_ENABLED) return
   console.log(formatLog(operation, details))
 }
 
-/**
- * Log a warning
- */
+export function debug(operation, details) {
+  if (customLogger) {
+    const detailsStr = typeof details === 'object' ? JSON.stringify(details) : details
+    const fn = customLogger.debug || customLogger.info
+    fn.call(customLogger, `[${operation}] ${detailsStr}`)
+    return
+  }
+  if (!LOG_ENABLED) return
+  console.log(formatLog(operation, details, 'DEBUG'))
+}
+
 export function warn(operation, details) {
+  if (customLogger) {
+    const detailsStr = typeof details === 'object' ? JSON.stringify(details) : details
+    customLogger.warn(`[${operation}] ${detailsStr}`)
+    return
+  }
   if (!LOG_ENABLED) return
   console.warn(formatLog(operation, details, 'WARN'))
 }
 
-/**
- * Log an error
- */
 export function error(operation, details) {
+  if (customLogger) {
+    const detailsStr = typeof details === 'object' ? JSON.stringify(details) : details
+    customLogger.error(`[${operation}] ${detailsStr}`)
+    return
+  }
   if (!LOG_ENABLED) return
   console.error(formatLog(operation, details, 'ERROR'))
 }
@@ -60,6 +93,5 @@ export function error(operation, details) {
  * Check if logging is enabled
  */
 export function isEnabled() {
-  return LOG_ENABLED
+  return customLogger != null || LOG_ENABLED
 }
-
