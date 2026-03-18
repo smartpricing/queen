@@ -1,0 +1,108 @@
+{
+  "system": "Apache Kafka",
+  "timestamp": "2026-03-18T08:20:00.008Z",
+  "config": {
+    "partitions": 100,
+    "acks": -1,
+    "messageSize": 256,
+    "duration": 60
+  },
+  "benchmarks": {
+    "push": {
+      "name": "Kafka - Push",
+      "duration": {
+        "ms": 59990.112583,
+        "formatted": "59.99s"
+      },
+      "messages": {
+        "sent": 403648,
+        "received": 0,
+        "errors": 0
+      },
+      "throughput": {
+        "messagesPerSecond": 6729,
+        "mbPerSecond": "1.51"
+      },
+      "latency": {
+        "min": "0.065",
+        "max": "72.390",
+        "mean": "0.148",
+        "p50": "0.126",
+        "p75": "0.136",
+        "p90": "0.163",
+        "p95": "0.221",
+        "p99": "0.585",
+        "p999": "1.980",
+        "unit": "ms"
+      }
+    },
+    "consume": {
+      "name": "Kafka - Consume",
+      "duration": {
+        "ms": 20005.451833,
+        "formatted": "20.01s"
+      },
+      "messages": {
+        "sent": 0,
+        "received": 403648,
+        "errors": 0
+      },
+      "throughput": {
+        "messagesPerSecond": 20177,
+        "mbPerSecond": "0.00"
+      },
+      "latency": {
+        "min": "0.001",
+        "max": "0.010",
+        "mean": "0.000",
+        "p50": "0.000",
+        "p75": "0.000",
+        "p90": "0.001",
+        "p95": "0.001",
+        "p99": "0.002",
+        "p999": "0.010",
+        "unit": "ms"
+      }
+    }
+  },
+  "dockerMetrics": {
+    "containers": {
+      "kafka-broker": {
+        "cpu": {
+          "min": 1.15,
+          "max": 196.57,
+          "avg": 41.75,
+          "p95": 139.4
+        },
+        "memoryPercent": {
+          "min": 8.47,
+          "max": 19.06,
+          "avg": 14.06,
+          "p95": 18.37
+        },
+        "memoryMB": {
+          "min": 693.9,
+          "max": 1561.6,
+          "avg": 1152.08,
+          "p95": 1504.26
+        }
+      }
+    },
+    "combined": {
+      "cpu": {
+        "min": 1.15,
+        "max": 278.8,
+        "avg": 42.23,
+        "p95": 122.5
+      },
+      "memoryMB": {
+        "min": 693.9,
+        "max": 3008.51,
+        "avg": 1165.32,
+        "p95": 1505.28
+      }
+    },
+    "sampleCount": 88,
+    "durationMs": 86829
+  }
+}

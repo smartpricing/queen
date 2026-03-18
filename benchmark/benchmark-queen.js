@@ -1,143 +1,34 @@
-// Queen MQ Benchmark
-// Measures latency and throughput with no client-side batching
-
 import { Queen } from 'queen-mq';
-import { config, generatePayload, getPartitionName } from './config.js';
-import { BenchmarkMetrics, sleep } from './lib/metrics.js';
-import { DockerMetrics, CONTAINER_NAMES } from './lib/docker-metrics.js';
-import { writeFileSync } from 'fs';
+import { config } from './config.js';
+import { BenchmarkMetrics } from './lib/metrics.js';
+import { DockerMetrics } from './lib/docker-metrics.js';
 
-const queen = new Queen(config.endpoints.queen);
 const QUEUE_NAME = 'benchmark';
 
-async function runLatencyBenchmark() {
-  console.log('\n--- Queen: Latency Benchmark (single messages) ---');
-  
-  const metrics = new BenchmarkMetrics('Queen - Latency');
-  const scenario = config.scenarios[0];  // latency-focused
-  const messagesPerSecond = scenario.messagesPerSecond;
-  const totalMessages = messagesPerSecond * scenario.duration;
-  const delayMs = 1000 / messagesPerSecond;
-  
-  console.log(`Target: ${messagesPerSecond} msg/s for ${scenario.duration}s = ${totalMessages} messages`);
-  
-  metrics.start();
-  
-  for (let i = 0; i < totalMessages; i++) {
-    const partitionIndex = i % config.partitionCount;
-    const payload = generatePayload();
-    const startNs = process.hrtime.bigint();
-    
-    try {
-      await queen
-        .queue(QUEUE_NAME)
-        .partition(getPartitionName(partitionIndex))
-        .push([{
-          transactionId: `lat-${Date.now()}-${i}`,
-          data: payload,
-        }]);
-      
-      metrics.recordLatency(startNs);
-      metrics.incrementSent(JSON.stringify(payload).length);
-    } catch (e) {
-      metrics.incrementErrors();
-      console.error('Push error:', e.message);
-    }
-    
-    // Rate limiting
-    if (delayMs > 0) {
-      await sleep(delayMs);
-    }
-    
-    if ((i + 1) % 1000 === 0) {
-      process.stdout.write(`\r  Progress: ${i + 1}/${totalMessages} messages`);
-    }
-  }
-  
-  metrics.stop();
-  console.log('');
-  return metrics.printReport();
-}
+const queen = new Queen(config.endpoints.queen);
 
-async function runThroughputBenchmark() {
-  console.log('\n--- Queen: Throughput Benchmark (max speed, no batching) ---');
-  
-  const metrics = new BenchmarkMetrics('Queen - Throughput');
-  const scenario = config.scenarios[1];  // throughput-focused
-  const concurrency = config.producer.concurrency;
-  
-  console.log(`Running for ${scenario.duration}s with ${concurrency} concurrent producers`);
-  
-  const endTime = Date.now() + (scenario.duration * 1000);
-  let messageIndex = 0;
-  
-  metrics.start();
-  
-  // Run concurrent producers
-  const producers = Array(concurrency).fill(null).map(async (_, producerId) => {
-    while (Date.now() < endTime) {
-      const batchPromises = [];
-      
-      // Each producer sends to different partitions
-      for (let j = 0; j < 10; j++) {
-        const idx = messageIndex++;
-        const partitionIndex = idx % config.partitionCount;
-        const payload = generatePayload();
-        const startNs = process.hrtime.bigint();
-        
-        batchPromises.push(
-          queen
-            .queue(QUEUE_NAME)
-            .partition(getPartitionName(partitionIndex))
-            .push([{
-              transactionId: `thr-${producerId}-${idx}`,
-              data: payload,
-            }])
-            .then(() => {
-              metrics.recordLatency(startNs);
-              metrics.incrementSent(JSON.stringify(payload).length);
-            })
-            .catch((e) => {
-              metrics.incrementErrors();
-            })
-        );
-      }
-      
-      await Promise.all(batchPromises);
-    }
+function generatePayload() {
+  return JSON.stringify({
+    data: 'x'.repeat(config.messageSize - 50),
+    ts: Date.now(),
   });
-  
-  // Progress reporter
-  const progressInterval = setInterval(() => {
-    const elapsed = (Date.now() - (endTime - scenario.duration * 1000)) / 1000;
-    const rate = metrics.messagesSent / elapsed;
-    process.stdout.write(`\r  Sent: ${metrics.messagesSent.toLocaleString()} msgs, Rate: ${Math.round(rate).toLocaleString()} msg/s`);
-  }, 1000);
-  
-  await Promise.all(producers);
-  clearInterval(progressInterval);
-  
-  metrics.stop();
-  console.log('');
-  return metrics.printReport();
 }
 
-async function runPartitionFanoutBenchmark() {
-  console.log(`\n--- Queen: Partition Fanout Benchmark (${config.partitionCount} partitions) ---`);
+function getPartitionName(index) {
+  return `partition-${index}`;
+}
+
+async function runPushBenchmark() {
+  console.log('\n--- Queen: Push Benchmark ---');
+  console.log(`Pushing to ${config.partitionCount} partitions with ${config.producer.concurrency} concurrent producers`);
+  console.log(`Duration: ${config.duration}s`);
   
-  const metrics = new BenchmarkMetrics('Queen - Partition Fanout');
-  const scenario = config.scenarios[2];  // partition-fanout
-  const totalMessages = scenario.messagesPerSecond * scenario.duration;
+  const metrics = new BenchmarkMetrics('Queen - Push');
   const concurrency = config.producer.concurrency;
-  
-  console.log(`Publishing to ${config.partitionCount} different partitions`);
-  console.log(`Target: ${scenario.messagesPerSecond} msg/s for ${scenario.duration}s`);
+  const endTime = Date.now() + (config.duration * 1000);
+  let messageIndex = 0;
   
   metrics.start();
-  
-  // Round-robin across all partitions
-  let messageIndex = 0;
-  const endTime = Date.now() + (scenario.duration * 1000);
   
   const producers = Array(concurrency).fill(null).map(async (_, producerId) => {
     while (Date.now() < endTime) {
@@ -151,27 +42,20 @@ async function runPartitionFanoutBenchmark() {
           .queue(QUEUE_NAME)
           .partition(getPartitionName(partitionIndex))
           .push([{
-            transactionId: `fan-${producerId}-${idx}`,
+            transactionId: `push-${producerId}-${idx}`,
             data: payload,
           }]);
         
         metrics.recordLatency(startNs);
-        metrics.incrementSent(JSON.stringify(payload).length);
+        metrics.incrementSent(1, payload.length);
       } catch (e) {
         metrics.incrementErrors();
-      }
-      
-      // Rate limiting per producer
-      const targetDelay = 1000 / (scenario.messagesPerSecond / concurrency);
-      if (targetDelay > 0) {
-        await sleep(targetDelay);
       }
     }
   });
   
-  // Progress reporter
   const progressInterval = setInterval(() => {
-    const elapsed = (Date.now() - (endTime - scenario.duration * 1000)) / 1000;
+    const elapsed = (Date.now() - (endTime - config.duration * 1000)) / 1000;
     const rate = metrics.messagesSent / elapsed;
     process.stdout.write(`\r  Sent: ${metrics.messagesSent.toLocaleString()} msgs, Rate: ${Math.round(rate).toLocaleString()} msg/s`);
   }, 1000);
@@ -184,68 +68,64 @@ async function runPartitionFanoutBenchmark() {
   return metrics.printReport();
 }
 
-async function runConsumerBenchmark() {
-  console.log('\n--- Queen: Consumer Benchmark ---');
+async function runConsumeBenchmark() {
+  console.log('\n--- Queen: Consume Benchmark ---');
+  console.log(`Consuming with ${config.consumer.concurrency} concurrent consumers, batch size ${config.consumer.batchSize}`);
   
-  const metrics = new BenchmarkMetrics('Queen - Consumer');
+  const metrics = new BenchmarkMetrics('Queen - Consume');
   const concurrency = config.consumer.concurrency;
-  const batchSize = config.consumer.batchSize;
-  
-  console.log(`Consuming with ${concurrency} concurrent consumers, batch size ${batchSize}`);
   
   metrics.start();
   
   let totalConsumed = 0;
-  let globalEmptyCount = 0;
-  let running = true;
+  let lastMessageTime = Date.now();
+  const maxIdleTime = 10000;
+  const benchmarkStartTime = Date.now();
+  const maxWait = 120000;
   
-  // Run concurrent consumers
   const consumers = Array(concurrency).fill(null).map(async (_, consumerId) => {
-    let localEmptyCount = 0;
+    let emptyCount = 0;
     
-    while (running && localEmptyCount < 5) {
-      const startNs = process.hrtime.bigint();
+    while (emptyCount < 50) {
+      if (Date.now() - lastMessageTime > maxIdleTime) {
+        break;
+      }
+      if (Date.now() - benchmarkStartTime > maxWait) {
+        break;
+      }
       
       try {
-        // pop() returns an array of messages directly
-        // wait(false) = don't block waiting for messages
+        const startNs = process.hrtime.bigint();
         const messages = await queen
           .queue(QUEUE_NAME)
-          .batch(batchSize)
+          .batch(config.consumer.batchSize)
           .wait(false)
           .pop();
         
         if (messages && messages.length > 0) {
-          // Manual ack each message (fair comparison with Kafka/Pulsar)
-          for (const msg of messages) {
-            await queen.ack(msg, true);  // true = success
-            metrics.incrementReceived(JSON.stringify(msg.data).length);
-          }
+          await queen.ack(messages, true);
           
           metrics.recordLatency(startNs);
+          metrics.incrementReceived(messages.length);
           totalConsumed += messages.length;
-          localEmptyCount = 0;
-          globalEmptyCount = 0;
-          
-          if (totalConsumed % 1000 === 0) {
-            process.stdout.write(`\r  Consumed: ${totalConsumed.toLocaleString()} messages`);
-          }
+          lastMessageTime = Date.now();
+          emptyCount = 0;
         } else {
-          localEmptyCount++;
-          globalEmptyCount++;
-          if (globalEmptyCount >= concurrency * 3) {
-            running = false;  // All consumers seeing empty queues
-          }
-          await sleep(50);
+          emptyCount++;
+          await new Promise(r => setTimeout(r, 100));
         }
       } catch (e) {
         metrics.incrementErrors();
-        await sleep(50);
       }
     }
   });
   
+  const progressInterval = setInterval(() => {
+    process.stdout.write(`\r  Consumed: ${totalConsumed.toLocaleString()} messages`);
+  }, 2000);
+  
   await Promise.all(consumers);
+  clearInterval(progressInterval);
   
   metrics.stop();
   console.log('');
@@ -256,13 +136,15 @@ async function main() {
   console.log('╔════════════════════════════════════════════════════════════╗');
   console.log('║           Queen MQ Benchmark Suite                         ║');
   console.log('╚════════════════════════════════════════════════════════════╝');
-  console.log(`\nConfiguration:`);
+  console.log();
+  console.log('Configuration:');
   console.log(`  Partitions: ${config.partitionCount}`);
-  console.log(`  Linger: ${config.producer.lingerMs}ms (no batching)`);
   console.log(`  Message size: ${config.messageSize} bytes`);
+  console.log(`  Duration: ${config.duration}s`);
+  console.log(`  Producers: ${config.producer.concurrency}`);
+  console.log(`  Consumers: ${config.consumer.concurrency}`);
   
-  // Start Docker metrics collection
-  const dockerMetrics = new DockerMetrics(CONTAINER_NAMES.queen);
+  const dockerMetrics = new DockerMetrics(['queen-postgres', 'queen-server']);
   dockerMetrics.start();
   
   const results = {
@@ -270,32 +152,32 @@ async function main() {
     timestamp: new Date().toISOString(),
     config: {
       partitions: config.partitionCount,
-      lingerMs: config.producer.lingerMs,
       messageSize: config.messageSize,
+      duration: config.duration,
     },
     benchmarks: {},
-    dockerMetrics: null,
   };
   
-  try {
-    results.benchmarks.latency = await runLatencyBenchmark();
-    results.benchmarks.throughput = await runThroughputBenchmark();
-    results.benchmarks.partitionFanout = await runPartitionFanoutBenchmark();
-    results.benchmarks.consumer = await runConsumerBenchmark();
-  } catch (e) {
-    console.error('Benchmark failed:', e);
-  }
+  results.benchmarks.push = await runPushBenchmark();
+  results.benchmarks.consume = await runConsumeBenchmark();
   
-  // Stop and report Docker metrics
   dockerMetrics.stop();
-  results.dockerMetrics = dockerMetrics.printReport();
+  results.dockerMetrics = dockerMetrics.getStats();
   
-  // Save results
+  console.log('\n────────────────────────────────────────────────────────────');
+  console.log('  Docker Resource Usage');
+  console.log('────────────────────────────────────────────────────────────');
+  for (const [container, stats] of Object.entries(results.dockerMetrics.containers)) {
+    console.log(`\n  Container: ${container}`);
+    console.log(`    CPU:    avg=${stats.cpu.avg.toFixed(2)}%  max=${stats.cpu.max.toFixed(2)}%  p95=${stats.cpu.p95.toFixed(2)}%`);
+    console.log(`    Memory: avg=${stats.memoryMB.avg.toFixed(2)}MB  max=${stats.memoryMB.max.toFixed(2)}MB  p95=${stats.memoryMB.p95.toFixed(2)}MB`);
+  }
+  console.log('────────────────────────────────────────────────────────────');
+  
+  const fs = await import('fs');
   const filename = `results-queen-${Date.now()}.json`;
-  writeFileSync(filename, JSON.stringify(results, null, 2));
+  fs.writeFileSync(filename, JSON.stringify(results, null, 2));
   console.log(`\nResults saved to ${filename}`);
-  
-  return results;
 }
 
 main().catch(console.error);

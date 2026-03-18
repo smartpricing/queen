@@ -2,15 +2,14 @@
 // Uses HDR Histogram for accurate latency percentiles
 
 import hdr from 'hdr-histogram-js';
-import { config } from '../config.js';
 
 export class BenchmarkMetrics {
   constructor(name) {
     this.name = name;
     this.histogram = hdr.build({
-      lowestDiscernibleValue: config.metrics.histogramLowestValue,
-      highestTrackableValue: config.metrics.histogramHighestValue,
-      numberOfSignificantValueDigits: config.metrics.histogramSignificantDigits,
+      lowestDiscernibleValue: 1,           // 1 microsecond
+      highestTrackableValue: 60000000,     // 60 seconds in microseconds
+      numberOfSignificantValueDigits: 3,
     });
     this.startTime = null;
     this.endTime = null;
@@ -42,13 +41,13 @@ export class BenchmarkMetrics {
     this.histogram.recordValue(latencyUs);
   }
   
-  incrementSent(bytes = 0) {
-    this.messagesSent++;
+  incrementSent(count = 1, bytes = 0) {
+    this.messagesSent += count;
     this.bytesSent += bytes;
   }
   
-  incrementReceived(bytes = 0) {
-    this.messagesReceived++;
+  incrementReceived(count = 1, bytes = 0) {
+    this.messagesReceived += count;
     this.bytesReceived += bytes;
   }
   
@@ -63,9 +62,11 @@ export class BenchmarkMetrics {
   
   getThroughput() {
     const durationSec = this.getDurationMs() / 1000;
+    const messages = this.messagesSent || this.messagesReceived;
+    const bytes = this.bytesSent || this.bytesReceived;
     return {
-      messagesPerSecond: durationSec > 0 ? this.messagesSent / durationSec : 0,
-      bytesPerSecond: durationSec > 0 ? this.bytesSent / durationSec : 0,
+      messagesPerSecond: durationSec > 0 ? messages / durationSec : 0,
+      bytesPerSecond: durationSec > 0 ? bytes / durationSec : 0,
     };
   }
   

@@ -2,7 +2,11 @@
 // Creates 5000 queues (one per partition for fair comparison)
 
 import { Queen } from 'queen-mq';
-import { config, getPartitionName } from '../config.js';
+import { config } from '../config.js';
+
+function getPartitionName(index) {
+  return `partition-${index}`;
+}
 
 const queen = new Queen(config.endpoints.queen);
 
@@ -66,14 +70,13 @@ async function setup() {
     // wait(false) = don't block waiting for messages
     const messages = await queen
       .queue(queueName)
-      .batch(100)
       .wait(false)
-      .pop();
+      .pop(10000);
     
     if (messages && messages.length > 0) {
       // Ack each message
       for (const msg of messages) {
-        await queen.ack(msg, true);
+        await queen.ack(msg.id, true);
       }
       consumed += messages.length;
     } else {

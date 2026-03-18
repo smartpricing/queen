@@ -1,203 +1,92 @@
-// Apache Pulsar Benchmark
-// Measures latency and throughput with batching disabled
-
 import Pulsar from 'pulsar-client';
-import { config, generatePayload, getPartitionName } from './config.js';
-import { BenchmarkMetrics, sleep } from './lib/metrics.js';
-import { DockerMetrics, CONTAINER_NAMES } from './lib/docker-metrics.js';
-import { writeFileSync } from 'fs';
+import { config } from './config.js';
+import { BenchmarkMetrics } from './lib/metrics.js';
+import { DockerMetrics } from './lib/docker-metrics.js';
 
 const TOPIC_NAME = 'persistent://public/benchmark/benchmark';
 
-async function createProducer(client, partitionIndex = null) {
-  const topic = partitionIndex !== null 
-    ? `${TOPIC_NAME}-partition-${partitionIndex}`
-    : TOPIC_NAME;
-    
-  return client.createProducer({
-    topic,
-    sendTimeoutMs: 30000,
-    // CRITICAL: Disable batching for fair comparison
-    batchingEnabled: false,
+function generatePayload() {
+  return JSON.stringify({
+    data: 'x'.repeat(config.messageSize - 50),
+    ts: Date.now(),
   });
 }
 
-async function runLatencyBenchmark(client) {
-  console.log('\n--- Pulsar: Latency Benchmark (single messages) ---');
+async function sleep(ms) {
+  return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+async function runPushBenchmark() {
+  console.log('\n--- Pulsar: Push Benchmark ---');
+  console.log(`Pushing to ${config.partitionCount} partitions with ${config.producer.concurrency} concurrent producers`);
+  console.log(`Duration: ${config.duration}s`);
   
-  const producer = await createProducer(client);
+  const metrics = new BenchmarkMetrics('Pulsar - Push');
+  const concurrency = config.producer.concurrency;
+  let messageIndex = 0;
   
-  const metrics = new BenchmarkMetrics('Pulsar - Latency');
-  const scenario = config.scenarios[0];  // latency-focused
-  const messagesPerSecond = scenario.messagesPerSecond;
-  const totalMessages = messagesPerSecond * scenario.duration;
-  const delayMs = 1000 / messagesPerSecond;
+  const client = new Pulsar.Client({
+    serviceUrl: config.endpoints.pulsar,
+    operationTimeoutSeconds: 60,
+  });
   
-  console.log(`Target: ${messagesPerSecond} msg/s for ${scenario.duration}s = ${totalMessages} messages`);
-  
-  metrics.start();
-  
-  for (let i = 0; i < totalMessages; i++) {
-    const partitionIndex = i % config.partitionCount;
-    const payload = generatePayload();
-    const payloadStr = JSON.stringify(payload);
-    const startNs = process.hrtime.bigint();
-    
-    try {
-      await producer.send({
-        data: Buffer.from(payloadStr),
-        partitionKey: `lat-${i}`,
-        // Route to specific partition
-        eventTimestamp: Date.now(),
-      });
-      
-      metrics.recordLatency(startNs);
-      metrics.incrementSent(payloadStr.length);
-    } catch (e) {
-      metrics.incrementErrors();
-      console.error('Send error:', e.message);
-    }
-    
-    // Rate limiting
-    if (delayMs > 0) {
-      await sleep(delayMs);
-    }
-    
-    if ((i + 1) % 1000 === 0) {
-      process.stdout.write(`\r  Progress: ${i + 1}/${totalMessages} messages`);
+  // Create producers sequentially to avoid overwhelming broker
+  const producers = [];
+  for (let i = 0; i < concurrency; i++) {
+    for (let attempt = 0; attempt < 3; attempt++) {
+      try {
+        const producer = await client.createProducer({
+          topic: TOPIC_NAME,
+          batchingEnabled: false,
+          sendTimeoutMs: 30000,
+        });
+        producers.push(producer);
+        if ((i + 1) % 10 === 0) {
+          console.log(`  Created ${i + 1}/${concurrency} producers`);
+        }
+        break;
+      } catch (e) {
+        console.log(`  Producer ${i + 1} attempt ${attempt + 1} failed: ${e.message}`);
+        await sleep(1000);
+      }
     }
   }
   
-  metrics.stop();
-  await producer.close();
-  console.log('');
-  return metrics.printReport();
-}
-
-async function runThroughputBenchmark(client) {
-  console.log('\n--- Pulsar: Throughput Benchmark (max speed, no batching) ---');
+  if (producers.length === 0) {
+    console.error('No producers could be created');
+    await client.close();
+    return { error: 'No producers created' };
+  }
   
-  const metrics = new BenchmarkMetrics('Pulsar - Throughput');
-  const scenario = config.scenarios[1];  // throughput-focused
-  const concurrency = config.producer.concurrency;
+  console.log(`  ${producers.length} producers ready`);
   
-  console.log(`Running for ${scenario.duration}s with ${concurrency} concurrent producers`);
-  
-  // Create multiple producers for concurrency
-  const producers = await Promise.all(
-    Array(concurrency).fill(null).map(() => createProducer(client))
-  );
-  
-  const endTime = Date.now() + (scenario.duration * 1000);
-  let messageIndex = 0;
+  const endTime = Date.now() + (config.duration * 1000);
   
   metrics.start();
   
-  // Run concurrent producers
-  const producerTasks = producers.map(async (producer, producerId) => {
-    while (Date.now() < endTime) {
-      const batchPromises = [];
-      
-      // Each producer sends multiple messages concurrently
-      for (let j = 0; j < 10; j++) {
-        const idx = messageIndex++;
-        const payload = generatePayload();
-        const payloadStr = JSON.stringify(payload);
-        const startNs = process.hrtime.bigint();
-        
-        batchPromises.push(
-          producer.send({
-            data: Buffer.from(payloadStr),
-            partitionKey: `thr-${producerId}-${idx}`,
-          })
-            .then(() => {
-              metrics.recordLatency(startNs);
-              metrics.incrementSent(payloadStr.length);
-            })
-            .catch((e) => {
-              metrics.incrementErrors();
-            })
-        );
-      }
-      
-      await Promise.all(batchPromises);
-    }
-  });
-  
-  // Progress reporter
-  const progressInterval = setInterval(() => {
-    const elapsed = (Date.now() - (endTime - scenario.duration * 1000)) / 1000;
-    const rate = metrics.messagesSent / elapsed;
-    process.stdout.write(`\r  Sent: ${metrics.messagesSent.toLocaleString()} msgs, Rate: ${Math.round(rate).toLocaleString()} msg/s`);
-  }, 1000);
-  
-  await Promise.all(producerTasks);
-  clearInterval(progressInterval);
-  
-  metrics.stop();
-  
-  // Close all producers
-  await Promise.all(producers.map(p => p.close()));
-  
-  console.log('');
-  return metrics.printReport();
-}
-
-async function runPartitionFanoutBenchmark(client) {
-  console.log(`\n--- Pulsar: Partition Fanout Benchmark (${config.partitionCount} partitions) ---`);
-  
-  const metrics = new BenchmarkMetrics('Pulsar - Partition Fanout');
-  const scenario = config.scenarios[2];  // partition-fanout
-  const concurrency = config.producer.concurrency;
-  
-  console.log(`Publishing to ${config.partitionCount} different partitions`);
-  console.log(`Target: ${scenario.messagesPerSecond} msg/s for ${scenario.duration}s`);
-  console.log(`Using ${concurrency} concurrent producers`);
-  
-  // Create multiple producers for concurrency
-  const producers = await Promise.all(
-    Array(concurrency).fill(null).map(() => createProducer(client))
-  );
-  
-  metrics.start();
-  
-  let messageIndex = 0;
-  const endTime = Date.now() + (scenario.duration * 1000);
-  
-  // Run concurrent producers for better fanout performance
   const producerTasks = producers.map(async (producer, producerId) => {
     while (Date.now() < endTime) {
       const idx = messageIndex++;
-      const partitionIndex = idx % config.partitionCount;
+      const partition = idx % config.partitionCount;
       const payload = generatePayload();
-      const payloadStr = JSON.stringify(payload);
       const startNs = process.hrtime.bigint();
       
       try {
-        // Use unique ordering key to ensure distribution across partitions
         await producer.send({
-          data: Buffer.from(payloadStr),
-          partitionKey: `p${partitionIndex}`,  // Short key for partition routing
-          orderingKey: `p${partitionIndex}`,   // Ordering key also helps routing
+          data: Buffer.from(payload),
+          partitionKey: `partition-${partition}`,
         });
         
         metrics.recordLatency(startNs);
-        metrics.incrementSent(payloadStr.length);
+        metrics.incrementSent(1, payload.length);
       } catch (e) {
         metrics.incrementErrors();
-      }
-      
-      // Rate limiting per producer
-      const targetDelay = 1000 / (scenario.messagesPerSecond / concurrency);
-      if (targetDelay > 1) {
-        await sleep(targetDelay);
       }
     }
   });
   
-  // Progress reporter
   const progressInterval = setInterval(() => {
-    const elapsed = (Date.now() - (endTime - scenario.duration * 1000)) / 1000;
+    const elapsed = (Date.now() - (endTime - config.duration * 1000)) / 1000;
     const rate = metrics.messagesSent / elapsed;
     process.stdout.write(`\r  Sent: ${metrics.messagesSent.toLocaleString()} msgs, Rate: ${Math.round(rate).toLocaleString()} msg/s`);
   }, 1000);
@@ -206,82 +95,100 @@ async function runPartitionFanoutBenchmark(client) {
   clearInterval(progressInterval);
   
   metrics.stop();
-  
-  // Close all producers
-  await Promise.all(producers.map(p => p.close()));
-  
   console.log('');
+  
+  for (const producer of producers) {
+    await producer.close();
+  }
+  await client.close();
+  
   return metrics.printReport();
 }
 
-async function runConsumerBenchmark(client) {
-  console.log('\n--- Pulsar: Consumer Benchmark ---');
+async function runConsumeBenchmark() {
+  console.log('\n--- Pulsar: Consume Benchmark ---');
+  console.log(`Consuming with ${config.consumer.concurrency} concurrent consumers, batch size ${config.consumer.batchSize}`);
   
-  const batchSize = config.consumer.batchSize;
+  // Wait for broker to stabilize after producer benchmark
+  console.log('  Waiting for broker to stabilize...');
+  await sleep(10000);
+  
+  const metrics = new BenchmarkMetrics('Pulsar - Consume');
   const concurrency = config.consumer.concurrency;
+  const subscriptionName = `benchmark-sub-${Date.now()}`;
   
-  // Create multiple consumers for concurrency (shared subscription)
-  const consumers = await Promise.all(
-    Array(concurrency).fill(null).map(() => 
-      client.subscribe({
-        topic: TOPIC_NAME,
-        subscription: `benchmark-consumer-shared`,  // Same subscription for load balancing
-        subscriptionType: 'Shared',
-        subscriptionInitialPosition: 'Earliest',
-        receiverQueueSize: batchSize * 2,
-      })
-    )
-  );
+  const client = new Pulsar.Client({
+    serviceUrl: config.endpoints.pulsar,
+    operationTimeoutSeconds: 120,
+  });
   
-  const metrics = new BenchmarkMetrics('Pulsar - Consumer');
+  // Create consumers sequentially with longer delays
+  const consumers = [];
+  for (let i = 0; i < concurrency; i++) {
+    for (let attempt = 0; attempt < 5; attempt++) {
+      try {
+        const consumer = await client.subscribe({
+          topic: TOPIC_NAME,
+          subscription: subscriptionName,
+          subscriptionType: 'Shared',
+          subscriptionInitialPosition: 'Earliest',
+          ackTimeoutMs: 60000,
+          receiverQueueSize: 1000,
+        });
+        consumers.push(consumer);
+        console.log(`  Consumer ${i + 1}/${concurrency} connected`);
+        break;
+      } catch (e) {
+        console.log(`  Consumer ${i + 1} attempt ${attempt + 1} failed: ${e.message}`);
+        await sleep(3000);
+      }
+    }
+    // Add delay between consumer creations
+    if (i < concurrency - 1) {
+      await sleep(1000);
+    }
+  }
   
-  console.log(`Consuming with ${concurrency} concurrent consumers, batch size ${batchSize}`);
+  if (consumers.length === 0) {
+    console.error('No consumers could connect');
+    await client.close();
+    return { error: 'No consumers connected' };
+  }
+  
+  console.log(`  ${consumers.length} consumers ready`);
   
   metrics.start();
   
   let totalConsumed = 0;
   let lastMessageTime = Date.now();
-  let running = true;
+  const maxIdleTime = 10000;
+  const benchmarkStartTime = Date.now();
+  const maxWait = 120000;
   
-  // Run concurrent consumers
-  const consumerTasks = consumers.map(async (consumer, consumerId) => {
-    let localEmptyCount = 0;
-    
-    while (running && localEmptyCount < 20) {  // More tolerance per consumer
+  const consumerTasks = consumers.map(async (consumer) => {
+    while (true) {
+      if (Date.now() - lastMessageTime > maxIdleTime || Date.now() - benchmarkStartTime > maxWait) {
+        break;
+      }
+      
       try {
         const startNs = process.hrtime.bigint();
-        
-        // Batch receive for fair comparison with Queen/Kafka
-        const messages = await consumer.batchReceive(1000);  // 1 second timeout
+        const messages = await consumer.batchReceive(config.consumer.batchSize, 5000);
         
         if (messages && messages.length > 0) {
-          // Ack each message in batch
           for (const msg of messages) {
-            metrics.incrementReceived(msg.getData().length);
             await consumer.acknowledge(msg);
           }
           
           metrics.recordLatency(startNs);
+          metrics.incrementReceived(messages.length);
           totalConsumed += messages.length;
-          localEmptyCount = 0;
           lastMessageTime = Date.now();
-          
-          if (totalConsumed % 1000 === 0) {
-            process.stdout.write(`\r  Consumed: ${totalConsumed.toLocaleString()} messages`);
-          }
-        } else {
-          localEmptyCount++;
-          // Stop if no messages received globally for 10 seconds
-          if (Date.now() - lastMessageTime > 10000) {
-            running = false;
-          }
         }
       } catch (e) {
-        if (e.message && e.message.includes('timeout')) {
-          localEmptyCount++;
-          // Stop if no messages received globally for 10 seconds
-          if (Date.now() - lastMessageTime > 10000) {
-            running = false;
+        if (e.message && e.message.includes('TimeOut')) {
+          if (Date.now() - lastMessageTime > maxIdleTime) {
+            break;
           }
         } else {
           metrics.incrementErrors();
@@ -290,14 +197,21 @@ async function runConsumerBenchmark(client) {
     }
   });
   
+  const progressInterval = setInterval(() => {
+    process.stdout.write(`\r  Consumed: ${totalConsumed.toLocaleString()} messages`);
+  }, 2000);
+  
   await Promise.all(consumerTasks);
+  clearInterval(progressInterval);
   
   metrics.stop();
-  
-  // Close all consumers
-  await Promise.all(consumers.map(c => c.close()));
-  
   console.log('');
+  
+  for (const consumer of consumers) {
+    await consumer.close();
+  }
+  await client.close();
+  
   return metrics.printReport();
 }
 
@@ -305,20 +219,17 @@ async function main() {
   console.log('╔════════════════════════════════════════════════════════════╗');
   console.log('║           Apache Pulsar Benchmark Suite                    ║');
   console.log('╚════════════════════════════════════════════════════════════╝');
-  console.log(`\nConfiguration:`);
+  console.log();
+  console.log('Configuration:');
   console.log(`  Partitions: ${config.partitionCount}`);
   console.log(`  Batching: disabled`);
-  console.log(`  Sync writes: ${config.durability.pulsarSyncWrites}`);
   console.log(`  Message size: ${config.messageSize} bytes`);
+  console.log(`  Duration: ${config.duration}s`);
+  console.log(`  Producers: ${config.producer.concurrency}`);
+  console.log(`  Consumers: ${config.consumer.concurrency}`);
   
-  // Start Docker metrics collection
-  const dockerMetrics = new DockerMetrics(CONTAINER_NAMES.pulsar);
+  const dockerMetrics = new DockerMetrics(['pulsar-broker']);
   dockerMetrics.start();
-  
-  const client = new Pulsar.Client({
-    serviceUrl: config.endpoints.pulsar,
-    operationTimeoutSeconds: 30,
-  });
   
   const results = {
     system: 'Apache Pulsar',
@@ -326,34 +237,32 @@ async function main() {
     config: {
       partitions: config.partitionCount,
       batchingEnabled: false,
-      syncWrites: config.durability.pulsarSyncWrites,
       messageSize: config.messageSize,
+      duration: config.duration,
     },
     benchmarks: {},
-    dockerMetrics: null,
   };
   
-  try {
-    results.benchmarks.latency = await runLatencyBenchmark(client);
-    results.benchmarks.throughput = await runThroughputBenchmark(client);
-    results.benchmarks.partitionFanout = await runPartitionFanoutBenchmark(client);
-    results.benchmarks.consumer = await runConsumerBenchmark(client);
-  } catch (e) {
-    console.error('Benchmark failed:', e);
-  }
+  results.benchmarks.push = await runPushBenchmark();
+  results.benchmarks.consume = await runConsumeBenchmark();
   
-  await client.close();
-  
-  // Stop and report Docker metrics
   dockerMetrics.stop();
-  results.dockerMetrics = dockerMetrics.printReport();
+  results.dockerMetrics = dockerMetrics.getStats();
   
-  // Save results
+  console.log('\n────────────────────────────────────────────────────────────');
+  console.log('  Docker Resource Usage');
+  console.log('────────────────────────────────────────────────────────────');
+  for (const [container, stats] of Object.entries(results.dockerMetrics.containers)) {
+    console.log(`\n  Container: ${container}`);
+    console.log(`    CPU:    avg=${stats.cpu.avg.toFixed(2)}%  max=${stats.cpu.max.toFixed(2)}%  p95=${stats.cpu.p95.toFixed(2)}%`);
+    console.log(`    Memory: avg=${stats.memoryMB.avg.toFixed(2)}MB  max=${stats.memoryMB.max.toFixed(2)}MB  p95=${stats.memoryMB.p95.toFixed(2)}MB`);
+  }
+  console.log('────────────────────────────────────────────────────────────');
+  
+  const fs = await import('fs');
   const filename = `results-pulsar-${Date.now()}.json`;
-  writeFileSync(filename, JSON.stringify(results, null, 2));
+  fs.writeFileSync(filename, JSON.stringify(results, null, 2));
   console.log(`\nResults saved to ${filename}`);
-  
-  return results;
 }
 
 main().catch(console.error);

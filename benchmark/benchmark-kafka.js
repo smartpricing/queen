@@ -1,176 +1,85 @@
-// Apache Kafka Benchmark
-// Measures latency and throughput with linger.ms=0 (no batching)
-
 import { Kafka, Partitioners, logLevel } from 'kafkajs';
-import { config, generatePayload, getPartitionName } from './config.js';
-import { BenchmarkMetrics, sleep } from './lib/metrics.js';
-import { DockerMetrics, CONTAINER_NAMES } from './lib/docker-metrics.js';
-import { writeFileSync } from 'fs';
-
-const kafka = new Kafka({
-  clientId: 'benchmark',
-  brokers: [config.endpoints.kafka],
-  logLevel: logLevel.ERROR,  // Suppress WARN spam for leader changes
-  retry: {
-    initialRetryTime: 100,
-    retries: 10,
-    maxRetryTime: 30000,
-    factor: 2,
-  },
-});
+import { config } from './config.js';
+import { BenchmarkMetrics } from './lib/metrics.js';
+import { DockerMetrics } from './lib/docker-metrics.js';
 
 const TOPIC_NAME = 'benchmark';
 
-// Check if topic exists and has expected partitions
-async function verifyTopicExists() {
-  const admin = kafka.admin();
-  await admin.connect();
-  
-  try {
-    const topics = await admin.listTopics();
-    if (!topics.includes(TOPIC_NAME)) {
-      throw new Error(`Topic '${TOPIC_NAME}' not found. Run 'npm run setup:kafka' first.`);
-    }
-    
-    const metadata = await admin.fetchTopicMetadata({ topics: [TOPIC_NAME] });
-    const partitionCount = metadata.topics[0].partitions.length;
-    console.log(`Topic '${TOPIC_NAME}' found with ${partitionCount} partitions`);
-    
-    if (partitionCount < config.partitionCount) {
-      console.warn(`WARNING: Topic has ${partitionCount} partitions, expected ${config.partitionCount}`);
-    }
-  } finally {
-    await admin.disconnect();
+const kafka = new Kafka({
+  clientId: 'benchmark-client',
+  brokers: [config.endpoints.kafka],
+  logLevel: logLevel.ERROR,
+  retry: {
+    initialRetryTime: 100,
+    retries: 8
   }
-}
+});
 
-async function runLatencyBenchmark() {
-  console.log('\n--- Kafka: Latency Benchmark (single messages) ---');
-  
-  const producer = kafka.producer({
-    allowAutoTopicCreation: false,
-    createPartitioner: Partitioners.LegacyPartitioner,
-    metadataMaxAge: 10000,  // Refresh metadata every 10s for partition leader changes
-    // CRITICAL: linger.ms = 0 for no batching (fair comparison)
-    // KafkaJS doesn't have linger.ms, but we send one message at a time
-    // and await each send, which achieves the same effect
+function generatePayload() {
+  return JSON.stringify({
+    data: 'x'.repeat(config.messageSize - 50),
+    ts: Date.now(),
   });
-  
-  await producer.connect();
-  
-  const metrics = new BenchmarkMetrics('Kafka - Latency');
-  const scenario = config.scenarios[0];  // latency-focused
-  const messagesPerSecond = scenario.messagesPerSecond;
-  const totalMessages = messagesPerSecond * scenario.duration;
-  const delayMs = 1000 / messagesPerSecond;
-  
-  console.log(`Target: ${messagesPerSecond} msg/s for ${scenario.duration}s = ${totalMessages} messages`);
-  
-  metrics.start();
-  
-  for (let i = 0; i < totalMessages; i++) {
-    const partitionIndex = i % config.partitionCount;
-    const payload = generatePayload();
-    const payloadStr = JSON.stringify(payload);
-    const startNs = process.hrtime.bigint();
-    
-    try {
-      await producer.send({
-        topic: TOPIC_NAME,
-        acks: config.durability.kafkaAcks,  // -1 = all
-        messages: [{
-          key: `lat-${i}`,
-          value: payloadStr,
-          partition: partitionIndex,
-        }],
-      });
-      
-      metrics.recordLatency(startNs);
-      metrics.incrementSent(payloadStr.length);
-    } catch (e) {
-      metrics.incrementErrors();
-      console.error('Send error:', e.message);
-    }
-    
-    // Rate limiting
-    if (delayMs > 0) {
-      await sleep(delayMs);
-    }
-    
-    if ((i + 1) % 1000 === 0) {
-      process.stdout.write(`\r  Progress: ${i + 1}/${totalMessages} messages`);
-    }
-  }
-  
-  metrics.stop();
-  await producer.disconnect();
-  console.log('');
-  return metrics.printReport();
 }
 
-async function runThroughputBenchmark() {
-  console.log('\n--- Kafka: Throughput Benchmark (max speed, no batching) ---');
+async function runPushBenchmark() {
+  console.log('\n--- Kafka: Push Benchmark ---');
+  console.log(`Pushing to ${config.partitionCount} partitions with ${config.producer.concurrency} concurrent producers`);
+  console.log(`Duration: ${config.duration}s`);
   
-  const metrics = new BenchmarkMetrics('Kafka - Throughput');
-  const scenario = config.scenarios[1];  // throughput-focused
+  const metrics = new BenchmarkMetrics('Kafka - Push');
   const concurrency = config.producer.concurrency;
+  const endTime = Date.now() + (config.duration * 1000);
+  let messageIndex = 0;
   
-  console.log(`Running for ${scenario.duration}s with ${concurrency} concurrent producers`);
-  
-  // Create multiple producers for concurrency
   const producers = await Promise.all(
-    Array(concurrency).fill(null).map(async (_, i) => {
-      const p = kafka.producer({ allowAutoTopicCreation: false, createPartitioner: Partitioners.LegacyPartitioner, metadataMaxAge: 10000 });
-      await p.connect();
-      return p;
+    Array(concurrency).fill(null).map(async () => {
+      const producer = kafka.producer({
+        createPartitioner: Partitioners.LegacyPartitioner,
+        allowAutoTopicCreation: false,
+        idempotent: false,
+        maxInFlightRequests: 1,  // Only 1 request at a time - no pipelining
+        metadataMaxAge: 10000,
+        retry: {
+          initialRetryTime: 100,
+          retries: 5
+        }
+      });
+      await producer.connect();
+      return producer;
     })
   );
   
-  const endTime = Date.now() + (scenario.duration * 1000);
-  let messageIndex = 0;
-  
   metrics.start();
   
-  // Run concurrent producers
   const producerTasks = producers.map(async (producer, producerId) => {
     while (Date.now() < endTime) {
-      const batchPromises = [];
+      const idx = messageIndex++;
+      const partition = idx % config.partitionCount;
+      const payload = generatePayload();
+      const startNs = process.hrtime.bigint();
       
-      // Each producer sends multiple messages concurrently
-      for (let j = 0; j < 10; j++) {
-        const idx = messageIndex++;
-        const partitionIndex = idx % config.partitionCount;
-        const payload = generatePayload();
-        const payloadStr = JSON.stringify(payload);
-        const startNs = process.hrtime.bigint();
+      try {
+        await producer.send({
+          topic: TOPIC_NAME,
+          messages: [{
+            key: `key-${partition}`,
+            value: payload,
+            partition: partition,
+          }],
+          acks: -1,
+        });
         
-        batchPromises.push(
-          producer.send({
-            topic: TOPIC_NAME,
-            acks: config.durability.kafkaAcks,
-            messages: [{
-              key: `thr-${producerId}-${idx}`,
-              value: payloadStr,
-              partition: partitionIndex,
-            }],
-          })
-            .then(() => {
-              metrics.recordLatency(startNs);
-              metrics.incrementSent(payloadStr.length);
-            })
-            .catch((e) => {
-              metrics.incrementErrors();
-            })
-        );
+        metrics.recordLatency(startNs);
+        metrics.incrementSent(1, payload.length);
+      } catch (e) {
+        metrics.incrementErrors();
       }
-      
-      await Promise.all(batchPromises);
     }
   });
   
-  // Progress reporter
   const progressInterval = setInterval(() => {
-    const elapsed = (Date.now() - (endTime - scenario.duration * 1000)) / 1000;
+    const elapsed = (Date.now() - (endTime - config.duration * 1000)) / 1000;
     const rate = metrics.messagesSent / elapsed;
     process.stdout.write(`\r  Sent: ${metrics.messagesSent.toLocaleString()} msgs, Rate: ${Math.round(rate).toLocaleString()} msg/s`);
   }, 1000);
@@ -179,142 +88,137 @@ async function runThroughputBenchmark() {
   clearInterval(progressInterval);
   
   metrics.stop();
-  
-  // Disconnect all producers
-  await Promise.all(producers.map(p => p.disconnect()));
-  
   console.log('');
+  
+  for (const producer of producers) {
+    await producer.disconnect();
+  }
+  
   return metrics.printReport();
 }
 
-async function runPartitionFanoutBenchmark() {
-  console.log(`\n--- Kafka: Partition Fanout Benchmark (${config.partitionCount} partitions) ---`);
+async function sleep(ms) {
+  return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+async function runConsumeBenchmark() {
+  console.log('\n--- Kafka: Consume Benchmark ---');
+  console.log(`Consuming with ${config.consumer.concurrency} concurrent consumers (single group)`);
   
-  const producer = kafka.producer({ allowAutoTopicCreation: false, createPartitioner: Partitioners.LegacyPartitioner, metadataMaxAge: 10000 });
-  await producer.connect();
+  // Wait for broker to recover after producer benchmark
+  console.log('Waiting for broker to stabilize...');
+  await sleep(5000);
   
-  const metrics = new BenchmarkMetrics('Kafka - Partition Fanout');
-  const scenario = config.scenarios[2];  // partition-fanout
-  const concurrency = config.producer.concurrency;
+  const metrics = new BenchmarkMetrics('Kafka - Consume');
+  const concurrency = config.consumer.concurrency;
+  const groupId = `benchmark-group-${Date.now()}`;
   
-  console.log(`Publishing to ${config.partitionCount} different partitions`);
-  console.log(`Target: ${scenario.messagesPerSecond} msg/s for ${scenario.duration}s`);
-  
-  metrics.start();
-  
-  let messageIndex = 0;
-  const endTime = Date.now() + (scenario.duration * 1000);
-  const targetDelay = 1000 / scenario.messagesPerSecond;
-  
-  while (Date.now() < endTime) {
-    const idx = messageIndex++;
-    const partitionIndex = idx % config.partitionCount;
-    const payload = generatePayload();
-    const payloadStr = JSON.stringify(payload);
-    const startNs = process.hrtime.bigint();
+  // Create consumers sequentially with single group
+  const consumers = [];
+  for (let i = 0; i < concurrency; i++) {
+    const consumer = kafka.consumer({ 
+      groupId: groupId,
+      sessionTimeout: 60000,
+      heartbeatInterval: 5000,
+      rebalanceTimeout: 120000,
+      maxWaitTimeInMs: 5000,
+      retry: {
+        initialRetryTime: 1000,
+        retries: 10,
+        maxRetryTime: 30000,
+      }
+    });
     
-    try {
-      await producer.send({
-        topic: TOPIC_NAME,
-        acks: config.durability.kafkaAcks,
-        messages: [{
-          key: `fan-${idx}`,
-          value: payloadStr,
-          partition: partitionIndex,
-        }],
-      });
-      
-      metrics.recordLatency(startNs);
-      metrics.incrementSent(payloadStr.length);
-    } catch (e) {
-      metrics.incrementErrors();
+    let connected = false;
+    for (let attempt = 0; attempt < 5 && !connected; attempt++) {
+      try {
+        await consumer.connect();
+        await consumer.subscribe({ topic: TOPIC_NAME, fromBeginning: true });
+        connected = true;
+        consumers.push(consumer);
+        console.log(`  Consumer ${i + 1}/${concurrency} connected`);
+      } catch (e) {
+        console.log(`  Consumer ${i + 1} connect attempt ${attempt + 1} failed: ${e.message}`);
+        await sleep(2000);
+      }
     }
     
-    // Rate limiting
-    if (targetDelay > 0) {
-      await sleep(targetDelay);
-    }
-    
-    if (messageIndex % 1000 === 0) {
-      const elapsed = (Date.now() - (endTime - scenario.duration * 1000)) / 1000;
-      const rate = metrics.messagesSent / elapsed;
-      process.stdout.write(`\r  Sent: ${metrics.messagesSent.toLocaleString()} msgs, Rate: ${Math.round(rate).toLocaleString()} msg/s`);
+    // Small delay between consumer creations
+    if (i < concurrency - 1) {
+      await sleep(500);
     }
   }
   
-  metrics.stop();
-  await producer.disconnect();
-  console.log('');
-  return metrics.printReport();
-}
-
-async function runConsumerBenchmark() {
-  console.log('\n--- Kafka: Consumer Benchmark ---');
+  if (consumers.length === 0) {
+    console.error('No consumers could connect');
+    return { error: 'No consumers connected' };
+  }
   
-  const batchSize = config.consumer.batchSize;
+  console.log(`  ${consumers.length} consumers ready`);
   
-  const consumer = kafka.consumer({
-    groupId: `benchmark-consumer-${Date.now()}`,
-    sessionTimeout: 30000,
-    heartbeatInterval: 3000,
-    // Disable auto-commit for manual ack (fair comparison)
-    autoCommit: false,
-    // Fetch settings for batching
-    maxBytesPerPartition: 1024 * 1024,  // 1MB per partition
-    minBytes: 1,
-    maxWaitTimeInMs: 100,  // Don't wait too long for batches
-  });
-  
-  await consumer.connect();
-  await consumer.subscribe({ topic: TOPIC_NAME, fromBeginning: true });
-  
-  const metrics = new BenchmarkMetrics('Kafka - Consumer');
-  
-  console.log(`Consuming with batch processing (partitions processed in parallel internally)...`);
-  
-  const benchmarkStartTime = Date.now();
   metrics.start();
   
   let totalConsumed = 0;
   let lastMessageTime = Date.now();
+  const maxIdleTime = 15000;
+  const benchmarkStartTime = Date.now();
+  const maxWait = 120000;
   
-  // Use eachBatch for fair comparison with Queen's batch pop
-  await consumer.run({
-    eachBatch: async ({ batch, resolveOffset, commitOffsetsIfNecessary }) => {
-      const startNs = process.hrtime.bigint();
-      const messages = batch.messages;
+  const consumerTasks = consumers.map(async (consumer) => {
+    return new Promise((resolve) => {
+      consumer.run({
+        autoCommit: true,
+        autoCommitInterval: 1000,
+        eachBatch: async ({ batch, heartbeat }) => {
+          const startNs = process.hrtime.bigint();
+          const batchSize = batch.messages.length;
+          
+          if (batchSize > 0) {
+            totalConsumed += batchSize;
+            metrics.incrementReceived(batchSize);
+            metrics.recordLatency(startNs);
+            lastMessageTime = Date.now();
+          }
+          
+          try {
+            await heartbeat();
+          } catch (e) {
+            // Ignore heartbeat errors
+          }
+          
+          if (Date.now() - lastMessageTime > maxIdleTime || Date.now() - benchmarkStartTime > maxWait) {
+            resolve();
+          }
+        }
+      }).catch(() => resolve());
       
-      if (messages.length > 0) {
-        // Process and ack each message in batch
-        for (const message of messages) {
-          metrics.incrementReceived(message.value.length);
-          resolveOffset(message.offset);
+      const checkInterval = setInterval(() => {
+        if (Date.now() - lastMessageTime > maxIdleTime || Date.now() - benchmarkStartTime > maxWait) {
+          clearInterval(checkInterval);
+          resolve();
         }
-        
-        // Commit the batch
-        await commitOffsetsIfNecessary();
-        
-        metrics.recordLatency(startNs);
-        totalConsumed += messages.length;
-        lastMessageTime = Date.now();
-        
-        if (totalConsumed % 1000 === 0) {
-          process.stdout.write(`\r  Consumed: ${totalConsumed.toLocaleString()} messages`);
-        }
-      }
-    },
+      }, 1000);
+    });
   });
   
-  // Wait for messages or timeout
-  const maxWait = 30000;  // 30 seconds
-  while (Date.now() - lastMessageTime < 5000) {
-    await sleep(100);
-    if (Date.now() - benchmarkStartTime > maxWait) break;
-  }
+  const progressInterval = setInterval(() => {
+    process.stdout.write(`\r  Consumed: ${totalConsumed.toLocaleString()} messages`);
+  }, 2000);
+  
+  await Promise.all(consumerTasks);
+  clearInterval(progressInterval);
   
   metrics.stop();
-  await consumer.disconnect();
   console.log('');
+  
+  for (const consumer of consumers) {
+    try {
+      await consumer.disconnect();
+    } catch (e) {
+      // Ignore disconnect errors
+    }
+  }
+  
   return metrics.printReport();
 }
 
@@ -322,22 +226,16 @@ async function main() {
   console.log('╔════════════════════════════════════════════════════════════╗');
   console.log('║           Apache Kafka Benchmark Suite                     ║');
   console.log('╚════════════════════════════════════════════════════════════╝');
-  console.log(`\nConfiguration:`);
+  console.log();
+  console.log('Configuration:');
   console.log(`  Partitions: ${config.partitionCount}`);
-  console.log(`  Linger: 0ms (no batching - each send awaited)`);
-  console.log(`  Acks: ${config.durability.kafkaAcks} (all)`);
+  console.log(`  Acks: -1 (all replicas)`);
   console.log(`  Message size: ${config.messageSize} bytes`);
+  console.log(`  Duration: ${config.duration}s`);
+  console.log(`  Producers: ${config.producer.concurrency}`);
+  console.log(`  Consumers: ${config.consumer.concurrency}`);
   
-  // Verify topic exists before starting
-  try {
-    await verifyTopicExists();
-  } catch (e) {
-    console.error(`\n❌ ${e.message}`);
-    process.exit(1);
-  }
-  
-  // Start Docker metrics collection
-  const dockerMetrics = new DockerMetrics(CONTAINER_NAMES.kafka);
+  const dockerMetrics = new DockerMetrics(['kafka-broker']);
   dockerMetrics.start();
   
   const results = {
@@ -345,33 +243,33 @@ async function main() {
     timestamp: new Date().toISOString(),
     config: {
       partitions: config.partitionCount,
-      lingerMs: 0,
-      acks: config.durability.kafkaAcks,
+      acks: -1,
       messageSize: config.messageSize,
+      duration: config.duration,
     },
     benchmarks: {},
-    dockerMetrics: null,
   };
   
-  try {
-    results.benchmarks.latency = await runLatencyBenchmark();
-    results.benchmarks.throughput = await runThroughputBenchmark();
-    results.benchmarks.partitionFanout = await runPartitionFanoutBenchmark();
-    results.benchmarks.consumer = await runConsumerBenchmark();
-  } catch (e) {
-    console.error('Benchmark failed:', e);
-  }
+  results.benchmarks.push = await runPushBenchmark();
+  results.benchmarks.consume = await runConsumeBenchmark();
   
-  // Stop and report Docker metrics
   dockerMetrics.stop();
-  results.dockerMetrics = dockerMetrics.printReport();
+  results.dockerMetrics = dockerMetrics.getStats();
   
-  // Save results
+  console.log('\n────────────────────────────────────────────────────────────');
+  console.log('  Docker Resource Usage');
+  console.log('────────────────────────────────────────────────────────────');
+  for (const [container, stats] of Object.entries(results.dockerMetrics.containers)) {
+    console.log(`\n  Container: ${container}`);
+    console.log(`    CPU:    avg=${stats.cpu.avg.toFixed(2)}%  max=${stats.cpu.max.toFixed(2)}%  p95=${stats.cpu.p95.toFixed(2)}%`);
+    console.log(`    Memory: avg=${stats.memoryMB.avg.toFixed(2)}MB  max=${stats.memoryMB.max.toFixed(2)}MB  p95=${stats.memoryMB.p95.toFixed(2)}MB`);
+  }
+  console.log('────────────────────────────────────────────────────────────');
+  
+  const fs = await import('fs');
   const filename = `results-kafka-${Date.now()}.json`;
-  writeFileSync(filename, JSON.stringify(results, null, 2));
+  fs.writeFileSync(filename, JSON.stringify(results, null, 2));
   console.log(`\nResults saved to ${filename}`);
-  
-  return results;
 }
 
 main().catch(console.error);

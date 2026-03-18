@@ -1,0 +1,127 @@
+{
+  "system": "Queen MQ",
+  "timestamp": "2026-03-18T07:02:59.758Z",
+  "config": {
+    "partitions": 10000,
+    "messageSize": 256,
+    "duration": 60
+  },
+  "benchmarks": {
+    "push": {
+      "name": "Queen - Push",
+      "duration": {
+        "ms": 60012.735166,
+        "formatted": "60.01s"
+      },
+      "messages": {
+        "sent": 336739,
+        "received": 0,
+        "errors": 0
+      },
+      "throughput": {
+        "messagesPerSecond": 5611,
+        "mbPerSecond": "1.26"
+      },
+      "latency": {
+        "min": "4.068",
+        "max": "232.820",
+        "mean": "17.819",
+        "p50": "16.895",
+        "p75": "20.655",
+        "p90": "24.751",
+        "p95": "28.831",
+        "p99": "40.895",
+        "p999": "102.911",
+        "unit": "ms"
+      }
+    },
+    "consume": {
+      "name": "Queen - Consume",
+      "duration": {
+        "ms": 103691.1685,
+        "formatted": "103.69s"
+      },
+      "messages": {
+        "sent": 0,
+        "received": 336739,
+        "errors": 0
+      },
+      "throughput": {
+        "messagesPerSecond": 3248,
+        "mbPerSecond": "0.00"
+      },
+      "latency": {
+        "min": "10.257",
+        "max": "995.219",
+        "mean": "44.318",
+        "p50": "33.023",
+        "p75": "45.119",
+        "p90": "67.711",
+        "p95": "98.111",
+        "p99": "264.447",
+        "p999": "605.183",
+        "unit": "ms"
+      }
+    }
+  },
+  "dockerMetrics": {
+    "containers": {
+      "queen-postgres": {
+        "cpu": {
+          "min": 66.09,
+          "max": 320.04,
+          "avg": 162.63,
+          "p95": 298.23
+        },
+        "memoryPercent": {
+          "min": 4.72,
+          "max": 11.58,
+          "avg": 9.57,
+          "p95": 11.57
+        },
+        "memoryMB": {
+          "min": 338.2,
+          "max": 830,
+          "avg": 685.77,
+          "p95": 829.2
+        }
+      },
+      "queen-server": {
+        "cpu": {
+          "min": 2.25,
+          "max": 92.27,
+          "avg": 45.41,
+          "p95": 89.73
+        },
+        "memoryPercent": {
+          "min": 1.78,
+          "max": 4.28,
+          "avg": 2.65,
+          "p95": 4.26
+        },
+        "memoryMB": {
+          "min": 18.28,
+          "max": 43.79,
+          "avg": 27.14,
+          "p95": 43.58
+        }
+      }
+    },
+    "combined": {
+      "cpu": {
+        "min": 96.15,
+        "max": 375.07,
+        "avg": 208.04,
+        "p95": 315.2
+      },
+      "memoryMB": {
+        "min": 381.85,
+        "max": 855.06,
+        "avg": 712.9,
+        "p95": 853.66
+      }
+    },
+    "sampleCount": 324,
+    "durationMs": 161304
+  }
+}
