@@ -36,15 +36,7 @@ This workload pattern is typical for:
 - **Workaround required:** Create partitions incrementally in batches of 2,000
 - Topic creation took ~40 seconds (vs instant for Queen)
 
-**Performance Degradation:**
-| Metric | 5K Partitions | 10K Partitions | Change |
-|--------|---------------|----------------|--------|
-| Push Throughput | ~8,000 msg/s | ~2,500 msg/s | **-69%** |
-| Push p99 Latency | ~15ms | ~700ms | **+4500%** |
-| Memory Usage | ~2.7GB | **8GB (hit limit)** | +200% |
-| CPU Usage | ~85% | ~330% | +290% |
-
-Kafka at 10K partitions on a single broker:
+**At 10K partitions on a single broker:**
 - Hit the 8GB memory limit
 - Extreme latency spikes (p99 > 700ms, max > 2 seconds)
 - Consumer group coordination becomes unstable with constant rebalancing
