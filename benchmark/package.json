@@ -12,10 +12,12 @@
     "stop:pulsar": "docker compose -f docker-compose.pulsar.yml down -v",
     "setup:kafka": "node scripts/setup-kafka.js",
     "setup:pulsar": "node scripts/setup-pulsar.js",
+    "setup:pulsar-keyshared": "node scripts/setup-pulsar-keyshared.js",
     "setup:queen": "node scripts/setup-queen.js",
     "bench:queen": "node benchmark-queen.js",
     "bench:kafka": "node benchmark-kafka.js",
     "bench:pulsar": "node benchmark-pulsar.js",
+    "bench:pulsar-keyshared": "node benchmark-pulsar-keyshared.js",
     "bench:all": "node run-all-benchmarks.js",
     "report": "node run-all-benchmarks.js report"
   },

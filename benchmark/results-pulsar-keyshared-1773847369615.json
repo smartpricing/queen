@@ -1,0 +1,110 @@
+{
+  "system": "Apache Pulsar (Key_Shared)",
+  "timestamp": "2026-03-18T15:21:33.156Z",
+  "config": {
+    "physicalPartitions": 1,
+    "virtualPartitions": 10000,
+    "subscriptionType": "Key_Shared",
+    "batchingEnabled": false,
+    "messageSize": 256,
+    "duration": 60
+  },
+  "benchmarks": {
+    "push": {
+      "name": "Pulsar Key_Shared - Push",
+      "duration": {
+        "ms": 60004.511208,
+        "formatted": "60.00s"
+      },
+      "messages": {
+        "sent": 11047,
+        "received": 0,
+        "errors": 0
+      },
+      "throughput": {
+        "messagesPerSecond": 184,
+        "mbPerSecond": "0.04"
+      },
+      "latency": {
+        "min": "2.532",
+        "max": "39.873",
+        "mean": "5.415",
+        "p50": "5.271",
+        "p75": "6.019",
+        "p90": "6.703",
+        "p95": "7.207",
+        "p99": "8.927",
+        "p999": "18.703",
+        "unit": "ms"
+      }
+    },
+    "consume": {
+      "name": "Pulsar Key_Shared - Consume",
+      "duration": {
+        "ms": 11350.053916,
+        "formatted": "11.35s"
+      },
+      "messages": {
+        "sent": 0,
+        "received": 11047,
+        "errors": 0
+      },
+      "throughput": {
+        "messagesPerSecond": 973,
+        "mbPerSecond": "0.00"
+      },
+      "latency": {
+        "min": "102.083",
+        "max": "123.691",
+        "mean": "112.283",
+        "p50": "110.655",
+        "p75": "117.631",
+        "p90": "120.575",
+        "p95": "123.711",
+        "p99": "123.711",
+        "p999": "123.711",
+        "unit": "ms"
+      }
+    }
+  },
+  "dockerMetrics": {
+    "containers": {
+      "pulsar-broker": {
+        "cpu": {
+          "min": 3.63,
+          "max": 255.54,
+          "avg": 41.18,
+          "p95": 198.34
+        },
+        "memoryPercent": {
+          "min": 53.77,
+          "max": 56.15,
+          "avg": 54.13,
+          "p95": 55.8
+        },
+        "memoryMB": {
+          "min": 4404.22,
+          "max": 4599.81,
+          "avg": 4434,
+          "p95": 4571.14
+        }
+      }
+    },
+    "combined": {
+      "cpu": {
+        "min": 3.63,
+        "max": 255.54,
+        "avg": 41.18,
+        "p95": 198.34
+      },
+      "memoryMB": {
+        "min": 4404.22,
+        "max": 4599.81,
+        "avg": 4434,
+        "p95": 4571.14
+      }
+    },
+    "sampleCount": 75,
+    "durationMs": 74321
+  }
+}

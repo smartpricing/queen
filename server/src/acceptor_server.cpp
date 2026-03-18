@@ -458,6 +458,7 @@ static void worker_thread(const Config& config, int worker_id, int num_workers,
                     global_async_db_pool,
                     global_db_thread_pool,
                     global_system_thread_pool,
+                    global_system_info.hostname,
                     config.jobs.stats_interval_ms,
                     config.jobs.stats_reconcile_interval_ms,
                     config.jobs.stats_history_retention_days

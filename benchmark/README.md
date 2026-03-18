@@ -59,6 +59,45 @@ This is a fundamental architectural difference, not a configuration issue:
 - Kafka: Consumer groups assign partition subsets to each consumer
 - Pulsar: Each client instance connects to ALL partitions by default
 
+### Pulsar Key_Shared: Alternative Approach
+
+Pulsar offers an alternative for high partition counts: **Key_Shared subscription** with virtual partitioning.
+
+Instead of creating 10K physical partitions, use 1 partition with message keys for routing:
+
+```
+┌─────────────────────────────────────────────────┐
+│           Single Pulsar Partition               │
+│                                                 │
+│  key=0 ──┐                     ┌──► Consumer 0  │
+│  key=1 ──┼── Key_Shared ───────┼──► Consumer 1  │
+│  key=2 ──┤   Subscription      ├──► Consumer 2  │
+│  ...     │                     │    ...         │
+│  key=N ──┘                     └──► Consumer N  │
+└─────────────────────────────────────────────────┘
+```
+
+**Key_Shared Results (1 Producer, 1 Consumer):**
+
+| Virtual Partitions | Push Throughput | Consume Throughput | Status |
+|--------------------|-----------------|-------------------|--------|
+| 100 keys | 201 msg/s | 1,053 msg/s | ✅ Works |
+| 10,000 keys | 184 msg/s | 973 msg/s | ✅ Works |
+| 10K physical partitions | 898 msg/s | N/A | ❌ Consumer fails |
+
+**Key insight:** Key_Shared maintains consistent performance (~8% drop from 100 to 10K keys), while physical partitions fail entirely at 10K.
+
+**Trade-offs:**
+- ✅ Scales to unlimited virtual partitions
+- ✅ Per-key ordering (equivalent to per-partition)
+- ⚠️ Single partition = single broker handles all writes
+- ⚠️ No write parallelism (acceptable for single-node benchmarks)
+
+Run the Key_Shared benchmark:
+```bash
+npm run setup:pulsar-keyshared && npm run bench:pulsar-keyshared
+```
+
 ### Queen at 10K Partitions: No Issues
 
 | Metric | Value |
@@ -216,6 +255,9 @@ npm install
 npm run start:queen && npm run setup:queen && npm run bench:queen && npm run stop:queen
 npm run start:kafka && npm run setup:kafka && npm run bench:kafka && npm run stop:kafka
 npm run start:pulsar && npm run setup:pulsar && npm run bench:pulsar && npm run stop:pulsar
+
+# Pulsar Key_Shared (alternative for high partition counts):
+npm run start:pulsar && npm run setup:pulsar-keyshared && npm run bench:pulsar-keyshared && npm run stop:pulsar
 ```
 
 ### Configuration
@@ -306,7 +348,8 @@ The goal is to evaluate performance for workloads where:
 
 - `results-queen-{timestamp}.json` - Queen benchmark results
 - `results-kafka-{timestamp}.json` - Kafka benchmark results  
-- `results-pulsar-{timestamp}.json` - Pulsar benchmark results
+- `results-pulsar-{timestamp}.json` - Pulsar benchmark results (partitioned)
+- `results-pulsar-keyshared-{timestamp}.json` - Pulsar Key_Shared benchmark results
 
 ## Reproducing Results
 

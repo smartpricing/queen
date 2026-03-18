@@ -36,6 +36,7 @@ private:
     int stats_interval_ms_;           // Fast aggregation interval (default: 10s)
     int reconcile_interval_ms_;       // Full reconciliation interval (default: 2 min)
     int history_retention_days_;      // How long to keep history (default: 7 days)
+    std::string hostname_;            // For stats leader election
     
     // Tracking
     std::chrono::steady_clock::time_point last_reconcile_;
@@ -46,6 +47,7 @@ public:
         std::shared_ptr<AsyncDbPool> db_pool,
         std::shared_ptr<astp::ThreadPool> db_thread_pool,
         std::shared_ptr<astp::ThreadPool> system_thread_pool,
+        const std::string& hostname,
         int stats_interval_ms = 10000,
         int reconcile_interval_ms = 120000,
         int history_retention_days = 7
@@ -63,7 +65,10 @@ public:
 private:
     void schedule_next_run();
     void stats_cycle();
-    
+
+    // Leader election - only one server runs stats in multi-instance deployments
+    bool is_stats_leader();
+
     // Stats computation methods
     void run_full_reconciliation();
     void run_fast_aggregation();

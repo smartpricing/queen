@@ -1,4 +1,5 @@
 #include "queen/stats_service.hpp"
+#include <unistd.h>  // getpid()
 
 namespace queen {
 
@@ -6,6 +7,7 @@ StatsService::StatsService(
     std::shared_ptr<AsyncDbPool> db_pool,
     std::shared_ptr<astp::ThreadPool> db_thread_pool,
     std::shared_ptr<astp::ThreadPool> system_thread_pool,
+    const std::string& hostname,
     int stats_interval_ms,
     int reconcile_interval_ms,
     int history_retention_days
@@ -14,7 +16,8 @@ StatsService::StatsService(
     system_thread_pool_(system_thread_pool),
     stats_interval_ms_(stats_interval_ms),
     reconcile_interval_ms_(reconcile_interval_ms),
-    history_retention_days_(history_retention_days) {
+    history_retention_days_(history_retention_days),
+    hostname_(hostname) {
 }
 
 StatsService::~StatsService() {
@@ -110,7 +113,35 @@ void StatsService::stats_cycle() {
     }
 }
 
+bool StatsService::is_stats_leader() {
+    try {
+        auto conn = db_pool_->acquire();
+
+        // Pass hostname and PID to handle multiple instances on same host
+        sendQueryParamsAsync(conn.get(), "SELECT queen.is_stats_leader($1, $2)",
+            {hostname_, std::to_string(getpid())});
+        auto result = getTuplesResult(conn.get());
+
+        if (PQntuples(result.get()) > 0) {
+            const char* val = PQgetvalue(result.get(), 0, 0);
+            return val && val[0] == 't';
+        }
+        return true;  // Default to leader if query fails
+
+    } catch (const std::exception& e) {
+        spdlog::warn("StatsService: Failed to check leader status: {}, assuming leader", e.what());
+        return true;  // On error, assume leader to avoid stats gaps
+    }
+}
+
 void StatsService::run_full_reconciliation() {
+    // Check if this instance is the stats leader
+    if (!is_stats_leader()) {
+        spdlog::info("StatsService: Skipping full reconciliation (not stats leader, hostname={})", hostname_);
+        return;
+    }
+    spdlog::info("StatsService: Running full reconciliation (stats leader, hostname={})", hostname_);
+
     try {
         auto conn = db_pool_->acquire();
         
@@ -131,9 +162,15 @@ void StatsService::run_full_reconciliation() {
 }
 
 void StatsService::run_fast_aggregation() {
+    // Check if this instance is the stats leader
+    if (!is_stats_leader()) {
+        spdlog::debug("StatsService: Skipping fast aggregation (not stats leader, hostname={})", hostname_);
+        return;
+    }
+
     try {
         auto conn = db_pool_->acquire();
-        
+
         // Step 0: Increment message counts (fast - only counts new messages since last scan)
         // This updates pending/processing/completed counts per partition
         sendQueryParamsAsync(conn.get(), "SELECT queen.increment_message_counts_v1()", {});

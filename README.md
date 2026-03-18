@@ -132,6 +132,7 @@ The repository is structured as follows:
 
 | Server Version | Description | Compatible Clients |
 |----------------|-------------|-------------------|
+| **0.12.14** |  | JS ≥0.7.4, Python ≥0.7.4 |
 | **0.12.13** | Added watermark tracking for efficient wildcard POP discovery. x20 faster pop on high partition count queues | JS ≥0.7.4, Python ≥0.7.4 |
 | **0.12.12** | Built-in database migration (pg_dump \| pg_restore, no temp file, selective table groups, row count validation) | JS ≥0.7.4, Python ≥0.7.4 |
 | **0.12.10** | Fixed JWKS fetch over HTTPS (cpp-httplib TLS support) | JS ≥0.7.4, Python ≥0.7.4, 0.12.0 if needs to use |

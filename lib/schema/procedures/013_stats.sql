@@ -1562,9 +1562,52 @@ END;
 $$;
 
 -- ============================================================================
+-- STATS LEADER ELECTION
+-- ============================================================================
+-- Elects a single server to run stats aggregation in multi-instance deployments.
+-- Leader = lexicographically smallest hostname that reported metrics recently.
+-- This ensures only ONE server runs stats, avoiding redundant DB work.
+
+-- Drop old single-argument version if exists (replaced by 2-arg version with default)
+DROP FUNCTION IF EXISTS queen.is_stats_leader(TEXT);
+
+CREATE OR REPLACE FUNCTION queen.is_stats_leader(p_hostname TEXT, p_pid INTEGER DEFAULT NULL)
+RETURNS BOOLEAN
+LANGUAGE plpgsql
+AS $$
+DECLARE
+    v_leader_hostname TEXT;
+    v_leader_pid INTEGER;
+BEGIN
+    -- Leader = lexicographically smallest (hostname, pid) that reported in last 2 minutes
+    -- In k8s: queen-mq-0 < queen-mq-1 < queen-mq-2, so queen-mq-0 is leader while alive
+    -- On same host with multiple instances: lowest PID wins
+    SELECT hostname, pid INTO v_leader_hostname, v_leader_pid
+    FROM queen.worker_metrics
+    WHERE bucket_time > NOW() - INTERVAL '2 minutes'
+    ORDER BY hostname ASC, pid ASC
+    LIMIT 1;
+
+    -- No workers registered yet? Caller is the leader (bootstrap case)
+    IF v_leader_hostname IS NULL THEN
+        RETURN TRUE;
+    END IF;
+
+    -- Am I the leader?
+    -- If p_pid is NULL (not provided), only compare hostname (backward compatible)
+    IF p_pid IS NULL THEN
+        RETURN p_hostname = v_leader_hostname;
+    END IF;
+
+    RETURN p_hostname = v_leader_hostname AND p_pid = v_leader_pid;
+END;
+$$;
+
+-- ============================================================================
 -- GRANT PERMISSIONS
 -- ============================================================================
 
+GRANT EXECUTE ON FUNCTION queen.is_stats_leader(TEXT, INTEGER) TO PUBLIC;
 GRANT EXECUTE ON FUNCTION queen.increment_message_counts_v1() TO PUBLIC;
 GRANT EXECUTE ON FUNCTION queen.compute_partition_stats_v1(BOOLEAN) TO PUBLIC;
 GRANT EXECUTE ON FUNCTION queen.compute_partition_stats_v2(BOOLEAN) TO PUBLIC;
