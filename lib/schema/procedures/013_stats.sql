@@ -708,6 +708,105 @@ BEGIN
 END;
 $$;
 
+-- Optimized queue stats aggregation using CTE
+-- Eliminates: correlated subqueries (3N lookups), double fan-out join through partitions table
+-- Aggregates directly from partition stats rows which already have queue_id
+CREATE OR REPLACE FUNCTION queen.aggregate_queue_stats_v2()
+RETURNS JSONB
+LANGUAGE plpgsql
+AS $$
+DECLARE
+    v_updated INTEGER := 0;
+BEGIN
+    WITH partition_agg AS (
+        SELECT
+            s.queue_id,
+            COUNT(*) AS child_count,
+            SUM(s.total_messages) AS total_messages,
+            SUM(s.pending_messages) AS pending_messages,
+            SUM(s.processing_messages) AS processing_messages,
+            SUM(s.completed_messages) AS completed_messages,
+            SUM(s.dead_letter_messages) AS dead_letter_messages,
+            MIN(s.oldest_pending_at) AS oldest_pending_at,
+            MAX(s.newest_message_at) AS newest_message_at,
+            COALESCE(AVG(EXTRACT(EPOCH FROM (NOW() - s.oldest_pending_at)))::integer, 0) AS avg_lag_seconds,
+            COALESCE(MAX(EXTRACT(EPOCH FROM (NOW() - s.oldest_pending_at)))::integer, 0) AS max_lag_seconds,
+            COALESCE(AVG(s.pending_messages)::integer, 0) AS avg_offset_lag,
+            COALESCE(MAX(s.pending_messages)::integer, 0) AS max_offset_lag
+        FROM queen.stats s
+        WHERE s.stat_type = 'partition'
+          AND s.queue_id IS NOT NULL
+        GROUP BY s.queue_id
+    )
+    INSERT INTO queen.stats (
+        stat_type, stat_key, queue_id,
+        child_count, total_messages, pending_messages, processing_messages,
+        completed_messages, dead_letter_messages,
+        oldest_pending_at, newest_message_at,
+        avg_lag_seconds, max_lag_seconds, avg_offset_lag, max_offset_lag,
+        ingested_per_second, processed_per_second,
+        last_computed_at
+    )
+    SELECT
+        'queue',
+        q.id::text,
+        q.id,
+        COALESCE(pa.child_count, 0),
+        COALESCE(pa.total_messages, 0),
+        COALESCE(pa.pending_messages, 0),
+        COALESCE(pa.processing_messages, 0),
+        COALESCE(pa.completed_messages, 0),
+        COALESCE(pa.dead_letter_messages, 0),
+        pa.oldest_pending_at,
+        pa.newest_message_at,
+        COALESCE(pa.avg_lag_seconds, 0),
+        COALESCE(pa.max_lag_seconds, 0),
+        COALESCE(pa.avg_offset_lag, 0),
+        COALESCE(pa.max_offset_lag, 0),
+        0, 0,
+        NOW()
+    FROM queen.queues q
+    LEFT JOIN partition_agg pa ON pa.queue_id = q.id
+    ON CONFLICT (stat_type, stat_key) DO UPDATE SET
+        child_count = EXCLUDED.child_count,
+        total_messages = EXCLUDED.total_messages,
+        pending_messages = EXCLUDED.pending_messages,
+        processing_messages = EXCLUDED.processing_messages,
+        completed_messages = EXCLUDED.completed_messages,
+        dead_letter_messages = EXCLUDED.dead_letter_messages,
+        oldest_pending_at = EXCLUDED.oldest_pending_at,
+        newest_message_at = EXCLUDED.newest_message_at,
+        avg_lag_seconds = EXCLUDED.avg_lag_seconds,
+        max_lag_seconds = EXCLUDED.max_lag_seconds,
+        avg_offset_lag = EXCLUDED.avg_offset_lag,
+        max_offset_lag = EXCLUDED.max_offset_lag,
+        ingested_per_second = CASE
+            WHEN queen.stats.prev_snapshot_at IS NOT NULL
+                AND NOW() > queen.stats.prev_snapshot_at
+                AND EXTRACT(EPOCH FROM (NOW() - queen.stats.prev_snapshot_at)) > 0
+            THEN ((EXCLUDED.total_messages - queen.stats.prev_total_messages)::numeric /
+                  EXTRACT(EPOCH FROM (NOW() - queen.stats.prev_snapshot_at)))
+            ELSE 0
+        END,
+        processed_per_second = CASE
+            WHEN queen.stats.prev_snapshot_at IS NOT NULL
+                AND NOW() > queen.stats.prev_snapshot_at
+                AND EXTRACT(EPOCH FROM (NOW() - queen.stats.prev_snapshot_at)) > 0
+            THEN ((EXCLUDED.completed_messages - queen.stats.prev_completed_messages)::numeric /
+                  EXTRACT(EPOCH FROM (NOW() - queen.stats.prev_snapshot_at)))
+            ELSE 0
+        END,
+        prev_total_messages = queen.stats.total_messages,
+        prev_completed_messages = queen.stats.completed_messages,
+        prev_snapshot_at = queen.stats.last_computed_at,
+        last_computed_at = NOW();
+
+    GET DIAGNOSTICS v_updated = ROW_COUNT;
+
+    RETURN jsonb_build_object('queuesUpdated', v_updated);
+END;
+$$;
+
 -- Aggregate namespace stats from queue stats
 CREATE OR REPLACE FUNCTION queen.aggregate_namespace_stats_v1()
 RETURNS JSONB
@@ -894,14 +993,113 @@ BEGIN
 END;
 $$;
 
--- Write stats snapshot to history table
--- Calculates deltas by comparing to previous bucket in history (not stats.prev_* fields)
--- Skips if this bucket was already written recently (prevents duplicate work across instances)
--- Write stats history with 1-minute granularity
--- If reconciliation interval > 1 minute, writes multiple rows dividing delta evenly
--- p_bucket_minutes parameter is kept for backwards compatibility but ignored (always 1 min)
+-- Optimized system stats aggregation
+-- Eliminates correlated subqueries for prev_* values (same fix as aggregate_queue_stats_v2)
+CREATE OR REPLACE FUNCTION queen.aggregate_system_stats_v2()
+RETURNS JSONB
+LANGUAGE plpgsql
+AS $$
+DECLARE
+    v_updated INTEGER := 0;
+BEGIN
+    INSERT INTO queen.stats (
+        stat_type, stat_key,
+        child_count, total_messages, pending_messages, processing_messages,
+        completed_messages, dead_letter_messages,
+        avg_lag_seconds, max_lag_seconds, median_lag_seconds,
+        avg_offset_lag, max_offset_lag,
+        ingested_per_second, processed_per_second,
+        last_computed_at
+    )
+    SELECT
+        'system',
+        'global',
+        (SELECT COUNT(*) FROM queen.partitions),
+        COALESCE(SUM(s.total_messages), 0),
+        COALESCE(SUM(s.pending_messages), 0),
+        COALESCE(SUM(s.processing_messages), 0),
+        COALESCE(SUM(s.completed_messages), 0),
+        COALESCE(SUM(s.dead_letter_messages), 0),
+        COALESCE(AVG(s.avg_lag_seconds)::integer, 0),
+        COALESCE(MAX(s.max_lag_seconds), 0),
+        COALESCE(PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY s.max_lag_seconds)::integer, 0),
+        COALESCE(AVG(s.pending_messages)::integer, 0),
+        COALESCE(MAX(s.pending_messages)::integer, 0),
+        COALESCE(SUM(s.ingested_per_second), 0),
+        COALESCE(SUM(s.processed_per_second), 0),
+        NOW()
+    FROM queen.stats s
+    WHERE s.stat_type = 'queue'
+    ON CONFLICT (stat_type, stat_key) DO UPDATE SET
+        child_count = EXCLUDED.child_count,
+        total_messages = EXCLUDED.total_messages,
+        pending_messages = EXCLUDED.pending_messages,
+        processing_messages = EXCLUDED.processing_messages,
+        completed_messages = EXCLUDED.completed_messages,
+        dead_letter_messages = EXCLUDED.dead_letter_messages,
+        avg_lag_seconds = EXCLUDED.avg_lag_seconds,
+        max_lag_seconds = EXCLUDED.max_lag_seconds,
+        median_lag_seconds = EXCLUDED.median_lag_seconds,
+        avg_offset_lag = EXCLUDED.avg_offset_lag,
+        max_offset_lag = EXCLUDED.max_offset_lag,
+        ingested_per_second = CASE
+            WHEN queen.stats.prev_snapshot_at IS NOT NULL
+                AND NOW() > queen.stats.prev_snapshot_at
+                AND EXTRACT(EPOCH FROM (NOW() - queen.stats.prev_snapshot_at)) > 0
+            THEN ((EXCLUDED.total_messages - queen.stats.prev_total_messages)::numeric /
+                  EXTRACT(EPOCH FROM (NOW() - queen.stats.prev_snapshot_at)))
+            ELSE queen.stats.ingested_per_second
+        END,
+        processed_per_second = CASE
+            WHEN queen.stats.prev_snapshot_at IS NOT NULL
+                AND NOW() > queen.stats.prev_snapshot_at
+                AND EXTRACT(EPOCH FROM (NOW() - queen.stats.prev_snapshot_at)) > 0
+            THEN ((EXCLUDED.completed_messages - queen.stats.prev_completed_messages)::numeric /
+                  EXTRACT(EPOCH FROM (NOW() - queen.stats.prev_snapshot_at)))
+            ELSE queen.stats.processed_per_second
+        END,
+        prev_total_messages = queen.stats.total_messages,
+        prev_completed_messages = queen.stats.completed_messages,
+        prev_snapshot_at = queen.stats.last_computed_at,
+        last_computed_at = NOW();
+
+    GET DIAGNOSTICS v_updated = ROW_COUNT;
+
+    RETURN jsonb_build_object('systemUpdated', v_updated);
+END;
+$$;
+
 -- NOTE: write_stats_history_v1 and cleanup_stats_history_v1 REMOVED
 -- Throughput history is now handled by worker_metrics (see 014_worker_metrics.sql)
+
+-- Optimized orphan cleanup using NOT EXISTS instead of NOT IN
+-- NOT IN has NULL-safety issues and generates worse plans
+CREATE OR REPLACE FUNCTION queen.cleanup_orphaned_stats_v2()
+RETURNS JSONB
+LANGUAGE plpgsql
+AS $$
+DECLARE
+    v_deleted INTEGER := 0;
+    v_count INTEGER := 0;
+BEGIN
+    -- Delete partition stats for non-existent partitions
+    DELETE FROM queen.stats s
+    WHERE s.stat_type = 'partition'
+    AND NOT EXISTS (SELECT 1 FROM queen.partitions p WHERE p.id = s.partition_id);
+
+    GET DIAGNOSTICS v_deleted = ROW_COUNT;
+
+    -- Delete queue stats for non-existent queues
+    DELETE FROM queen.stats s
+    WHERE s.stat_type = 'queue'
+    AND NOT EXISTS (SELECT 1 FROM queen.queues q WHERE q.id = s.queue_id);
+
+    GET DIAGNOSTICS v_count = ROW_COUNT;
+    v_deleted := v_deleted + v_count;
+
+    RETURN jsonb_build_object('orphanedDeleted', v_deleted);
+END;
+$$;
 
 -- Cleanup orphaned stats (for deleted queues/partitions)
 CREATE OR REPLACE FUNCTION queen.cleanup_orphaned_stats_v1()
@@ -1337,7 +1535,7 @@ BEGIN
     v_result := v_result || jsonb_build_object('partition', v_step);
     
     -- Step 2: Aggregate queue stats
-    SELECT queen.aggregate_queue_stats_v1() INTO v_step;
+    SELECT queen.aggregate_queue_stats_v2() INTO v_step;
     v_result := v_result || jsonb_build_object('queue', v_step);
     
     -- Step 3: Aggregate namespace stats
@@ -1349,13 +1547,13 @@ BEGIN
     v_result := v_result || jsonb_build_object('task', v_step);
     
     -- Step 5: Aggregate system stats
-    SELECT queen.aggregate_system_stats_v1() INTO v_step;
+    SELECT queen.aggregate_system_stats_v2() INTO v_step;
     v_result := v_result || jsonb_build_object('system', v_step);
-    
+
     -- NOTE: Step 6 (write_stats_history_v1) REMOVED - handled by worker_metrics
-    
+
     -- Step 6: Cleanup orphaned
-    SELECT queen.cleanup_orphaned_stats_v1() INTO v_step;
+    SELECT queen.cleanup_orphaned_stats_v2() INTO v_step;
     v_result := v_result || jsonb_build_object('cleanup', v_step);
     
     -- Lock automatically released when transaction commits
@@ -1371,11 +1569,14 @@ GRANT EXECUTE ON FUNCTION queen.increment_message_counts_v1() TO PUBLIC;
 GRANT EXECUTE ON FUNCTION queen.compute_partition_stats_v1(BOOLEAN) TO PUBLIC;
 GRANT EXECUTE ON FUNCTION queen.compute_partition_stats_v2(BOOLEAN) TO PUBLIC;
 GRANT EXECUTE ON FUNCTION queen.aggregate_queue_stats_v1() TO PUBLIC;
+GRANT EXECUTE ON FUNCTION queen.aggregate_queue_stats_v2() TO PUBLIC;
 GRANT EXECUTE ON FUNCTION queen.aggregate_namespace_stats_v1() TO PUBLIC;
 GRANT EXECUTE ON FUNCTION queen.aggregate_task_stats_v1() TO PUBLIC;
 GRANT EXECUTE ON FUNCTION queen.aggregate_system_stats_v1() TO PUBLIC;
+GRANT EXECUTE ON FUNCTION queen.aggregate_system_stats_v2() TO PUBLIC;
 -- NOTE: write_stats_history_v1 and cleanup_stats_history_v1 REMOVED (handled by worker_metrics)
 GRANT EXECUTE ON FUNCTION queen.cleanup_orphaned_stats_v1() TO PUBLIC;
+GRANT EXECUTE ON FUNCTION queen.cleanup_orphaned_stats_v2() TO PUBLIC;
 GRANT EXECUTE ON FUNCTION queen.refresh_all_stats_v1(BOOLEAN) TO PUBLIC;
 
 -- NOTE: get_system_overview_v2 and get_status_v2 REMOVED (replaced by v3 in 014_worker_metrics.sql)

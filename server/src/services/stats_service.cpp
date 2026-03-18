@@ -140,7 +140,7 @@ void StatsService::run_fast_aggregation() {
         getTuplesResult(conn.get());
         
         // Step 1: Aggregate queue stats from partition stats
-        sendQueryParamsAsync(conn.get(), "SELECT queen.aggregate_queue_stats_v1()", {});
+        sendQueryParamsAsync(conn.get(), "SELECT queen.aggregate_queue_stats_v2()", {});
         getTuplesResult(conn.get());
         
         // NOTE: System throughput now computed by worker_metrics in libqueen
@@ -151,7 +151,7 @@ void StatsService::run_fast_aggregation() {
         sendQueryParamsAsync(conn.get(), "SELECT queen.aggregate_task_stats_v1()", {});
         getTuplesResult(conn.get());
         
-        sendQueryParamsAsync(conn.get(), "SELECT queen.aggregate_system_stats_v1()", {});
+        sendQueryParamsAsync(conn.get(), "SELECT queen.aggregate_system_stats_v2()", {});
         getTuplesResult(conn.get());
         
         spdlog::trace("StatsService: Queue/partition aggregation complete");
