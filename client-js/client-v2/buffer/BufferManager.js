@@ -36,13 +36,11 @@ export class BufferManager {
   async #flushBuffer(queueAddress) {
     const buffer = this.#buffers.get(queueAddress)
     if (!buffer || buffer.messageCount === 0) {
-      logger.log('BufferManager.flushBuffer', { queueAddress, status: 'empty' })
-      console.log(`No buffer or empty buffer for ${queueAddress}`)
+      logger.debug('BufferManager.flushBuffer', { queueAddress, status: 'empty' })
       return
     }
 
     logger.log('BufferManager.flushBuffer', { queueAddress, messageCount: buffer.messageCount })
-    console.log(`Flushing ${buffer.messageCount} messages for ${queueAddress}`)
     buffer.setFlushing(true)
 
     // Create a promise for this flush and track it
@@ -50,13 +48,13 @@ export class BufferManager {
       try {
         const messages = buffer.extractMessages()
 
-        console.log(`Extracted ${messages.length} messages, sending to server...`)
+        logger.debug('BufferManager.flushBuffer', { queueAddress, extracted: messages.length })
 
         if (messages.length === 0) return
 
         // Send to server
         const result = await this.#httpClient.post('/api/v1/push', { items: messages })
-        console.log(`Server responded:`, result ? `${result.length || 'N/A'} items` : 'null')
+        logger.debug('BufferManager.flushBuffer', { queueAddress, serverResponse: result ? `${result.length || 'N/A'} items` : 'null' })
 
         this.#flushCount++
         logger.log('BufferManager.flushBuffer', { queueAddress, status: 'success', messagesSent: messages.length })
@@ -66,7 +64,6 @@ export class BufferManager {
 
       } catch (error) {
         logger.error('BufferManager.flushBuffer', { queueAddress, error: error.message })
-        console.error(`Flush error for ${queueAddress}:`, error.message)
         buffer.setFlushing(false)
         throw error
       } finally {
@@ -94,13 +91,13 @@ export class BufferManager {
       try {
         const messages = buffer.extractMessages(batchSize)
 
-        console.log(`Extracted ${messages.length} messages, sending to server...`)
+        logger.debug('BufferManager.flushBufferBatch', { queueAddress, extracted: messages.length })
 
         if (messages.length === 0) return
 
         // Send to server
         const result = await this.#httpClient.post('/api/v1/push', { items: messages })
-        console.log(`Server responded:`, result ? `${result.length || 'N/A'} items` : 'null')
+        logger.debug('BufferManager.flushBufferBatch', { queueAddress, serverResponse: result ? `${result.length || 'N/A'} items` : 'null' })
 
         this.#flushCount++
 
@@ -112,7 +109,7 @@ export class BufferManager {
         }
 
       } catch (error) {
-        console.error(`Flush error for ${queueAddress}:`, error.message)
+        logger.error('BufferManager.flushBufferBatch', { queueAddress, error: error.message })
         buffer.setFlushing(false)
         throw error
       } finally {
@@ -129,14 +126,10 @@ export class BufferManager {
 
   async flushBuffer(queueAddress) {
     logger.log('BufferManager.flushBuffer', { queueAddress, activeBuffers: this.#buffers.size, pendingFlushes: this.#pendingFlushes.size })
-    console.log(`flushBuffer called for address: ${queueAddress}`)
-    console.log(`Active buffers:`, Array.from(this.#buffers.keys()))
-    console.log(`Pending flushes:`, this.#pendingFlushes.size)
     
     const buffer = this.#buffers.get(queueAddress)
     if (!buffer) {
-      logger.log('BufferManager.flushBuffer', { queueAddress, status: 'not-found' })
-      console.log(`No buffer found for ${queueAddress}`)
+      logger.debug('BufferManager.flushBuffer', { queueAddress, status: 'not-found' })
       await this.#waitForPendingFlushes()
       return
     }
@@ -149,22 +142,20 @@ export class BufferManager {
     
     // Flush all messages in batches
     while (buffer.messageCount > 0) {
-      console.log(`Flushing batch of up to ${batchSize} messages (${buffer.messageCount} remaining)`)
+      logger.debug('BufferManager.flushBuffer', { queueAddress, batchSize, remaining: buffer.messageCount })
       await this.#flushBufferBatch(queueAddress, batchSize)
     }
     
     // Wait for all pending flushes to complete
     await this.#waitForPendingFlushes()
     
-    console.log(`flushBuffer completed for ${queueAddress}`)
+    logger.debug('BufferManager.flushBuffer', { queueAddress, status: 'completed' })
   }
 
   async flushAllBuffers() {
+    // Get all queue addresses that have buffers
     const queueAddresses = Array.from(this.#buffers.keys())
     logger.log('BufferManager.flushAllBuffers', { bufferCount: queueAddresses.length, pendingFlushes: this.#pendingFlushes.size })
-    console.log(`flushAllBuffers called, pending flushes: ${this.#pendingFlushes.size}`)
-    
-    // Get all queue addresses that have buffers
     
     // Flush each buffer in batches
     for (const queueAddress of queueAddresses) {
@@ -172,15 +163,14 @@ export class BufferManager {
     }
     
     logger.log('BufferManager.flushAllBuffers', { status: 'completed' })
-    console.log(`flushAllBuffers completed`)
   }
 
   async #waitForPendingFlushes() {
     if (this.#pendingFlushes.size === 0) return
     
-    console.log(`Waiting for ${this.#pendingFlushes.size} pending flushes...`)
+    logger.debug('BufferManager.waitForPendingFlushes', { count: this.#pendingFlushes.size })
     await Promise.all(Array.from(this.#pendingFlushes))
-    console.log(`All pending flushes completed`)
+    logger.debug('BufferManager.waitForPendingFlushes', { status: 'completed' })
   }
 
   getStats() {
@@ -212,4 +202,3 @@ export class BufferManager {
     this.#buffers.clear()
   }
 }
-

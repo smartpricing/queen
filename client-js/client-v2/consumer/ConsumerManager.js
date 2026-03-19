@@ -222,7 +222,6 @@ export class ConsumerManager {
 
         if (isNetworkError) {
           logger.warn('ConsumerManager.worker', { workerId, error: 'network', message: error.message })
-          console.warn(`Worker ${workerId}: Network error - ${error.message}`)
           // Wait before retry
           await new Promise(resolve => setTimeout(resolve, 1000))
           continue
@@ -296,7 +295,7 @@ export class ConsumerManager {
       try {
         await this.#queen.renew(messages)
       } catch (error) {
-        console.error('Lease renewal failed:', error)
+        logger.error('ConsumerManager.leaseRenewal', { error: error.message })
       }
     }, intervalMillis)
   }
@@ -367,7 +366,7 @@ export class ConsumerManager {
             error: error.message,
             phase: 'trace-failed'
           })
-          console.warn(`[TRACE FAILED] ${message.transactionId}: ${error.message}`)
+          logger.warn('ConsumerManager.trace', { transactionId: message.transactionId, error: error.message })
           
           return { success: false, error: error.message }
         }

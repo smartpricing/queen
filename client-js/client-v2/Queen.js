@@ -23,6 +23,11 @@ export class Queen {
   #admin = null
 
   constructor(config = {}) {
+    // Configure custom logger before anything else
+    if (config && typeof config === 'object' && !Array.isArray(config) && config.logger) {
+      logger.configure(config.logger)
+    }
+
     logger.log('Queen.constructor', { config: typeof config === 'object' && !Array.isArray(config) ? { ...config, urls: config.urls?.length || 0 } : { type: typeof config } })
     
     // Normalize config
@@ -117,17 +122,17 @@ export class Queen {
 
     let signalReceivedCount = 0;
     const shutdown = async (signal) => {
-      console.log(`\nReceived ${signal}, shutting down gracefully...`)
+      logger.log('Queen.shutdown', { signal })
       try {
         signalReceivedCount++;
         if (signalReceivedCount > 1) {
-          console.log('Received multiple shutdown signals, exiting immediately')
+          logger.warn('Queen.shutdown', 'Received multiple shutdown signals, exiting immediately')
           process.exit(1)
         }
         await this.close()
         process.exit(0)
       } catch (error) {
-        console.error('Error during shutdown:', error)
+        logger.error('Queen.shutdown', { error: error.message })
         process.exit(1)
       }
     }
@@ -480,16 +485,13 @@ export class Queen {
 
   async close() {
     logger.log('Queen.close', 'Starting shutdown')
-    console.log('Closing Queen client...')
 
     // Flush all buffers
     try {
       await this.#bufferManager.flushAllBuffers()
       logger.log('Queen.close', 'All buffers flushed')
-      console.log('All buffers flushed')
     } catch (error) {
       logger.error('Queen.close', { error: error.message, phase: 'buffer-flush' })
-      console.warn('Error flushing buffers:', error)
     }
 
     // Cleanup buffer manager
@@ -502,7 +504,6 @@ export class Queen {
     this.#shutdownHandlers = []
 
     logger.log('Queen.close', 'Client closed successfully')
-    console.log('Queen client closed')
   }
 }
 

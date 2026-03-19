@@ -196,7 +196,6 @@ export class HttpClient {
         }
         
         logger.warn('HttpClient.failover', { url, method, path, error: error.message })
-        console.warn(`Request failed for ${url}: ${method} ${path} - ${error.message}`)
 
         // Don't retry on client errors (4xx)
         if (error.status && error.status >= 400 && error.status < 500) {

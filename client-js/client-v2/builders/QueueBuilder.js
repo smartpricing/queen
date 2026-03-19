@@ -306,7 +306,6 @@ export class QueueBuilder {
     } catch (error) {
       // Return empty array on error instead of throwing
       logger.error('QueueBuilder.pop', { error: error.message })
-      console.warn('Pop failed:', error.message)
       return []
     }
   }
@@ -745,7 +744,6 @@ class DLQBuilder {
       return result || { messages: [], total: 0 }
     } catch (error) {
       logger.error('DLQBuilder.get', { error: error.message })
-      console.warn('DLQ query failed:', error.message)
       return { messages: [], total: 0 }
     }
   }

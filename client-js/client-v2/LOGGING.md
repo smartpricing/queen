@@ -2,9 +2,64 @@
 
 ## Overview
 
-The Queen Client V2 includes comprehensive operation logging that captures every significant action performed by the client. Logging is **disabled by default** and can be enabled via the `QUEEN_CLIENT_LOG` environment variable.
+The Queen Client V2 includes comprehensive operation logging that captures every significant action performed by the client. You can either:
 
-## Enabling Logging
+1. **Inject a custom logger** (pino, winston, bunyan, etc.) via the `logger` config option -- recommended for production.
+2. **Use the built-in console logger** gated by the `QUEEN_CLIENT_LOG` environment variable -- handy for quick debugging.
+
+## Custom Logger (Recommended)
+
+Pass any logger instance that implements `info()`, `warn()`, and `error()` methods. When a custom logger is configured, it is always active (level filtering is controlled by your logger, not by `QUEEN_CLIENT_LOG`).
+
+### Pino
+
+```javascript
+import pino from 'pino'
+import { Queen } from '@punkish/queen'
+
+const queen = new Queen({
+  urls: ['http://localhost:6632'],
+  logger: pino()
+})
+```
+
+### Winston
+
+```javascript
+import winston from 'winston'
+import { Queen } from '@punkish/queen'
+
+const winstonLogger = winston.createLogger({
+  level: 'info',
+  transports: [new winston.transports.Console()]
+})
+
+const queen = new Queen({
+  urls: ['http://localhost:6632'],
+  logger: winstonLogger
+})
+```
+
+### Custom implementation
+
+Any object with `info`, `warn`, and `error` methods works:
+
+```javascript
+const queen = new Queen({
+  urls: ['http://localhost:6632'],
+  logger: {
+    info: (msg) => myLogSink('INFO', msg),
+    warn: (msg) => myLogSink('WARN', msg),
+    error: (msg) => myLogSink('ERROR', msg)
+  }
+})
+```
+
+The `debug()` method is optional. If your logger provides it, verbose internal details (buffer flush progress, server responses, etc.) will be emitted at `debug` level. Otherwise they fall back to `info`.
+
+## Built-in Console Logger
+
+If no custom logger is provided, the built-in console logger can be enabled via environment variable:
 
 ```bash
 export QUEEN_CLIENT_LOG=true
@@ -158,11 +213,13 @@ pm2 restart my-app
 
 ## Performance Impact
 
-- **Disabled (default)**: Zero performance impact - all logging calls are no-ops
-- **Enabled**: Minimal impact - logging is asynchronous and uses `console.log/warn/error`
+- **No logger configured + `QUEEN_CLIENT_LOG` unset (default)**: Zero performance impact - all logging calls are no-ops
+- **Built-in console logger enabled**: Minimal impact
+- **Custom logger**: Depends on the logger implementation; pino in async mode has negligible overhead
 
 ## Log Levels
 
+- **DEBUG**: Verbose operational details (buffer flush progress, extracted message counts, server responses)
 - **INFO**: Normal operations (most logs)
 - **WARN**: Recoverable issues (retries, failover, network errors)
 - **ERROR**: Operation failures (push failed, ack failed, etc.)
@@ -191,31 +248,7 @@ QUEEN_CLIENT_LOG=true node app.js 2>&1 | grep "pop"
 
 ## Integration with Log Aggregation
 
-The structured JSON format makes it easy to integrate with log aggregation tools:
-
-### Winston
-```javascript
-import winston from 'winston'
-
-// Redirect console.log to Winston
-console.log = winston.info
-console.error = winston.error
-console.warn = winston.warn
-```
-
-### Pino
-```javascript
-import pino from 'pino'
-const logger = pino()
-
-console.log = (msg) => logger.info(msg)
-console.error = (msg) => logger.error(msg)
-console.warn = (msg) => logger.warn(msg)
-```
-
-### Datadog, CloudWatch, etc.
-
-The ISO 8601 timestamps and JSON format are compatible with most log aggregation services.
+When using a custom logger, integration with log aggregation services (Datadog, CloudWatch, Elastic, etc.) depends on your logger's configuration, not on Queen. For example, pino outputs NDJSON by default which is compatible with most log aggregation pipelines out of the box.
 
 ## Best Practices
 
@@ -236,5 +269,5 @@ The logging system is implemented in `utils/logger.js` and imported by all major
 - `QueueBuilder.js` - Queue operations
 - `TransactionBuilder.js` - Atomic transactions
 
-All logging calls check the `QUEEN_CLIENT_LOG` environment variable and are no-ops when disabled, ensuring zero performance impact by default.
+When a custom logger is configured via `new Queen({ logger })`, all internal logging is routed through it. When no custom logger is provided, logging falls back to the built-in console logger gated by `QUEEN_CLIENT_LOG`.
 
