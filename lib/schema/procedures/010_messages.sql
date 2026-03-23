@@ -26,8 +26,10 @@ DECLARE
     v_total_bus_groups INTEGER;
 BEGIN
     -- Parse filters
+    -- from: inclusive of the exact timestamp
     v_from_ts := COALESCE((p_filters->>'from')::timestamptz, NOW() - INTERVAL '1 hour');
-    v_to_ts := COALESCE((p_filters->>'to')::timestamptz, NOW());
+    -- to: inclusive of the entire minute (truncate to minute, add 1 minute, use < comparison)
+    v_to_ts := date_trunc('minute', COALESCE((p_filters->>'to')::timestamptz, NOW())) + INTERVAL '1 minute';
     v_queue := p_filters->>'queue';
     v_partition := p_filters->>'partition';
     v_namespace := p_filters->>'namespace';
@@ -45,7 +47,7 @@ BEGIN
     JOIN queen.partitions p ON p.id = m.partition_id
     JOIN queen.queues q ON q.id = p.queue_id
     LEFT JOIN queen.partition_consumers pc ON pc.partition_id = p.id
-    WHERE m.created_at >= v_from_ts AND m.created_at <= v_to_ts
+    WHERE m.created_at >= v_from_ts AND m.created_at < v_to_ts
       AND (v_queue IS NULL OR q.name = v_queue);
     
     -- Get messages with computed status, then filter by status if specified
@@ -95,7 +97,7 @@ BEGIN
         JOIN queen.queues q ON q.id = p.queue_id
         LEFT JOIN queen.partition_consumers pc_queue ON pc_queue.partition_id = p.id AND pc_queue.consumer_group = '__QUEUE_MODE__'
         LEFT JOIN queen.dead_letter_queue dlq ON dlq.message_id = m.id
-        WHERE m.created_at >= v_from_ts AND m.created_at <= v_to_ts
+        WHERE m.created_at >= v_from_ts AND m.created_at < v_to_ts
           AND (v_queue IS NULL OR q.name = v_queue)
           AND (v_partition IS NULL OR p.name = v_partition)
           AND (v_namespace IS NULL OR q.namespace = v_namespace)
