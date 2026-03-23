@@ -6,6 +6,8 @@ This page documents Queen MQ server releases and their compatible client version
 
 | Server Version | Description | Compatible Clients |
 |----------------|-------------|-------------------|
+| **0.12.17** | Improved stats  | JS ≥0.7.4, Python ≥0.7.4 |
+| **0.12.13** | Added watermark tracking for efficient wildcard POP discovery. x20 faster pop on high partition count queues | JS ≥0.7.4, Python ≥0.7.4 |
 | **0.12.12** | Built-in database migration (pg_dump \| pg_restore, no temp file, selective table groups, row count validation) | JS ≥0.7.4, Python ≥0.7.4 |
 | **0.12.10** | Fixed JWKS fetch over HTTPS (cpp-httplib TLS support) | JS ≥0.7.4, Python ≥0.7.4, 0.12.0 if needs to use |
 | **0.12.9** | Fixed server crash (SIGSEGV) on lease renewal, added EdDSA/JWKS auth, fixed examples | JS ≥0.7.4, Python ≥0.7.4, 0.12.0 if needs to use |
@@ -18,11 +20,13 @@ This page documents Queen MQ server releases and their compatible client version
 | **0.12.x** | New frontend and docs | JS ≥0.7.4, Python ≥0.7.4, 0.12.0 if needs to use proxy auth |
 | **0.11.x** | Libqueen 0.11.0; added stats tables and optimized analytics procedures, added DB statement timeout and stats reconcile interval | JS ≥0.7.4, Python ≥0.7.4 |
 | **0.10.x** | Total rewrite of the engine with libuv and stored procedures, removed streaming engine | JS ≥0.7.4, Python ≥0.7.4 |
-| **0.8.x** | Added Shared Cache with UDP sync for clustered deployment | JS ≥0.7.4, Python ≥0.7.4 |
+| **0.8.0** | Added Shared Cache with UDP sync for clustered deployment | JS ≥0.7.4, Python ≥0.7.4 |
 | **0.7.5** | First stable release | JS ≥0.7.4, Python ≥0.7.4 |
 
 ## Bug fixing and improvements 
 
+- Server 0.12.17: Improved stats
+- Server 0.12.13: Added watermark tracking for efficient wildcard POP discovery. x20 faster pop on high partition count queues
 - Server 0.12.12: Added built-in database migration (pg_dump | pg_restore stream, no temp file, selective table groups, row count validation, PG 18 client in Docker image)
 - Clients 0.12.2: Added custom `headers` option to JS, Python, and Go clients for API gateway authentication
 - Server 0.12.10: Fixed JWKS fetch over HTTPS (added CPPHTTPLIB_OPENSSL_SUPPORT to enable TLS in cpp-httplib)
@@ -38,6 +42,14 @@ This page documents Queen MQ server releases and their compatible client version
 - Clients 0.12.1: Fixed bug in transaction with consumer groups
 
 ## Release Details
+
+### Version 0.12.17
+**Highlights:**
+- Much more efficent non hot path operations like refresh_all_Stats.
+
+### Version 0.12.13
+**Highlights:**
+- Added watermark tracking for efficient wildcard POP discovery. x20 faster pop on high partition count queues
 
 ### Version 0.12.12
 **Highlights:**
