@@ -65,7 +65,7 @@ docker run --name qpg --network queen -e POSTGRES_PASSWORD=postgres -p 5433:5432
 sleep 2
 
 # Start Queen Server
-docker run -p 6632:6632 --network queen -e PG_HOST=qpg -e PG_PORT=5432 -e PG_PASSWORD=postgres -e NUM_WORKERS=2 -e DB_POOL_SIZE=5 -e SIDECAR_POOL_SIZE=30 smartnessai/queen-mq:0.12.17
+docker run -p 6632:6632 --network queen -e PG_HOST=qpg -e PG_PORT=5432 -e PG_PASSWORD=postgres -e NUM_WORKERS=2 -e DB_POOL_SIZE=5 -e SIDECAR_POOL_SIZE=30 smartnessai/queen-mq:0.12.18
 ```
 
 Then in another terminal, use cURL (or the client libraries) to push and consume messages
@@ -132,6 +132,7 @@ The repository is structured as follows:
 
 | Server Version | Description | Compatible Clients |
 |----------------|-------------|-------------------|
+| **0.12.18** | Improved charts and filters  | JS ≥0.7.4, Python ≥0.7.4 |
 | **0.12.17** | Improved stats  | JS ≥0.7.4, Python ≥0.7.4 |
 | **0.12.13** | Added watermark tracking for efficient wildcard POP discovery. x20 faster pop on high partition count queues | JS ≥0.7.4, Python ≥0.7.4 |
 | **0.12.12** | Built-in database migration (pg_dump \| pg_restore, no temp file, selective table groups, row count validation) | JS ≥0.7.4, Python ≥0.7.4 |
