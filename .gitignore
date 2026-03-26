@@ -24,5 +24,7 @@ lib/build
 
 
 helm
+helm_queen
 upgrade.sh
+upgrade_queen.sh
 start.sh
