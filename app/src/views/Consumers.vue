@@ -242,6 +242,9 @@
                 Members
               </th>
               <th class="text-right px-4 py-3 text-xs font-semibold text-light-500 uppercase tracking-wide">
+                Lag Parts
+              </th>
+              <th class="text-right px-4 py-3 text-xs font-semibold text-light-500 uppercase tracking-wide">
                 Time Lag
               </th>
               <th class="text-center px-4 py-3 text-xs font-semibold text-light-500 uppercase tracking-wide">
@@ -254,6 +257,7 @@
               <td class="px-4 py-3"><div class="skeleton h-4 w-40" /></td>
               <td class="px-4 py-3"><div class="skeleton h-5 w-16" /></td>
               <td class="px-4 py-3"><div class="skeleton h-4 w-24" /></td>
+              <td class="px-4 py-3"><div class="skeleton h-4 w-8 ml-auto" /></td>
               <td class="px-4 py-3"><div class="skeleton h-4 w-8 ml-auto" /></td>
               <td class="px-4 py-3"><div class="skeleton h-4 w-16 ml-auto" /></td>
               <td class="px-4 py-3"><div class="skeleton h-4 w-32 mx-auto" /></td>
@@ -291,6 +295,15 @@
                 <span class="text-sm font-medium text-cyber-600 dark:text-cyber-400">
                   {{ consumer.members || 0 }}
                 </span>
+              </td>
+              <td class="px-4 py-3 text-right">
+                <span 
+                  v-if="(consumer.partitionsWithLag || 0) > 0"
+                  class="inline-flex items-center text-xs font-semibold px-2 py-0.5 rounded-full bg-amber-100 dark:bg-amber-900/30 text-amber-700 dark:text-amber-400"
+                >
+                  {{ consumer.partitionsWithLag }}
+                </span>
+                <span v-else class="text-sm text-light-400 dark:text-light-600">-</span>
               </td>
               <td class="px-4 py-3 text-right">
                 <span 
@@ -381,7 +394,7 @@
           </button>
         </div>
         <div class="card-body overflow-y-auto max-h-[60vh]">
-          <div class="grid grid-cols-3 gap-4 mb-6">
+          <div class="grid grid-cols-4 gap-4 mb-6">
             <div class="p-4 rounded-lg bg-light-100 dark:bg-dark-300 text-center">
               <p class="text-xs text-light-500 uppercase tracking-wide">Members</p>
               <p class="text-2xl font-bold text-cyber-600 dark:text-cyber-400 mt-1">
@@ -396,6 +409,12 @@
                 'text-rose-600 dark:text-rose-400': getStatusText(selectedConsumer) === 'Lagging'
               }">
                 {{ getStatusText(selectedConsumer) }}
+              </p>
+            </div>
+            <div class="p-4 rounded-lg bg-light-100 dark:bg-dark-300 text-center">
+              <p class="text-xs text-light-500 uppercase tracking-wide">Lag Parts</p>
+              <p class="text-2xl font-bold mt-1" :class="(selectedConsumer.partitionsWithLag || 0) > 0 ? 'text-amber-600 dark:text-amber-400' : 'text-light-900 dark:text-white'">
+                {{ selectedConsumer.partitionsWithLag || 0 }}
               </p>
             </div>
             <div class="p-4 rounded-lg bg-light-100 dark:bg-dark-300 text-center">

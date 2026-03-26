@@ -257,6 +257,15 @@
         <template #members="{ value }">
           <span class="badge badge-queen">{{ value }}</span>
         </template>
+        <template #partitionsWithLag="{ value }">
+          <span 
+            v-if="(value || 0) > 0"
+            class="badge badge-warning"
+          >
+            {{ value }}
+          </span>
+          <span v-else class="text-light-400 dark:text-light-600">-</span>
+        </template>
         <template #maxTimeLag="{ value }">
           <span 
             class="badge"
@@ -528,6 +537,7 @@ const queueColumns = [
 const consumerColumns = [
   { key: 'name', label: 'Group Name', sortable: true },
   { key: 'members', label: 'Partitions', sortable: true, align: 'right' },
+  { key: 'partitionsWithLag', label: 'Lag Parts', sortable: true, align: 'right' },
   { key: 'maxTimeLag', label: 'Time Lag', sortable: true, align: 'right' },
 ]
 

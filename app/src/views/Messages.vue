@@ -48,6 +48,18 @@
             </select>
           </div>
           
+          <div class="sm:w-48">
+            <label class="block text-xs font-medium text-light-600 dark:text-light-400 mb-1.5">
+              Partition Name
+            </label>
+            <input
+              v-model="filterPartition"
+              type="text"
+              placeholder="Filter by name..."
+              class="input"
+            />
+          </div>
+          
           <div class="sm:w-40">
             <label class="block text-xs font-medium text-light-600 dark:text-light-400 mb-1.5">
               Status
@@ -477,6 +489,7 @@ const loading = ref(true)
 
 const searchQuery = ref('')
 const filterQueue = ref('')
+const filterPartition = ref('')
 const filterStatus = ref('')
 const filterFrom = ref('')
 const filterTo = ref('')
@@ -507,7 +520,7 @@ const filteredMessages = computed(() => {
 })
 
 const hasActiveFilters = computed(() => {
-  return searchQuery.value || filterQueue.value || filterStatus.value
+  return searchQuery.value || filterQueue.value || filterPartition.value || filterStatus.value
 })
 
 // Helper to format Date to datetime-local input format
@@ -539,6 +552,7 @@ const setTimeRange = (hours) => {
 const clearFilters = () => {
   searchQuery.value = ''
   filterQueue.value = ''
+  filterPartition.value = ''
   filterStatus.value = ''
   
   // Reset to default last 1 hour
@@ -557,6 +571,7 @@ const fetchMessages = async () => {
       offset: (currentPage.value - 1) * limit.value
     }
     if (filterQueue.value) params.queue = filterQueue.value
+    if (filterPartition.value) params.partition = filterPartition.value
     if (filterStatus.value) params.status = filterStatus.value
     if (filterFrom.value) params.from = toISOString(filterFrom.value)
     if (filterTo.value) params.to = toISOString(filterTo.value)
@@ -774,6 +789,9 @@ onMounted(() => {
   if (route.query.queue) {
     filterQueue.value = route.query.queue
   }
+  if (route.query.partition) {
+    filterPartition.value = route.query.partition
+  }
   if (route.query.status) {
     filterStatus.value = route.query.status
   }
@@ -788,7 +806,7 @@ onMounted(() => {
 })
 
 // Watch for filter changes (auto-apply on queue/status change)
-watch([filterQueue, filterStatus], () => {
+watch([filterQueue, filterPartition, filterStatus], () => {
   currentPage.value = 1
   fetchMessages()
 })
