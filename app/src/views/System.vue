@@ -286,6 +286,59 @@
         </div>
       </div>
 
+      <!-- Per-Queue Metrics -->
+      <div class="card">
+        <div class="card-header">
+          <h3 class="font-semibold text-light-900 dark:text-white">Per-Queue Metrics</h3>
+        </div>
+        <div class="card-body space-y-4">
+          <template v-if="availableQueues.length > 0">
+            <!-- Queue selector -->
+            <div class="flex items-center gap-2">
+              <span class="text-xs text-light-500 whitespace-nowrap">Filter queues:</span>
+              <MultiSelect
+                v-model="selectedQueues"
+                :options="availableQueues"
+                placeholder="All queues"
+                search-placeholder="Search queues…"
+              />
+              <span v-if="selectedQueues.length > 0" class="text-xs text-light-400">
+                {{ selectedQueues.length }} of {{ availableQueues.length }}
+              </span>
+            </div>
+            <!-- Pop throughput by queue -->
+            <div class="space-y-4">
+              <div>
+                <h4 class="text-xs font-semibold text-light-500 uppercase mb-2">Pop Throughput by Queue</h4>
+                <BaseChart
+                  v-if="queuePopChartData.labels.length > 0"
+                  type="line"
+                  :data="queuePopChartData"
+                  :options="perQueueThroughputOptions"
+                  height="340px"
+                />
+                <div v-else class="text-center py-12 text-light-500">No per-queue data available</div>
+              </div>
+              <div>
+                <h4 class="text-xs font-semibold text-light-500 uppercase mb-2">Avg Latency by Queue</h4>
+                <BaseChart
+                  v-if="queueLagChartData.labels.length > 0"
+                  type="line"
+                  :data="queueLagChartData"
+                  :options="perQueueLagOptions"
+                  height="340px"
+                />
+                <div v-else class="text-center py-12 text-light-500">No per-queue data available</div>
+              </div>
+            </div>
+          </template>
+          <div v-else class="text-center py-8 text-light-500">
+            <p>No per-queue metrics recorded yet.</p>
+            <p class="text-xs mt-1">Queue lag data is collected when messages are popped from queues.</p>
+          </div>
+        </div>
+      </div>
+
       <!-- Workers Status Panel -->
       <div v-if="workerData?.workers?.length" class="card">
         <div class="card-header flex items-center justify-between">
@@ -884,6 +937,7 @@ import { ref, reactive, computed, onMounted } from 'vue'
 import { system } from '@/api'
 import { useRefresh } from '@/composables/useRefresh'
 import BaseChart from '@/components/BaseChart.vue'
+import MultiSelect from '@/components/MultiSelect.vue'
 
 // State
 const loading = ref(true)
@@ -897,6 +951,8 @@ const customTo = ref('')
 const workerData = ref(null)
 const systemData = ref(null)
 const postgresData = ref(null)
+const queueLagData = ref(null)
+const selectedQueues = ref([])
 
 const timeRanges = [
   { label: '15m', value: 15 },
@@ -1048,10 +1104,60 @@ const errorsChartOptions = {
   }
 }
 
+// Per-queue chart options (legend visible to distinguish queues)
+const perQueueThroughputOptions = {
+  plugins: {
+    legend: { display: true, position: 'top', labels: { boxWidth: 12, padding: 8, font: { size: 11 } } }
+  },
+  scales: {
+    y: {
+      beginAtZero: true,
+      min: 0,
+      title: { display: true, text: 'Pops/s', font: { size: 11 } }
+    }
+  }
+}
+
+const perQueueLagOptions = {
+  plugins: {
+    legend: { display: true, position: 'top', labels: { boxWidth: 12, padding: 8, font: { size: 11 } } },
+    tooltip: {
+      callbacks: {
+        label: (ctx) => ` ${ctx.dataset.label}: ${formatDuration(ctx.parsed.y)}`
+      }
+    }
+  },
+  scales: {
+    y: {
+      beginAtZero: true,
+      min: 0,
+      title: { display: true, text: 'Latency', font: { size: 11 } },
+      ticks: {
+        callback: (value) => formatDuration(value)
+      }
+    }
+  }
+}
+
+// Color palette for per-queue charts (distinct, readable colors)
+const queueColors = [
+  { border: 'rgb(109, 77, 191)', bg: 'rgba(109, 77, 191, 0.1)' },   // purple
+  { border: 'rgb(0, 200, 150)', bg: 'rgba(0, 200, 150, 0.1)' },      // teal
+  { border: 'rgb(220, 180, 50)', bg: 'rgba(220, 180, 50, 0.1)' },    // gold
+  { border: 'rgb(244, 63, 94)', bg: 'rgba(244, 63, 94, 0.1)' },      // rose
+  { border: 'rgb(59, 130, 246)', bg: 'rgba(59, 130, 246, 0.1)' },    // blue
+  { border: 'rgb(245, 158, 11)', bg: 'rgba(245, 158, 11, 0.1)' },    // amber
+  { border: 'rgb(16, 185, 129)', bg: 'rgba(16, 185, 129, 0.1)' },    // emerald
+  { border: 'rgb(168, 85, 247)', bg: 'rgba(168, 85, 247, 0.1)' },    // violet
+  { border: 'rgb(236, 72, 153)', bg: 'rgba(236, 72, 153, 0.1)' },    // pink
+  { border: 'rgb(20, 184, 166)', bg: 'rgba(20, 184, 166, 0.1)' },    // teal-alt
+]
+
 // Toggle functions
 const toggleThroughputMetric = (key) => { selectedThroughputMetrics[key] = !selectedThroughputMetrics[key] }
 const toggleEventLoopMetric = (key) => { selectedEventLoopMetrics[key] = !selectedEventLoopMetrics[key] }
 const toggleErrorMetric = (key) => { selectedErrorMetrics[key] = !selectedErrorMetrics[key] }
+
 
 // Time range functions
 const selectQuickRange = (value) => {
@@ -1293,6 +1399,61 @@ const errorsChartData = computed(() => {
   
   return { labels, datasets }
 })
+
+// Per-Queue Chart Data
+const availableQueues = computed(() => {
+  const raw = queueLagData.value || []
+  const names = new Set(raw.map(r => r.queueName))
+  return [...names].sort()
+})
+
+const queuesToShow = computed(() => {
+  if (selectedQueues.value.length > 0) return [...selectedQueues.value].sort()
+  return availableQueues.value
+})
+
+// Helper: pivot flat per-queue time series into chart datasets
+const buildPerQueueChart = (valueAccessor) => {
+  const raw = queueLagData.value || []
+  if (!raw.length) return { labels: [], datasets: [] }
+
+  // Get unique sorted buckets ascending
+  const bucketSet = new Set(raw.map(r => r.bucketTime))
+  const buckets = [...bucketSet].sort()
+
+  const multiDay = buckets.length >= 2 &&
+    new Date(buckets[0]).toDateString() !== new Date(buckets[buckets.length - 1]).toDateString()
+
+  const labels = buckets.map(b => formatChartLabel(new Date(b), multiDay))
+
+  // Build lookup: "queue|bucket" -> row
+  const lookup = {}
+  raw.forEach(r => { lookup[`${r.queueName}|${r.bucketTime}`] = r })
+
+  const datasets = queuesToShow.value.map((q, i) => {
+    const color = queueColors[i % queueColors.length]
+    return {
+      label: q,
+      data: buckets.map(b => {
+        const entry = lookup[`${q}|${b}`]
+        return entry ? valueAccessor(entry) : 0
+      }),
+      borderColor: color.border,
+      backgroundColor: color.bg,
+      fill: false,
+      tension: 0
+    }
+  })
+
+  return { labels, datasets }
+}
+
+const queuePopChartData = computed(() => buildPerQueueChart(entry => {
+  // popCount is total pops in that bucket (1 minute), convert to per-second
+  return Math.round(((entry.popCount || 0) / 60) * 100) / 100
+}))
+
+const queueLagChartData = computed(() => buildPerQueueChart(entry => entry.avgLagMs || 0))
 
 // System Chart Data
 const cpuChartData = computed(() => {
@@ -1574,13 +1735,18 @@ const fetchData = async () => {
         to: to.toISOString()
       }
       
-      const [workerRes, systemRes] = await Promise.all([
+      const [workerRes, systemRes, queueLagRes] = await Promise.all([
         system.getWorkerMetrics(params),
-        system.getSystemMetrics(params)
+        system.getSystemMetrics(params),
+        system.getQueueLag(params).catch(e => {
+          console.warn('Failed to fetch per-queue lag metrics:', e.message)
+          return { data: [] }
+        })
       ])
       
       workerData.value = workerRes.data
       systemData.value = systemRes.data
+      queueLagData.value = queueLagRes.data
     }
   } catch (err) {
     console.error('Failed to fetch system metrics:', err)

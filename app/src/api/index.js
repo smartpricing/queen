@@ -107,6 +107,8 @@ export const system = {
   // System Metrics
   getSystemMetrics: (params) => client.get('/api/v1/analytics/system-metrics', { params }),
   getWorkerMetrics: (params) => client.get('/api/v1/analytics/worker-metrics', { params }),
+  // Per-Queue Lag & Pop Throughput
+  getQueueLag: (params) => client.get('/api/v1/analytics/queue-lag', { params }),
   // PostgreSQL Stats
   getPostgresStats: () => client.get('/api/v1/analytics/postgres-stats'),
 }

@@ -230,6 +230,28 @@ void setup_status_routes(uWS::App* app, const RouteContext& ctx) {
         }
     });
     
+    // GET /api/v1/analytics/queue-lag - Per-queue lag and pop throughput time series
+    app->get("/api/v1/analytics/queue-lag", [ctx](auto* res, auto* req) {
+        // Check authentication - READ_ONLY required for analytics
+        REQUIRE_AUTH(res, req, ctx, auth::AccessLevel::READ_ONLY);
+        
+        try {
+            std::string filters_json = build_filters_json(
+                get_query_param(req, "from"),
+                get_query_param(req, "to"),
+                get_query_param(req, "queue")
+            );
+            submit_sp_call(ctx, res, 
+                "SELECT queen.get_queue_lag_v1("
+                "COALESCE(($1::jsonb->>'from')::timestamptz, NOW() - INTERVAL '1 hour'), "
+                "COALESCE(($1::jsonb->>'to')::timestamptz, NOW()), "
+                "$1::jsonb->>'queue')",
+                {filters_json});
+        } catch (const std::exception& e) {
+            send_error_response(res, e.what(), 500);
+        }
+    });
+    
     // GET /api/v1/analytics/postgres-stats - PostgreSQL internal stats (async via stored procedure)
     app->get("/api/v1/analytics/postgres-stats", [ctx](auto* res, auto* req) {
         // Check authentication - READ_ONLY required for analytics
