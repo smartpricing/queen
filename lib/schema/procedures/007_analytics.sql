@@ -23,14 +23,18 @@ BEGIN
         JOIN queen.queues q ON p.queue_id = q.id
         WHERE q.name = p_queue_name
     );
-    
+
+    -- Delete watermarks for this queue to prevent orphaned entries
+    DELETE FROM queen.consumer_watermarks
+    WHERE queue_name = p_queue_name;
+
     -- Delete queue (CASCADE handles partitions and messages)
     WITH deleted AS (
         DELETE FROM queen.queues WHERE name = p_queue_name
         RETURNING id
     )
     SELECT EXISTS (SELECT 1 FROM deleted) INTO v_existed;
-    
+
     RETURN jsonb_build_object(
         'deleted', true,
         'queue', p_queue_name,

@@ -6,6 +6,7 @@ This page documents Queen MQ server releases and their compatible client version
 
 | Server Version | Description | Compatible Clients |
 |----------------|-------------|-------------------|
+| **0.12.19** | Fix bug that on seek or cg delete do not deleted the watermark  | JS ≥0.7.4, Python ≥0.7.4 |
 | **0.12.17** | Improved stats  | JS ≥0.7.4, Python ≥0.7.4 |
 | **0.12.13** | Added watermark tracking for efficient wildcard POP discovery. x20 faster pop on high partition count queues | JS ≥0.7.4, Python ≥0.7.4 |
 | **0.12.12** | Built-in database migration (pg_dump \| pg_restore, no temp file, selective table groups, row count validation) | JS ≥0.7.4, Python ≥0.7.4 |
@@ -25,6 +26,7 @@ This page documents Queen MQ server releases and their compatible client version
 
 ## Bug fixing and improvements 
 
+- Server 0.12.19: Fix bug that on seek or cg delete do not deleted the watermark
 - Server 0.12.17: Improved stats
 - Server 0.12.13: Added watermark tracking for efficient wildcard POP discovery. x20 faster pop on high partition count queues
 - Server 0.12.12: Added built-in database migration (pg_dump | pg_restore stream, no temp file, selective table groups, row count validation, PG 18 client in Docker image)

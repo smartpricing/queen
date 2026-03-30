@@ -287,15 +287,20 @@ BEGIN
     -- Delete partition consumers
     DELETE FROM queen.partition_consumers
     WHERE consumer_group = p_consumer_group;
-    
+
     GET DIAGNOSTICS v_deleted_count = ROW_COUNT;
-    
+
     -- Delete metadata if requested
     IF p_delete_metadata THEN
         DELETE FROM queen.consumer_groups_metadata
         WHERE consumer_group = p_consumer_group;
     END IF;
-    
+
+    -- Delete watermarks to prevent stale watermark from blocking re-consumption
+    -- if a new consumer group with the same name is created later
+    DELETE FROM queen.consumer_watermarks
+    WHERE consumer_group = p_consumer_group;
+
     RETURN jsonb_build_object(
         'success', true,
         'consumerGroup', p_consumer_group,
@@ -354,16 +359,22 @@ BEGIN
     WHERE pc.partition_id = p.id
       AND pc.consumer_group = p_consumer_group
       AND q.name = p_queue_name;
-    
+
     GET DIAGNOSTICS v_deleted_count = ROW_COUNT;
-    
+
     -- Delete metadata if requested (only for this queue)
     IF p_delete_metadata THEN
         DELETE FROM queen.consumer_groups_metadata
         WHERE consumer_group = p_consumer_group
           AND queue_name = p_queue_name;
     END IF;
-    
+
+    -- Delete watermark for this specific (queue, consumer_group) to prevent
+    -- stale watermark from blocking re-consumption if CG is recreated
+    DELETE FROM queen.consumer_watermarks
+    WHERE queue_name = p_queue_name
+      AND consumer_group = p_consumer_group;
+
     RETURN jsonb_build_object(
         'success', true,
         'consumerGroup', p_consumer_group,
@@ -473,13 +484,23 @@ BEGIN
             END IF;
         END IF;
     END LOOP;
-    
+
+    -- When seeking backwards (not to end), delete the watermark to allow
+    -- re-consumption of messages. The watermark optimization tracks "last empty scan"
+    -- and would otherwise filter out partitions that haven't been updated recently.
+    -- Seeking to end doesn't need this since the consumer is caught up anyway.
+    IF NOT p_seek_to_end THEN
+        DELETE FROM queen.consumer_watermarks
+        WHERE queue_name = p_queue_name
+          AND consumer_group = p_consumer_group;
+    END IF;
+
     RETURN jsonb_build_object(
         'success', true,
         'consumerGroup', p_consumer_group,
         'queueName', p_queue_name,
         'seekToEnd', p_seek_to_end,
-        'targetTimestamp', CASE WHEN p_target_timestamp IS NOT NULL 
+        'targetTimestamp', CASE WHEN p_target_timestamp IS NOT NULL
             THEN to_char(p_target_timestamp, 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"') ELSE NULL END,
         'partitionsUpdated', v_updated_count
     );
