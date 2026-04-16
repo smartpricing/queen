@@ -44,6 +44,12 @@ const routes = [
     meta: { title: 'Analytics', subtitle: 'Throughput and performance trends' }
   },
   {
+    path: '/dlq',
+    name: 'DeadLetter',
+    component: () => import('@/views/DeadLetter.vue'),
+    meta: { title: 'Dead Letter', subtitle: 'Inspect, replay, and purge failed messages' }
+  },
+  {
     path: '/system',
     name: 'System',
     component: () => import('@/views/System.vue'),

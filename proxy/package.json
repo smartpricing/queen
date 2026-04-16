@@ -1,6 +1,6 @@
 {
   "name": "queen-mq-proxy",
-  "version": "0.0.10",
+  "version": "0.0.11",
   "type": "module",
   "description": "Secure proxy for Queen message queue",
   "main": "src/server.js",

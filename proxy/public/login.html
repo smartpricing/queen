@@ -3,410 +3,242 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Login - Queen</title>
-    
-    <!-- Fonts -->
+    <title>Login · QueenMQ</title>
+    <link rel="icon" type="image/png" href="/queen_logo.png">
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500;600&family=Outfit:wght@400;500;600;700;800&display=swap" rel="stylesheet">
-    
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;450;500;550;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
     <style>
         :root {
-            /* Queen colors */
-            --queen-400: #F472B6;
-            --queen-500: #EC4899;
-            --queen-600: #DB2777;
-            --queen-700: #BE185D;
-            
-            /* Cyber colors */
-            --cyber-400: #22D3EE;
-            --cyber-500: #06B6D4;
-            --cyber-600: #0891B2;
-            
-            /* Crown colors */
-            --crown-400: #FBBF24;
-            --crown-500: #F59E0B;
-            --crown-600: #D97706;
-            
-            /* Dark surfaces */
-            --dark-50: #18181B;
-            --dark-100: #151518;
-            --dark-200: #121215;
-            --dark-300: #0F0F12;
-            --dark-400: #0C0C0F;
-            
-            /* Light surfaces */
-            --light-100: #FAFAFA;
-            --light-200: #F5F5F7;
-            --light-300: #E5E5E7;
-            --light-400: #D4D4D8;
-            --light-500: #A1A1AA;
-            --light-600: #71717A;
-            --light-800: #3F3F46;
+            --ink-0: #07070a; --ink-1: #0b0b0f; --ink-2: #101015;
+            --ink-3: #17171e; --ink-4: #1f1f28;
+            --text-hi: #f5f5f1; --text-mid: #a8a8a0;
+            --text-low: #6a6a62; --text-faint: #3a3a38;
+            --crown-400: #fbbf24; --crown-500: #f59e0b; --crown-600: #d97706;
+            --crown-glow: rgba(251,191,36,0.18);
+            --ember-400: #fb7185; --ember-500: #f43f5e;
+            --ember-glow: rgba(244,63,94,0.18);
+            --ice-400: #22d3ee; --ice-glow: rgba(34,211,238,0.18);
+            --bd: rgba(255,255,255,0.06); --bd-hi: rgba(255,255,255,0.10);
+            --ease: cubic-bezier(.2,.7,.2,1);
         }
-        
-        * {
-            margin: 0;
-            padding: 0;
-            box-sizing: border-box;
-        }
-        
+
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+
         body {
-            font-family: 'Inter', system-ui, -apple-system, sans-serif;
-            background: var(--dark-400);
+            font-family: 'Inter', ui-sans-serif, system-ui, sans-serif;
+            font-feature-settings: "cv11","ss01","ss03","cv02";
+            -webkit-font-smoothing: antialiased;
+            background: var(--ink-0);
+            color: var(--text-hi);
             min-height: 100vh;
             display: flex;
             align-items: center;
             justify-content: center;
-            color: var(--light-100);
-            position: relative;
             overflow: hidden;
-        }
-        
-        /* Mesh gradient background */
-        .bg-mesh {
-            position: fixed;
-            inset: 0;
-            pointer-events: none;
-            background-image: 
-                radial-gradient(at 0% 0%, rgba(236,72,153,0.15) 0px, transparent 50%),
-                radial-gradient(at 100% 0%, rgba(6,182,212,0.12) 0px, transparent 50%),
-                radial-gradient(at 100% 100%, rgba(245,158,11,0.08) 0px, transparent 50%);
-        }
-        
-        /* Subtle animated gradient orbs */
-        .orb {
-            position: absolute;
-            border-radius: 50%;
-            filter: blur(80px);
-            opacity: 0.4;
-            animation: float 20s ease-in-out infinite;
-        }
-        
-        .orb-1 {
-            width: 400px;
-            height: 400px;
-            background: var(--queen-500);
-            top: -200px;
-            left: -100px;
-            animation-delay: 0s;
-        }
-        
-        .orb-2 {
-            width: 300px;
-            height: 300px;
-            background: var(--cyber-500);
-            top: 50%;
-            right: -150px;
-            animation-delay: -7s;
-        }
-        
-        .orb-3 {
-            width: 250px;
-            height: 250px;
-            background: var(--crown-500);
-            bottom: -100px;
-            left: 30%;
-            animation-delay: -14s;
-        }
-        
-        @keyframes float {
-            0%, 100% { transform: translate(0, 0) scale(1); }
-            25% { transform: translate(30px, -30px) scale(1.05); }
-            50% { transform: translate(-20px, 20px) scale(0.95); }
-            75% { transform: translate(10px, 10px) scale(1.02); }
-        }
-        
-        .login-container {
             position: relative;
-            z-index: 10;
-            background: var(--dark-200);
-            border: 1px solid rgba(255, 255, 255, 0.05);
+        }
+
+        /* Ambient vignette */
+        body::before {
+            content: ""; position: fixed; inset: 0; z-index: 0; pointer-events: none;
+            background-image:
+                radial-gradient(1200px 600px at 15% -10%, var(--crown-glow), transparent 60%),
+                radial-gradient(900px 500px at 95% 110%, var(--ice-glow), transparent 55%),
+                radial-gradient(600px 400px at 110% 0%, var(--ember-glow), transparent 60%);
+            opacity: 0.9;
+        }
+
+        /* Grain */
+        body::after {
+            content: ""; position: fixed; inset: 0; z-index: 0; pointer-events: none;
+            background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='140' height='140'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2' stitchTiles='stitch'/%3E%3CfeColorMatrix values='0 0 0 0 1  0 0 0 0 1  0 0 0 0 1  0 0 0 0.06 0'/%3E%3C/filter%3E%3Crect width='140' height='140' filter='url(%23n)'/%3E%3C/svg%3E");
+            mix-blend-mode: overlay; opacity: .35;
+        }
+
+        .login-card {
+            position: relative; z-index: 1;
+            width: 100%; max-width: 400px; margin: 1rem;
             padding: 2.5rem;
-            border-radius: 1rem;
-            box-shadow: 
-                0 10px 40px -10px rgba(0, 0, 0, 0.5),
-                0 2px 10px -2px rgba(0, 0, 0, 0.3);
-            width: 100%;
-            max-width: 400px;
-            backdrop-filter: blur(20px);
+            border-radius: 14px;
+            border: 1px solid var(--bd);
+            background: linear-gradient(180deg, rgba(20,20,26,.7), rgba(14,14,18,.7));
+            backdrop-filter: blur(20px); -webkit-backdrop-filter: blur(20px);
+            box-shadow: 0 40px 80px -20px rgba(0,0,0,.6), inset 0 1px 0 rgba(255,255,255,.04);
         }
-        
-        .logo-section {
-            text-align: center;
-            margin-bottom: 2rem;
+
+        /* Gold accent line on top */
+        .login-card::after {
+            content: ""; position: absolute; top: 0; left: 0; right: 0;
+            height: 1px;
+            background: linear-gradient(90deg, transparent, var(--crown-400), transparent);
+            opacity: .6; border-radius: 14px 14px 0 0;
         }
-        
-        .logo-wrapper {
-            display: inline-flex;
-            align-items: center;
-            justify-content: center;
-            margin-bottom: 1rem;
-            position: relative;
+
+        .logo-section { text-align: center; margin-bottom: 2rem; }
+
+        .logo-glow {
+            display: inline-block; position: relative; margin-bottom: 1rem;
         }
-        
-        .logo-wrapper::after {
-            content: '';
-            position: absolute;
-            inset: -10px;
-            background: radial-gradient(circle, rgba(236,72,153,0.2) 0%, transparent 70%);
-            border-radius: 50%;
-            z-index: -1;
+        .logo-glow::after {
+            content: ''; position: absolute; inset: -16px;
+            background: radial-gradient(circle, var(--crown-glow) 0%, transparent 70%);
+            border-radius: 50%; z-index: -1;
         }
-        
-        .logo {
-            height: 100px;
-            width: auto;
-            filter: drop-shadow(0 0 20px rgba(236,72,153,0.3));
+        .logo-glow img {
+            height: 90px; width: auto;
+            filter: drop-shadow(0 0 24px var(--crown-glow));
         }
-        
+
         .logo-section h1 {
-            font-family: 'Outfit', 'Inter', system-ui, sans-serif;
-            color: var(--light-100);
-            font-size: 1.75rem;
-            font-weight: 700;
-            margin-bottom: 0.375rem;
-            letter-spacing: -0.025em;
-            background: linear-gradient(135deg, var(--queen-400), var(--cyber-400));
-            -webkit-background-clip: text;
-            -webkit-text-fill-color: transparent;
-            background-clip: text;
+            font-size: 1.625rem; font-weight: 700;
+            letter-spacing: -0.02em; line-height: 1;
+            color: var(--text-hi);
         }
-        
+        .logo-section h1 b {
+            font-weight: 400; font-size: 0.75em;
+            letter-spacing: .08em; margin-left: 4px;
+            color: var(--text-mid);
+        }
         .logo-section p {
-            color: var(--light-500);
-            font-size: 0.875rem;
-            font-weight: 500;
+            color: var(--text-low); font-size: 0.8125rem;
+            margin-top: 0.5rem; font-weight: 500;
         }
-        
-        .form-group {
-            margin-bottom: 1.25rem;
-        }
-        
+
+        .form-group { margin-bottom: 1.25rem; }
+
         label {
-            display: block;
-            margin-bottom: 0.5rem;
-            color: var(--light-200);
-            font-weight: 500;
-            font-size: 0.875rem;
+            display: block; margin-bottom: 0.5rem;
+            font-size: 10.5px; font-weight: 500;
+            letter-spacing: .14em; text-transform: uppercase;
+            color: var(--text-low);
         }
-        
+
         input {
-            width: 100%;
-            padding: 0.75rem 1rem;
-            background: var(--dark-300);
-            border: 1px solid var(--dark-50);
-            border-radius: 0.5rem;
-            font-size: 0.9375rem;
+            width: 100%; padding: 10px 12px;
+            background: rgba(255,255,255,.04);
+            border: 1px solid var(--bd-hi);
+            border-radius: 9px; font-size: 14px;
             font-family: 'Inter', system-ui, sans-serif;
-            color: var(--light-100);
-            transition: all 0.2s ease;
+            color: var(--text-hi);
+            transition: border-color .15s var(--ease), box-shadow .15s var(--ease);
             outline: none;
         }
-        
-        input::placeholder {
-            color: var(--light-600);
-        }
-        
+        input::placeholder { color: var(--text-low); }
         input:focus {
-            border-color: var(--queen-500);
-            box-shadow: 0 0 0 3px rgba(236, 72, 153, 0.15);
-            background: var(--dark-400);
+            border-color: var(--crown-400);
+            box-shadow: 0 0 0 3px rgba(251,191,36,.15);
         }
-        
         input:hover:not(:focus) {
-            border-color: var(--light-800);
+            border-color: rgba(255,255,255,.18);
         }
-        
-        button {
-            width: 100%;
-            padding: 0.875rem 1rem;
-            background: linear-gradient(135deg, var(--queen-500) 0%, var(--queen-600) 100%);
-            color: white;
-            border: none;
-            border-radius: 0.5rem;
-            font-size: 0.9375rem;
+
+        .btn-submit {
+            width: 100%; padding: 12px;
+            background: linear-gradient(180deg, var(--crown-400), var(--crown-600));
+            border: 1px solid var(--crown-600);
+            border-radius: 9px; font-size: 14px;
             font-family: 'Inter', system-ui, sans-serif;
-            font-weight: 600;
-            cursor: pointer;
-            transition: all 0.2s ease;
-            margin-top: 0.75rem;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            gap: 0.5rem;
+            font-weight: 600; color: #1a0f02;
+            cursor: pointer; margin-top: 0.75rem;
+            display: flex; align-items: center; justify-content: center; gap: 8px;
+            transition: filter .15s, box-shadow .15s, transform .1s;
+            box-shadow: 0 6px 22px -10px var(--crown-glow), inset 0 1px 0 rgba(255,255,255,.25);
         }
-        
-        button:hover {
-            background: linear-gradient(135deg, var(--queen-600) 0%, var(--queen-700) 100%);
-            box-shadow: 0 0 20px -5px rgba(236, 72, 153, 0.4);
+        .btn-submit:hover {
+            filter: brightness(1.08);
+            box-shadow: 0 8px 30px -8px var(--crown-glow), inset 0 1px 0 rgba(255,255,255,.25);
             transform: translateY(-1px);
         }
-        
-        button:active {
-            transform: translateY(0);
+        .btn-submit:active { transform: translateY(0); }
+        .btn-submit:disabled {
+            opacity: 0.5; cursor: not-allowed;
+            transform: none; box-shadow: none;
         }
-        
-        button:disabled {
-            opacity: 0.6;
-            cursor: not-allowed;
-            transform: none;
-            box-shadow: none;
-        }
-        
+
         .error {
-            background: rgba(244, 63, 94, 0.1);
-            border: 1px solid rgba(244, 63, 94, 0.2);
-            color: #FDA4AF;
-            padding: 0.75rem 1rem;
-            border-radius: 0.5rem;
-            margin-bottom: 1.25rem;
-            font-size: 0.875rem;
-            display: none;
-            align-items: center;
-            gap: 0.5rem;
+            background: var(--ember-glow);
+            border: 1px solid rgba(244,63,94,.25);
+            color: var(--ember-400);
+            padding: 10px 14px; border-radius: 9px;
+            margin-bottom: 1.25rem; font-size: 13px;
+            display: none; align-items: center; gap: 8px;
         }
-        
-        .error.show {
-            display: flex;
-        }
-        
-        .error-icon {
-            flex-shrink: 0;
-            color: #F87171;
-        }
-        
-        /* Loading spinner */
+        .error.show { display: flex; }
+        .error-icon { flex-shrink: 0; color: var(--ember-500); }
+
         .spinner {
-            display: none;
-            width: 18px;
-            height: 18px;
-            border: 2px solid rgba(255, 255, 255, 0.3);
-            border-top-color: white;
+            display: none; width: 16px; height: 16px;
+            border: 2px solid rgba(26,15,2,.3);
+            border-top-color: #1a0f02;
             border-radius: 50%;
             animation: spin 0.6s linear infinite;
         }
-        
-        button.loading .spinner {
-            display: inline-block;
-        }
-        
-        @keyframes spin {
-            to { transform: rotate(360deg); }
-        }
-        
-        /* Footer */
+        .btn-submit.loading .spinner { display: inline-block; }
+        @keyframes spin { to { transform: rotate(360deg); } }
+
         .footer {
-            margin-top: 2rem;
-            text-align: center;
-            padding-top: 1.5rem;
-            border-top: 1px solid var(--dark-50);
+            margin-top: 2rem; text-align: center;
+            padding-top: 1.25rem; border-top: 1px solid var(--bd);
         }
-        
         .footer p {
-            color: var(--light-600);
-            font-size: 0.75rem;
+            color: var(--text-low); font-size: 11px;
+            font-family: 'JetBrains Mono', monospace;
         }
-        
-        .footer a {
-            color: var(--queen-400);
-            text-decoration: none;
-            transition: color 0.2s;
-        }
-        
-        .footer a:hover {
-            color: var(--queen-500);
-        }
-        
-        /* Focus ring */
+
         *:focus-visible {
             outline: none;
-            box-shadow: 0 0 0 2px var(--queen-500), 0 0 0 4px rgba(236, 72, 153, 0.2);
+            box-shadow: 0 0 0 2px rgba(251,191,36,.5);
         }
-        
-        /* Selection */
-        ::selection {
-            background: rgba(236, 72, 153, 0.3);
-            color: var(--light-100);
-        }
-        
-        /* Responsive */
+        ::selection { background: rgba(251,191,36,.3); }
+
         @media (max-width: 480px) {
-            .login-container {
-                padding: 2rem 1.5rem;
-                margin: 1rem;
-                border-radius: 0.75rem;
-            }
-            
-            .logo {
-                height: 80px;
-            }
-            
-            .logo-section h1 {
-                font-size: 1.5rem;
-            }
-            
-            .orb {
-                opacity: 0.25;
-            }
+            .login-card { padding: 2rem 1.5rem; }
+            .logo-glow img { height: 72px; }
+            .logo-section h1 { font-size: 1.375rem; }
         }
     </style>
 </head>
 <body>
-    <!-- Background effects -->
-    <div class="bg-mesh"></div>
-    <div class="orb orb-1"></div>
-    <div class="orb orb-2"></div>
-    <div class="orb orb-3"></div>
-    
-    <div class="login-container">
+    <div class="login-card">
         <div class="logo-section">
-            <div class="logo-wrapper">
-                <img src="/queen_logo.png" alt="Queen" class="logo">
+            <div class="logo-glow">
+                <img src="/queen_logo.png" alt="Queen">
             </div>
-            <h1>Queen</h1>
+            <h1>Queen<b>MQ</b></h1>
             <p>Secure Proxy Access</p>
         </div>
-        
+
         <div id="error" class="error">
-            <svg class="error-icon" width="16" height="16" fill="currentColor" viewBox="0 0 16 16">
+            <svg class="error-icon" width="14" height="14" fill="currentColor" viewBox="0 0 16 16">
                 <path d="M8 0a8 8 0 1 1 0 16A8 8 0 0 1 8 0zM7 4v5h2V4H7zm0 6v2h2v-2H7z"/>
             </svg>
             <span id="errorText"></span>
         </div>
-        
+
         <form id="loginForm">
             <div class="form-group">
                 <label for="username">Username</label>
-                <input 
-                    type="text" 
-                    id="username" 
-                    name="username" 
+                <input
+                    type="text" id="username" name="username"
                     placeholder="Enter your username"
-                    required 
-                    autofocus
-                    autocomplete="username"
+                    required autofocus autocomplete="username"
                 >
             </div>
-            
             <div class="form-group">
                 <label for="password">Password</label>
-                <input 
-                    type="password" 
-                    id="password" 
-                    name="password" 
+                <input
+                    type="password" id="password" name="password"
                     placeholder="Enter your password"
-                    required
-                    autocomplete="current-password"
+                    required autocomplete="current-password"
                 >
             </div>
-            
-            <button type="submit" id="loginBtn">
+            <button type="submit" id="loginBtn" class="btn-submit">
                 <span id="btnText">Sign In</span>
                 <span class="spinner"></span>
             </button>
         </form>
-        
+
         <div class="footer">
             <p>Queen Message Queue</p>
         </div>
@@ -421,31 +253,24 @@
 
         form.addEventListener('submit', async (e) => {
             e.preventDefault();
-            
             const username = document.getElementById('username').value;
             const password = document.getElementById('password').value;
-            
+
             errorDiv.classList.remove('show');
             loginBtn.disabled = true;
             loginBtn.classList.add('loading');
-            btnText.textContent = 'Signing in...';
-            
+            btnText.textContent = 'Signing in…';
+
             try {
                 const response = await fetch('/api/login', {
                     method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json'
-                    },
+                    headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ username, password })
                 });
-                
                 const data = await response.json();
-                
                 if (response.ok) {
                     btnText.textContent = 'Success!';
-                    setTimeout(() => {
-                        window.location.href = '/';
-                    }, 200);
+                    setTimeout(() => { window.location.href = '/'; }, 200);
                 } else {
                     throw new Error(data.error || 'Login failed');
                 }

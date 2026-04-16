@@ -1,19 +1,16 @@
 <template>
-  <div ref="rootEl" class="relative inline-block w-full max-w-xs">
-    <!-- Trigger button -->
+  <div ref="rootEl" class="relative inline-block w-full" style="max-width: 220px;">
+    <!-- Trigger -->
     <button
-      class="w-full flex items-center justify-between gap-2 px-3 py-1.5 text-sm rounded-lg border
-             border-light-200 dark:border-dark-200 bg-white dark:bg-dark-400
-             text-light-900 dark:text-white hover:border-queen-400 dark:hover:border-queen-500
-             transition-colors cursor-pointer"
+      class="ms-trigger"
       @click="open = !open"
     >
-      <span class="truncate text-left">
+      <span class="ms-label">
         <template v-if="modelValue.length === 0">{{ placeholder }}</template>
         <template v-else-if="modelValue.length === 1">{{ modelValue[0] }}</template>
         <template v-else>{{ modelValue.length }} selected</template>
       </span>
-      <svg class="w-4 h-4 shrink-0 text-light-400 transition-transform" :class="{ 'rotate-180': open }" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+      <svg class="ms-chevron" :class="{ 'ms-chevron-open': open }" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
         <path stroke-linecap="round" stroke-linejoin="round" d="M19 9l-7 7-7-7" />
       </svg>
     </button>
@@ -27,58 +24,43 @@
       leave-from-class="opacity-100 scale-100"
       leave-to-class="opacity-0 scale-95"
     >
-      <div
-        v-if="open"
-        class="absolute z-50 mt-1 w-full rounded-lg border border-light-200 dark:border-dark-200
-               bg-white dark:bg-dark-400 shadow-lg origin-top"
-      >
-        <!-- Search input -->
-        <div class="p-2 border-b border-light-100 dark:border-dark-200">
+      <div v-if="open" class="ms-dropdown">
+        <!-- Search -->
+        <div style="padding:8px; border-bottom:1px solid var(--bd);">
           <input
             ref="searchEl"
             v-model="search"
             type="text"
-            class="w-full px-2.5 py-1.5 text-xs rounded-md border border-light-200 dark:border-dark-300
-                   bg-light-50 dark:bg-dark-500 text-light-900 dark:text-white
-                   placeholder-light-400 dark:placeholder-dark-100
-                   focus:outline-none focus:ring-1 focus:ring-queen-500 focus:border-queen-500"
+            class="ms-search"
             :placeholder="searchPlaceholder"
             @keydown.esc="open = false"
           />
         </div>
 
-        <!-- Options list -->
-        <div class="max-h-48 overflow-y-auto py-1">
-          <div v-if="filteredOptions.length === 0" class="px-3 py-2 text-xs text-light-500">
+        <!-- Options -->
+        <div style="max-height:192px; overflow-y:auto; padding:4px 0;">
+          <div v-if="filteredOptions.length === 0" style="padding:8px 12px; font-size:12px; color:var(--text-low);">
             No matches
           </div>
           <label
             v-for="opt in filteredOptions"
             :key="opt"
-            class="flex items-center gap-2 px-3 py-1.5 text-sm cursor-pointer
-                   hover:bg-light-50 dark:hover:bg-dark-300 transition-colors"
+            class="ms-option"
           >
             <input
               type="checkbox"
-              class="rounded border-light-300 dark:border-dark-200 text-queen-600
-                     focus:ring-queen-500 cursor-pointer"
+              class="ms-checkbox"
               :checked="modelValue.includes(opt)"
               @change="toggle(opt)"
             />
-            <span class="truncate text-light-800 dark:text-light-200 text-xs">{{ opt }}</span>
+            <span class="ms-option-text">{{ opt }}</span>
           </label>
         </div>
 
-        <!-- Footer actions -->
-        <div v-if="options.length > 1" class="flex items-center justify-between px-3 py-1.5 border-t border-light-100 dark:border-dark-200">
-          <button
-            class="text-xs text-queen-600 dark:text-queen-400 hover:underline cursor-pointer"
-            @click="selectAll"
-          >Select all</button>
-          <button
-            class="text-xs text-light-500 hover:text-light-700 dark:hover:text-light-300 hover:underline cursor-pointer"
-            @click="clearAll"
-          >Clear</button>
+        <!-- Footer -->
+        <div v-if="options.length > 1" class="ms-footer">
+          <button class="ms-action ms-action-primary" @click="selectAll">Select all</button>
+          <button class="ms-action" @click="clearAll">Clear</button>
         </div>
       </div>
     </Transition>
@@ -111,37 +93,77 @@ const filteredOptions = computed(() => {
 const toggle = (opt) => {
   const current = [...props.modelValue]
   const idx = current.indexOf(opt)
-  if (idx >= 0) {
-    current.splice(idx, 1)
-  } else {
-    current.push(opt)
-  }
+  if (idx >= 0) current.splice(idx, 1)
+  else current.push(opt)
   emit('update:modelValue', current)
 }
 
-const selectAll = () => {
-  emit('update:modelValue', [...props.options])
-}
+const selectAll = () => { emit('update:modelValue', [...props.options]) }
+const clearAll = () => { emit('update:modelValue', []) }
 
-const clearAll = () => {
-  emit('update:modelValue', [])
-}
-
-// Focus search when opening
 watch(open, (val) => {
-  if (val) {
-    search.value = ''
-    nextTick(() => searchEl.value?.focus())
-  }
+  if (val) { search.value = ''; nextTick(() => searchEl.value?.focus()) }
 })
 
-// Click outside to close
 const handleClickOutside = (e) => {
-  if (open.value && rootEl.value && !rootEl.value.contains(e.target)) {
-    open.value = false
-  }
+  if (open.value && rootEl.value && !rootEl.value.contains(e.target)) open.value = false
 }
-
 onMounted(() => document.addEventListener('click', handleClickOutside, true))
 onUnmounted(() => document.removeEventListener('click', handleClickOutside, true))
 </script>
+
+<style>
+.ms-trigger {
+  width: 100%; display: flex; align-items: center; justify-content: space-between; gap: 8px;
+  padding: 7px 10px; font-size: 13px; border-radius: 9px;
+  border: 1px solid var(--bd-hi); color: var(--text-hi); cursor: pointer;
+  transition: border-color .15s;
+}
+html:not(.light) .ms-trigger { background: rgba(255,255,255,.04); }
+html.light .ms-trigger { background: #fff; }
+.ms-trigger:hover { border-color: var(--crown-400); }
+
+.ms-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-align: left; flex: 1; }
+.ms-chevron { width: 14px; height: 14px; flex-shrink: 0; color: var(--text-low); transition: transform .15s; }
+.ms-chevron-open { transform: rotate(180deg); }
+
+.ms-dropdown {
+  position: absolute; z-index: 50; margin-top: 4px; width: 100%;
+  border-radius: 12px; border: 1px solid var(--bd-hi);
+  overflow: hidden; transform-origin: top;
+}
+html:not(.light) .ms-dropdown { background: var(--ink-3); box-shadow: 0 20px 40px -10px rgba(0,0,0,.5); }
+html.light .ms-dropdown { background: #fff; box-shadow: 0 10px 30px -10px rgba(0,0,0,.15); }
+
+.ms-search {
+  width: 100%; padding: 6px 10px; font-size: 12px; border-radius: 7px;
+  border: 1px solid var(--bd-hi); color: var(--text-hi); outline: none;
+}
+html:not(.light) .ms-search { background: rgba(255,255,255,.04); }
+html.light .ms-search { background: var(--paper-1); }
+.ms-search:focus { border-color: var(--crown-400); box-shadow: 0 0 0 2px rgba(251,191,36,.15); }
+.ms-search::placeholder { color: var(--text-low); }
+
+.ms-option {
+  display: flex; align-items: center; gap: 8px;
+  padding: 6px 12px; font-size: 13px; cursor: pointer; transition: background .1s;
+}
+.ms-option:hover { background: rgba(255,255,255,.04); }
+html.light .ms-option:hover { background: var(--paper-1); }
+
+.ms-checkbox {
+  width: 14px; height: 14px; border-radius: 3px; cursor: pointer;
+  accent-color: var(--crown-400);
+}
+
+.ms-option-text { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-hi); font-size: 12px; }
+
+.ms-footer {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 6px 12px; border-top: 1px solid var(--bd);
+}
+.ms-action { font-size: 11px; color: var(--text-low); cursor: pointer; border: none; background: none; padding: 2px 0; }
+.ms-action:hover { color: var(--text-hi); }
+.ms-action-primary { color: var(--crown-400); }
+.ms-action-primary:hover { color: var(--crown-500); }
+</style>

@@ -1,259 +1,256 @@
 <template>
-  <div class="space-y-4 sm:space-y-6 animate-fade-in">
-    <!-- Filters -->
-    <div class="card p-4">
-      <div class="flex flex-col gap-4">
-        <!-- Time Range Row -->
-        <div class="flex flex-wrap items-center gap-3">
-          <label class="text-xs font-medium text-light-600 dark:text-light-400">Time Range:</label>
-          <div class="flex items-center gap-1 flex-wrap">
-            <button 
-              v-for="range in timeRanges" 
+  <div class="view-container animate-fade-in">
+
+    <!-- Page head -->
+    <div class="page-head">
+      <div>
+        <div class="eyebrow">Insights</div>
+        <h1><span class="accent">Analytics</span></h1>
+        <p>Throughput, distribution and health metrics for your message pipeline.</p>
+      </div>
+    </div>
+
+    <!-- Filters card -->
+    <div class="card" style="margin-bottom:20px;">
+      <div class="card-body" style="display:flex; flex-direction:column; gap:16px;">
+
+        <!-- Time range row -->
+        <div style="display:flex; flex-wrap:wrap; align-items:center; gap:12px;">
+          <span class="label-xs">Time range</span>
+          <div class="seg">
+            <button
+              v-for="range in timeRanges"
               :key="range.value"
+              :class="{ on: timeRange === range.value && !customMode }"
               @click="selectQuickRange(range.value)"
-              class="px-3 py-1.5 text-xs font-medium rounded-lg transition-colors"
-              :class="timeRange === range.value && !customMode
-                ? 'bg-queen-500 text-white' 
-                : 'bg-light-100 dark:bg-dark-300 text-light-700 dark:text-light-300 hover:bg-light-200 dark:hover:bg-dark-200'"
-            >
-              {{ range.label }}
-            </button>
-            <button 
+            >{{ range.label }}</button>
+            <button
+              :class="{ on: customMode }"
               @click="toggleCustomMode"
-              class="px-3 py-1.5 text-xs font-medium rounded-lg transition-colors"
-              :class="customMode
-                ? 'bg-queen-500 text-white' 
-                : 'bg-light-100 dark:bg-dark-300 text-light-700 dark:text-light-300 hover:bg-light-200 dark:hover:bg-dark-200'"
-            >
-              Custom
-            </button>
+            >Custom</button>
           </div>
         </div>
-        
-        <!-- Custom Date/Time Range -->
-        <div v-if="customMode" class="flex flex-wrap items-center gap-3 pt-3 border-t border-light-200 dark:border-dark-50">
-          <div class="flex items-center gap-2">
-            <label class="text-xs font-medium text-light-600 dark:text-light-400 whitespace-nowrap">From:</label>
-            <input 
-              type="datetime-local" 
+
+        <!-- Custom date/time range -->
+        <div v-if="customMode" style="display:flex; flex-wrap:wrap; align-items:center; gap:12px; padding-top:12px; border-top:1px solid var(--bd);">
+          <div style="display:flex; align-items:center; gap:8px;">
+            <span class="label-xs">From</span>
+            <input
+              type="datetime-local"
               v-model="customFrom"
-              class="input text-sm py-1.5 px-2 font-mono"
+              class="input font-mono"
+              style="width:auto; font-size:13px;"
             />
           </div>
-          <div class="flex items-center gap-2">
-            <label class="text-xs font-medium text-light-600 dark:text-light-400 whitespace-nowrap">To:</label>
-            <input 
-              type="datetime-local" 
+          <div style="display:flex; align-items:center; gap:8px;">
+            <span class="label-xs">To</span>
+            <input
+              type="datetime-local"
               v-model="customTo"
-              class="input text-sm py-1.5 px-2 font-mono"
+              class="input font-mono"
+              style="width:auto; font-size:13px;"
             />
           </div>
-          <button 
+          <button
             @click="applyCustomRange"
-            class="btn btn-primary text-xs"
-          >
-            Apply
-          </button>
+            class="btn btn-primary"
+          >Apply</button>
         </div>
-        
-        <!-- Filters Row -->
-        <div class="flex flex-wrap items-end gap-3">
-          <!-- Queue Filter -->
-          <div class="w-48">
-            <label class="block text-xs font-medium text-light-600 dark:text-light-400 mb-1.5">Queue</label>
-            <select v-model="queueFilter" class="select">
+
+        <!-- Filters row -->
+        <div style="display:flex; flex-wrap:wrap; align-items:flex-end; gap:12px;">
+          <div style="width:192px;">
+            <span class="label-xs" style="display:block; margin-bottom:6px;">Queue</span>
+            <select v-model="queueFilter" class="input" style="width:100%;">
               <option value="">All Queues</option>
               <option v-for="q in allQueues" :key="q.name" :value="q.name">
                 {{ q.name }}
               </option>
             </select>
           </div>
-          
-          <!-- Namespace Filter -->
-          <div class="w-40">
-            <label class="block text-xs font-medium text-light-600 dark:text-light-400 mb-1.5">Namespace</label>
-            <select v-model="namespaceFilter" class="select">
+
+          <div style="width:160px;">
+            <span class="label-xs" style="display:block; margin-bottom:6px;">Namespace</span>
+            <select v-model="namespaceFilter" class="input" style="width:100%;">
               <option value="">All Namespaces</option>
               <option v-for="ns in namespaces" :key="ns.namespace" :value="ns.namespace">
                 {{ ns.namespace || 'Default' }}
               </option>
             </select>
           </div>
-          
-          <!-- Task Filter -->
-          <div class="w-40">
-            <label class="block text-xs font-medium text-light-600 dark:text-light-400 mb-1.5">Task</label>
-            <select v-model="taskFilter" class="select">
+
+          <div style="width:160px;">
+            <span class="label-xs" style="display:block; margin-bottom:6px;">Task</span>
+            <select v-model="taskFilter" class="input" style="width:100%;">
               <option value="">All Tasks</option>
               <option v-for="task in tasks" :key="task.task" :value="task.task">
                 {{ task.task || 'Default' }}
               </option>
             </select>
           </div>
-          
-          <button 
+
+          <button
             v-if="queueFilter || namespaceFilter || taskFilter"
             @click="clearFilters"
-            class="btn btn-ghost text-xs"
-          >
-            Clear Filters
-          </button>
+            class="btn btn-ghost"
+          >Clear Filters</button>
         </div>
       </div>
-      
-      <!-- Active Filters Display -->
-      <div v-if="queueFilter || namespaceFilter || taskFilter" class="flex flex-wrap gap-2 mt-3 pt-3 border-t border-light-200 dark:border-dark-50">
-        <span v-if="queueFilter" class="badge badge-queen">
+
+      <!-- Active filters display -->
+      <div v-if="queueFilter || namespaceFilter || taskFilter" style="display:flex; flex-wrap:wrap; gap:8px; padding:0 16px 14px; border-top:1px solid var(--bd); padding-top:12px;">
+        <span v-if="queueFilter" class="chip chip-ice">
           Queue: {{ queueFilter }}
         </span>
-        <span v-if="namespaceFilter" class="badge badge-cyber">
+        <span v-if="namespaceFilter" class="chip chip-ice">
           Namespace: {{ namespaceFilter }}
         </span>
-        <span v-if="taskFilter" class="badge badge-crown">
+        <span v-if="taskFilter" class="chip chip-warn">
           Task: {{ taskFilter }}
         </span>
       </div>
     </div>
 
-    <div v-if="loading" class="space-y-4 sm:space-y-6">
-      <div class="card p-6">
-        <div class="skeleton h-64 w-full rounded-lg" />
+    <!-- Loading skeleton -->
+    <div v-if="loading" style="display:flex; flex-direction:column; gap:16px;">
+      <div class="card" style="padding:24px;">
+        <div class="skeleton" style="height:256px; width:100%; border-radius:10px;" />
       </div>
-      <div class="grid grid-cols-1 lg:grid-cols-2 gap-4 sm:gap-6">
-        <div class="card p-6">
-          <div class="skeleton h-48 w-full rounded-lg" />
+      <div style="display:grid; grid-template-columns:1fr 1fr; gap:16px;">
+        <div class="card" style="padding:24px;">
+          <div class="skeleton" style="height:192px; width:100%; border-radius:10px;" />
         </div>
-        <div class="card p-6">
-          <div class="skeleton h-48 w-full rounded-lg" />
+        <div class="card" style="padding:24px;">
+          <div class="skeleton" style="height:192px; width:100%; border-radius:10px;" />
         </div>
       </div>
     </div>
 
     <template v-else-if="statusData">
       <!-- Message Flow Chart -->
-      <div class="card">
+      <div class="card card-accent" style="margin-bottom:20px;">
         <div class="card-header">
-          <h3 class="font-semibold text-light-900 dark:text-white">Message Flow Over Time</h3>
+          <h3>Message Flow Over Time</h3>
         </div>
         <div class="card-body">
-          <BaseChart 
+          <BaseChart
             v-if="throughputData.labels.length > 0"
-            type="line" 
-            :data="throughputData" 
-            :options="chartOptions" 
+            type="line"
+            :data="throughputData"
+            :options="chartOptions"
             height="280px"
           />
-          <div v-else class="text-center py-12 text-light-500">
+          <div v-else style="text-align:center; padding:48px 0; color:var(--text-mid);">
             No throughput data available
           </div>
         </div>
       </div>
 
-      <!-- Charts Row -->
-      <div class="grid grid-cols-1 lg:grid-cols-2 gap-4 sm:gap-6">
+      <!-- Charts row -->
+      <div style="display:grid; grid-template-columns:1fr 1fr; gap:16px; margin-bottom:20px;">
         <!-- Top Queues Chart -->
         <div class="card">
           <div class="card-header">
-            <h3 class="font-semibold text-light-900 dark:text-white">Top Queues by Volume</h3>
+            <h3>Top Queues by Volume</h3>
           </div>
           <div class="card-body">
-            <BaseChart 
+            <BaseChart
               v-if="queueActivityData.labels.length > 0"
-              type="bar" 
-              :data="queueActivityData" 
-              :options="barChartOptions" 
+              type="bar"
+              :data="queueActivityData"
+              :options="barChartOptions"
               height="240px"
             />
-            <div v-else class="text-center py-12 text-light-500">
+            <div v-else style="text-align:center; padding:48px 0; color:var(--text-mid);">
               No queue data available
             </div>
           </div>
         </div>
-        
+
         <!-- Message Distribution Chart -->
         <div class="card">
           <div class="card-header">
-            <h3 class="font-semibold text-light-900 dark:text-white">Message Status Distribution</h3>
+            <h3>Message Status Distribution</h3>
           </div>
-          <div class="card-body flex items-center justify-center">
-            <BaseChart 
+          <div class="card-body" style="display:flex; align-items:center; justify-content:center;">
+            <BaseChart
               v-if="messageDistributionData.labels.length > 0"
-              type="doughnut" 
-              :data="messageDistributionData" 
-              :options="doughnutOptions" 
+              type="doughnut"
+              :data="messageDistributionData"
+              :options="doughnutOptions"
               height="240px"
             />
-            <div v-else class="text-center py-12 text-light-500">
+            <div v-else style="text-align:center; padding:48px 0; color:var(--text-mid);">
               No message data available
             </div>
           </div>
         </div>
       </div>
 
-      <!-- Performance Metrics -->
-      <div class="card">
+      <!-- Message Counts -->
+      <div class="card" style="margin-bottom:20px;">
         <div class="card-header">
-          <h3 class="font-semibold text-light-900 dark:text-white">Message Counts</h3>
+          <h3>Message Counts</h3>
         </div>
         <div class="card-body">
-          <div class="grid grid-cols-2 md:grid-cols-5 gap-2 sm:gap-4">
-            <div class="p-4 bg-light-100 dark:bg-dark-300 rounded-lg">
-              <p class="text-xs text-light-500 uppercase tracking-wide">Pending</p>
-              <p class="text-2xl font-bold text-cyber-600 dark:text-cyber-400 mt-1">
+          <div style="display:grid; grid-template-columns:repeat(5,1fr); gap:16px;">
+            <div class="stat">
+              <div class="stat-label">Pending</div>
+              <div class="stat-value font-mono" style="color:#22d3ee;">
                 {{ formatNumber(statusData?.messages?.pending || 0) }}
-              </p>
+              </div>
             </div>
-            <div class="p-4 bg-light-100 dark:bg-dark-300 rounded-lg">
-              <p class="text-xs text-light-500 uppercase tracking-wide">Processing</p>
-              <p class="text-2xl font-bold text-crown-600 dark:text-crown-400 mt-1">
+            <div class="stat">
+              <div class="stat-label">Processing</div>
+              <div class="stat-value font-mono" style="color:#fbbf24;">
                 {{ formatNumber(statusData?.messages?.processing || 0) }}
-              </p>
+              </div>
             </div>
-            <div class="p-4 bg-light-100 dark:bg-dark-300 rounded-lg">
-              <p class="text-xs text-light-500 uppercase tracking-wide">Completed</p>
-              <p class="text-2xl font-bold text-emerald-600 dark:text-emerald-400 mt-1">
+            <div class="stat">
+              <div class="stat-label">Completed</div>
+              <div class="stat-value font-mono" style="color:#34d399;">
                 {{ formatNumber(statusData?.messages?.completed || 0) }}
-              </p>
+              </div>
             </div>
-            <div class="p-4 bg-light-100 dark:bg-dark-300 rounded-lg">
-              <p class="text-xs text-light-500 uppercase tracking-wide">Failed</p>
-              <p class="text-2xl font-bold text-orange-600 dark:text-orange-400 mt-1">
+            <div class="stat">
+              <div class="stat-label">Failed</div>
+              <div class="stat-value font-mono" style="color:#fb923c;">
                 {{ formatNumber(statusData?.messages?.failed || 0) }}
-              </p>
+              </div>
             </div>
-            <div class="p-4 bg-light-100 dark:bg-dark-300 rounded-lg">
-              <p class="text-xs text-light-500 uppercase tracking-wide">Dead Letter</p>
-              <p class="text-2xl font-bold text-rose-600 dark:text-rose-400 mt-1">
+            <div class="stat">
+              <div class="stat-label">Dead Letter</div>
+              <div class="stat-value font-mono" style="color:#f43f5e;">
                 {{ formatNumber(statusData?.messages?.deadLetter || 0) }}
-              </p>
+              </div>
             </div>
           </div>
         </div>
       </div>
 
       <!-- Detailed Stats -->
-      <div class="grid grid-cols-1 lg:grid-cols-2 gap-4 sm:gap-6">
+      <div style="display:grid; grid-template-columns:1fr 1fr; gap:16px; margin-bottom:20px;">
         <!-- Leases Info -->
         <div class="card">
           <div class="card-header">
-            <h3 class="font-semibold text-light-900 dark:text-white">Active Leases</h3>
+            <h3>Active Leases</h3>
           </div>
-          <div class="card-body space-y-3">
-            <div class="flex items-center justify-between">
-              <span class="text-light-600 dark:text-light-400">Active Leases</span>
-              <span class="font-semibold">{{ statusData?.leases?.active || 0 }}</span>
+          <div class="card-body" style="display:flex; flex-direction:column; gap:12px;">
+            <div style="display:flex; align-items:center; justify-content:space-between;">
+              <span style="color:var(--text-mid); font-size:13px;">Active Leases</span>
+              <span class="font-mono tabular-nums" style="font-weight:600; color:var(--text-hi);">{{ statusData?.leases?.active || 0 }}</span>
             </div>
-            <div class="flex items-center justify-between">
-              <span class="text-light-600 dark:text-light-400">Partitions with Leases</span>
-              <span class="font-semibold">{{ statusData?.leases?.partitionsWithLeases || 0 }}</span>
+            <div style="display:flex; align-items:center; justify-content:space-between;">
+              <span style="color:var(--text-mid); font-size:13px;">Partitions with Leases</span>
+              <span class="font-mono tabular-nums" style="font-weight:600; color:var(--text-hi);">{{ statusData?.leases?.partitionsWithLeases || 0 }}</span>
             </div>
-            <div class="flex items-center justify-between">
-              <span class="text-light-600 dark:text-light-400">Total Batch Size</span>
-              <span class="font-semibold">{{ statusData?.leases?.totalBatchSize || 0 }}</span>
+            <div style="display:flex; align-items:center; justify-content:space-between;">
+              <span style="color:var(--text-mid); font-size:13px;">Total Batch Size</span>
+              <span class="font-mono tabular-nums" style="font-weight:600; color:var(--text-hi);">{{ statusData?.leases?.totalBatchSize || 0 }}</span>
             </div>
-            <div class="flex items-center justify-between">
-              <span class="text-light-600 dark:text-light-400">Total Acked</span>
-              <span class="font-semibold">{{ statusData?.leases?.totalAcked || 0 }}</span>
+            <div style="display:flex; align-items:center; justify-content:space-between;">
+              <span style="color:var(--text-mid); font-size:13px;">Total Acked</span>
+              <span class="font-mono tabular-nums" style="font-weight:600; color:var(--text-hi);">{{ statusData?.leases?.totalAcked || 0 }}</span>
             </div>
           </div>
         </div>
@@ -261,28 +258,28 @@
         <!-- Dead Letter Queue -->
         <div class="card">
           <div class="card-header">
-            <h3 class="font-semibold text-light-900 dark:text-white">Dead Letter Queue</h3>
+            <h3>Dead Letter Queue</h3>
           </div>
-          <div class="card-body space-y-3">
-            <div class="flex items-center justify-between">
-              <span class="text-light-600 dark:text-light-400">Total Messages</span>
-              <span class="font-semibold">{{ statusData?.deadLetterQueue?.totalMessages || 0 }}</span>
+          <div class="card-body" style="display:flex; flex-direction:column; gap:12px;">
+            <div style="display:flex; align-items:center; justify-content:space-between;">
+              <span style="color:var(--text-mid); font-size:13px;">Total Messages</span>
+              <span class="font-mono tabular-nums" style="font-weight:600; color:var(--text-hi);">{{ statusData?.deadLetterQueue?.totalMessages || 0 }}</span>
             </div>
-            <div class="flex items-center justify-between">
-              <span class="text-light-600 dark:text-light-400">Affected Partitions</span>
-              <span class="font-semibold">{{ statusData?.deadLetterQueue?.affectedPartitions || 0 }}</span>
+            <div style="display:flex; align-items:center; justify-content:space-between;">
+              <span style="color:var(--text-mid); font-size:13px;">Affected Partitions</span>
+              <span class="font-mono tabular-nums" style="font-weight:600; color:var(--text-hi);">{{ statusData?.deadLetterQueue?.affectedPartitions || 0 }}</span>
             </div>
-            
-            <div v-if="statusData?.deadLetterQueue?.topErrors?.length" class="pt-3 border-t border-light-200 dark:border-dark-50">
-              <p class="text-xs font-semibold text-light-600 dark:text-light-400 mb-2">Top Errors:</p>
-              <div class="space-y-2">
+
+            <div v-if="statusData?.deadLetterQueue?.topErrors?.length" style="padding-top:12px; border-top:1px solid var(--bd);">
+              <span class="label-xs" style="display:block; margin-bottom:8px;">Top Errors</span>
+              <div style="display:flex; flex-direction:column; gap:8px;">
                 <div
                   v-for="(errorItem, idx) in statusData.deadLetterQueue.topErrors.slice(0, 3)"
                   :key="idx"
-                  class="flex items-center justify-between text-sm"
+                  style="display:flex; align-items:center; justify-content:space-between; font-size:13px;"
                 >
-                  <span class="text-light-600 dark:text-light-400 truncate flex-1">{{ errorItem.error }}</span>
-                  <span class="font-semibold ml-2">{{ errorItem.count }}</span>
+                  <span style="color:var(--text-mid); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; flex:1;">{{ errorItem.error }}</span>
+                  <span class="font-mono tabular-nums" style="font-weight:600; color:var(--text-hi); margin-left:8px;">{{ errorItem.count }}</span>
                 </div>
               </div>
             </div>
@@ -292,29 +289,29 @@
 
       <!-- Workers Info -->
       <div v-if="statusData?.workers?.length" class="card">
-        <div class="card-header flex items-center justify-between">
-          <h3 class="font-semibold text-light-900 dark:text-white">{{ statusData.workers.length }} Workers</h3>
-          <span class="badge badge-success">Healthy</span>
+        <div class="card-header">
+          <h3>{{ statusData.workers.length }} Workers</h3>
+          <span class="chip chip-ok"><span class="dot"></span>Healthy</span>
         </div>
         <div class="card-body">
-          <div class="grid grid-cols-3 gap-2 sm:gap-4">
-            <div class="p-4 bg-light-100 dark:bg-dark-300 rounded-lg text-center">
-              <p class="text-xs text-light-500 uppercase tracking-wide">Avg Event Loop</p>
-              <p class="text-2xl font-bold text-light-900 dark:text-light-100 mt-1">
-                {{ Math.round(statusData.workers.reduce((sum, w) => sum + (w.avgEventLoopLagMs || 0), 0) / statusData.workers.length) }}ms
-              </p>
+          <div class="grid-3">
+            <div class="stat" style="text-align:center;">
+              <div class="stat-label" style="justify-content:center;">Avg Event Loop</div>
+              <div class="stat-value font-mono">
+                {{ Math.round(statusData.workers.reduce((sum, w) => sum + (w.avgEventLoopLagMs || 0), 0) / statusData.workers.length) }}<small>ms</small>
+              </div>
             </div>
-            <div class="p-4 bg-light-100 dark:bg-dark-300 rounded-lg text-center">
-              <p class="text-xs text-light-500 uppercase tracking-wide">Connection Pool</p>
-              <p class="text-2xl font-bold text-light-900 dark:text-light-100 mt-1">
-                {{ statusData.workers.reduce((sum, w) => sum + (w.freeSlots || 0), 0) }}/{{ statusData.workers.reduce((sum, w) => sum + (w.dbConnections || 0), 0) }}
-              </p>
+            <div class="stat" style="text-align:center;">
+              <div class="stat-label" style="justify-content:center;">Connection Pool</div>
+              <div class="stat-value font-mono">
+                {{ statusData.workers.reduce((sum, w) => sum + (w.freeSlots || 0), 0) }}<small>/{{ statusData.workers.reduce((sum, w) => sum + (w.dbConnections || 0), 0) }}</small>
+              </div>
             </div>
-            <div class="p-4 bg-light-100 dark:bg-dark-300 rounded-lg text-center">
-              <p class="text-xs text-light-500 uppercase tracking-wide">Max Job Queue</p>
-              <p class="text-2xl font-bold text-light-900 dark:text-light-100 mt-1">
+            <div class="stat" style="text-align:center;">
+              <div class="stat-label" style="justify-content:center;">Max Job Queue</div>
+              <div class="stat-value font-mono">
                 {{ Math.max(...statusData.workers.map(w => w.jobQueueSize || 0)) }}
-              </p>
+              </div>
             </div>
           </div>
         </div>

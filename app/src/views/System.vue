@@ -1,147 +1,113 @@
 <template>
-  <div class="space-y-4 sm:space-y-6 animate-fade-in">
-    <!-- Controls -->
-    <div class="card p-3 sm:p-4">
-      <div class="flex flex-col gap-3">
-        <!-- Row 1: Data Source & View Mode -->
-        <div class="flex flex-wrap items-center gap-2 sm:gap-4">
-          <!-- Data Source Toggle -->
-          <div class="flex items-center gap-1 sm:gap-2">
-            <span class="text-[10px] sm:text-xs font-medium text-light-500">Source:</span>
-            <div class="flex items-center gap-1">
-              <button 
-                @click="dataSource = 'worker'; fetchData()"
-                class="px-3 py-1.5 text-xs font-medium rounded-lg transition-colors"
-                :class="dataSource === 'worker' 
-                  ? 'bg-queen-500 text-white' 
-                  : 'bg-light-100 dark:bg-dark-300 text-light-700 dark:text-light-300 hover:bg-light-200 dark:hover:bg-dark-200'"
-              >
-                Queue Operations
-              </button>
-              <button 
-                @click="dataSource = 'system'; fetchData()"
-                class="px-3 py-1.5 text-xs font-medium rounded-lg transition-colors"
-                :class="dataSource === 'system' 
-                  ? 'bg-queen-500 text-white' 
-                  : 'bg-light-100 dark:bg-dark-300 text-light-700 dark:text-light-300 hover:bg-light-200 dark:hover:bg-dark-200'"
-              >
-                System Resources
-              </button>
-              <button 
-                @click="dataSource = 'postgres'; fetchData()"
-                class="px-3 py-1.5 text-xs font-medium rounded-lg transition-colors"
-                :class="dataSource === 'postgres' 
-                  ? 'bg-queen-500 text-white' 
-                  : 'bg-light-100 dark:bg-dark-300 text-light-700 dark:text-light-300 hover:bg-light-200 dark:hover:bg-dark-200'"
-              >
-                Postgres Stats
-              </button>
-            </div>
-          </div>
+  <div class="view-container animate-fade-in">
 
-          <!-- View Mode (only for System) -->
-          <div v-if="dataSource === 'system'" class="flex items-center gap-2">
-            <span class="text-xs font-medium text-light-500">View:</span>
-            <div class="flex items-center gap-1">
-              <button 
-                @click="viewMode = 'individual'"
-                class="px-3 py-1.5 text-xs font-medium rounded-lg transition-colors"
-                :class="viewMode === 'individual' 
-                  ? 'bg-indigo-500 text-white' 
-                  : 'bg-light-100 dark:bg-dark-300 text-light-700 dark:text-light-300 hover:bg-light-200 dark:hover:bg-dark-200'"
-              >
-                Per Server
-              </button>
-              <button 
-                @click="viewMode = 'aggregate'"
-                class="px-3 py-1.5 text-xs font-medium rounded-lg transition-colors"
-                :class="viewMode === 'aggregate' 
-                  ? 'bg-indigo-500 text-white' 
-                  : 'bg-light-100 dark:bg-dark-300 text-light-700 dark:text-light-300 hover:bg-light-200 dark:hover:bg-dark-200'"
-              >
-                Aggregate
-              </button>
-            </div>
-          </div>
-
-          <!-- Aggregation Type (only for System) -->
-          <div v-if="dataSource === 'system'" class="flex items-center gap-2">
-            <span class="text-xs font-medium text-light-500">Metric:</span>
-            <div class="flex items-center gap-1">
-              <button 
-                v-for="agg in aggregationTypes"
-                :key="agg.value"
-                @click="aggregationType = agg.value"
-                class="px-3 py-1.5 text-xs font-medium rounded-lg transition-colors"
-                :class="aggregationType === agg.value 
-                  ? 'bg-crown-500 text-white' 
-                  : 'bg-light-100 dark:bg-dark-300 text-light-700 dark:text-light-300 hover:bg-light-200 dark:hover:bg-dark-200'"
-              >
-                {{ agg.label }}
-              </button>
-            </div>
-          </div>
-          
-          <!-- Time Range (hide for postgres stats - point-in-time) -->
-          <div v-if="dataSource !== 'postgres'" class="flex items-center gap-2 ml-auto">
-            <span class="text-xs font-medium text-light-500">Range:</span>
-            <div class="flex items-center gap-1">
-              <button 
-                v-for="range in timeRanges" 
-                :key="range.value"
-                @click="selectQuickRange(range.value)"
-                class="px-3 py-1.5 text-xs font-medium rounded-lg transition-colors"
-                :class="timeRange === range.value && !customMode
-                  ? 'bg-cyber-500 text-white' 
-                  : 'bg-light-100 dark:bg-dark-300 text-light-700 dark:text-light-300 hover:bg-light-200 dark:hover:bg-dark-200'"
-              >
-                {{ range.label }}
-              </button>
-              <button 
-                @click="toggleCustomMode"
-                class="px-3 py-1.5 text-xs font-medium rounded-lg transition-colors"
-                :class="customMode
-                  ? 'bg-cyber-500 text-white' 
-                  : 'bg-light-100 dark:bg-dark-300 text-light-700 dark:text-light-300 hover:bg-light-200 dark:hover:bg-dark-200'"
-              >
-                Custom
-              </button>
-            </div>
-          </div>
-        </div>
-
-        <!-- Custom Date/Time Range -->
-        <div v-if="customMode" class="flex flex-wrap items-center gap-3 pt-3 border-t border-light-200 dark:border-dark-50">
-          <div class="flex items-center gap-2">
-            <label class="text-xs font-medium text-light-600 dark:text-light-400 whitespace-nowrap">From:</label>
-            <input 
-              type="datetime-local" 
-              v-model="customFrom"
-              class="input text-sm py-1.5 px-2 font-mono"
-            />
-          </div>
-          <div class="flex items-center gap-2">
-            <label class="text-xs font-medium text-light-600 dark:text-light-400 whitespace-nowrap">To:</label>
-            <input 
-              type="datetime-local" 
-              v-model="customTo"
-              class="input text-sm py-1.5 px-2 font-mono"
-            />
-          </div>
-          <button 
-            @click="applyCustomRange"
-            class="btn btn-primary text-xs"
-          >
-            Apply
-          </button>
-        </div>
+    <!-- Page head -->
+    <div class="page-head">
+      <div>
+        <div class="eyebrow">Observability</div>
+        <h1>System <span class="accent">Metrics</span></h1>
+        <p>Queue operations, system resources, and Postgres internals.</p>
       </div>
     </div>
 
-    <div v-if="loading" class="space-y-6">
-      <div class="grid grid-cols-1 lg:grid-cols-2 gap-4 sm:gap-6">
-        <div v-for="i in 4" :key="i" class="card p-6">
-          <div class="skeleton h-48 w-full rounded-lg" />
+    <!-- Controls -->
+    <div class="card" style="padding:12px 16px; margin-bottom:20px;">
+      <div style="display:flex; flex-wrap:wrap; align-items:center; gap:12px;">
+        <!-- Data Source Toggle -->
+        <div style="display:flex; align-items:center; gap:8px;">
+          <span style="font-size:11px; font-weight:500; color:var(--text-low);">Source</span>
+          <div class="seg">
+            <button
+              @click="dataSource = 'worker'; fetchData()"
+              :class="{ on: dataSource === 'worker' }"
+            >Queue Operations</button>
+            <button
+              @click="dataSource = 'system'; fetchData()"
+              :class="{ on: dataSource === 'system' }"
+            >System Resources</button>
+            <button
+              @click="dataSource = 'postgres'; fetchData()"
+              :class="{ on: dataSource === 'postgres' }"
+            >Postgres Stats</button>
+          </div>
+        </div>
+
+        <!-- View Mode (only for System) -->
+        <div v-if="dataSource === 'system'" style="display:flex; align-items:center; gap:8px;">
+          <span style="font-size:11px; font-weight:500; color:var(--text-low);">View</span>
+          <div class="seg">
+            <button
+              @click="viewMode = 'individual'"
+              :class="{ on: viewMode === 'individual' }"
+            >Per Server</button>
+            <button
+              @click="viewMode = 'aggregate'"
+              :class="{ on: viewMode === 'aggregate' }"
+            >Aggregate</button>
+          </div>
+        </div>
+
+        <!-- Aggregation Type (only for System) -->
+        <div v-if="dataSource === 'system'" style="display:flex; align-items:center; gap:8px;">
+          <span style="font-size:11px; font-weight:500; color:var(--text-low);">Metric</span>
+          <div class="seg">
+            <button
+              v-for="agg in aggregationTypes"
+              :key="agg.value"
+              @click="aggregationType = agg.value"
+              :class="{ on: aggregationType === agg.value }"
+            >{{ agg.label }}</button>
+          </div>
+        </div>
+
+        <!-- Time Range (hide for postgres stats - point-in-time) -->
+        <div v-if="dataSource !== 'postgres'" style="display:flex; align-items:center; gap:8px; margin-left:auto;">
+          <span style="font-size:11px; font-weight:500; color:var(--text-low);">Range</span>
+          <div class="seg">
+            <button
+              v-for="range in timeRanges"
+              :key="range.value"
+              @click="selectQuickRange(range.value)"
+              :class="{ on: timeRange === range.value && !customMode }"
+            >{{ range.label }}</button>
+            <button
+              @click="toggleCustomMode"
+              :class="{ on: customMode }"
+            >Custom</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- Custom Date/Time Range -->
+      <div v-if="customMode" style="display:flex; flex-wrap:wrap; align-items:center; gap:12px; padding-top:12px; margin-top:12px; border-top:1px solid var(--bd);">
+        <div style="display:flex; align-items:center; gap:8px;">
+          <label style="font-size:12px; font-weight:500; color:var(--text-low); white-space:nowrap;">From:</label>
+          <input
+            type="datetime-local"
+            v-model="customFrom"
+            class="input font-mono" style="font-size:13px; padding:6px 10px; width:auto;"
+          />
+        </div>
+        <div style="display:flex; align-items:center; gap:8px;">
+          <label style="font-size:12px; font-weight:500; color:var(--text-low); white-space:nowrap;">To:</label>
+          <input
+            type="datetime-local"
+            v-model="customTo"
+            class="input font-mono" style="font-size:13px; padding:6px 10px; width:auto;"
+          />
+        </div>
+        <button
+          @click="applyCustomRange"
+          class="btn btn-primary" style="font-size:12px;"
+        >Apply</button>
+      </div>
+    </div>
+
+    <!-- Loading -->
+    <div v-if="loading">
+      <div style="display:grid; grid-template-columns:repeat(2,1fr); gap:16px;">
+        <div v-for="i in 4" :key="i" class="card" style="padding:24px;">
+          <div class="skeleton" style="height:192px; width:100%; border-radius:8px;" />
         </div>
       </div>
     </div>
@@ -149,104 +115,102 @@
     <!-- Worker Metrics View -->
     <template v-else-if="dataSource === 'worker' && workerData">
       <!-- Throughput Chart -->
-      <div class="card">
-        <div class="card-header flex items-center justify-between">
-          <h3 class="font-semibold text-light-900 dark:text-white">Message Throughput</h3>
-          <span class="text-xs text-light-500">{{ workerData.pointCount || 0 }} data points</span>
+      <div class="card" style="margin-bottom:16px;">
+        <div class="card-header">
+          <h3>Message Throughput</h3>
+          <span class="muted">{{ workerData.pointCount || 0 }} data points</span>
         </div>
         <div class="card-body">
-          <!-- Metric Toggles -->
-          <div class="flex items-center gap-2 flex-wrap mb-4">
+          <div style="display:flex; align-items:center; gap:8px; flex-wrap:wrap; margin-bottom:14px;">
             <button
               v-for="metric in throughputMetrics"
               :key="metric.key"
               @click="toggleThroughputMetric(metric.key)"
-              class="flex items-center gap-1.5 px-2 py-1 text-xs font-medium rounded transition-colors"
-              :class="selectedThroughputMetrics[metric.key] ? metric.activeClass : 'bg-light-100 dark:bg-dark-300 text-light-600'"
+              style="display:inline-flex; align-items:center; gap:6px; padding:3px 10px; border-radius:999px; font-size:11px; font-weight:500; cursor:pointer; border:1px solid var(--bd-hi); transition:.15s;"
+              :class="selectedThroughputMetrics[metric.key] ? metric.activeClass : 'opacity-50'"
             >
-              <span class="w-2 h-2 rounded-full" :class="selectedThroughputMetrics[metric.key] ? metric.dotClass : 'bg-gray-400'" />
+              <span style="width:7px; height:7px; border-radius:99px;" :class="selectedThroughputMetrics[metric.key] ? metric.dotClass : 'bg-gray-400'" />
               {{ metric.label }}
             </button>
           </div>
-          <BaseChart 
+          <BaseChart
             v-if="throughputChartData.labels.length > 0"
-            type="line" 
-            :data="throughputChartData" 
-            :options="throughputChartOptions" 
+            type="line"
+            :data="throughputChartData"
+            :options="throughputChartOptions"
             height="280px"
           />
-          <div v-else class="text-center py-12 text-light-500">
+          <div v-else style="text-align:center; padding:48px 0; color:var(--text-low);">
             No throughput data available
           </div>
         </div>
       </div>
 
       <!-- Message Latency -->
-      <div class="card">
+      <div class="card" style="margin-bottom:16px;">
         <div class="card-header">
-          <h3 class="font-semibold text-light-900 dark:text-white">Message Latency</h3>
-          <p class="text-xs text-light-500 mt-0.5">Time from push to pop</p>
+          <h3>Message Latency</h3>
+          <span class="muted">time from push to pop</span>
         </div>
         <div class="card-body">
-          <BaseChart 
+          <BaseChart
             v-if="latencyChartData.labels.length > 0"
-            type="line" 
-            :data="latencyChartData" 
-            :options="lagChartOptions" 
+            type="line"
+            :data="latencyChartData"
+            :options="lagChartOptions"
             height="240px"
           />
-          <div v-else class="text-center py-12 text-light-500">
+          <div v-else style="text-align:center; padding:48px 0; color:var(--text-low);">
             No latency data available
           </div>
         </div>
       </div>
 
       <!-- Event Loop & Connection Pool -->
-      <div class="grid grid-cols-1 lg:grid-cols-2 gap-4 sm:gap-6">
+      <div style="display:grid; grid-template-columns:1fr 1fr; gap:16px; margin-bottom:16px;">
         <div class="card">
           <div class="card-header">
-            <h3 class="font-semibold text-light-900 dark:text-white">Event Loop Latency</h3>
+            <h3>Event Loop Latency</h3>
           </div>
           <div class="card-body">
-            <!-- Metric Toggles -->
-            <div class="flex items-center gap-2 flex-wrap mb-4">
+            <div style="display:flex; align-items:center; gap:8px; flex-wrap:wrap; margin-bottom:14px;">
               <button
                 v-for="metric in eventLoopMetrics"
                 :key="metric.key"
                 @click="toggleEventLoopMetric(metric.key)"
-                class="flex items-center gap-1.5 px-2 py-1 text-xs font-medium rounded transition-colors"
-                :class="selectedEventLoopMetrics[metric.key] ? metric.activeClass : 'bg-light-100 dark:bg-dark-300 text-light-600'"
+                style="display:inline-flex; align-items:center; gap:6px; padding:3px 10px; border-radius:999px; font-size:11px; font-weight:500; cursor:pointer; border:1px solid var(--bd-hi); transition:.15s;"
+                :class="selectedEventLoopMetrics[metric.key] ? metric.activeClass : 'opacity-50'"
               >
-                <span class="w-2 h-2 rounded-full" :class="selectedEventLoopMetrics[metric.key] ? metric.dotClass : 'bg-gray-400'" />
+                <span style="width:7px; height:7px; border-radius:99px;" :class="selectedEventLoopMetrics[metric.key] ? metric.dotClass : 'bg-gray-400'" />
                 {{ metric.label }}
               </button>
             </div>
-            <BaseChart 
+            <BaseChart
               v-if="eventLoopChartData.labels.length > 0"
-              type="line" 
-              :data="eventLoopChartData" 
+              type="line"
+              :data="eventLoopChartData"
               :options="lagChartOptions"
               height="200px"
             />
-            <div v-else class="text-center py-12 text-light-500">
+            <div v-else style="text-align:center; padding:48px 0; color:var(--text-low);">
               No event loop data available
             </div>
           </div>
         </div>
-        
+
         <div class="card">
           <div class="card-header">
-            <h3 class="font-semibold text-light-900 dark:text-white">Connection Pool</h3>
+            <h3>Connection Pool</h3>
           </div>
           <div class="card-body">
-            <BaseChart 
+            <BaseChart
               v-if="connectionPoolChartData.labels.length > 0"
-              type="line" 
-              :data="connectionPoolChartData" 
+              type="line"
+              :data="connectionPoolChartData"
               :options="poolChartOptions"
               height="200px"
             />
-            <div v-else class="text-center py-12 text-light-500">
+            <div v-else style="text-align:center; padding:48px 0; color:var(--text-low);">
               No connection pool data available
             </div>
           </div>
@@ -254,134 +218,128 @@
       </div>
 
       <!-- Errors Chart -->
-      <div class="card">
-        <div class="card-header flex items-center justify-between">
-          <h3 class="font-semibold text-light-900 dark:text-white">Errors</h3>
-          <span v-if="totalErrors > 0" class="badge badge-danger">{{ totalErrors }} in period</span>
+      <div class="card" style="margin-bottom:16px;">
+        <div class="card-header">
+          <h3>Errors</h3>
+          <span v-if="totalErrors > 0" class="chip chip-bad" style="margin-left:auto;">{{ totalErrors }} in period</span>
         </div>
         <div class="card-body">
-          <!-- Metric Toggles -->
-          <div class="flex items-center gap-2 flex-wrap mb-4">
+          <div style="display:flex; align-items:center; gap:8px; flex-wrap:wrap; margin-bottom:14px;">
             <button
               v-for="metric in errorMetrics"
               :key="metric.key"
               @click="toggleErrorMetric(metric.key)"
-              class="flex items-center gap-1.5 px-2 py-1 text-xs font-medium rounded transition-colors"
-              :class="selectedErrorMetrics[metric.key] ? metric.activeClass : 'bg-light-100 dark:bg-dark-300 text-light-600'"
+              style="display:inline-flex; align-items:center; gap:6px; padding:3px 10px; border-radius:999px; font-size:11px; font-weight:500; cursor:pointer; border:1px solid var(--bd-hi); transition:.15s;"
+              :class="selectedErrorMetrics[metric.key] ? metric.activeClass : 'opacity-50'"
             >
-              <span class="w-2 h-2 rounded-full" :class="selectedErrorMetrics[metric.key] ? metric.dotClass : 'bg-gray-400'" />
+              <span style="width:7px; height:7px; border-radius:99px;" :class="selectedErrorMetrics[metric.key] ? metric.dotClass : 'bg-gray-400'" />
               {{ metric.label }}
             </button>
           </div>
-          <BaseChart 
+          <BaseChart
             v-if="errorsChartData.labels.length > 0"
-            type="bar" 
-            :data="errorsChartData" 
+            type="bar"
+            :data="errorsChartData"
             :options="errorsChartOptions"
             height="200px"
           />
-          <div v-else class="text-center py-12 text-light-500">
+          <div v-else style="text-align:center; padding:48px 0; color:var(--text-low);">
             No error data available
           </div>
         </div>
       </div>
 
       <!-- Per-Queue Metrics -->
-      <div class="card">
+      <div class="card" style="margin-bottom:16px;">
         <div class="card-header">
-          <h3 class="font-semibold text-light-900 dark:text-white">Per-Queue Metrics</h3>
+          <h3>Per-Queue Metrics</h3>
         </div>
-        <div class="card-body space-y-4">
+        <div class="card-body">
           <template v-if="availableQueues.length > 0">
-            <!-- Queue selector -->
-            <div class="flex items-center gap-2">
-              <span class="text-xs text-light-500 whitespace-nowrap">Filter queues:</span>
+            <div style="display:flex; align-items:center; gap:8px; margin-bottom:16px;">
+              <span style="font-size:12px; color:var(--text-low); white-space:nowrap;">Filter queues:</span>
               <MultiSelect
                 v-model="selectedQueues"
                 :options="availableQueues"
                 placeholder="All queues"
                 search-placeholder="Search queues…"
               />
-              <span v-if="selectedQueues.length > 0" class="text-xs text-light-400">
+              <span v-if="selectedQueues.length > 0" style="font-size:12px; color:var(--text-low);">
                 {{ selectedQueues.length }} of {{ availableQueues.length }}
               </span>
             </div>
-            <!-- Pop throughput by queue -->
-            <div class="space-y-4">
-              <div>
-                <h4 class="text-xs font-semibold text-light-500 uppercase mb-2">Pop Throughput by Queue</h4>
-                <BaseChart
-                  v-if="queuePopChartData.labels.length > 0"
-                  type="line"
-                  :data="queuePopChartData"
-                  :options="perQueueThroughputOptions"
-                  height="340px"
-                />
-                <div v-else class="text-center py-12 text-light-500">No per-queue data available</div>
-              </div>
-              <div>
-                <h4 class="text-xs font-semibold text-light-500 uppercase mb-2">Avg Latency by Queue</h4>
-                <BaseChart
-                  v-if="queueLagChartData.labels.length > 0"
-                  type="line"
-                  :data="queueLagChartData"
-                  :options="perQueueLagOptions"
-                  height="340px"
-                />
-                <div v-else class="text-center py-12 text-light-500">No per-queue data available</div>
-              </div>
+            <div>
+              <h4 class="label-xs" style="margin-bottom:10px;">Pop Throughput by Queue</h4>
+              <BaseChart
+                v-if="queuePopChartData.labels.length > 0"
+                type="line"
+                :data="queuePopChartData"
+                :options="perQueueThroughputOptions"
+                height="340px"
+              />
+              <div v-else style="text-align:center; padding:48px 0; color:var(--text-low);">No per-queue data available</div>
+            </div>
+            <div style="margin-top:20px;">
+              <h4 class="label-xs" style="margin-bottom:10px;">Avg Latency by Queue</h4>
+              <BaseChart
+                v-if="queueLagChartData.labels.length > 0"
+                type="line"
+                :data="queueLagChartData"
+                :options="perQueueLagOptions"
+                height="340px"
+              />
+              <div v-else style="text-align:center; padding:48px 0; color:var(--text-low);">No per-queue data available</div>
             </div>
           </template>
-          <div v-else class="text-center py-8 text-light-500">
+          <div v-else style="text-align:center; padding:32px 0; color:var(--text-low);">
             <p>No per-queue metrics recorded yet.</p>
-            <p class="text-xs mt-1">Queue lag data is collected when messages are popped from queues.</p>
+            <p style="font-size:12px; margin-top:4px;">Queue lag data is collected when messages are popped from queues.</p>
           </div>
         </div>
       </div>
 
       <!-- Workers Status Panel -->
       <div v-if="workerData?.workers?.length" class="card">
-        <div class="card-header flex items-center justify-between">
-          <h3 class="font-semibold text-light-900 dark:text-white">Workers Status</h3>
-          <span class="text-xs text-light-500">{{ workerData.workers.length }} workers</span>
+        <div class="card-header">
+          <h3>Workers Status</h3>
+          <span class="muted">{{ workerData.workers.length }} workers</span>
         </div>
         <div class="card-body">
-          <div class="overflow-x-auto">
-            <table class="w-full text-sm">
+          <div style="overflow-x:auto;">
+            <table class="t">
               <thead>
-                <tr class="border-b border-light-200 dark:border-dark-50">
-                  <th class="text-left px-3 py-2 text-xs font-semibold text-light-500 uppercase">Worker ID</th>
-                  <th class="text-left px-3 py-2 text-xs font-semibold text-light-500 uppercase">Hostname</th>
-                  <th class="text-right px-3 py-2 text-xs font-semibold text-light-500 uppercase">Avg EL</th>
-                  <th class="text-right px-3 py-2 text-xs font-semibold text-light-500 uppercase">Max EL</th>
-                  <th class="text-right px-3 py-2 text-xs font-semibold text-light-500 uppercase">Free Slots</th>
-                  <th class="text-right px-3 py-2 text-xs font-semibold text-light-500 uppercase">DB Conn</th>
-                  <th class="text-right px-3 py-2 text-xs font-semibold text-light-500 uppercase">Job Queue</th>
-                  <th class="text-left px-3 py-2 text-xs font-semibold text-light-500 uppercase">Last Seen</th>
+                <tr>
+                  <th>Worker ID</th>
+                  <th>Hostname</th>
+                  <th style="text-align:right;">Avg EL</th>
+                  <th style="text-align:right;">Max EL</th>
+                  <th style="text-align:right;">Free Slots</th>
+                  <th style="text-align:right;">DB Conn</th>
+                  <th style="text-align:right;">Job Queue</th>
+                  <th>Last Seen</th>
                 </tr>
               </thead>
               <tbody>
-                <tr 
-                  v-for="worker in workerData.workers" 
+                <tr
+                  v-for="worker in workerData.workers"
                   :key="worker.workerId"
-                  class="border-b border-light-100 dark:border-dark-100"
                 >
-                  <td class="px-3 py-2 font-medium">{{ worker.workerId }}</td>
-                  <td class="px-3 py-2 text-light-600 dark:text-light-400">{{ worker.hostname }}</td>
-                  <td class="px-3 py-2 text-right">
-                    <span :class="worker.avgEventLoopLagMs > 100 ? 'text-amber-600 dark:text-amber-400' : ''">
+                  <td style="font-weight:500;">{{ worker.workerId }}</td>
+                  <td style="color:var(--text-mid);">{{ worker.hostname }}</td>
+                  <td style="text-align:right;">
+                    <span class="font-mono tabular-nums" :style="{ color: worker.avgEventLoopLagMs > 100 ? '#fbbf24' : 'var(--text-hi)' }">
                       {{ worker.avgEventLoopLagMs }}ms
                     </span>
                   </td>
-                  <td class="px-3 py-2 text-right">
-                    <span :class="worker.maxEventLoopLagMs > 500 ? 'text-rose-600 dark:text-rose-400' : ''">
+                  <td style="text-align:right;">
+                    <span class="font-mono tabular-nums" :style="{ color: worker.maxEventLoopLagMs > 500 ? '#f43f5e' : 'var(--text-hi)' }">
                       {{ worker.maxEventLoopLagMs }}ms
                     </span>
                   </td>
-                  <td class="px-3 py-2 text-right text-cyber-600 dark:text-cyber-400">{{ worker.freeSlots }}</td>
-                  <td class="px-3 py-2 text-right">{{ worker.dbConnections }}</td>
-                  <td class="px-3 py-2 text-right">{{ worker.jobQueueSize }}</td>
-                  <td class="px-3 py-2 text-xs text-light-500">{{ formatTime(worker.lastSeen) }}</td>
+                  <td style="text-align:right; color:#22d3ee;" class="font-mono tabular-nums">{{ worker.freeSlots }}</td>
+                  <td style="text-align:right;" class="font-mono tabular-nums">{{ worker.dbConnections }}</td>
+                  <td style="text-align:right;" class="font-mono tabular-nums">{{ worker.jobQueueSize }}</td>
+                  <td style="font-size:12px; color:var(--text-low);">{{ formatTime(worker.lastSeen) }}</td>
                 </tr>
               </tbody>
             </table>
@@ -393,39 +351,39 @@
     <!-- System Metrics View -->
     <template v-else-if="dataSource === 'system' && systemData">
       <!-- CPU & Memory Charts -->
-      <div class="grid grid-cols-1 lg:grid-cols-2 gap-4 sm:gap-6">
+      <div style="display:grid; grid-template-columns:1fr 1fr; gap:16px; margin-bottom:16px;">
         <div class="card">
-          <div class="card-header flex items-center justify-between">
-            <h3 class="font-semibold text-light-900 dark:text-white">CPU Usage</h3>
-            <span class="text-xs text-light-500">{{ systemData.replicaCount || 0 }} replicas</span>
+          <div class="card-header">
+            <h3>CPU Usage</h3>
+            <span class="muted">{{ systemData.replicaCount || 0 }} replicas</span>
           </div>
           <div class="card-body">
-            <BaseChart 
+            <BaseChart
               v-if="cpuChartData.labels.length > 0"
-              type="line" 
-              :data="cpuChartData" 
+              type="line"
+              :data="cpuChartData"
               :options="cpuChartOptions"
               height="240px"
             />
-            <div v-else class="text-center py-12 text-light-500">
+            <div v-else style="text-align:center; padding:48px 0; color:var(--text-low);">
               No CPU data available
             </div>
           </div>
         </div>
-        
+
         <div class="card">
           <div class="card-header">
-            <h3 class="font-semibold text-light-900 dark:text-white">Memory Usage</h3>
+            <h3>Memory Usage</h3>
           </div>
           <div class="card-body">
-            <BaseChart 
+            <BaseChart
               v-if="memoryChartData.labels.length > 0"
-              type="line" 
-              :data="memoryChartData" 
+              type="line"
+              :data="memoryChartData"
               :options="memoryChartOptions"
               height="240px"
             />
-            <div v-else class="text-center py-12 text-light-500">
+            <div v-else style="text-align:center; padding:48px 0; color:var(--text-low);">
               No memory data available
             </div>
           </div>
@@ -433,38 +391,38 @@
       </div>
 
       <!-- Database & Thread Pool -->
-      <div class="grid grid-cols-1 lg:grid-cols-2 gap-4 sm:gap-6">
+      <div style="display:grid; grid-template-columns:1fr 1fr; gap:16px; margin-bottom:16px;">
         <div class="card">
           <div class="card-header">
-            <h3 class="font-semibold text-light-900 dark:text-white">Database Pool</h3>
+            <h3>Database Pool</h3>
           </div>
           <div class="card-body">
-            <BaseChart 
+            <BaseChart
               v-if="databaseChartData.labels.length > 0"
-              type="line" 
-              :data="databaseChartData" 
+              type="line"
+              :data="databaseChartData"
               :options="poolChartOptions"
               height="200px"
             />
-            <div v-else class="text-center py-12 text-light-500">
+            <div v-else style="text-align:center; padding:48px 0; color:var(--text-low);">
               No database pool data available
             </div>
           </div>
         </div>
-        
+
         <div class="card">
           <div class="card-header">
-            <h3 class="font-semibold text-light-900 dark:text-white">Thread Pool</h3>
+            <h3>Thread Pool</h3>
           </div>
           <div class="card-body">
-            <BaseChart 
+            <BaseChart
               v-if="threadPoolChartData.labels.length > 0"
-              type="line" 
-              :data="threadPoolChartData" 
+              type="line"
+              :data="threadPoolChartData"
               :options="queueChartOptions"
               height="200px"
             />
-            <div v-else class="text-center py-12 text-light-500">
+            <div v-else style="text-align:center; padding:48px 0; color:var(--text-low);">
               No thread pool data available
             </div>
           </div>
@@ -472,47 +430,35 @@
       </div>
 
       <!-- Stats Summary -->
-      <div class="card">
+      <div class="card" style="margin-bottom:16px;">
         <div class="card-header">
-          <h3 class="font-semibold text-light-900 dark:text-white">System Summary</h3>
+          <h3>System Summary</h3>
         </div>
         <div class="card-body">
-          <div class="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-2 sm:gap-4">
-            <div class="p-4 bg-light-100 dark:bg-dark-300 rounded-lg">
-              <p class="text-xs text-light-500 uppercase tracking-wide">Replicas</p>
-              <p class="text-2xl font-bold text-light-900 dark:text-light-100 mt-1">
-                {{ systemData.replicaCount || 0 }}
-              </p>
+          <div style="display:grid; grid-template-columns:repeat(6,1fr); gap:16px;">
+            <div class="stat">
+              <div class="stat-label">Replicas</div>
+              <div class="stat-value font-mono">{{ systemData.replicaCount || 0 }}</div>
             </div>
-            <div class="p-4 bg-light-100 dark:bg-dark-300 rounded-lg">
-              <p class="text-xs text-light-500 uppercase tracking-wide">Data Points</p>
-              <p class="text-2xl font-bold text-light-900 dark:text-light-100 mt-1">
-                {{ systemData.pointCount || 0 }}
-              </p>
+            <div class="stat">
+              <div class="stat-label">Data Points</div>
+              <div class="stat-value font-mono">{{ systemData.pointCount || 0 }}</div>
             </div>
-            <div class="p-4 bg-light-100 dark:bg-dark-300 rounded-lg">
-              <p class="text-xs text-light-500 uppercase tracking-wide">Bucket Size</p>
-              <p class="text-2xl font-bold text-light-900 dark:text-light-100 mt-1">
-                {{ formatBucketSize(systemData.bucketMinutes) }}
-              </p>
+            <div class="stat">
+              <div class="stat-label">Bucket Size</div>
+              <div class="stat-value font-mono">{{ formatBucketSize(systemData.bucketMinutes) }}</div>
             </div>
-            <div class="p-4 bg-light-100 dark:bg-dark-300 rounded-lg">
-              <p class="text-xs text-light-500 uppercase tracking-wide">Latest CPU</p>
-              <p class="text-2xl font-bold text-rose-600 dark:text-rose-400 mt-1">
-                {{ formatCPU(lastMetrics?.cpu?.user_us?.last) }}
-              </p>
+            <div class="stat">
+              <div class="stat-label">Latest CPU</div>
+              <div class="stat-value font-mono" style="color:#f43f5e;">{{ formatCPU(lastMetrics?.cpu?.user_us?.last) }}</div>
             </div>
-            <div class="p-4 bg-light-100 dark:bg-dark-300 rounded-lg">
-              <p class="text-xs text-light-500 uppercase tracking-wide">Latest Memory</p>
-              <p class="text-2xl font-bold text-purple-600 dark:text-purple-400 mt-1">
-                {{ formatMemory(lastMetrics?.memory?.rss_bytes?.last) }}
-              </p>
+            <div class="stat">
+              <div class="stat-label">Latest Memory</div>
+              <div class="stat-value font-mono" style="color:#8b5cf6;">{{ formatMemory(lastMetrics?.memory?.rss_bytes?.last) }}</div>
             </div>
-            <div class="p-4 bg-light-100 dark:bg-dark-300 rounded-lg">
-              <p class="text-xs text-light-500 uppercase tracking-wide">DB Active</p>
-              <p class="text-2xl font-bold text-light-900 dark:text-light-100 mt-1">
-                {{ lastMetrics?.database?.pool_active?.last || 0 }}
-              </p>
+            <div class="stat">
+              <div class="stat-label">DB Active</div>
+              <div class="stat-value font-mono">{{ lastMetrics?.database?.pool_active?.last || 0 }}</div>
             </div>
           </div>
         </div>
@@ -521,39 +467,38 @@
       <!-- Per-Server Stats (when in individual mode) -->
       <div v-if="viewMode === 'individual' && systemData?.replicas?.length > 1" class="card">
         <div class="card-header">
-          <h3 class="font-semibold text-light-900 dark:text-white">Server Details</h3>
+          <h3>Server Details</h3>
         </div>
         <div class="card-body">
-          <div class="overflow-x-auto">
-            <table class="w-full text-sm">
+          <div style="overflow-x:auto;">
+            <table class="t">
               <thead>
-                <tr class="border-b border-light-200 dark:border-dark-50">
-                  <th class="text-left px-3 py-2 text-xs font-semibold text-light-500 uppercase">Hostname</th>
-                  <th class="text-right px-3 py-2 text-xs font-semibold text-light-500 uppercase">Port</th>
-                  <th class="text-right px-3 py-2 text-xs font-semibold text-light-500 uppercase">CPU (User)</th>
-                  <th class="text-right px-3 py-2 text-xs font-semibold text-light-500 uppercase">CPU (Sys)</th>
-                  <th class="text-right px-3 py-2 text-xs font-semibold text-light-500 uppercase">Memory</th>
-                  <th class="text-right px-3 py-2 text-xs font-semibold text-light-500 uppercase">DB Pool</th>
+                <tr>
+                  <th>Hostname</th>
+                  <th style="text-align:right;">Port</th>
+                  <th style="text-align:right;">CPU (User)</th>
+                  <th style="text-align:right;">CPU (Sys)</th>
+                  <th style="text-align:right;">Memory</th>
+                  <th style="text-align:right;">DB Pool</th>
                 </tr>
               </thead>
               <tbody>
-                <tr 
-                  v-for="replica in systemData.replicas" 
+                <tr
+                  v-for="replica in systemData.replicas"
                   :key="`${replica.hostname}:${replica.port}`"
-                  class="border-b border-light-100 dark:border-dark-100"
                 >
-                  <td class="px-3 py-2 font-medium">{{ replica.hostname }}</td>
-                  <td class="px-3 py-2 text-right text-light-600 dark:text-light-400">{{ replica.port }}</td>
-                  <td class="px-3 py-2 text-right text-rose-600 dark:text-rose-400">
+                  <td style="font-weight:500;">{{ replica.hostname }}</td>
+                  <td style="text-align:right; color:var(--text-mid);" class="font-mono tabular-nums">{{ replica.port }}</td>
+                  <td style="text-align:right; color:#f43f5e;" class="font-mono tabular-nums">
                     {{ formatCPU(getLastMetricForReplica(replica)?.cpu?.user_us?.last) }}
                   </td>
-                  <td class="px-3 py-2 text-right text-amber-600 dark:text-amber-400">
+                  <td style="text-align:right; color:#fbbf24;" class="font-mono tabular-nums">
                     {{ formatCPU(getLastMetricForReplica(replica)?.cpu?.system_us?.last) }}
                   </td>
-                  <td class="px-3 py-2 text-right text-purple-600 dark:text-purple-400">
+                  <td style="text-align:right; color:#8b5cf6;" class="font-mono tabular-nums">
                     {{ formatMemory(getLastMetricForReplica(replica)?.memory?.rss_bytes?.last) }}
                   </td>
-                  <td class="px-3 py-2 text-right">
+                  <td style="text-align:right;" class="font-mono tabular-nums">
                     {{ getLastMetricForReplica(replica)?.database?.pool_active?.last || 0 }}/{{ getLastMetricForReplica(replica)?.database?.pool_size?.last || 0 }}
                   </td>
                 </tr>
@@ -567,73 +512,68 @@
     <!-- Postgres Stats View -->
     <template v-else-if="dataSource === 'postgres' && postgresData">
       <!-- Cache Hit Ratios Summary -->
-      <div class="card">
-        <div class="card-header flex items-center justify-between">
-          <h3 class="font-semibold text-light-900 dark:text-white">Cache Performance</h3>
-          <span class="text-xs text-light-500">{{ postgresData.database }}</span>
+      <div class="card" style="margin-bottom:16px;">
+        <div class="card-header">
+          <h3>Cache Performance</h3>
+          <span class="muted">{{ postgresData.database }}</span>
         </div>
         <div class="card-body">
-          <div class="grid grid-cols-2 sm:grid-cols-4 gap-4">
-            <!-- Database-level cache -->
-            <div class="p-4 bg-light-100 dark:bg-dark-300 rounded-lg">
-              <p class="text-xs text-light-500 uppercase tracking-wide">Database Hit Ratio</p>
-              <p class="text-2xl font-bold mt-1" :class="getCacheRatioClass(postgresData.databaseCache?.cacheHitRatio)">
+          <div class="grid-4">
+            <div class="stat">
+              <div class="stat-label">Database Hit Ratio</div>
+              <div class="stat-value font-mono" :class="getCacheRatioClass(postgresData.databaseCache?.cacheHitRatio)">
                 {{ postgresData.databaseCache?.cacheHitRatio || 0 }}%
-              </p>
+              </div>
             </div>
-            <!-- Table cache -->
-            <div class="p-4 bg-light-100 dark:bg-dark-300 rounded-lg">
-              <p class="text-xs text-light-500 uppercase tracking-wide">Table Hit Ratio</p>
-              <p class="text-2xl font-bold mt-1" :class="getCacheRatioClass(postgresData.cacheSummary?.tables?.hitRatio)">
+            <div class="stat">
+              <div class="stat-label">Table Hit Ratio</div>
+              <div class="stat-value font-mono" :class="getCacheRatioClass(postgresData.cacheSummary?.tables?.hitRatio)">
                 {{ postgresData.cacheSummary?.tables?.hitRatio || 0 }}%
-              </p>
+              </div>
             </div>
-            <!-- Index cache -->
-            <div class="p-4 bg-light-100 dark:bg-dark-300 rounded-lg">
-              <p class="text-xs text-light-500 uppercase tracking-wide">Index Hit Ratio</p>
-              <p class="text-2xl font-bold mt-1" :class="getCacheRatioClass(postgresData.cacheSummary?.indexes?.hitRatio)">
+            <div class="stat">
+              <div class="stat-label">Index Hit Ratio</div>
+              <div class="stat-value font-mono" :class="getCacheRatioClass(postgresData.cacheSummary?.indexes?.hitRatio)">
                 {{ postgresData.cacheSummary?.indexes?.hitRatio || 0 }}%
-              </p>
+              </div>
             </div>
-            <!-- Shared buffers -->
-            <div class="p-4 bg-light-100 dark:bg-dark-300 rounded-lg">
-              <p class="text-xs text-light-500 uppercase tracking-wide">Shared Buffers</p>
-              <p class="text-2xl font-bold text-light-900 dark:text-light-100 mt-1">
+            <div class="stat">
+              <div class="stat-label">Shared Buffers</div>
+              <div class="stat-value font-mono">
                 {{ postgresData.bufferConfig?.sharedBuffersSize || 'N/A' }}
-              </p>
+              </div>
             </div>
           </div>
         </div>
       </div>
 
       <!-- Table Cache Details -->
-      <div class="card">
+      <div class="card" style="margin-bottom:16px;">
         <div class="card-header">
-          <h3 class="font-semibold text-light-900 dark:text-white">Table Cache Stats</h3>
-          <p class="text-xs text-light-500 mt-0.5">Cache hit ratios per table in queen schema</p>
+          <h3>Table Cache Stats</h3>
+          <span class="muted">hit ratios per table in queen schema</span>
         </div>
         <div class="card-body">
-          <div class="overflow-x-auto">
-            <table class="w-full text-sm">
+          <div style="overflow-x:auto;">
+            <table class="t">
               <thead>
-                <tr class="border-b border-light-200 dark:border-dark-50">
-                  <th class="text-left px-3 py-2 text-xs font-semibold text-light-500 uppercase">Table</th>
-                  <th class="text-right px-3 py-2 text-xs font-semibold text-light-500 uppercase">Disk Reads</th>
-                  <th class="text-right px-3 py-2 text-xs font-semibold text-light-500 uppercase">Cache Hits</th>
-                  <th class="text-right px-3 py-2 text-xs font-semibold text-light-500 uppercase">Hit Ratio</th>
+                <tr>
+                  <th>Table</th>
+                  <th style="text-align:right;">Disk Reads</th>
+                  <th style="text-align:right;">Cache Hits</th>
+                  <th style="text-align:right;">Hit Ratio</th>
                 </tr>
               </thead>
               <tbody>
-                <tr 
-                  v-for="table in postgresData.tableCache" 
+                <tr
+                  v-for="table in postgresData.tableCache"
                   :key="table.table"
-                  class="border-b border-light-100 dark:border-dark-100"
                 >
-                  <td class="px-3 py-2 font-medium font-mono text-sm">{{ table.table }}</td>
-                  <td class="px-3 py-2 text-right text-light-600 dark:text-light-400">{{ formatNumber(table.diskReads) }}</td>
-                  <td class="px-3 py-2 text-right text-light-600 dark:text-light-400">{{ formatNumber(table.cacheHits) }}</td>
-                  <td class="px-3 py-2 text-right">
-                    <span :class="getCacheRatioClass(table.cacheHitRatio)">
+                  <td class="font-mono" style="font-weight:500;">{{ table.table }}</td>
+                  <td style="text-align:right; color:var(--text-mid);" class="font-mono tabular-nums">{{ formatNumber(table.diskReads) }}</td>
+                  <td style="text-align:right; color:var(--text-mid);" class="font-mono tabular-nums">{{ formatNumber(table.cacheHits) }}</td>
+                  <td style="text-align:right;">
+                    <span class="font-mono tabular-nums" :class="getCacheRatioClass(table.cacheHitRatio)">
                       {{ table.cacheHitRatio || 0 }}%
                     </span>
                   </td>
@@ -645,35 +585,34 @@
       </div>
 
       <!-- Index Cache Details -->
-      <div class="card">
+      <div class="card" style="margin-bottom:16px;">
         <div class="card-header">
-          <h3 class="font-semibold text-light-900 dark:text-white">Index Cache Stats</h3>
-          <p class="text-xs text-light-500 mt-0.5">Cache hit ratios per index (top 20 by disk reads)</p>
+          <h3>Index Cache Stats</h3>
+          <span class="muted">top 20 by disk reads</span>
         </div>
         <div class="card-body">
-          <div class="overflow-x-auto">
-            <table class="w-full text-sm">
+          <div style="overflow-x:auto;">
+            <table class="t">
               <thead>
-                <tr class="border-b border-light-200 dark:border-dark-50">
-                  <th class="text-left px-3 py-2 text-xs font-semibold text-light-500 uppercase">Index</th>
-                  <th class="text-left px-3 py-2 text-xs font-semibold text-light-500 uppercase">Table</th>
-                  <th class="text-right px-3 py-2 text-xs font-semibold text-light-500 uppercase">Disk Reads</th>
-                  <th class="text-right px-3 py-2 text-xs font-semibold text-light-500 uppercase">Cache Hits</th>
-                  <th class="text-right px-3 py-2 text-xs font-semibold text-light-500 uppercase">Hit Ratio</th>
+                <tr>
+                  <th>Index</th>
+                  <th>Table</th>
+                  <th style="text-align:right;">Disk Reads</th>
+                  <th style="text-align:right;">Cache Hits</th>
+                  <th style="text-align:right;">Hit Ratio</th>
                 </tr>
               </thead>
               <tbody>
-                <tr 
-                  v-for="idx in postgresData.indexCache" 
+                <tr
+                  v-for="idx in postgresData.indexCache"
                   :key="idx.index"
-                  class="border-b border-light-100 dark:border-dark-100"
                 >
-                  <td class="px-3 py-2 font-mono text-xs">{{ idx.index }}</td>
-                  <td class="px-3 py-2 text-light-600 dark:text-light-400">{{ idx.table }}</td>
-                  <td class="px-3 py-2 text-right text-light-600 dark:text-light-400">{{ formatNumber(idx.diskReads) }}</td>
-                  <td class="px-3 py-2 text-right text-light-600 dark:text-light-400">{{ formatNumber(idx.cacheHits) }}</td>
-                  <td class="px-3 py-2 text-right">
-                    <span :class="getCacheRatioClass(idx.cacheHitRatio)">
+                  <td class="font-mono" style="font-size:12px;">{{ idx.index }}</td>
+                  <td style="color:var(--text-mid);">{{ idx.table }}</td>
+                  <td style="text-align:right; color:var(--text-mid);" class="font-mono tabular-nums">{{ formatNumber(idx.diskReads) }}</td>
+                  <td style="text-align:right; color:var(--text-mid);" class="font-mono tabular-nums">{{ formatNumber(idx.cacheHits) }}</td>
+                  <td style="text-align:right;">
+                    <span class="font-mono tabular-nums" :class="getCacheRatioClass(idx.cacheHitRatio)">
                       {{ idx.cacheHitRatio || 0 }}%
                     </span>
                   </td>
@@ -685,38 +624,34 @@
       </div>
 
       <!-- Buffer Usage -->
-      <div v-if="postgresData.bufferUsage?.length" class="card">
+      <div v-if="postgresData.bufferUsage?.length" class="card" style="margin-bottom:16px;">
         <div class="card-header">
-          <h3 class="font-semibold text-light-900 dark:text-white">Buffer Cache Contents</h3>
-          <p class="text-xs text-light-500 mt-0.5">What's currently cached in shared_buffers</p>
+          <h3>Buffer Cache Contents</h3>
+          <span class="muted">what's cached in shared_buffers</span>
         </div>
         <div class="card-body">
-          <div class="overflow-x-auto">
-            <table class="w-full text-sm">
+          <div style="overflow-x:auto;">
+            <table class="t">
               <thead>
-                <tr class="border-b border-light-200 dark:border-dark-50">
-                  <th class="text-left px-3 py-2 text-xs font-semibold text-light-500 uppercase">Object</th>
-                  <th class="text-right px-3 py-2 text-xs font-semibold text-light-500 uppercase">Buffered Size</th>
-                  <th class="text-right px-3 py-2 text-xs font-semibold text-light-500 uppercase">% of Cache</th>
+                <tr>
+                  <th>Object</th>
+                  <th style="text-align:right;">Buffered Size</th>
+                  <th style="text-align:right;">% of Cache</th>
                 </tr>
               </thead>
               <tbody>
-                <tr 
-                  v-for="buf in postgresData.bufferUsage" 
+                <tr
+                  v-for="buf in postgresData.bufferUsage"
                   :key="buf.object"
-                  class="border-b border-light-100 dark:border-dark-100"
                 >
-                  <td class="px-3 py-2 font-mono text-sm">{{ buf.object }}</td>
-                  <td class="px-3 py-2 text-right text-light-600 dark:text-light-400">{{ buf.bufferedSize }}</td>
-                  <td class="px-3 py-2 text-right">
-                    <div class="flex items-center justify-end gap-2">
-                      <div class="w-16 h-2 bg-light-200 dark:bg-dark-200 rounded-full overflow-hidden">
-                        <div 
-                          class="h-full bg-indigo-500 rounded-full" 
-                          :style="{ width: `${Math.min(buf.percentOfCache, 100)}%` }"
-                        />
+                  <td class="font-mono" style="font-weight:500;">{{ buf.object }}</td>
+                  <td style="text-align:right; color:var(--text-mid);" class="font-mono tabular-nums">{{ buf.bufferedSize }}</td>
+                  <td style="text-align:right;">
+                    <div style="display:flex; align-items:center; justify-content:flex-end; gap:8px;">
+                      <div class="bar" style="width:64px;">
+                        <i :style="{ width: `${Math.min(buf.percentOfCache, 100)}%` }" />
                       </div>
-                      <span class="text-xs text-light-600 dark:text-light-400 w-12 text-right">
+                      <span class="font-mono tabular-nums" style="font-size:12px; color:var(--text-mid); width:48px; text-align:right;">
                         {{ buf.percentOfCache }}%
                       </span>
                     </div>
@@ -729,32 +664,31 @@
       </div>
 
       <!-- Table Sizes -->
-      <div class="card">
+      <div class="card" style="margin-bottom:16px;">
         <div class="card-header">
-          <h3 class="font-semibold text-light-900 dark:text-white">Table Sizes</h3>
-          <p class="text-xs text-light-500 mt-0.5">Storage usage per table</p>
+          <h3>Table Sizes</h3>
+          <span class="muted">storage usage per table</span>
         </div>
         <div class="card-body">
-          <div class="overflow-x-auto">
-            <table class="w-full text-sm">
+          <div style="overflow-x:auto;">
+            <table class="t">
               <thead>
-                <tr class="border-b border-light-200 dark:border-dark-50">
-                  <th class="text-left px-3 py-2 text-xs font-semibold text-light-500 uppercase">Table</th>
-                  <th class="text-right px-3 py-2 text-xs font-semibold text-light-500 uppercase">Total Size</th>
-                  <th class="text-right px-3 py-2 text-xs font-semibold text-light-500 uppercase">Table Size</th>
-                  <th class="text-right px-3 py-2 text-xs font-semibold text-light-500 uppercase">Index Size</th>
+                <tr>
+                  <th>Table</th>
+                  <th style="text-align:right;">Total Size</th>
+                  <th style="text-align:right;">Table Size</th>
+                  <th style="text-align:right;">Index Size</th>
                 </tr>
               </thead>
               <tbody>
-                <tr 
-                  v-for="tbl in postgresData.tableSizes" 
+                <tr
+                  v-for="tbl in postgresData.tableSizes"
                   :key="tbl.table"
-                  class="border-b border-light-100 dark:border-dark-100"
                 >
-                  <td class="px-3 py-2 font-mono text-sm font-medium">{{ tbl.table }}</td>
-                  <td class="px-3 py-2 text-right font-medium text-light-900 dark:text-light-100">{{ tbl.totalSize }}</td>
-                  <td class="px-3 py-2 text-right text-light-600 dark:text-light-400">{{ tbl.tableSize }}</td>
-                  <td class="px-3 py-2 text-right text-indigo-600 dark:text-indigo-400">{{ tbl.indexSize }}</td>
+                  <td class="font-mono" style="font-weight:500;">{{ tbl.table }}</td>
+                  <td style="text-align:right; font-weight:500;" class="font-mono tabular-nums">{{ tbl.totalSize }}</td>
+                  <td style="text-align:right; color:var(--text-mid);" class="font-mono tabular-nums">{{ tbl.tableSize }}</td>
+                  <td style="text-align:right; color:#22d3ee;" class="font-mono tabular-nums">{{ tbl.indexSize }}</td>
                 </tr>
               </tbody>
             </table>
@@ -763,51 +697,48 @@
       </div>
 
       <!-- Dead Tuples & HOT Updates (side by side) -->
-      <div class="grid grid-cols-1 lg:grid-cols-2 gap-4 sm:gap-6">
+      <div style="display:grid; grid-template-columns:1fr 1fr; gap:16px; margin-bottom:16px;">
         <!-- Dead Tuples -->
         <div class="card">
-          <div class="card-header flex items-center justify-between">
-            <div>
-              <h3 class="font-semibold text-light-900 dark:text-white">Dead Tuples</h3>
-              <p class="text-xs text-light-500 mt-0.5">Tables needing vacuum</p>
-            </div>
-            <span v-if="postgresData.deadTuples?.length" class="badge badge-warning">
+          <div class="card-header">
+            <h3>Dead Tuples</h3>
+            <span v-if="postgresData.deadTuples?.length" class="chip chip-warn" style="margin-left:auto;">
               {{ postgresData.deadTuples.length }} tables
             </span>
+            <span v-else class="muted">tables needing vacuum</span>
           </div>
           <div class="card-body">
-            <div v-if="postgresData.deadTuples?.length" class="overflow-x-auto">
-              <table class="w-full text-sm">
+            <div v-if="postgresData.deadTuples?.length" style="overflow-x:auto;">
+              <table class="t">
                 <thead>
-                  <tr class="border-b border-light-200 dark:border-dark-50">
-                    <th class="text-left px-3 py-2 text-xs font-semibold text-light-500 uppercase">Table</th>
-                    <th class="text-right px-3 py-2 text-xs font-semibold text-light-500 uppercase">Dead</th>
-                    <th class="text-right px-3 py-2 text-xs font-semibold text-light-500 uppercase">Dead %</th>
-                    <th class="text-left px-3 py-2 text-xs font-semibold text-light-500 uppercase">Last Vacuum</th>
+                  <tr>
+                    <th>Table</th>
+                    <th style="text-align:right;">Dead</th>
+                    <th style="text-align:right;">Dead %</th>
+                    <th>Last Vacuum</th>
                   </tr>
                 </thead>
                 <tbody>
-                  <tr 
-                    v-for="tbl in postgresData.deadTuples" 
+                  <tr
+                    v-for="tbl in postgresData.deadTuples"
                     :key="tbl.table"
-                    class="border-b border-light-100 dark:border-dark-100"
                   >
-                    <td class="px-3 py-2 font-mono text-xs">{{ tbl.table }}</td>
-                    <td class="px-3 py-2 text-right text-amber-600 dark:text-amber-400">{{ formatNumber(tbl.deadTuples) }}</td>
-                    <td class="px-3 py-2 text-right">
-                      <span :class="tbl.deadPercentage > 10 ? 'text-rose-600 dark:text-rose-400' : 'text-light-600 dark:text-light-400'">
+                    <td class="font-mono" style="font-size:12px;">{{ tbl.table }}</td>
+                    <td style="text-align:right; color:#fbbf24;" class="font-mono tabular-nums">{{ formatNumber(tbl.deadTuples) }}</td>
+                    <td style="text-align:right;">
+                      <span class="font-mono tabular-nums" :style="{ color: tbl.deadPercentage > 10 ? '#f43f5e' : 'var(--text-mid)' }">
                         {{ tbl.deadPercentage || 0 }}%
                       </span>
                     </td>
-                    <td class="px-3 py-2 text-xs text-light-500">
+                    <td style="font-size:12px; color:var(--text-low);">
                       {{ formatTimestamp(tbl.lastAutovacuum || tbl.lastVacuum) }}
                     </td>
                   </tr>
                 </tbody>
               </table>
             </div>
-            <div v-else class="text-center py-8 text-light-500">
-              No dead tuples - tables are clean! ✓
+            <div v-else style="text-align:center; padding:32px 0; color:#34d399;">
+              No dead tuples — tables are clean
             </div>
           </div>
         </div>
@@ -815,29 +746,28 @@
         <!-- HOT Updates -->
         <div class="card">
           <div class="card-header">
-            <h3 class="font-semibold text-light-900 dark:text-white">HOT Update Efficiency</h3>
-            <p class="text-xs text-light-500 mt-0.5">Heap-Only Tuple updates (higher is better)</p>
+            <h3>HOT Update Efficiency</h3>
+            <span class="muted">higher is better</span>
           </div>
           <div class="card-body">
-            <div v-if="postgresData.hotUpdates?.length" class="overflow-x-auto">
-              <table class="w-full text-sm">
+            <div v-if="postgresData.hotUpdates?.length" style="overflow-x:auto;">
+              <table class="t">
                 <thead>
-                  <tr class="border-b border-light-200 dark:border-dark-50">
-                    <th class="text-left px-3 py-2 text-xs font-semibold text-light-500 uppercase">Table</th>
-                    <th class="text-right px-3 py-2 text-xs font-semibold text-light-500 uppercase">Updates</th>
-                    <th class="text-right px-3 py-2 text-xs font-semibold text-light-500 uppercase">HOT %</th>
+                  <tr>
+                    <th>Table</th>
+                    <th style="text-align:right;">Updates</th>
+                    <th style="text-align:right;">HOT %</th>
                   </tr>
                 </thead>
                 <tbody>
-                  <tr 
-                    v-for="tbl in postgresData.hotUpdates" 
+                  <tr
+                    v-for="tbl in postgresData.hotUpdates"
                     :key="tbl.table"
-                    class="border-b border-light-100 dark:border-dark-100"
                   >
-                    <td class="px-3 py-2 font-mono text-xs">{{ tbl.table }}</td>
-                    <td class="px-3 py-2 text-right text-light-600 dark:text-light-400">{{ formatNumber(tbl.totalUpdates) }}</td>
-                    <td class="px-3 py-2 text-right">
-                      <span :class="getHotRatioClass(tbl.hotUpdatePercentage)">
+                    <td class="font-mono" style="font-size:12px;">{{ tbl.table }}</td>
+                    <td style="text-align:right; color:var(--text-mid);" class="font-mono tabular-nums">{{ formatNumber(tbl.totalUpdates) }}</td>
+                    <td style="text-align:right;">
+                      <span class="font-mono tabular-nums" :class="getHotRatioClass(tbl.hotUpdatePercentage)">
                         {{ tbl.hotUpdatePercentage || 0 }}%
                       </span>
                     </td>
@@ -845,7 +775,7 @@
                 </tbody>
               </table>
             </div>
-            <div v-else class="text-center py-8 text-light-500">
+            <div v-else style="text-align:center; padding:32px 0; color:var(--text-low);">
               No updates recorded yet
             </div>
           </div>
@@ -853,75 +783,69 @@
       </div>
 
       <!-- Active Queries -->
-      <div class="card">
-        <div class="card-header flex items-center justify-between">
-          <div>
-            <h3 class="font-semibold text-light-900 dark:text-white">Active Queries</h3>
-            <p class="text-xs text-light-500 mt-0.5">Queries running longer than 1 second</p>
-          </div>
-          <span v-if="postgresData.activeQueries?.length" class="badge badge-danger">
+      <div class="card" style="margin-bottom:16px;">
+        <div class="card-header">
+          <h3>Active Queries</h3>
+          <span v-if="postgresData.activeQueries?.length" class="chip chip-bad" style="margin-left:auto;">
             {{ postgresData.activeQueries.length }} slow
           </span>
+          <span v-else class="muted">queries running longer than 1s</span>
         </div>
         <div class="card-body">
-          <div v-if="postgresData.activeQueries?.length" class="space-y-3">
-            <div 
-              v-for="query in postgresData.activeQueries" 
+          <div v-if="postgresData.activeQueries?.length" style="display:flex; flex-direction:column; gap:12px;">
+            <div
+              v-for="query in postgresData.activeQueries"
               :key="query.pid"
-              class="p-3 bg-light-100 dark:bg-dark-300 rounded-lg"
+              class="card" style="padding:12px 14px;"
             >
-              <div class="flex items-center justify-between mb-2">
-                <span class="text-xs font-medium text-light-600 dark:text-light-400">
+              <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:8px;">
+                <span style="font-size:12px; font-weight:500; color:var(--text-mid);">
                   PID: {{ query.pid }} · {{ query.state }}
                 </span>
-                <span class="text-xs font-mono" :class="query.duration > 10 ? 'text-rose-600 dark:text-rose-400' : 'text-amber-600 dark:text-amber-400'">
+                <span class="font-mono tabular-nums" style="font-size:12px;" :style="{ color: query.duration > 10 ? '#f43f5e' : '#fbbf24' }">
                   {{ formatDurationSeconds(query.duration) }}
                 </span>
               </div>
-              <code class="text-xs text-light-700 dark:text-light-300 block break-all">
+              <code class="font-mono" style="font-size:12px; color:var(--text-hi); display:block; word-break:break-all;">
                 {{ query.query }}
               </code>
-              <div v-if="query.waitEventType" class="mt-2 text-xs text-light-500">
+              <div v-if="query.waitEventType" style="margin-top:8px; font-size:12px; color:var(--text-low);">
                 Wait: {{ query.waitEventType }} / {{ query.waitEvent }}
               </div>
             </div>
           </div>
-          <div v-else class="text-center py-8 text-emerald-600 dark:text-emerald-400">
-            No slow queries running ✓
+          <div v-else style="text-align:center; padding:32px 0; color:#34d399;">
+            No slow queries running
           </div>
         </div>
       </div>
 
       <!-- Autovacuum Status -->
       <div v-if="postgresData.autovacuumStatus?.length" class="card">
-        <div class="card-header flex items-center justify-between">
-          <div>
-            <h3 class="font-semibold text-light-900 dark:text-white">Autovacuum Status</h3>
-            <p class="text-xs text-light-500 mt-0.5">Tables with >1000 dead tuples</p>
-          </div>
-          <span class="badge badge-warning">{{ postgresData.autovacuumStatus.length }} pending</span>
+        <div class="card-header">
+          <h3>Autovacuum Status</h3>
+          <span class="chip chip-warn" style="margin-left:auto;">{{ postgresData.autovacuumStatus.length }} pending</span>
         </div>
         <div class="card-body">
-          <div class="overflow-x-auto">
-            <table class="w-full text-sm">
+          <div style="overflow-x:auto;">
+            <table class="t">
               <thead>
-                <tr class="border-b border-light-200 dark:border-dark-50">
-                  <th class="text-left px-3 py-2 text-xs font-semibold text-light-500 uppercase">Table</th>
-                  <th class="text-right px-3 py-2 text-xs font-semibold text-light-500 uppercase">Dead Tuples</th>
-                  <th class="text-right px-3 py-2 text-xs font-semibold text-light-500 uppercase">Vacuum Count</th>
-                  <th class="text-left px-3 py-2 text-xs font-semibold text-light-500 uppercase">Last Autovacuum</th>
+                <tr>
+                  <th>Table</th>
+                  <th style="text-align:right;">Dead Tuples</th>
+                  <th style="text-align:right;">Vacuum Count</th>
+                  <th>Last Autovacuum</th>
                 </tr>
               </thead>
               <tbody>
-                <tr 
-                  v-for="tbl in postgresData.autovacuumStatus" 
+                <tr
+                  v-for="tbl in postgresData.autovacuumStatus"
                   :key="tbl.table"
-                  class="border-b border-light-100 dark:border-dark-100"
                 >
-                  <td class="px-3 py-2 font-mono text-sm">{{ tbl.table }}</td>
-                  <td class="px-3 py-2 text-right text-amber-600 dark:text-amber-400">{{ formatNumber(tbl.deadTuples) }}</td>
-                  <td class="px-3 py-2 text-right text-light-600 dark:text-light-400">{{ tbl.autovacuumCount }}</td>
-                  <td class="px-3 py-2 text-xs text-light-500">{{ formatTimestamp(tbl.lastAutovacuum) }}</td>
+                  <td class="font-mono" style="font-weight:500;">{{ tbl.table }}</td>
+                  <td style="text-align:right; color:#fbbf24;" class="font-mono tabular-nums">{{ formatNumber(tbl.deadTuples) }}</td>
+                  <td style="text-align:right; color:var(--text-mid);" class="font-mono tabular-nums">{{ tbl.autovacuumCount }}</td>
+                  <td style="font-size:12px; color:var(--text-low);">{{ formatTimestamp(tbl.lastAutovacuum) }}</td>
                 </tr>
               </tbody>
             </table>
@@ -987,24 +911,24 @@ const aggregationTypes = [
 
 // Metric toggles for throughput
 const throughputMetrics = [
-  { key: 'push', label: 'Push', activeClass: 'bg-orange-100 dark:bg-orange-900/30 text-orange-700 dark:text-orange-300', dotClass: 'bg-orange-500' },
-  { key: 'pop', label: 'Pop', activeClass: 'bg-indigo-100 dark:bg-indigo-900/30 text-indigo-700 dark:text-indigo-300', dotClass: 'bg-indigo-500' },
-  { key: 'ack', label: 'Ack', activeClass: 'bg-emerald-100 dark:bg-emerald-900/30 text-emerald-700 dark:text-emerald-300', dotClass: 'bg-emerald-500' }
+  { key: 'push', label: 'Push', activeClass: 'chip-ice', dotClass: 'bg-ice' },
+  { key: 'pop', label: 'Pop', activeClass: 'chip-warn', dotClass: 'bg-crown' },
+  { key: 'ack', label: 'Ack', activeClass: 'chip-ok', dotClass: 'bg-ok' }
 ]
 const selectedThroughputMetrics = reactive({ push: true, pop: true, ack: true })
 
 // Metric toggles for event loop
 const eventLoopMetrics = [
-  { key: 'avg', label: 'Avg Event Loop', activeClass: 'bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-300', dotClass: 'bg-blue-500' },
-  { key: 'max', label: 'Max Event Loop', activeClass: 'bg-rose-100 dark:bg-rose-900/30 text-rose-700 dark:text-rose-300', dotClass: 'bg-rose-500' }
+  { key: 'avg', label: 'Avg Event Loop', activeClass: 'chip-ice', dotClass: 'bg-ice' },
+  { key: 'max', label: 'Max Event Loop', activeClass: 'chip-bad', dotClass: 'bg-ember' }
 ]
 const selectedEventLoopMetrics = reactive({ avg: true, max: true })
 
 // Metric toggles for errors
 const errorMetrics = [
-  { key: 'dbErrors', label: 'DB Errors', activeClass: 'bg-rose-100 dark:bg-rose-900/30 text-rose-700 dark:text-rose-300', dotClass: 'bg-rose-500' },
-  { key: 'ackFailed', label: 'Ack Failed', activeClass: 'bg-orange-100 dark:bg-orange-900/30 text-orange-700 dark:text-orange-300', dotClass: 'bg-orange-500' },
-  { key: 'dlq', label: 'DLQ', activeClass: 'bg-amber-100 dark:bg-amber-900/30 text-amber-700 dark:text-amber-300', dotClass: 'bg-amber-500' }
+  { key: 'dbErrors', label: 'DB Errors', activeClass: 'chip-bad', dotClass: 'bg-ember' },
+  { key: 'ackFailed', label: 'Ack Failed', activeClass: 'chip-warn', dotClass: 'bg-crown' },
+  { key: 'dlq', label: 'DLQ', activeClass: 'chip-ice', dotClass: 'bg-ice' }
 ]
 const selectedErrorMetrics = reactive({ dbErrors: true, ackFailed: true, dlq: true })
 
@@ -1141,16 +1065,16 @@ const perQueueLagOptions = {
 
 // Color palette for per-queue charts (distinct, readable colors)
 const queueColors = [
-  { border: 'rgb(109, 77, 191)', bg: 'rgba(109, 77, 191, 0.1)' },   // purple
-  { border: 'rgb(0, 200, 150)', bg: 'rgba(0, 200, 150, 0.1)' },      // teal
-  { border: 'rgb(220, 180, 50)', bg: 'rgba(220, 180, 50, 0.1)' },    // gold
-  { border: 'rgb(244, 63, 94)', bg: 'rgba(244, 63, 94, 0.1)' },      // rose
-  { border: 'rgb(59, 130, 246)', bg: 'rgba(59, 130, 246, 0.1)' },    // blue
-  { border: 'rgb(245, 158, 11)', bg: 'rgba(245, 158, 11, 0.1)' },    // amber
-  { border: 'rgb(16, 185, 129)', bg: 'rgba(16, 185, 129, 0.1)' },    // emerald
-  { border: 'rgb(168, 85, 247)', bg: 'rgba(168, 85, 247, 0.1)' },    // violet
-  { border: 'rgb(236, 72, 153)', bg: 'rgba(236, 72, 153, 0.1)' },    // pink
-  { border: 'rgb(20, 184, 166)', bg: 'rgba(20, 184, 166, 0.1)' },    // teal-alt
+  { border: '#22d3ee', bg: 'rgba(34, 211, 238, 0.12)' },    // ice
+  { border: '#fbbf24', bg: 'rgba(251, 191, 36, 0.12)' },    // crown
+  { border: '#34d399', bg: 'rgba(52, 211, 153, 0.12)' },    // ok
+  { border: '#fb7185', bg: 'rgba(251, 113, 133, 0.12)' },   // ember
+  { border: '#a78bfa', bg: 'rgba(167, 139, 250, 0.12)' },   // violet
+  { border: '#f59e0b', bg: 'rgba(245, 158, 11, 0.12)' },    // amber
+  { border: '#06b6d4', bg: 'rgba(6, 182, 212, 0.12)' },     // cyan
+  { border: '#f43f5e', bg: 'rgba(244, 63, 94, 0.12)' },     // rose
+  { border: '#14b8a6', bg: 'rgba(20, 184, 166, 0.12)' },    // teal
+  { border: '#d97706', bg: 'rgba(217, 119, 6, 0.12)' },     // gold
 ]
 
 // Toggle functions
@@ -1235,8 +1159,8 @@ const throughputChartData = computed(() => {
     datasets.push({
       label: 'Push/s',
       data: ts.map(t => t.pushPerSecond || 0),
-      borderColor: 'rgba(255, 107, 0, 0.9)',
-      backgroundColor: 'rgba(255, 107, 0, 0.1)',
+      borderColor: '#22d3ee',
+      backgroundColor: 'rgba(34, 211, 238, 0.12)',
       fill: true,
       tension: 0
     })
@@ -1246,8 +1170,8 @@ const throughputChartData = computed(() => {
     datasets.push({
       label: 'Pop/s',
       data: ts.map(t => t.popPerSecond || 0),
-      borderColor: 'rgba(99, 102, 241, 0.9)',
-      backgroundColor: 'rgba(99, 102, 241, 0.1)',
+      borderColor: '#fbbf24',
+      backgroundColor: 'rgba(251, 191, 36, 0.12)',
       fill: true,
       tension: 0
     })
@@ -1257,8 +1181,8 @@ const throughputChartData = computed(() => {
     datasets.push({
       label: 'Ack/s',
       data: ts.map(t => t.ackPerSecond || 0),
-      borderColor: 'rgba(16, 185, 129, 0.9)',
-      backgroundColor: 'rgba(16, 185, 129, 0.1)',
+      borderColor: '#34d399',
+      backgroundColor: 'rgba(52, 211, 153, 0.12)',
       fill: true,
       tension: 0
     })
@@ -1280,14 +1204,15 @@ const latencyChartData = computed(() => {
       { 
         label: 'Avg Lag (ms)', 
         data: ts.map(t => t.avgLagMs || 0), 
-        borderColor: 'rgba(139, 92, 246, 0.9)',
-        fill: false,
+        borderColor: '#22d3ee',
+        backgroundColor: 'rgba(34, 211, 238, 0.1)',
+        fill: true,
         tension: 0
       },
       { 
         label: 'Max Lag (ms)', 
         data: ts.map(t => t.maxLagMs || 0), 
-        borderColor: 'rgba(244, 63, 94, 0.9)',
+        borderColor: '#fb7185',
         fill: false,
         tension: 0
       }
@@ -1308,8 +1233,8 @@ const eventLoopChartData = computed(() => {
     datasets.push({
       label: 'Avg Event Loop (ms)',
       data: ts.map(t => t.avgEventLoopLagMs || 0),
-      borderColor: 'rgba(59, 130, 246, 0.9)',
-      backgroundColor: 'rgba(59, 130, 246, 0.1)',
+      borderColor: '#22d3ee',
+      backgroundColor: 'rgba(34, 211, 238, 0.12)',
       fill: true,
       tension: 0
     })
@@ -1319,8 +1244,8 @@ const eventLoopChartData = computed(() => {
     datasets.push({
       label: 'Max Event Loop (ms)',
       data: ts.map(t => t.maxEventLoopLagMs || 0),
-      borderColor: 'rgba(239, 68, 68, 0.9)',
-      backgroundColor: 'rgba(239, 68, 68, 0.05)',
+      borderColor: '#fb7185',
+      backgroundColor: 'rgba(244, 63, 94, 0.06)',
       fill: true,
       tension: 0
     })
@@ -1342,15 +1267,15 @@ const connectionPoolChartData = computed(() => {
       { 
         label: 'Free Slots', 
         data: ts.map(t => t.avgFreeSlots || 0), 
-        borderColor: 'rgba(6, 182, 212, 0.9)',
-        backgroundColor: 'rgba(6, 182, 212, 0.1)',
+        borderColor: '#22d3ee',
+        backgroundColor: 'rgba(34, 211, 238, 0.12)',
         fill: true,
         tension: 0
       },
       { 
         label: 'DB Connections', 
         data: ts.map(t => t.dbConnections || 0), 
-        borderColor: 'rgba(245, 158, 11, 0.9)',
+        borderColor: '#fbbf24',
         fill: false,
         tension: 0
       }
@@ -1371,8 +1296,8 @@ const errorsChartData = computed(() => {
     datasets.push({
       label: 'DB Errors',
       data: ts.map(t => t.dbErrors || 0),
-      backgroundColor: 'rgba(239, 68, 68, 0.7)',
-      borderColor: 'rgba(239, 68, 68, 1)',
+      backgroundColor: 'rgba(244, 63, 94, 0.6)',
+      borderColor: '#f43f5e',
       borderWidth: 1
     })
   }
@@ -1381,8 +1306,8 @@ const errorsChartData = computed(() => {
     datasets.push({
       label: 'Ack Failed',
       data: ts.map(t => t.ackFailed || 0),
-      backgroundColor: 'rgba(255, 107, 0, 0.7)',
-      borderColor: 'rgba(255, 107, 0, 1)',
+      backgroundColor: 'rgba(251, 191, 36, 0.6)',
+      borderColor: '#fbbf24',
       borderWidth: 1
     })
   }
@@ -1391,8 +1316,8 @@ const errorsChartData = computed(() => {
     datasets.push({
       label: 'DLQ',
       data: ts.map(t => t.dlqCount || 0),
-      backgroundColor: 'rgba(245, 158, 11, 0.7)',
-      borderColor: 'rgba(245, 158, 11, 1)',
+      backgroundColor: 'rgba(34, 211, 238, 0.6)',
+      borderColor: '#22d3ee',
       borderWidth: 1
     })
   }
@@ -1495,16 +1420,16 @@ const cpuChartData = computed(() => {
         { 
           label: 'User CPU (%)', 
           data: ts.map(t => (t.metrics?.cpu?.user_us?.[agg] || 0) / 100), 
-          borderColor: 'rgba(244, 63, 94, 0.9)',
-          backgroundColor: 'rgba(244, 63, 94, 0.1)',
+          borderColor: '#22d3ee',
+          backgroundColor: 'rgba(34, 211, 238, 0.12)',
           fill: true,
           tension: 0
         },
         { 
           label: 'System CPU (%)', 
           data: ts.map(t => (t.metrics?.cpu?.system_us?.[agg] || 0) / 100), 
-          borderColor: 'rgba(245, 158, 11, 0.9)',
-          backgroundColor: 'rgba(245, 158, 11, 0.1)',
+          borderColor: '#fbbf24',
+          backgroundColor: 'rgba(251, 191, 36, 0.12)',
           fill: true,
           tension: 0
         }
@@ -1525,7 +1450,7 @@ const memoryChartData = computed(() => {
     const multiDay = isMultiDay(ts)
     const labels = ts.map(t => formatChartLabel(new Date(t.timestamp), multiDay))
     
-    const colors = ['#8b5cf6', '#3b82f6', '#10b981', '#f59e0b', '#f43f5e']
+    const colors = ['#22d3ee', '#fbbf24', '#34d399', '#fb7185', '#a78bfa']
     
     systemData.value.replicas.forEach((replica, i) => {
       const color = colors[i % colors.length]
@@ -1550,8 +1475,8 @@ const memoryChartData = computed(() => {
         { 
           label: 'RSS (MB)', 
           data: ts.map(t => Math.round((t.metrics?.memory?.rss_bytes?.[agg] || 0) / 1024 / 1024)), 
-          borderColor: 'rgba(139, 92, 246, 0.9)',
-          backgroundColor: 'rgba(139, 92, 246, 0.1)',
+          borderColor: '#22d3ee',
+          backgroundColor: 'rgba(34, 211, 238, 0.12)',
           fill: true,
           tension: 0
         }
@@ -1574,16 +1499,16 @@ const databaseChartData = computed(() => {
       { 
         label: 'Active', 
         data: ts.map(t => t.metrics?.database?.pool_active?.[agg] || 0), 
-        borderColor: 'rgba(6, 182, 212, 0.9)',
-        backgroundColor: 'rgba(6, 182, 212, 0.1)',
+        borderColor: '#22d3ee',
+        backgroundColor: 'rgba(34, 211, 238, 0.12)',
         fill: true,
         tension: 0
       },
       { 
         label: 'Idle', 
         data: ts.map(t => t.metrics?.database?.pool_idle?.[agg] || 0), 
-        borderColor: 'rgba(16, 185, 129, 0.9)',
-        backgroundColor: 'rgba(16, 185, 129, 0.1)',
+        borderColor: '#34d399',
+        backgroundColor: 'rgba(52, 211, 153, 0.12)',
         fill: true,
         tension: 0
       }
@@ -1605,16 +1530,16 @@ const threadPoolChartData = computed(() => {
       { 
         label: 'DB Queue', 
         data: ts.map(t => t.metrics?.threadpool?.db?.queue_size?.[agg] || 0), 
-        borderColor: 'rgba(99, 102, 241, 0.9)',
-        backgroundColor: 'rgba(99, 102, 241, 0.1)',
+        borderColor: '#22d3ee',
+        backgroundColor: 'rgba(34, 211, 238, 0.12)',
         fill: true,
         tension: 0
       },
       { 
         label: 'System Queue', 
         data: ts.map(t => t.metrics?.threadpool?.system?.queue_size?.[agg] || 0), 
-        borderColor: 'rgba(245, 158, 11, 0.9)',
-        backgroundColor: 'rgba(245, 158, 11, 0.1)',
+        borderColor: '#fbbf24',
+        backgroundColor: 'rgba(251, 191, 36, 0.12)',
         fill: true,
         tension: 0
       }
@@ -1685,19 +1610,19 @@ const formatDurationSeconds = (seconds) => {
 }
 
 const getCacheRatioClass = (ratio) => {
-  if (ratio === undefined || ratio === null) return 'text-light-500'
-  if (ratio >= 99) return 'text-emerald-600 dark:text-emerald-400'
-  if (ratio >= 95) return 'text-cyber-600 dark:text-cyber-400'
-  if (ratio >= 90) return 'text-amber-600 dark:text-amber-400'
-  return 'text-rose-600 dark:text-rose-400'
+  if (ratio === undefined || ratio === null) return ''
+  if (ratio >= 99) return 'color-ok'
+  if (ratio >= 95) return 'color-ice'
+  if (ratio >= 90) return 'color-crown'
+  return 'color-ember'
 }
 
 const getHotRatioClass = (ratio) => {
-  if (ratio === undefined || ratio === null) return 'text-light-500'
-  if (ratio >= 95) return 'text-emerald-600 dark:text-emerald-400'
-  if (ratio >= 80) return 'text-cyber-600 dark:text-cyber-400'
-  if (ratio >= 50) return 'text-amber-600 dark:text-amber-400'
-  return 'text-rose-600 dark:text-rose-400'
+  if (ratio === undefined || ratio === null) return ''
+  if (ratio >= 95) return 'color-ok'
+  if (ratio >= 80) return 'color-ice'
+  if (ratio >= 50) return 'color-crown'
+  return 'color-ember'
 }
 
 const getLastMetricForReplica = (replica) => {
@@ -1760,3 +1685,14 @@ useRefresh(fetchData)
 
 onMounted(fetchData)
 </script>
+
+<style scoped>
+@media (max-width: 1100px) {
+  div[style*="grid-template-columns:repeat(6"] { grid-template-columns: repeat(3, 1fr) !important; }
+  div[style*="grid-template-columns:repeat(4"] { grid-template-columns: repeat(2, 1fr) !important; }
+  div[style*="grid-template-columns:1fr 1fr"] { grid-template-columns: 1fr !important; }
+}
+@media (max-width: 640px) {
+  div[style*="padding:28px 32px"] { padding: 16px !important; }
+}
+</style>

@@ -93,6 +93,18 @@ export const consumers = {
 }
 
 // ============================================
+// DEAD LETTER QUEUE API
+// ============================================
+export const dlq = {
+  list: (params) => client.get('/api/v1/dlq', { params }),
+  getStatus: (params) => client.get('/api/v1/status', { params }),
+  retry: (partitionId, transactionId) =>
+    client.post(`/api/v1/messages/${partitionId}/${transactionId}/retry`),
+  delete: (partitionId, transactionId) =>
+    client.delete(`/api/v1/messages/${partitionId}/${transactionId}`),
+}
+
+// ============================================
 // SYSTEM API
 // ============================================
 export const system = {
@@ -132,6 +144,7 @@ export default {
   traces,
   analytics,
   consumers,
+  dlq,
   system,
   migration,
 }

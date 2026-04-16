@@ -1,212 +1,195 @@
 <template>
-  <div class="space-y-4 sm:space-y-6 animate-fade-in">
+  <div class="view-container animate-fade-in">
+
     <!-- Loading state -->
-    <div v-if="loading" class="space-y-4 sm:space-y-6">
-      <div class="card p-5">
-        <div class="skeleton h-8 w-48 mb-4" />
-        <div class="skeleton h-4 w-64" />
+    <div v-if="loading" style="display:flex; flex-direction:column; gap:20px;">
+      <div class="card" style="padding:20px;">
+        <div class="skeleton" style="height:32px; width:192px; margin-bottom:16px;" />
+        <div class="skeleton" style="height:16px; width:256px;" />
       </div>
-      <div class="grid grid-cols-2 md:grid-cols-4 gap-2 sm:gap-4">
-        <div v-for="i in 4" :key="i" class="card p-4">
-          <div class="skeleton h-4 w-20 mb-2" />
-          <div class="skeleton h-8 w-16" />
+      <div class="grid-4">
+        <div v-for="i in 4" :key="i" class="stat">
+          <div class="skeleton" style="height:16px; width:80px; margin-bottom:8px;" />
+          <div class="skeleton" style="height:32px; width:64px;" />
         </div>
       </div>
     </div>
-    
+
     <template v-else-if="queueData || statusData">
-      <!-- Header Card -->
-      <div class="card p-5">
-        <div class="flex items-center justify-between mb-3">
-          <div class="flex items-center gap-3">
-            <button @click="$router.push('/queues')" class="p-2 hover:bg-light-100 dark:hover:bg-dark-300 rounded-lg transition-colors">
-              <svg class="w-5 h-5 text-light-600 dark:text-light-400" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2">
+      <!-- Page head -->
+      <div class="page-head">
+        <div>
+          <div class="eyebrow">
+            <button @click="$router.push('/queues')" style="color:var(--text-low); cursor:pointer; background:none; border:none; padding:0; margin-right:6px;">
+              <svg style="width:16px; height:16px; vertical-align:middle;" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2">
                 <path stroke-linecap="round" stroke-linejoin="round" d="M10 19l-7-7m0 0l7-7m-7 7h18" />
               </svg>
             </button>
-            <h1 class="text-xl font-bold font-display text-light-900 dark:text-white">
-              {{ queueData?.name || queueName }}
-            </h1>
+            Queue detail
           </div>
-          
-          <button @click="showDeleteModal = true" class="btn bg-rose-600 text-white hover:bg-rose-700">
-            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <h1><span class="accent">{{ queueData?.name || queueName }}</span></h1>
+          <p>
+            <span v-if="queueData?.namespace" style="margin-right:16px;">Namespace: <b>{{ queueData.namespace }}</b></span>
+            <span v-if="queueData?.task" style="margin-right:16px;">Task: <b>{{ queueData.task }}</b></span>
+            <span style="margin-right:16px;">Partitions: <b class="font-mono">{{ partitions.length }}</b></span>
+            <span style="font-size:11px; color:var(--text-low);">Created: {{ formatDate(queueData?.createdAt) }}</span>
+          </p>
+        </div>
+        <div class="actions">
+          <button @click="showDeleteModal = true" class="btn btn-danger">
+            <svg style="width:16px; height:16px;" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
             </svg>
             Delete Queue
           </button>
         </div>
-        
-        <div class="flex flex-wrap gap-x-6 gap-y-1 text-sm text-light-600 dark:text-light-400">
-          <span v-if="queueData?.namespace">
-            <span class="text-light-500">Namespace:</span> {{ queueData.namespace }}
-          </span>
-          <span v-if="queueData?.task">
-            <span class="text-light-500">Task:</span> {{ queueData.task }}
-          </span>
-          <span>
-            <span class="text-light-500">Partitions:</span> {{ partitions.length }}
-          </span>
-          <span class="text-xs text-light-500">
-            Created: {{ formatDate(queueData?.createdAt) }}
-          </span>
-        </div>
       </div>
 
       <!-- Metrics Grid -->
-      <div class="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-2 sm:gap-4">
-        <div class="card p-4">
-          <p class="text-xs text-light-500 uppercase tracking-wide">Total</p>
-          <p class="text-2xl font-bold font-display text-light-900 dark:text-white mt-1">
-            {{ formatNumber(totalMessages.total) }}
-          </p>
+      <div style="display:grid; grid-template-columns:repeat(5,1fr); gap:16px; margin-bottom:20px;">
+        <div class="stat">
+          <div class="stat-label">Total</div>
+          <div class="stat-value font-mono">{{ formatNumber(totalMessages.total) }}</div>
         </div>
-        <div class="card p-4">
-          <p class="text-xs text-light-500 uppercase tracking-wide">Pending</p>
-          <p class="text-2xl font-bold font-display text-cyber-600 dark:text-cyber-400 mt-1">
-            {{ formatNumber(totalMessages.pending) }}
-          </p>
+        <div class="stat">
+          <div class="stat-label">Pending</div>
+          <div class="stat-value font-mono" style="color:#22d3ee;">{{ formatNumber(totalMessages.pending) }}</div>
         </div>
-        <div class="card p-4">
-          <p class="text-xs text-light-500 uppercase tracking-wide">Processing</p>
-          <p class="text-2xl font-bold font-display text-crown-600 dark:text-crown-400 mt-1">
-            {{ formatNumber(totalMessages.processing) }}
-          </p>
+        <div class="stat">
+          <div class="stat-label">Processing</div>
+          <div class="stat-value font-mono" style="color:#fbbf24;">{{ formatNumber(totalMessages.processing) }}</div>
         </div>
-        <div class="card p-4">
-          <p class="text-xs text-light-500 uppercase tracking-wide">Completed</p>
-          <p class="text-2xl font-bold font-display text-emerald-600 dark:text-emerald-400 mt-1">
-            {{ formatNumber(totalMessages.completed) }}
-          </p>
+        <div class="stat">
+          <div class="stat-label">Completed</div>
+          <div class="stat-value font-mono" style="color:#34d399;">{{ formatNumber(totalMessages.completed) }}</div>
         </div>
-        <div class="card p-4">
-          <p class="text-xs text-light-500 uppercase tracking-wide">Failed / DLQ</p>
-          <p class="text-2xl font-bold font-display text-rose-600 dark:text-rose-400 mt-1">
-            {{ formatNumber(totalMessages.failed + totalMessages.deadLetter) }}
-          </p>
+        <div class="stat">
+          <div class="stat-label">Failed / DLQ</div>
+          <div class="stat-value font-mono" style="color:#f43f5e;">{{ formatNumber(totalMessages.failed + totalMessages.deadLetter) }}</div>
         </div>
       </div>
 
       <!-- Queue Configuration -->
-      <div v-if="queueData?.config" class="card p-5">
-        <h3 class="text-sm font-semibold text-light-900 dark:text-white mb-4">Queue Configuration</h3>
-        <div class="grid grid-cols-2 md:grid-cols-3 gap-x-3 sm:gap-x-6 gap-y-2 sm:gap-y-3 text-xs sm:text-sm">
+      <div v-if="queueData?.config" class="card" style="padding:20px; margin-bottom:20px;">
+        <h3 style="font-size:13px; font-weight:600; color:var(--text-hi); margin-bottom:16px;">Queue Configuration</h3>
+        <div class="grid-3" style="gap:12px 24px;">
           <div>
-            <span class="text-light-500 block mb-0.5">Lease Time</span>
-            <span class="font-semibold">{{ queueData.config.leaseTime || 0 }}s</span>
+            <span class="label-xs">Lease Time</span>
+            <span style="font-weight:600; display:block; font-family:'JetBrains Mono',monospace;">{{ queueData.config.leaseTime || 0 }}s</span>
           </div>
           <div>
-            <span class="text-light-500 block mb-0.5">TTL</span>
-            <span class="font-semibold">{{ formatDuration(queueData.config.ttl || 0) }}</span>
+            <span class="label-xs">TTL</span>
+            <span style="font-weight:600; display:block; font-family:'JetBrains Mono',monospace;">{{ formatDuration(queueData.config.ttl || 0) }}</span>
           </div>
           <div>
-            <span class="text-light-500 block mb-0.5">Max Queue Size</span>
-            <span class="font-semibold">{{ formatNumber(queueData.config.maxQueueSize || 0) }}</span>
+            <span class="label-xs">Max Queue Size</span>
+            <span style="font-weight:600; display:block; font-family:'JetBrains Mono',monospace;">{{ formatNumber(queueData.config.maxQueueSize || 0) }}</span>
           </div>
           <div>
-            <span class="text-light-500 block mb-0.5">Retry Limit</span>
-            <span class="font-semibold">{{ queueData.config.retryLimit || 0 }}</span>
+            <span class="label-xs">Retry Limit</span>
+            <span style="font-weight:600; display:block; font-family:'JetBrains Mono',monospace;">{{ queueData.config.retryLimit || 0 }}</span>
           </div>
           <div>
-            <span class="text-light-500 block mb-0.5">Retry Delay</span>
-            <span class="font-semibold">{{ queueData.config.retryDelay || 0 }}ms</span>
+            <span class="label-xs">Retry Delay</span>
+            <span style="font-weight:600; display:block; font-family:'JetBrains Mono',monospace;">{{ queueData.config.retryDelay || 0 }}ms</span>
           </div>
           <div>
-            <span class="text-light-500 block mb-0.5">DLQ Enabled</span>
-            <span class="font-semibold">{{ queueData.config.deadLetterQueue ? 'Yes' : 'No' }}</span>
+            <span class="label-xs">DLQ Enabled</span>
+            <span style="font-weight:600; display:block;">{{ queueData.config.deadLetterQueue ? 'Yes' : 'No' }}</span>
           </div>
         </div>
       </div>
 
       <!-- Partitions Table -->
       <div class="card">
-        <div class="card-header flex items-center justify-between">
-          <div class="flex items-center gap-3">
-            <h3 class="font-semibold text-light-900 dark:text-white">Partitions</h3>
-            <span class="badge badge-queen">{{ partitions.length }} partitions</span>
+        <div class="card-header" style="justify-content:space-between;">
+          <div style="display:flex; align-items:center; gap:10px;">
+            <h3>Partitions</h3>
+            <span class="chip chip-ice">{{ partitions.length }} partitions</span>
           </div>
-          <div class="w-48">
+          <div style="width:192px;">
             <input
               v-model="partitionSearch"
               type="text"
               placeholder="Search partitions..."
-              class="input text-sm"
+              class="input"
+              style="font-size:12px;"
             />
           </div>
         </div>
-        
-        <div class="overflow-x-auto">
-          <table class="table">
+
+        <div style="overflow-x:auto;">
+          <table class="t" style="width:100%;">
             <thead>
               <tr>
-                <th @click="sortPartitions('name')" class="cursor-pointer hover:text-queen-500 transition-colors">
-                  <div class="flex items-center gap-1">
+                <th @click="sortPartitions('name')" style="cursor:pointer;">
+                  <div style="display:flex; align-items:center; gap:4px;">
                     Partition
-                    <svg class="w-3 h-3 transition-transform" :class="getSortClass('name')" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <svg style="width:12px; height:12px; transition:transform .2s;" :class="getSortClass('name')" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                       <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7" />
                     </svg>
                   </div>
                 </th>
-                <th @click="sortPartitions('pending')" class="text-right cursor-pointer hover:text-queen-500 transition-colors">
-                  <div class="flex items-center justify-end gap-1">
+                <th @click="sortPartitions('pending')" style="text-align:right; cursor:pointer;">
+                  <div style="display:flex; align-items:center; justify-content:flex-end; gap:4px;">
                     Pending
-                    <svg class="w-3 h-3 transition-transform" :class="getSortClass('pending')" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <svg style="width:12px; height:12px; transition:transform .2s;" :class="getSortClass('pending')" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                       <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7" />
                     </svg>
                   </div>
                 </th>
-                <th @click="sortPartitions('processing')" class="text-right cursor-pointer hover:text-queen-500 transition-colors">
-                  <div class="flex items-center justify-end gap-1">
+                <th @click="sortPartitions('processing')" style="text-align:right; cursor:pointer;">
+                  <div style="display:flex; align-items:center; justify-content:flex-end; gap:4px;">
                     Processing
-                    <svg class="w-3 h-3 transition-transform" :class="getSortClass('processing')" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <svg style="width:12px; height:12px; transition:transform .2s;" :class="getSortClass('processing')" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                       <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7" />
                     </svg>
                   </div>
                 </th>
-                <th @click="sortPartitions('completed')" class="text-right cursor-pointer hover:text-queen-500 transition-colors">
-                  <div class="flex items-center justify-end gap-1">
+                <th @click="sortPartitions('completed')" style="text-align:right; cursor:pointer;">
+                  <div style="display:flex; align-items:center; justify-content:flex-end; gap:4px;">
                     Completed
-                    <svg class="w-3 h-3 transition-transform" :class="getSortClass('completed')" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <svg style="width:12px; height:12px; transition:transform .2s;" :class="getSortClass('completed')" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                       <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7" />
                     </svg>
                   </div>
                 </th>
-                <th @click="sortPartitions('failed')" class="text-right cursor-pointer hover:text-queen-500 transition-colors">
-                  <div class="flex items-center justify-end gap-1">
+                <th @click="sortPartitions('failed')" style="text-align:right; cursor:pointer;">
+                  <div style="display:flex; align-items:center; justify-content:flex-end; gap:4px;">
                     Failed
-                    <svg class="w-3 h-3 transition-transform" :class="getSortClass('failed')" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <svg style="width:12px; height:12px; transition:transform .2s;" :class="getSortClass('failed')" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                       <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7" />
                     </svg>
                   </div>
                 </th>
-                <th class="text-right">Consumed</th>
+                <th style="text-align:right;">Consumed</th>
               </tr>
             </thead>
             <tbody>
-              <tr v-for="partition in sortedPartitions" :key="partition.id" class="hover:bg-light-50 dark:hover:bg-dark-300">
+              <tr v-for="partition in sortedPartitions" :key="partition.id">
                 <td>
-                  <div class="font-medium text-light-900 dark:text-light-100">{{ partition.name }}</div>
-                  <div v-if="partition.lastActivity" class="text-xs text-light-500 mt-0.5">
+                  <div style="font-weight:500; color:var(--text-hi);">{{ partition.name }}</div>
+                  <div v-if="partition.lastActivity" style="font-size:11px; color:var(--text-low); margin-top:2px;">
                     Last: {{ formatTime(partition.lastActivity) }}
                   </div>
                 </td>
-                <td class="text-right font-medium tabular-nums">{{ formatNumber(partition.messages?.pending || 0) }}</td>
-                <td class="text-right font-medium tabular-nums">{{ formatNumber(partition.messages?.processing || 0) }}</td>
-                <td class="text-right font-medium tabular-nums text-emerald-600 dark:text-emerald-400">
+                <td style="text-align:right;" class="font-mono tabular-nums">{{ formatNumber(partition.messages?.pending || 0) }}</td>
+                <td style="text-align:right;" class="font-mono tabular-nums">{{ formatNumber(partition.messages?.processing || 0) }}</td>
+                <td style="text-align:right; color:#34d399;" class="font-mono tabular-nums">
                   {{ formatNumber(partition.messages?.completed || 0) }}
                 </td>
-                <td class="text-right font-medium tabular-nums text-rose-600 dark:text-rose-400">
+                <td style="text-align:right; color:#f43f5e;" class="font-mono tabular-nums">
                   {{ formatNumber(partition.messages?.failed || 0) }}
                 </td>
-                <td class="text-right">
-                  <div class="text-sm tabular-nums">{{ formatNumber(partition.cursor?.totalConsumed || 0) }}</div>
-                  <div class="text-xs text-light-500">
+                <td style="text-align:right;">
+                  <div class="font-mono tabular-nums" style="font-size:13px;">{{ formatNumber(partition.cursor?.totalConsumed || 0) }}</div>
+                  <div style="font-size:11px; color:var(--text-low);">
                     {{ partition.cursor?.batchesConsumed || 0 }} batches
                   </div>
                 </td>
               </tr>
               <tr v-if="sortedPartitions.length === 0">
-                <td colspan="6" class="text-center py-8 text-light-500 text-sm">
+                <td colspan="6" style="text-align:center; padding:32px; color:var(--text-low); font-size:13px;">
                   No partitions found
                 </td>
               </tr>
@@ -215,37 +198,38 @@
         </div>
       </div>
     </template>
-    
+
     <!-- Error state -->
-    <div v-else-if="error" class="card p-6 text-rose-600 dark:text-rose-400">
-      <p class="font-semibold mb-2">Error loading queue</p>
-      <p class="text-sm">{{ error }}</p>
+    <div v-else-if="error" class="card" style="padding:24px; color:#f43f5e;">
+      <p style="font-weight:600; margin-bottom:8px;">Error loading queue</p>
+      <p style="font-size:13px;">{{ error }}</p>
     </div>
 
     <!-- Delete Queue Confirmation Modal -->
-    <div 
+    <div
       v-if="showDeleteModal"
-      class="fixed inset-0 z-50 flex items-center justify-center p-4 bg-dark-500/50 backdrop-blur-sm"
+      style="position:fixed; inset:0; z-index:50; display:flex; align-items:center; justify-content:center; padding:16px; background:rgba(0,0,0,.5); backdrop-filter:blur(4px);"
       @click="showDeleteModal = false"
     >
-      <div 
-        class="card w-full max-w-md animate-slide-up"
+      <div
+        class="card animate-slide-up"
+        style="width:100%; max-width:420px;"
         @click.stop
       >
         <div class="card-header">
-          <h3 class="font-semibold text-light-900 dark:text-white">Delete Queue</h3>
+          <h3>Delete Queue</h3>
         </div>
         <div class="card-body">
-          <p class="text-light-600 dark:text-light-400">
-            Are you sure you want to delete <strong>{{ queueName }}</strong>? 
+          <p style="color:var(--text-mid);">
+            Are you sure you want to delete <strong>{{ queueName }}</strong>?
             This will permanently remove the queue and all its messages. This action cannot be undone.
           </p>
         </div>
-        <div class="px-5 py-4 border-t border-light-200 dark:border-dark-50 flex items-center justify-end gap-3">
-          <button @click="showDeleteModal = false" class="btn btn-secondary">
+        <div style="padding:14px 16px; border-top:1px solid var(--bd); display:flex; align-items:center; justify-content:flex-end; gap:12px;">
+          <button @click="showDeleteModal = false" class="btn btn-ghost">
             Cancel
           </button>
-          <button @click="deleteQueue" class="btn bg-rose-600 text-white hover:bg-rose-700">
+          <button @click="deleteQueue" class="btn btn-danger">
             Delete Queue
           </button>
         </div>

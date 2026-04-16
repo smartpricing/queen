@@ -1,57 +1,65 @@
 <template>
-  <div class="space-y-4 sm:space-y-6 animate-fade-in">
+  <div class="view-container animate-fade-in">
+
+    <!-- Page head -->
+    <div class="page-head">
+      <div>
+        <div class="eyebrow">Queue browser</div>
+        <h1><span class="accent">Messages</span></h1>
+        <p>Browse, search and inspect messages across all queues.</p>
+      </div>
+    </div>
+
     <!-- Mode Indicator (for Bus Mode) -->
-    <div v-if="queueMode && queueMode.type === 'bus'" class="bg-purple-50 dark:bg-purple-900/20 border border-purple-200 dark:border-purple-700/30 rounded-lg p-3">
-      <div class="flex items-center gap-2 text-sm">
-        <svg class="w-5 h-5 text-purple-600 dark:text-purple-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+    <div v-if="queueMode && queueMode.type === 'bus'" class="card" style="padding:10px 14px; margin-bottom:16px;">
+      <div style="display:flex; align-items:center; gap:8px; font-size:13px;">
+        <svg style="width:18px; height:18px; color:#a78bfa;" fill="none" stroke="currentColor" viewBox="0 0 24 24">
           <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0zm6 3a2 2 0 11-4 0 2 2 0 014 0zM7 10a2 2 0 11-4 0 2 2 0 014 0z" />
         </svg>
-        <span class="font-medium text-purple-900 dark:text-purple-100">Bus Mode Active</span>
-        <span class="text-purple-700 dark:text-purple-300">{{ queueMode.busGroupsCount }} consumer group(s)</span>
+        <span style="font-weight:600; color:var(--text-hi);">Bus Mode Active</span>
+        <span class="chip chip-warn">{{ queueMode.busGroupsCount }} consumer group(s)</span>
       </div>
     </div>
 
     <!-- Filters -->
-    <div class="card p-3 sm:p-4">
-      <div class="flex flex-col gap-3 sm:gap-4">
+    <div class="card" style="margin-bottom:16px;">
+      <div class="card-header">
+        <h3>Filters</h3>
+      </div>
+      <div class="card-body" style="display:flex; flex-direction:column; gap:14px;">
         <!-- First Row: Search, Queue, Status, Limit -->
-        <div class="grid grid-cols-2 sm:flex sm:flex-wrap sm:items-end gap-2 sm:gap-4">
-          <div class="col-span-2 sm:flex-1 sm:min-w-[200px] sm:max-w-sm">
-            <label class="block text-xs font-medium text-light-600 dark:text-light-400 mb-1.5">
-              Search
-            </label>
-            <div class="relative">
+        <div style="display:grid; grid-template-columns:repeat(auto-fill, minmax(150px, 1fr)); gap:12px; align-items:end;">
+          <div>
+            <label class="label-xs" style="display:block; margin-bottom:6px;">Search</label>
+            <div style="position:relative;">
               <input
                 v-model="searchQuery"
                 type="text"
                 placeholder="Search by transaction ID..."
-                class="input pl-10"
+                class="input"
+                style="padding-left:34px;"
               />
-              <svg 
-                class="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-light-500"
+              <svg
+                style="position:absolute; left:10px; top:50%; transform:translateY(-50%); width:15px; height:15px; color:var(--text-low);"
                 fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.5"
               >
                 <path stroke-linecap="round" stroke-linejoin="round" d="M21 21l-5.197-5.197m0 0A7.5 7.5 0 105.196 5.196a7.5 7.5 0 0010.607 10.607z" />
               </svg>
             </div>
           </div>
-          
-          <div class="col-span-2 sm:w-48">
-            <label class="block text-xs font-medium text-light-600 dark:text-light-400 mb-1.5">
-              Queue
-            </label>
-            <select v-model="filterQueue" class="select">
+
+          <div>
+            <label class="label-xs" style="display:block; margin-bottom:6px;">Queue</label>
+            <select v-model="filterQueue" class="input">
               <option value="">All Queues</option>
               <option v-for="q in queues" :key="q.name" :value="q.name">
                 {{ q.name }}
               </option>
             </select>
           </div>
-          
-          <div class="sm:w-48">
-            <label class="block text-xs font-medium text-light-600 dark:text-light-400 mb-1.5">
-              Partition Name
-            </label>
+
+          <div>
+            <label class="label-xs" style="display:block; margin-bottom:6px;">Partition Name</label>
             <input
               v-model="filterPartition"
               type="text"
@@ -59,12 +67,10 @@
               class="input"
             />
           </div>
-          
-          <div class="sm:w-40">
-            <label class="block text-xs font-medium text-light-600 dark:text-light-400 mb-1.5">
-              Status
-            </label>
-            <select v-model="filterStatus" class="select">
+
+          <div>
+            <label class="label-xs" style="display:block; margin-bottom:6px;">Status</label>
+            <select v-model="filterStatus" class="input">
               <option value="">All Status</option>
               <option value="pending">Pending</option>
               <option value="processing">Processing</option>
@@ -72,12 +78,10 @@
               <option value="dead_letter">Dead Letter</option>
             </select>
           </div>
-          
-          <div class="sm:w-40">
-            <label class="block text-xs font-medium text-light-600 dark:text-light-400 mb-1.5">
-              Limit
-            </label>
-            <select v-model="limit" class="select">
+
+          <div>
+            <label class="label-xs" style="display:block; margin-bottom:6px;">Limit</label>
+            <select v-model="limit" class="input">
               <option :value="50">50 messages</option>
               <option :value="100">100 messages</option>
               <option :value="200">200 messages</option>
@@ -85,43 +89,39 @@
             </select>
           </div>
         </div>
-        
+
         <!-- Second Row: Date Range and Actions -->
-        <div class="grid grid-cols-2 sm:flex sm:flex-wrap sm:items-end gap-2 sm:gap-4">
-          <div class="col-span-1 sm:flex-1 sm:min-w-[180px] sm:max-w-xs">
-            <label class="block text-xs font-medium text-light-600 dark:text-light-400 mb-1.5">
-              From
-            </label>
+        <div style="display:flex; flex-wrap:wrap; align-items:end; gap:12px;">
+          <div style="flex:1; min-width:180px; max-width:260px;">
+            <label class="label-xs" style="display:block; margin-bottom:6px;">From</label>
             <input
               v-model="filterFrom"
               type="datetime-local"
-              class="input text-sm"
+              class="input"
+              style="font-size:13px;"
             />
           </div>
-          
-          <div class="col-span-1 sm:flex-1 sm:min-w-[180px] sm:max-w-xs">
-            <label class="block text-xs font-medium text-light-600 dark:text-light-400 mb-1.5">
-              To
-            </label>
+
+          <div style="flex:1; min-width:180px; max-width:260px;">
+            <label class="label-xs" style="display:block; margin-bottom:6px;">To</label>
             <input
               v-model="filterTo"
               type="datetime-local"
-              class="input text-sm"
+              class="input"
+              style="font-size:13px;"
             />
           </div>
-          
+
           <!-- Quick Time Range Buttons -->
-          <div class="col-span-2 flex flex-wrap gap-2">
-            <button @click="setTimeRange(1)" class="btn btn-secondary text-xs sm:text-sm flex-1 sm:flex-none">1h</button>
-            <button @click="setTimeRange(24)" class="btn btn-secondary text-xs sm:text-sm flex-1 sm:flex-none">24h</button>
-            <button @click="setTimeRange(168)" class="btn btn-secondary text-xs sm:text-sm flex-1 sm:flex-none">7d</button>
-            <button @click="applyFilters" class="btn btn-cyber text-xs sm:text-sm flex-1 sm:flex-none">
-              Apply
-            </button>
-            <button 
-              v-if="hasActiveFilters" 
-              @click="clearFilters" 
-              class="btn btn-secondary text-xs sm:text-sm"
+          <div style="display:flex; flex-wrap:wrap; gap:8px;">
+            <button @click="setTimeRange(1)" class="btn btn-ghost" style="font-size:12px;">1h</button>
+            <button @click="setTimeRange(24)" class="btn btn-ghost" style="font-size:12px;">24h</button>
+            <button @click="setTimeRange(168)" class="btn btn-ghost" style="font-size:12px;">7d</button>
+            <button @click="applyFilters" class="btn btn-primary" style="font-size:12px;">Apply</button>
+            <button
+              v-if="hasActiveFilters"
+              @click="clearFilters"
+              class="btn btn-ghost" style="font-size:12px;"
             >
               Clear
             </button>
@@ -132,82 +132,78 @@
 
     <!-- Messages list -->
     <div class="card">
-      <div class="card-header flex items-center justify-between">
-        <div class="flex items-center gap-3">
-          <h3 class="font-semibold text-light-900 dark:text-white">Messages</h3>
-          <span class="badge badge-queen">{{ formatNumber(messages.length) }} loaded</span>
-        </div>
-        <div class="text-sm text-light-500">
-          Page {{ currentPage }}
-        </div>
+      <div class="card-header">
+        <h3>Messages</h3>
+        <span class="chip chip-ice">{{ formatNumber(messages.length) }} loaded</span>
+        <span class="muted">Page <span class="font-mono tabular-nums">{{ currentPage }}</span></span>
       </div>
-      
-      <div class="overflow-x-auto">
-        <table class="table">
+
+      <div style="overflow-x:auto;">
+        <table class="t">
           <thead>
             <tr>
               <th>Queue</th>
               <th class="hidden xl:table-cell">Partition ID</th>
               <th class="hidden lg:table-cell">Partition</th>
               <th>Transaction ID</th>
-              <th class="text-right">Created</th>
-              <th class="text-right">Status</th>
+              <th style="text-align:right;">Created</th>
+              <th style="text-align:right;">Status</th>
             </tr>
           </thead>
           <tbody>
             <template v-if="loading">
               <tr v-for="i in 10" :key="i">
-                <td><div class="skeleton h-4 w-24" /></td>
-                <td class="hidden xl:table-cell"><div class="skeleton h-4 w-32" /></td>
-                <td class="hidden lg:table-cell"><div class="skeleton h-4 w-12" /></td>
-                <td><div class="skeleton h-4 w-40" /></td>
-                <td><div class="skeleton h-4 w-28" /></td>
-                <td><div class="skeleton h-4 w-20" /></td>
+                <td><div class="skeleton" style="height:16px; width:96px;" /></td>
+                <td class="hidden xl:table-cell"><div class="skeleton" style="height:16px; width:128px;" /></td>
+                <td class="hidden lg:table-cell"><div class="skeleton" style="height:16px; width:48px;" /></td>
+                <td><div class="skeleton" style="height:16px; width:160px;" /></td>
+                <td><div class="skeleton" style="height:16px; width:112px;" /></td>
+                <td><div class="skeleton" style="height:16px; width:80px;" /></td>
               </tr>
             </template>
             <template v-else-if="filteredMessages.length > 0">
-              <tr 
-                v-for="message in filteredMessages" 
+              <tr
+                v-for="message in filteredMessages"
                 :key="message.id"
-                class="group cursor-pointer hover:bg-queen-50 dark:hover:bg-queen-500/10"
+                style="cursor:pointer;"
                 @click="selectMessage(message)"
               >
                 <td>
-                  <div class="text-sm font-medium text-light-900 dark:text-light-100">{{ message.queue }}</div>
-                  <div class="text-xs text-light-500 dark:text-light-400 lg:hidden mt-0.5">
+                  <div style="font-size:13px; font-weight:500; color:var(--text-hi);">{{ message.queue }}</div>
+                  <div class="lg:hidden" style="font-size:11px; color:var(--text-low); margin-top:2px;">
                     {{ message.partition }}
                   </div>
                 </td>
                 <td class="hidden xl:table-cell">
-                  <div class="text-xs text-light-600 dark:text-light-400 font-mono select-all break-all">
+                  <div class="font-mono" style="font-size:11px; color:var(--text-mid); word-break:break-all; user-select:all;">
                     {{ message.partitionId }}
                   </div>
                 </td>
                 <td class="hidden lg:table-cell">
-                  <span class="text-xs text-light-600 dark:text-light-400">{{ message.partition }}</span>
+                  <span style="font-size:12px; color:var(--text-mid);">{{ message.partition }}</span>
                 </td>
                 <td>
-                  <div class="text-xs font-mono select-all break-all text-light-900 dark:text-light-100">
+                  <div class="font-mono" style="font-size:11px; color:var(--text-hi); word-break:break-all; user-select:all;">
                     {{ message.transactionId }}
                   </div>
                 </td>
-                <td class="text-right text-xs text-light-600 dark:text-light-400 tabular-nums whitespace-nowrap">
+                <td class="font-mono tabular-nums" style="text-align:right; font-size:12px; color:var(--text-mid); white-space:nowrap;">
                   {{ formatDateTime(message.createdAt) }}
                 </td>
-                <td class="text-right">
-                  <div class="flex flex-col items-end gap-1">
-                    <span 
-                      class="badge"
+                <td style="text-align:right;">
+                  <div style="display:flex; flex-direction:column; align-items:flex-end; gap:4px;">
+                    <span
+                      class="chip"
                       :class="{
-                        'badge-cyber': message.status === 'pending',
-                        'badge-crown': message.status === 'processing',
-                        'badge-success': message.status === 'completed',
-                        'badge-danger': message.status === 'dead_letter' || message.status === 'failed'
+                        'chip-ice': message.status === 'pending',
+                        'chip-warn': message.status === 'processing',
+                        'chip-ok': message.status === 'completed',
+                        'chip-bad': message.status === 'dead_letter' || message.status === 'failed'
                       }"
                     >
                       {{ message.status }}
                     </span>
-                    <div v-if="message.busStatus && message.busStatus.totalGroups > 0" class="text-xs text-light-600 dark:text-light-400">
+                    <div v-if="message.busStatus && message.busStatus.totalGroups > 0" style="font-size:11px; color:var(--text-low);">
                       {{ message.busStatus.consumedBy }}/{{ message.busStatus.totalGroups }} groups
                     </div>
                   </div>
@@ -215,38 +211,38 @@
               </tr>
             </template>
             <tr v-else>
-              <td colspan="6" class="text-center py-12">
-                <svg class="w-12 h-12 mx-auto text-light-400 dark:text-light-600 mb-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1">
+              <td colspan="6" style="text-align:center; padding:48px 16px;">
+                <svg style="width:48px; height:48px; margin:0 auto 12px; color:var(--text-low);" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1">
                   <path stroke-linecap="round" stroke-linejoin="round" d="M21.75 6.75v10.5a2.25 2.25 0 01-2.25 2.25h-15a2.25 2.25 0 01-2.25-2.25V6.75m19.5 0A2.25 2.25 0 0019.5 4.5h-15a2.25 2.25 0 00-2.25 2.25m19.5 0v.243a2.25 2.25 0 01-1.07 1.916l-7.5 4.615a2.25 2.25 0 01-2.36 0L3.32 8.91a2.25 2.25 0 01-1.07-1.916V6.75" />
                 </svg>
-                <p class="text-light-600 dark:text-light-400">No messages found</p>
+                <p style="color:var(--text-mid);">No messages found</p>
               </td>
             </tr>
           </tbody>
         </table>
       </div>
-      
+
       <!-- Pagination -->
-      <div class="px-5 py-4 border-t border-light-200 dark:border-dark-50 flex items-center justify-between">
-        <div class="text-sm text-light-600 dark:text-light-400">
-          Page {{ currentPage }}
+      <div style="padding:14px 16px; border-top:1px solid var(--bd); display:flex; align-items:center; justify-content:space-between;">
+        <div style="font-size:13px; color:var(--text-mid);">
+          Page <span class="font-mono tabular-nums">{{ currentPage }}</span>
         </div>
-        <div class="flex gap-2">
+        <div style="display:flex; gap:8px;">
           <button
             @click="prevPage"
             :disabled="currentPage === 1"
-            class="btn btn-secondary px-3 py-1.5"
+            class="btn btn-ghost" style="padding:6px 10px;"
           >
-            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <svg style="width:16px; height:16px;" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 19l-7-7 7-7" />
             </svg>
           </button>
           <button
             @click="nextPage"
             :disabled="messages.length < limit"
-            class="btn btn-secondary px-3 py-1.5"
+            class="btn btn-ghost" style="padding:6px 10px;"
           >
-            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <svg style="width:16px; height:16px;" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7" />
             </svg>
           </button>
@@ -256,153 +252,157 @@
 
     <!-- Message detail panel (teleported to body to avoid transform issues) -->
     <Teleport to="body">
-      <div 
+      <div
         v-if="selectedMessage"
-        class="fixed inset-0 sm:left-auto w-full sm:max-w-2xl bg-light-50 dark:bg-dark-400 shadow-2xl z-50 overflow-y-auto border-l border-light-200 dark:border-dark-50"
+        style="position:fixed; top:0; right:0; bottom:0; width:100%; max-width:640px; z-index:50; overflow-y:auto; border-left:1px solid var(--bd); background:linear-gradient(180deg, rgba(14,14,18,.97), rgba(10,10,14,.97)); backdrop-filter:blur(16px);"
       >
-      <div class="p-4 sm:p-6">
+      <div style="padding:20px 24px;">
         <!-- Header -->
-        <div class="flex items-start justify-between mb-5 pb-4 border-b border-light-200 dark:border-dark-50">
-          <div class="flex-1 min-w-0">
-            <h3 class="text-base font-bold mb-1 text-light-900 dark:text-white">Message Details</h3>
-            <p class="text-xs font-mono text-light-500 break-all">
+        <div style="display:flex; align-items:flex-start; justify-content:space-between; margin-bottom:20px; padding-bottom:16px; border-bottom:1px solid var(--bd);">
+          <div style="flex:1; min-width:0;">
+            <h3 style="font-size:15px; font-weight:700; margin-bottom:4px; color:var(--text-hi);">Message Details</h3>
+            <p class="font-mono" style="font-size:11px; color:var(--text-low); word-break:break-all;">
               {{ messageDetail?.transactionId }}
             </p>
           </div>
-          <button 
+          <button
             @click="selectedMessage = null"
-            class="text-light-400 hover:text-light-600 dark:hover:text-light-300 p-1.5 rounded-lg hover:bg-light-100 dark:hover:bg-dark-300 transition-colors"
+            class="btn btn-ghost btn-icon"
           >
-            <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <svg style="width:18px; height:18px;" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" />
             </svg>
           </button>
         </div>
 
-        <div v-if="detailLoading" class="text-center py-12">
-          <div class="w-8 h-8 border-2 border-queen-500 border-t-transparent rounded-full animate-spin mx-auto mb-3"></div>
-          <p class="text-light-500">Loading details...</p>
+        <div v-if="detailLoading" style="text-align:center; padding:48px 0;">
+          <div class="spinner" style="margin:0 auto 12px;"></div>
+          <p style="color:var(--text-low);">Loading details...</p>
         </div>
 
-        <div v-else-if="detailError" class="text-sm text-rose-600 dark:text-rose-400">
+        <div v-else-if="detailError" style="font-size:13px; color:#fb7185;">
           {{ detailError }}
         </div>
 
         <template v-else-if="messageDetail">
           <!-- Status -->
-          <div class="mb-6">
-            <div class="mb-5">
-              <span 
-                class="badge text-sm"
+          <div style="margin-bottom:24px;">
+            <div style="margin-bottom:20px;">
+              <span
+                class="chip"
+                style="font-size:12px;"
                 :class="{
-                  'badge-cyber': messageDetail.status === 'pending',
-                  'badge-crown': messageDetail.status === 'processing',
-                  'badge-success': messageDetail.status === 'completed',
-                  'badge-danger': messageDetail.status === 'dead_letter' || messageDetail.status === 'failed'
+                  'chip-ice': messageDetail.status === 'pending',
+                  'chip-warn': messageDetail.status === 'processing',
+                  'chip-ok': messageDetail.status === 'completed',
+                  'chip-bad': messageDetail.status === 'dead_letter' || messageDetail.status === 'failed'
                 }"
               >
                 {{ messageDetail.status }}
               </span>
             </div>
 
-            <div class="space-y-4">
+            <div style="display:flex; flex-direction:column; gap:16px;">
               <div>
-                <label class="text-xs font-medium text-light-500 block mb-1.5 uppercase tracking-wide">Queue / Partition</label>
-                <p class="text-sm font-medium text-light-900 dark:text-light-100">
+                <label class="label-xs" style="display:block; margin-bottom:6px;">Queue / Partition</label>
+                <p style="font-size:13px; font-weight:500; color:var(--text-hi);">
                   {{ messageDetail.queue }} / {{ messageDetail.partition }}
                 </p>
               </div>
-              
+
               <div>
-                <label class="text-xs font-medium text-light-500 block mb-1.5 uppercase tracking-wide">Partition ID</label>
-                <p class="text-xs font-mono text-light-700 dark:text-light-300 break-all">{{ messageDetail.partitionId }}</p>
+                <label class="label-xs" style="display:block; margin-bottom:6px;">Partition ID</label>
+                <p class="font-mono" style="font-size:11px; color:var(--text-mid); word-break:break-all;">{{ messageDetail.partitionId }}</p>
               </div>
-              
+
               <div>
-                <label class="text-xs font-medium text-light-500 block mb-1.5 uppercase tracking-wide">Transaction ID</label>
-                <p class="text-xs font-mono text-light-700 dark:text-light-300 break-all">{{ messageDetail.transactionId }}</p>
+                <label class="label-xs" style="display:block; margin-bottom:6px;">Transaction ID</label>
+                <p class="font-mono" style="font-size:11px; color:var(--text-mid); word-break:break-all;">{{ messageDetail.transactionId }}</p>
               </div>
-              
+
               <div>
-                <label class="text-xs font-medium text-light-500 block mb-1.5 uppercase tracking-wide">Created</label>
-                <p class="text-sm text-light-700 dark:text-light-300">{{ formatDateTime(messageDetail.createdAt) }}</p>
+                <label class="label-xs" style="display:block; margin-bottom:6px;">Created</label>
+                <p style="font-size:13px; color:var(--text-mid);">{{ formatDateTime(messageDetail.createdAt) }}</p>
               </div>
-              
+
               <div v-if="messageDetail.traceId">
-                <label class="text-xs font-medium text-light-500 block mb-1.5 uppercase tracking-wide">Trace ID</label>
-                <p class="text-xs font-mono break-all text-light-700 dark:text-light-300">{{ messageDetail.traceId }}</p>
+                <label class="label-xs" style="display:block; margin-bottom:6px;">Trace ID</label>
+                <p class="font-mono" style="font-size:11px; color:var(--text-mid); word-break:break-all;">{{ messageDetail.traceId }}</p>
               </div>
-              
+
               <div v-if="messageDetail.errorMessage">
-                <label class="text-xs font-medium text-light-500 block mb-1.5 uppercase tracking-wide">Error Message</label>
-                <p class="text-sm text-rose-600 dark:text-rose-400">{{ messageDetail.errorMessage }}</p>
+                <label class="label-xs" style="display:block; margin-bottom:6px;">Error Message</label>
+                <p style="font-size:13px; color:#fb7185;">{{ messageDetail.errorMessage }}</p>
               </div>
-              
+
               <div v-if="messageDetail.retryCount">
-                <label class="text-xs font-medium text-light-500 block mb-1.5 uppercase tracking-wide">Retry Count</label>
-                <p class="text-sm text-light-700 dark:text-light-300">{{ messageDetail.retryCount }}</p>
+                <label class="label-xs" style="display:block; margin-bottom:6px;">Retry Count</label>
+                <p class="font-mono tabular-nums" style="font-size:13px; color:var(--text-mid);">{{ messageDetail.retryCount }}</p>
               </div>
             </div>
           </div>
 
           <!-- Queue Config -->
-          <div v-if="messageDetail.queueConfig" class="mb-6">
-            <h4 class="text-sm font-semibold mb-3 text-light-900 dark:text-white">Queue Config</h4>
-            <div class="bg-light-100 dark:bg-dark-300 rounded-lg p-4 grid grid-cols-2 gap-3 text-sm">
-              <div>
-                <span class="text-light-500">Lease Time:</span>
-                <span class="font-medium ml-1">{{ messageDetail.queueConfig.leaseTime }}s</span>
-              </div>
-              <div>
-                <span class="text-light-500">TTL:</span>
-                <span class="font-medium ml-1">{{ messageDetail.queueConfig.ttl }}s</span>
-              </div>
-              <div>
-                <span class="text-light-500">Retry Limit:</span>
-                <span class="font-medium ml-1">{{ messageDetail.queueConfig.retryLimit }}</span>
-              </div>
-              <div>
-                <span class="text-light-500">Retry Delay:</span>
-                <span class="font-medium ml-1">{{ messageDetail.queueConfig.retryDelay }}ms</span>
+          <div v-if="messageDetail.queueConfig" style="margin-bottom:24px;">
+            <h4 style="font-size:13px; font-weight:600; margin-bottom:12px; color:var(--text-hi);">Queue Config</h4>
+            <div class="card" style="padding:14px 16px;">
+              <div style="display:grid; grid-template-columns:1fr 1fr; gap:10px; font-size:13px;">
+                <div>
+                  <span style="color:var(--text-low);">Lease Time:</span>
+                  <span class="font-mono tabular-nums" style="font-weight:500; margin-left:4px; color:var(--text-hi);">{{ messageDetail.queueConfig.leaseTime }}s</span>
+                </div>
+                <div>
+                  <span style="color:var(--text-low);">TTL:</span>
+                  <span class="font-mono tabular-nums" style="font-weight:500; margin-left:4px; color:var(--text-hi);">{{ messageDetail.queueConfig.ttl }}s</span>
+                </div>
+                <div>
+                  <span style="color:var(--text-low);">Retry Limit:</span>
+                  <span class="font-mono tabular-nums" style="font-weight:500; margin-left:4px; color:var(--text-hi);">{{ messageDetail.queueConfig.retryLimit }}</span>
+                </div>
+                <div>
+                  <span style="color:var(--text-low);">Retry Delay:</span>
+                  <span class="font-mono tabular-nums" style="font-weight:500; margin-left:4px; color:var(--text-hi);">{{ messageDetail.queueConfig.retryDelay }}ms</span>
+                </div>
               </div>
             </div>
           </div>
 
           <!-- Payload -->
-          <div class="mb-6">
-            <div class="flex items-center justify-between mb-3">
-              <h4 class="text-sm font-semibold text-light-900 dark:text-white">Payload</h4>
-              <button 
+          <div style="margin-bottom:24px;">
+            <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:12px;">
+              <h4 style="font-size:13px; font-weight:600; color:var(--text-hi);">Payload</h4>
+              <button
                 @click="copyPayload"
-                class="flex items-center gap-1.5 text-xs text-light-500 hover:text-queen-600 dark:hover:text-queen-400 transition-colors"
+                class="btn btn-ghost" style="padding:4px 8px; font-size:11px; gap:4px;"
               >
-                <svg v-if="!payloadCopied" class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <svg v-if="!payloadCopied" style="width:14px; height:14px;" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" />
                 </svg>
-                <svg v-else class="w-4 h-4 text-emerald-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <svg v-else style="width:14px; height:14px; color:#34d399;" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7" />
                 </svg>
                 {{ payloadCopied ? 'Copied!' : 'Copy' }}
               </button>
             </div>
-            <div class="bg-dark-400 dark:bg-dark-500 rounded-lg p-4 overflow-x-auto">
-              <pre class="text-sm font-mono whitespace-pre-wrap" v-html="highlightJson(messageDetail.payload)"></pre>
+            <div style="background:rgba(0,0,0,.35); border:1px solid var(--bd); border-radius:10px; padding:14px 16px; overflow-x:auto;">
+              <pre class="font-mono" style="font-size:12px; white-space:pre-wrap; margin:0;" v-html="highlightJson(messageDetail.payload)"></pre>
             </div>
           </div>
 
           <!-- Consumer Groups -->
-          <div v-if="messageDetail.consumerGroups && messageDetail.consumerGroups.length > 0" class="mb-6">
-            <h4 class="text-sm font-semibold mb-3 text-light-900 dark:text-white">Consumer Groups</h4>
-            <div class="space-y-2">
-              <div 
-                v-for="group in messageDetail.consumerGroups" 
+          <div v-if="messageDetail.consumerGroups && messageDetail.consumerGroups.length > 0" style="margin-bottom:24px;">
+            <h4 style="font-size:13px; font-weight:600; margin-bottom:12px; color:var(--text-hi);">Consumer Groups</h4>
+            <div style="display:flex; flex-direction:column; gap:8px;">
+              <div
+                v-for="group in messageDetail.consumerGroups"
                 :key="group.name"
-                class="flex items-center justify-between p-3 bg-light-100 dark:bg-dark-300 rounded-lg"
+                class="card"
+                style="display:flex; align-items:center; justify-content:space-between; padding:10px 14px;"
               >
-                <span class="text-sm font-medium">{{ group.name === '__QUEUE_MODE__' ? 'Queue Mode' : group.name }}</span>
-                <span 
-                  class="badge"
-                  :class="group.consumed ? 'badge-success' : 'badge-cyber'"
+                <span style="font-size:13px; font-weight:500; color:var(--text-hi);">{{ group.name === '__QUEUE_MODE__' ? 'Queue Mode' : group.name }}</span>
+                <span
+                  class="chip"
+                  :class="group.consumed ? 'chip-ok' : 'chip-ice'"
                 >
                   {{ group.consumed ? 'Consumed' : 'Pending' }}
                 </span>
@@ -411,61 +411,61 @@
           </div>
 
           <!-- Actions -->
-          <div class="space-y-2 pt-2">
+          <div style="display:flex; flex-direction:column; gap:8px; padding-top:8px;">
             <!-- Completed message info -->
-            <div v-if="messageDetail.status === 'completed'" class="bg-emerald-50 dark:bg-emerald-900/20 border border-emerald-200 dark:border-emerald-700/30 rounded-lg p-3 text-emerald-800 dark:text-emerald-200 text-sm">
-              <div class="flex gap-2">
-                <svg class="w-5 h-5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <div v-if="messageDetail.status === 'completed'" class="card" style="padding:12px 14px; border-color:rgba(52,211,153,.2);">
+              <div style="display:flex; gap:8px; align-items:center; font-size:13px; color:#34d399;">
+                <svg style="width:18px; height:18px; flex-shrink:0;" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
                 </svg>
                 <p>This message has been successfully consumed and acknowledged.</p>
               </div>
             </div>
-            
+
             <button
               v-if="messageDetail.status === 'dead_letter'"
               @click="retryMessage"
               :disabled="actionLoading"
-              class="btn btn-primary w-full"
+              class="btn btn-primary" style="width:100%; justify-content:center;"
             >
-              <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <svg style="width:16px; height:16px;" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
               </svg>
               Retry Message
             </button>
-            
+
             <button
               v-if="messageDetail.status === 'pending'"
               @click="moveToDLQ"
               :disabled="actionLoading"
-              class="btn btn-secondary w-full"
+              class="btn btn-ghost" style="width:100%; justify-content:center;"
             >
               Move to Dead Letter Queue
             </button>
-            
+
             <button
               @click="deleteMessage"
               :disabled="actionLoading"
-              class="btn bg-rose-600 text-white hover:bg-rose-700 w-full"
+              class="btn btn-danger" style="width:100%; justify-content:center;"
             >
-              <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <svg style="width:16px; height:16px;" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
               </svg>
               Delete Message
             </button>
           </div>
 
-          <div v-if="actionError" class="text-sm text-rose-600 dark:text-rose-400 mt-4">
+          <div v-if="actionError" style="font-size:13px; color:#fb7185; margin-top:16px;">
             {{ actionError }}
           </div>
         </template>
       </div>
       </div>
-      
+
       <!-- Backdrop -->
-      <div 
+      <div
         v-if="selectedMessage"
-        class="fixed inset-0 bg-dark-500/50 backdrop-blur-sm z-40"
+        style="position:fixed; inset:0; z-index:40; background:rgba(0,0,0,.5); backdrop-filter:blur(4px);"
         @click="selectedMessage = null"
       ></div>
     </Teleport>
@@ -748,12 +748,12 @@ const highlightJson = (payload) => {
     }
     // Braces and brackets
     else if (char === '{' || char === '}' || char === '[' || char === ']') {
-      result += `<span class="text-light-500">${char}</span>`
+      result += `<span style="color:var(--text-low)">${char}</span>`
       i++
     }
     // Colon
     else if (char === ':') {
-      result += '<span class="text-light-400">:</span>'
+      result += '<span style="color:var(--text-faint)">:</span>'
       i++
     }
     // Everything else (whitespace, commas)

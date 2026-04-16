@@ -38,6 +38,7 @@ const isDark = ref(getInitialTheme())
 
 // Apply theme to DOM immediately on module load
 document.documentElement.classList.toggle('dark', isDark.value)
+document.documentElement.classList.toggle('light', !isDark.value)
 
 export function useTheme() {
   const toggleTheme = () => {
@@ -56,6 +57,7 @@ export function useTheme() {
   // Sync with DOM, localStorage and cookie on changes
   watch(isDark, (dark) => {
     document.documentElement.classList.toggle('dark', dark)
+    document.documentElement.classList.toggle('light', !dark)
     const themeValue = dark ? 'dark' : 'light'
     localStorage.setItem(STORAGE_KEY, themeValue)
     setCookie(COOKIE_NAME, themeValue)
