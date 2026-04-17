@@ -411,6 +411,9 @@ func parseMessages(result map[string]interface{}) []*Message {
 		if v, ok := msgMap["retryCount"].(float64); ok {
 			msg.RetryCount = int(v)
 		}
+		if v, ok := msgMap["producerSub"].(string); ok {
+			msg.ProducerSub = v
+		}
 
 		messages = append(messages, msg)
 	}

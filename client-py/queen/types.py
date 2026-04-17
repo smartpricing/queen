@@ -7,7 +7,14 @@ from typing_extensions import TypedDict, Protocol
 
 
 class Message(TypedDict, total=False):
-    """Message from Queen"""
+    """Message from Queen.
+
+    ``producerSub`` is the authenticated producer identity stamped by the server
+    from the JWT ``sub`` claim at push time. It is present only when JWT
+    authentication is enabled on the server. Clients CANNOT set this field on
+    push - the server always derives it from the validated JWT, which is how
+    impersonation is prevented.
+    """
 
     transactionId: str
     partitionId: str
@@ -18,6 +25,7 @@ class Message(TypedDict, total=False):
     createdAt: str
     errorMessage: Optional[str]
     retryCount: int
+    producerSub: Optional[str]
 
 
 class AckResponse(TypedDict, total=False):

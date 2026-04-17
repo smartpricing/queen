@@ -31,7 +31,9 @@ BEGIN
         COALESCE(item->'payload', '{}'::jsonb) as payload,
         CASE WHEN item->>'traceId' IS NOT NULL AND item->>'traceId' != '' 
              THEN (item->>'traceId')::uuid ELSE NULL END as trace_id,
-        COALESCE((item->>'is_encrypted')::boolean, false) as is_encrypted
+        COALESCE((item->>'is_encrypted')::boolean, false) as is_encrypted,
+        -- producerSub is server-stamped (from validated JWT 'sub' claim); NULL when auth disabled
+        NULLIF(item->>'producerSub', '') as producer_sub
     FROM jsonb_array_elements(p_items) WITH ORDINALITY AS t(item, idx);
 
     -- Ensure queues exist (batch upsert)
@@ -68,8 +70,8 @@ BEGIN
     END IF;
 
     -- Insert non-duplicate messages
-    INSERT INTO queen.messages (id, transaction_id, partition_id, payload, trace_id, is_encrypted)
-    SELECT message_id, transaction_id, partition_id, payload, trace_id, is_encrypted
+    INSERT INTO queen.messages (id, transaction_id, partition_id, payload, trace_id, is_encrypted, producer_sub)
+    SELECT message_id, transaction_id, partition_id, payload, trace_id, is_encrypted, producer_sub
     FROM tmp_items
     WHERE NOT COALESCE(is_duplicate, false);
 

@@ -58,6 +58,7 @@ BEGIN
             m.partition_id,
             m.created_at,
             m.trace_id,
+            m.producer_sub,
             q.name as queue_name,
             p.name as partition_name,
             q.namespace,
@@ -134,6 +135,7 @@ BEGIN
                     'totalGroups', partition_bus_groups_count
                 ),
                 'traceId', trace_id,
+                'producerSub', producer_sub,
                 'queuePriority', queue_priority,
                 'createdAt', to_char(created_at, 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"'),
                 'leaseExpiresAt', CASE WHEN lease_expires_at IS NOT NULL 
@@ -223,6 +225,7 @@ BEGIN
         'payload', m.payload,
         'isEncrypted', COALESCE(m.is_encrypted, false),
         'traceId', m.trace_id,
+        'producerSub', m.producer_sub,
         'createdAt', to_char(m.created_at, 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"'),
         'errorMessage', dlq.error_message,
         'retryCount', dlq.retry_count,
@@ -339,6 +342,7 @@ BEGIN
                     'errorMessage', dlq.error_message,
                     'retryCount', dlq.retry_count,
                     'data', m.payload,
+                    'producerSub', m.producer_sub,
                     'createdAt', to_char(m.created_at, 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"'),
                     'failedAt', to_char(dlq.failed_at, 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"')
                 ) ORDER BY dlq.failed_at DESC

@@ -222,12 +222,13 @@ BEGIN
                 'transactionId', sub.transaction_id,
                 'traceId', sub.trace_id::text,
                 'data', sub.payload,
+                'producerSub', sub.producer_sub,
                 'createdAt', to_char(sub.created_at, 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"')
             ) ORDER BY sub.created_at, sub.id
         ), '[]'::jsonb)
         INTO v_messages
         FROM (
-            SELECT m.id, m.transaction_id, m.trace_id, m.payload, m.created_at
+            SELECT m.id, m.transaction_id, m.trace_id, m.payload, m.producer_sub, m.created_at
             FROM queen.messages m
             WHERE m.partition_id = v_partition_id
               AND (v_cursor_ts IS NULL OR (m.created_at, m.id) > (v_cursor_ts, COALESCE(v_cursor_id, '00000000-0000-0000-0000-000000000000'::uuid)))
@@ -557,12 +558,13 @@ BEGIN
                 'transactionId', sub.transaction_id,
                 'traceId', sub.trace_id::text,
                 'data', sub.payload,
+                'producerSub', sub.producer_sub,
                 'createdAt', to_char(sub.created_at, 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"')
             ) ORDER BY sub.created_at, sub.id
         ), '[]'::jsonb)
         INTO v_messages
         FROM (
-            SELECT m.id, m.transaction_id, m.trace_id, m.payload, m.created_at
+            SELECT m.id, m.transaction_id, m.trace_id, m.payload, m.producer_sub, m.created_at
             FROM queen.messages m
             WHERE m.partition_id = v_partition_id
               AND (v_cursor_ts IS NULL OR (m.created_at, m.id) > (v_cursor_ts, COALESCE(v_cursor_id, '00000000-0000-0000-0000-000000000000'::uuid)))
@@ -1040,12 +1042,13 @@ BEGIN
                 'transactionId', sub.transaction_id,
                 'traceId', sub.trace_id::text,
                 'data', sub.payload,
+                'producerSub', sub.producer_sub,
                 'createdAt', to_char(sub.created_at, 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"')
             ) ORDER BY sub.created_at, sub.id
         ), '[]'::jsonb)
         INTO v_messages
         FROM (
-            SELECT m.id, m.transaction_id, m.trace_id, m.payload, m.created_at
+            SELECT m.id, m.transaction_id, m.trace_id, m.payload, m.producer_sub, m.created_at
             FROM queen.messages m
             WHERE m.partition_id = v_partition_id
               AND (v_cursor_ts IS NULL OR (m.created_at, m.id) > (v_cursor_ts, COALESCE(v_cursor_id, '00000000-0000-0000-0000-000000000000'::uuid)))

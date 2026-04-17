@@ -54,7 +54,10 @@ namespace routes {
  * @param level  The required AccessLevel
  * @param claims Variable to store the claims (std::optional<auth::JwtClaims>)
  */
-#define REQUIRE_AUTH_WITH_CLAIMS(res, req, ctx, level, claims) \
+// Note: the out-parameter name must NOT collide with any member of AuthCheck
+// (e.g. "claims"), otherwise token-pasting in the macro body rewrites the
+// wrong identifier. Use a sigil-style name and reassign at the bottom.
+#define REQUIRE_AUTH_WITH_CLAIMS(res, req, ctx, level, _claims_out) \
     do { \
         if (ctx.config.auth.enabled && queen::auth::global_auth_middleware) { \
             auto _auth_result = queen::auth::global_auth_middleware->check(req, level); \
@@ -62,7 +65,7 @@ namespace routes {
                 send_error_response(res, _auth_result.error, _auth_result.status_code); \
                 return; \
             } \
-            claims = _auth_result.claims; \
+            _claims_out = _auth_result.claims; \
         } \
     } while(0)
 

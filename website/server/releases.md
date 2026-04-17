@@ -6,6 +6,7 @@ This page documents Queen MQ server releases and their compatible client version
 
 | Server Version | Description | Compatible Clients |
 |----------------|-------------|-------------------|
+| **0.13.0** | Added server-stamped `producerSub` (authenticated JWT `sub`) on every message - closes impersonation vector (issue #23). Schema adds nullable `producer_sub TEXT` column (no table rewrite). Clients: `producerSub` is read-only and exposed on popped messages. | JS ≥0.7.4, Python ≥0.7.4, Go ≥0.13.0 for typed field access |
 | **0.12.19** | Fix bug that on seek or cg delete do not deleted the watermark  | JS ≥0.7.4, Python ≥0.7.4 |
 | **0.12.17** | Improved stats  | JS ≥0.7.4, Python ≥0.7.4 |
 | **0.12.13** | Added watermark tracking for efficient wildcard POP discovery. x20 faster pop on high partition count queues | JS ≥0.7.4, Python ≥0.7.4 |
@@ -26,6 +27,7 @@ This page documents Queen MQ server releases and their compatible client version
 
 ## Bug fixing and improvements 
 
+- Server 0.13.0: Added server-stamped `producerSub` to close impersonation vector (GitHub issue #23). When JWT auth is enabled the server writes the validated `sub` claim to every pushed message; clients CANNOT set this field, and it is exposed on pop responses and admin message APIs. Migration adds a nullable `producer_sub TEXT` column to `queen.messages` via `ADD COLUMN IF NOT EXISTS` - metadata-only in Postgres ≥11, no table rewrite, safe on tables with millions of rows. Old clients and old messages work unchanged (pre-feature rows have `producerSub = null`).
 - Server 0.12.19: Fix bug that on seek or cg delete do not deleted the watermark
 - Server 0.12.17: Improved stats
 - Server 0.12.13: Added watermark tracking for efficient wildcard POP discovery. x20 faster pop on high partition count queues

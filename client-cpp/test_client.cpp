@@ -922,6 +922,65 @@ bool test_transaction_ack_with_consumer_group(const std::string& server_url) {
 // DLQ TEST
 // ============================================================================
 
+// ============================================================================
+// PRODUCER SUB TESTS (issue #23, feature A)
+// ============================================================================
+// These tests verify that the producerSub field surfaces correctly on popped
+// messages in C++. The C++ client uses nlohmann::json for messages, so the
+// field is accessed as msg["producerSub"] - no struct change required. The
+// tests also verify that server-side anti-impersonation logic prevents a
+// client from spoofing the field.
+// ============================================================================
+
+// Verify that producerSub (when present in the server response) is accessible
+// via the nlohmann::json-based Message. Uses a raw HTTP push that attempts to
+// set producerSub in the body; the server (with auth disabled, the typical
+// CI environment) must ignore it and store NULL, which surfaces as JSON null.
+bool test_producer_sub_ignored_without_auth(const std::string& server_url) {
+    QueenClient client(server_url);
+    const std::string queue_name = "test-auth-cpp-noauth";
+    const std::string tx_id = "tx-cpp-noauth-" + std::to_string(std::time(nullptr));
+
+    client.queue(queue_name).create();
+
+    // Build a push body that tries to spoof producerSub.
+    httplib::Client http(server_url.c_str());
+    http.set_connection_timeout(5);
+    json body = {
+        {"items", json::array({
+            {
+                {"queue", queue_name},
+                {"partition", "Default"},
+                {"transactionId", tx_id},
+                {"payload", {{"x", 1}}},
+                {"producerSub", "attacker-cpp"}  // must be ignored server-side
+            }
+        })}
+    };
+    auto res = http.Post("/api/v1/push", body.dump(), "application/json");
+    if (!res || res->status >= 300) {
+        std::cerr << "HTTP push failed" << std::endl;
+        return false;
+    }
+
+    // Pop and verify the server returns null (or omits) producerSub.
+    auto msgs = client.queue(queue_name).batch(1).wait(false).pop();
+    if (msgs.empty()) {
+        std::cerr << "No message popped" << std::endl;
+        return false;
+    }
+
+    const auto& m = msgs[0];
+    // The server returns the field as null when producer_sub is NULL in DB.
+    // Valid expectations: field missing OR field is null - either way the
+    // spoofing attempt must NOT be reflected.
+    if (m.contains("producerSub") && !m["producerSub"].is_null()) {
+        std::cerr << "producerSub leaked: " << m["producerSub"].dump() << std::endl;
+        return false;
+    }
+    return true;
+}
+
 bool test_dlq(const std::string& server_url) {
     QueenClient client(server_url);
     
@@ -1171,6 +1230,11 @@ int main(int argc, char** argv) {
     // DLQ TEST
     std::cout << YELLOW << "\n=== DLQ TESTS ===" << RESET << "\n" << std::endl;
     runner.run_test("Dead Letter Queue", [&]() { return test_dlq(server_url); });
+
+    // PRODUCER-SUB TESTS (issue #23, feature A)
+    std::cout << YELLOW << "\n=== PRODUCER SUB TESTS ===" << RESET << "\n" << std::endl;
+    runner.run_test("Producer Sub ignored from body without auth",
+                    [&]() { return test_producer_sub_ignored_without_auth(server_url); });
     
     // SUBSCRIPTION TESTS
     std::cout << YELLOW << "\n=== SUBSCRIPTION TESTS ===" << RESET << "\n" << std::endl;

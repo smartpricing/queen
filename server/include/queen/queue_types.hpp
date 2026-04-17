@@ -34,6 +34,9 @@ struct PushItem {
     nlohmann::json payload;
     std::optional<std::string> transaction_id;
     std::optional<std::string> trace_id;
+    // Server-stamped authenticated producer identity (from validated JWT 'sub' claim).
+    // Never populated from client input; set by the push route when auth is enabled.
+    std::optional<std::string> producer_sub;
 };
 
 struct PushResult {

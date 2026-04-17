@@ -23,11 +23,15 @@ namespace routes {
 void setup_push_routes(uWS::App* app, const RouteContext& ctx) {
     // PUSH endpoint - uses per-worker sidecar for true async non-blocking operation
     app->post("/api/v1/push", [ctx](auto* res, auto* req) {
-        // Check authentication - READ_WRITE required for push
-        REQUIRE_AUTH(res, req, ctx, auth::AccessLevel::READ_WRITE);
-        
+        // Check authentication - READ_WRITE required for push.
+        // Capture claims so we can stamp the authenticated producer 'sub' onto each message.
+        // This closes the impersonation hole described in issue #23: the client's claimed
+        // identity cannot be forged because the server derives it from the validated JWT.
+        std::optional<auth::JwtClaims> auth_claims;
+        REQUIRE_AUTH_WITH_CLAIMS(res, req, ctx, auth::AccessLevel::READ_WRITE, auth_claims);
+
         read_json_body(res,
-            [res, ctx](const nlohmann::json& body) {
+            [res, ctx, auth_claims = std::move(auth_claims)](const nlohmann::json& body) {
                 try {
                     if (!body.contains("items") || !body["items"].is_array()) {
                         send_error_response(res, "items array is required", 400);
@@ -74,6 +78,13 @@ void setup_push_routes(uWS::App* app, const RouteContext& ctx) {
                         if (item_json.contains("traceId")) {
                             item.trace_id = item_json["traceId"];
                         }
+                        // SECURITY: producer_sub is *always* server-stamped from the validated
+                        // JWT subject. Any "producerSub" field in the client body is intentionally
+                        // ignored so a client cannot impersonate another producer. When auth is
+                        // disabled, producer_sub stays empty (NULL in DB).
+                        if (auth_claims.has_value() && !auth_claims->subject.empty()) {
+                            item.producer_sub = auth_claims->subject;
+                        }
                         items.push_back(std::move(item));
                     }
                     
@@ -110,7 +121,11 @@ void setup_push_routes(uWS::App* app, const RouteContext& ctx) {
                             if (item.trace_id.has_value() && !item.trace_id->empty()) {
                                 event["traceId"] = *item.trace_id;
                             }
-                            
+
+                            if (item.producer_sub.has_value() && !item.producer_sub->empty()) {
+                                event["producerSub"] = *item.producer_sub;
+                            }
+
                             if (ctx.file_buffer->write_event(event)) {
                                 nlohmann::json result = {
                                     {"status", "buffered"},
@@ -201,6 +216,9 @@ void setup_push_routes(uWS::App* app, const RouteContext& ctx) {
                             if (item.trace_id.has_value() && !item.trace_id->empty()) {
                                 item_json["traceId"] = *item.trace_id;
                             }
+                            if (item.producer_sub.has_value() && !item.producer_sub->empty()) {
+                                item_json["producerSub"] = *item.producer_sub;
+                            }
                             items_json.push_back(item_json);
                         }
                         
@@ -279,6 +297,9 @@ void setup_push_routes(uWS::App* app, const RouteContext& ctx) {
                                                 }
                                                 if (item.contains("traceId")) {
                                                     event["traceId"] = item["traceId"];
+                                                }
+                                                if (item.contains("producerSub")) {
+                                                    event["producerSub"] = item["producerSub"];
                                                 }
                                                 
                                                 if (file_buffer->write_event(event)) {

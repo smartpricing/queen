@@ -124,6 +124,68 @@ Or with roles array:
 }
 ```
 
+## Producer Identity Stamping (`producerSub`)
+
+When JWT authentication is enabled, Queen **automatically stamps every pushed
+message with the authenticated producer's `sub` claim** and stores it on the
+message. Consumers can read the stamped identity from the `producerSub` field
+on popped messages and trust it — a client cannot set or forge this field.
+
+This closes a class of impersonation attacks where one authenticated producer
+pretends to be another by embedding a fake identity inside the payload.
+
+### Guarantees
+
+- `producerSub` is set **server-side from the validated JWT `sub` claim**.
+- Any `producerSub` field supplied in the HTTP push body is **ignored**.
+- When JWT auth is disabled, `producerSub` is `NULL` (no identity to attest).
+- The field survives failover: messages buffered to disk during maintenance
+  mode or DB outages keep the producer identity when replayed.
+
+### Example
+
+Producer (authenticated as `alice-producer`):
+
+```javascript
+await queen.queue('orders').push([{ data: { orderId: 42 } }])
+// Request body sent to server - note: no producerSub here.
+// Server writes producer_sub='alice-producer' to the message row.
+```
+
+Consumer:
+
+```javascript
+const [msg] = await queen.queue('orders').batch(1).pop()
+console.log(msg.producerSub)   // 'alice-producer' (trusted, from JWT)
+console.log(msg.data.orderId)  // 42 (untrusted, from client payload)
+```
+
+Attempted spoofing is silently ignored:
+
+```javascript
+// Even with a valid JWT for alice-producer, this producerSub is dropped.
+await fetch('/api/v1/push', {
+  method: 'POST',
+  headers: { Authorization: `Bearer ${aliceToken}` },
+  body: JSON.stringify({
+    items: [{ queue: 'orders', payload: {}, producerSub: 'attacker' }]
+  })
+})
+// Stored on the message: producer_sub = 'alice-producer' (NOT 'attacker').
+```
+
+### Where `producerSub` appears
+
+| Endpoint | Field location |
+|---|---|
+| `POST /api/v1/pop` | `messages[].producerSub` |
+| `GET /api/v1/messages` (admin) | `messages[].producerSub` |
+| `GET /api/v1/messages/:partitionId/:txId` (admin) | `producerSub` |
+| `GET /api/v1/dlq` | `messages[].producerSub` |
+
+The field is omitted when `NULL` (i.e. when JWT auth was disabled at push
+time), so existing consumers that don't use it see no change in wire format.
+
 ## Generating Tokens
 
 ### Using Node.js

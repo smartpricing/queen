@@ -462,7 +462,11 @@ PushResult AsyncQueueManager::push_single_message(const PushItem& item) {
             if (item.trace_id.has_value() && !item.trace_id->empty()) {
                 event["traceId"] = *item.trace_id;
             }
-            
+
+            if (item.producer_sub.has_value() && !item.producer_sub->empty()) {
+                event["producerSub"] = *item.producer_sub;
+            }
+
             if (file_buffer_manager_->write_event(event)) {
                 result.status = "buffered";
                 result.message_id = std::nullopt;
@@ -507,42 +511,49 @@ PushResult AsyncQueueManager::push_single_message(const PushItem& item) {
         std::string sql;
         std::vector<std::string> params;
         
-        if (item.trace_id.has_value() && !item.trace_id->empty()) {
+        // Use NULL placeholder (empty string passed as NULL via $N::<type>) to uniformly handle
+        // optional trace_id and producer_sub without exploding the number of SQL branches.
+        std::string trace_id_param = item.trace_id.value_or("");
+        std::string producer_sub_param = item.producer_sub.value_or("");
+
+        if (!trace_id_param.empty()) {
             sql = R"(
                 INSERT INTO queen.messages (
-                    id, transaction_id, partition_id, payload, trace_id, created_at
+                    id, transaction_id, partition_id, payload, trace_id, producer_sub, created_at
                 )
-                SELECT $1, $2, p.id, $3, $4, NOW()
+                SELECT $1, $2, p.id, $3, $4, NULLIF($5, ''), NOW()
                 FROM queen.partitions p
                 JOIN queen.queues q ON q.id = p.queue_id
-                WHERE q.name = $5 AND p.name = $6
+                WHERE q.name = $6 AND p.name = $7
                 RETURNING id, trace_id
             )";
-            
+
             params = {
                 message_id,
                 result.transaction_id,
                 item.payload.dump(),
-                item.trace_id.value(),
+                trace_id_param,
+                producer_sub_param,
                 item.queue,
                 item.partition
             };
         } else {
             sql = R"(
                 INSERT INTO queen.messages (
-                    id, transaction_id, partition_id, payload, created_at
+                    id, transaction_id, partition_id, payload, producer_sub, created_at
                 )
-                SELECT $1, $2, p.id, $3, NOW()
+                SELECT $1, $2, p.id, $3, NULLIF($4, ''), NOW()
                 FROM queen.partitions p
                 JOIN queen.queues q ON q.id = p.queue_id
-                WHERE q.name = $4 AND p.name = $5
+                WHERE q.name = $5 AND p.name = $6
                 RETURNING id, trace_id
             )";
-            
+
             params = {
                 message_id,
                 result.transaction_id,
                 item.payload.dump(),
+                producer_sub_param,
                 item.queue,
                 item.partition
             };
@@ -583,7 +594,11 @@ PushResult AsyncQueueManager::push_single_message(const PushItem& item) {
                 if (item.trace_id.has_value() && !item.trace_id->empty()) {
                     event["traceId"] = *item.trace_id;
                 }
-                
+
+                if (item.producer_sub.has_value() && !item.producer_sub->empty()) {
+                    event["producerSub"] = *item.producer_sub;
+                }
+
                 if (file_buffer_manager_->write_event(event)) {
                     spdlog::info("Message successfully failed over to file buffer");
                     result.status = "buffered";
@@ -806,7 +821,10 @@ std::vector<PushResult> AsyncQueueManager::push_messages_internal(const std::vec
                 if (item.trace_id.has_value() && !item.trace_id->empty()) {
                     msg_obj["traceId"] = *item.trace_id;
                 }
-                
+                if (item.producer_sub.has_value() && !item.producer_sub->empty()) {
+                    msg_obj["producerSub"] = *item.producer_sub;
+                }
+
                 messages_array.push_back(msg_obj);
                 
                 // Pre-populate result

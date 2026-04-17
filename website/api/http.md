@@ -193,6 +193,12 @@ Server batches events and flushes to database after 100ms or 100 events (whichev
 | `bufferMs` | int | No | QoS 0: Buffer time in milliseconds |
 | `bufferMax` | int | No | QoS 0: Max messages before flush |
 
+> **Note — `producerSub` is not client-settable.**
+> When JWT auth is enabled, the server automatically stamps each message with
+> the authenticated producer's JWT `sub` claim. Any `producerSub` field you
+> include in the request body is ignored. See
+> [Authentication → Producer Identity Stamping](/server/authentication#producer-identity-stamping-producersub).
+
 **Response:**
 ```json
 {
@@ -256,6 +262,7 @@ curl "http://localhost:6632/api/v1/pop/queue/events?autoAck=true&batch=10"
       "leaseId": "lease-uuid",
       "leaseExpiresAt": "2025-11-13T12:00:00Z",
       "data": {"orderId": 123},
+      "producerSub": "alice-producer",
       "createdAt": "2025-11-13T11:00:00Z",
       "sequence": 1,
       "retryCount": 0
@@ -263,6 +270,11 @@ curl "http://localhost:6632/api/v1/pop/queue/events?autoAck=true&batch=10"
   ]
 }
 ```
+
+> `producerSub` is the authenticated producer's JWT `sub` claim, stamped by
+> the server at push time. Present only when JWT auth is enabled and the
+> message was produced while authenticated. See
+> [Authentication → Producer Identity Stamping](/server/authentication#producer-identity-stamping-producersub).
 
 ---
 

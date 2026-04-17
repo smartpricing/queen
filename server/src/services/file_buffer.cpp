@@ -833,7 +833,13 @@ bool FileBufferManager::flush_batched_to_db(const std::vector<nlohmann::json>& e
                 event["traceId"].is_string() && !event["traceId"].get<std::string>().empty()) {
                 item.trace_id = event["traceId"].get<std::string>();
             }
-            
+
+            // Preserve server-stamped producer identity across buffer drain (issue #23).
+            if (event.contains("producerSub") && !event["producerSub"].is_null() &&
+                event["producerSub"].is_string() && !event["producerSub"].get<std::string>().empty()) {
+                item.producer_sub = event["producerSub"].get<std::string>();
+            }
+
             items.push_back(std::move(item));
         }
         

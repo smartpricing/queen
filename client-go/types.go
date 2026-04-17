@@ -18,6 +18,14 @@ type Message struct {
 	ErrorMessage  string                 `json:"errorMessage,omitempty"`
 	RetryCount    int                    `json:"retryCount"`
 
+	// ProducerSub is the authenticated producer identity stamped by the server
+	// from the JWT "sub" claim at push time. It is present only when JWT
+	// authentication is enabled on the server. Clients CANNOT set this field
+	// on push - the server always derives it from the validated JWT, which is
+	// how impersonation is prevented. See the server docs on authentication
+	// for details.
+	ProducerSub string `json:"producerSub,omitempty"`
+
 	// trace is the function to add traces to this message
 	trace TraceFunc
 }

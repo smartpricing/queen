@@ -58,8 +58,17 @@ CREATE TABLE IF NOT EXISTS queen.messages (
     partition_id UUID REFERENCES queen.partitions(id) ON DELETE CASCADE,
     payload JSONB NOT NULL,
     created_at TIMESTAMPTZ DEFAULT NOW(),
-    is_encrypted BOOLEAN DEFAULT FALSE
+    is_encrypted BOOLEAN DEFAULT FALSE,
+    -- Server-stamped authenticated producer identity (JWT 'sub' claim) when JWT auth is enabled.
+    -- Clients CANNOT set this field; it is always set by the server from the validated JWT.
+    -- NULL means: (a) auth disabled, (b) pre-feature message, or (c) message produced by an
+    -- internal path (e.g. failover replay where the original sub was not preserved).
+    producer_sub TEXT
 );
+
+-- Idempotent upgrade for existing installations (safe on tables with millions of rows:
+-- nullable column with no default is a catalog-only change in Postgres >= 11 - no table rewrite).
+ALTER TABLE queen.messages ADD COLUMN IF NOT EXISTS producer_sub TEXT;
 
 -- Unique constraint scoped to partition (not global)
 CREATE UNIQUE INDEX IF NOT EXISTS messages_partition_transaction_unique 
