@@ -53,7 +53,7 @@
         </div>
         <div class="stat">
           <div class="stat-label">Pending</div>
-          <div class="stat-value font-mono" style="color:#22d3ee;">{{ formatNumber(totalMessages.pending) }}</div>
+          <div class="stat-value font-mono" style="color:#22d3ee;">{{ formatNumber(Math.max(0, totalMessages.pending)) }}</div>
         </div>
         <div class="stat">
           <div class="stat-label">Processing</div>
@@ -173,7 +173,7 @@
                     Last: {{ formatTime(partition.lastActivity) }}
                   </div>
                 </td>
-                <td style="text-align:right;" class="font-mono tabular-nums">{{ formatNumber(partition.messages?.pending || 0) }}</td>
+                <td style="text-align:right;" class="font-mono tabular-nums">{{ formatNumber(Math.max(0, partition.messages?.pending || 0)) }}</td>
                 <td style="text-align:right;" class="font-mono tabular-nums">{{ formatNumber(partition.messages?.processing || 0) }}</td>
                 <td style="text-align:right; color:#34d399;" class="font-mono tabular-nums">
                   {{ formatNumber(partition.messages?.completed || 0) }}

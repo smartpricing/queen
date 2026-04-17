@@ -35,7 +35,7 @@
     <!-- STAT CARDS -->
     <div class="grid-4" style="margin-bottom:20px;">
       <MetricCard label="Messages" :value="overview?.messages?.total || 0" :subtext="`${formatNumber(totalPartitions)} partitions · ${formatNumber(overview?.messages?.completed || 0)} completed`" :icon="QueuesIcon" icon-color="ice" :loading="loadingOverview" clickable @click="$router.push('/messages')" />
-      <MetricCard label="Pending" :value="overview?.messages?.pending || 0" :subtext="`across ${overview?.queues || 0} queues`" :icon="PendingIcon" icon-color="crown" :loading="loadingOverview" />
+      <MetricCard label="Pending" :value="Math.max(0, overview?.messages?.pending || 0)" :subtext="`across ${overview?.queues || 0} queues`" :icon="PendingIcon" icon-color="crown" :loading="loadingOverview" />
       <MetricCard label="Consumer groups" :value="consumers?.length || 0" :icon="ConsumersIcon" icon-color="crown" :loading="loadingConsumers" clickable @click="$router.push('/consumers')" />
       <MetricCard label="Throughput" :value="throughput.current" format="raw" unit=" msg/s" :trend="throughput.trend" :loading="loadingStatus" />
     </div>
@@ -140,35 +140,69 @@
 
     <!-- Bottom row: tables -->
     <div class="grid-7-5">
-      <DataTable title="Active queues" :subtitle="`${queues.length} queues`" :columns="queueColumns" :data="sortedQueues" :loading="loadingQueues" :page-size="6" clickable @row-click="(row) => $router.push(`/queues/${row.name}`)">
-        <template #name="{ value }">
-          <span style="font-weight:500; color:var(--text-hi);">{{ value }}</span>
+      <DataTable title="Top queues by pending depth" :subtitle="`${queues.length} queues`" :columns="queueColumns" :data="enrichedQueues" :loading="loadingQueues" :page-size="6" clickable @row-click="(row) => $router.push(`/queues/${row.name}`)">
+        <template #name="{ row }">
+          <div style="display:flex; align-items:center; gap:8px;">
+            <span class="status-dot" :class="statusDotClass(row._status)" />
+            <span style="font-weight:500; color:var(--text-hi);">{{ row.name }}</span>
+          </div>
         </template>
-        <template #messages.pending="{ row }">
-          <span class="chip chip-ice">{{ formatNumber(row.messages?.pending || 0) }}</span>
+        <template #partitions="{ value }">
+          <span class="font-mono tabular-nums" style="color:var(--text-mid); font-size:12px;">{{ value || 1 }}</span>
+        </template>
+        <template #_pending="{ row }">
+          <span class="font-mono tabular-nums">{{ formatNumber(Math.max(0, row.messages?.pending || 0)) }}</span>
+        </template>
+        <template #_depth="{ row }">
+          <div class="bar" style="width:100px; display:block;">
+            <i :class="row._status === 'degraded' ? 'bad' : row._status === 'watch' ? 'warn' : ''" :style="{ width: row._depthPct + '%' }" />
+          </div>
+        </template>
+        <template #_lag="{ row }">
+          <span class="font-mono tabular-nums" style="font-size:12px;" :style="{ color: lagColor(row._lag) }">
+            {{ row._lag > 0 ? formatDuration(row._lag) : '-' }}
+          </span>
+        </template>
+        <template #_status="{ row }">
+          <span class="chip" :class="statusChipClass(row._status)"><span class="dot"></span>{{ row._status }}</span>
         </template>
       </DataTable>
 
-      <DataTable title="Consumer groups" :subtitle="`${consumers.length} groups`" :columns="consumerColumns" :data="sortedConsumers" :loading="loadingConsumers" :page-size="6" clickable @row-click="() => $router.push('/consumers')">
-        <template #name="{ value, row }">
-          <div style="max-width:160px; overflow:hidden;">
-            <span style="font-weight:500; color:var(--text-hi);">{{ value }}</span>
-            <p v-if="row.queueName" style="font-size:11px; color:var(--text-low); overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">{{ row.queueName }}</p>
+      <!-- Consumer groups — opus card list -->
+      <div class="card">
+        <div class="card-header">
+          <h3>Consumer groups</h3>
+          <span class="muted">{{ consumers.length }} total</span>
+        </div>
+        <div v-if="loadingConsumers" class="card-body" style="display:flex; flex-direction:column; gap:8px;">
+          <div v-for="i in 5" :key="i" class="skeleton" style="height:56px; border-radius:10px;" />
+        </div>
+        <div v-else-if="sortedConsumers.length" class="card-body" style="display:flex; flex-direction:column; gap:10px;">
+          <div
+            v-for="g in sortedConsumers.slice(0, 6)"
+            :key="g.name + g.queueName"
+            class="cg-row"
+            @click="$router.push('/consumers')"
+          >
+            <span class="pulse" :class="cgPulseClass(g)" style="flex-shrink:0;" />
+            <div style="flex:1; min-width:0;">
+              <div style="display:flex; align-items:center; gap:8px;">
+                <span style="font-weight:500; color:var(--text-hi); font-size:13.5px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">{{ g.name }}</span>
+              </div>
+              <div class="font-mono" style="font-size:11px; color:var(--text-low); margin-top:2px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">
+                <span v-if="g.queueName">{{ g.queueName }} · </span>
+                {{ g.members || 0 }} members · lag {{ g.maxTimeLag > 0 ? formatDuration(g.maxTimeLag) : '0s' }}
+              </div>
+            </div>
+            <span class="chip" :class="cgChipClass(g)" style="flex-shrink:0;">
+              <span class="dot"></span>{{ cgLabel(g) }}
+            </span>
           </div>
-        </template>
-        <template #members="{ value }">
-          <span class="chip chip-warn">{{ value }}</span>
-        </template>
-        <template #partitionsWithLag="{ value }">
-          <span v-if="(value||0) > 0" class="chip chip-bad">{{ value }}</span>
-          <span v-else style="color:var(--text-low);">-</span>
-        </template>
-        <template #maxTimeLag="{ value }">
-          <span class="chip" :class="value > 300 ? 'chip-bad' : value > 60 ? 'chip-warn' : 'chip-ok'">
-            {{ value > 0 ? formatDuration(value) : '-' }}
-          </span>
-        </template>
-      </DataTable>
+        </div>
+        <div v-else class="card-body" style="padding:32px; text-align:center; color:var(--text-low); font-size:13px;">
+          No consumer groups
+        </div>
+      </div>
     </div>
   </div>
 </template>
@@ -282,16 +316,64 @@ const queueTimeLag = computed(() => {
 
 const queueColumns = [
   { key: 'name', label: 'Queue', sortable: true },
-  { key: 'messages.pending', label: 'Pending', sortable: true, align: 'right' },
-]
-const consumerColumns = [
-  { key: 'name', label: 'Group', sortable: true },
-  { key: 'members', label: 'Members', sortable: true, align: 'right' },
-  { key: 'partitionsWithLag', label: 'Lag Parts', sortable: true, align: 'right' },
-  { key: 'maxTimeLag', label: 'Time Lag', sortable: true, align: 'right' },
+  { key: 'partitions', label: 'Parts', sortable: true, align: 'right' },
+  { key: '_pending', label: 'Pending', sortable: true, align: 'right' },
+  { key: '_depth', label: 'Depth' },
+  { key: '_lag', label: 'Lag', align: 'right' },
+  { key: '_status', label: 'Status' },
 ]
 
-const sortedQueues = computed(() => [...queues.value].sort((a, b) => (b.messages?.pending || 0) - (a.messages?.pending || 0)))
+const statusDotClass = (s) => s === 'degraded' ? 'status-dot-danger' : s === 'watch' ? 'status-dot-warning' : 'status-dot-success'
+const statusChipClass = (s) => s === 'degraded' ? 'chip-bad' : s === 'watch' ? 'chip-warn' : 'chip-ok'
+
+// Consumer group status derivation
+const cgStatus = (g) => {
+  const lag = g.maxTimeLag || 0
+  if (lag >= 300) return 'stuck'
+  if (lag >= 60 || (g.partitionsWithLag || 0) > 0) return 'lag'
+  return 'healthy'
+}
+const cgPulseClass = (g) => {
+  const s = cgStatus(g)
+  return s === 'stuck' ? 'pulse-ember' : s === 'lag' ? 'pulse-amber' : ''
+}
+const cgChipClass = (g) => {
+  const s = cgStatus(g)
+  return s === 'stuck' ? 'chip-bad' : s === 'lag' ? 'chip-warn' : 'chip-ok'
+}
+const cgLabel = (g) => cgStatus(g)
+// Aggregate max time lag per queue from consumer groups
+const queueLagMap = computed(() => {
+  const m = {}
+  for (const c of consumers.value) {
+    const q = c.queueName
+    if (!q) continue
+    const lag = c.maxTimeLag || 0
+    if (!m[q] || lag > m[q]) m[q] = lag
+  }
+  return m
+})
+
+const enrichedQueues = computed(() => {
+  const base = [...queues.value].map(q => ({ ...q, _pending: Math.max(0, q.messages?.pending || 0) }))
+  const maxPending = Math.max(...base.map(q => q._pending), 1)
+  return base
+    .map(q => {
+      const lag = queueLagMap.value[q.name] || 0
+      const status = lag >= 300 || (q._pending / maxPending) > 0.8 ? 'degraded'
+                   : lag >= 60 || (q._pending / maxPending) > 0.5 ? 'watch'
+                   : 'healthy'
+      return {
+        ...q,
+        _lag: lag,
+        _status: status,
+        _depthPct: Math.min(100, (q._pending / maxPending) * 100),
+      }
+    })
+    .sort((a, b) => b._pending - a._pending)
+})
+
+const sortedQueues = enrichedQueues
 const sortedConsumers = computed(() => [...consumers.value].sort((a, b) => (b.maxTimeLag || 0) - (a.maxTimeLag || 0)))
 
 const fetchOverview = async () => { if (!overview.value) loadingOverview.value = true; try { overview.value = (await resources.getOverview()).data } catch {} finally { loadingOverview.value = false } }
@@ -311,4 +393,19 @@ function QueuesIcon(p) { return h('svg', { ...p, fill:'none', viewBox:'0 0 24 24
 function PendingIcon(p) { return h('svg', { ...p, fill:'none', viewBox:'0 0 24 24', stroke:'currentColor', 'stroke-width':'2' }, [h('circle',{cx:'12',cy:'12',r:'9'}),h('path',{d:'M12 7v5l3 2'})]) }
 function ConsumersIcon(p) { return h('svg', { ...p, fill:'none', viewBox:'0 0 24 24', stroke:'currentColor', 'stroke-width':'2' }, [h('circle',{cx:'9',cy:'8',r:'3'}),h('circle',{cx:'17',cy:'10',r:'2.2'}),h('path',{d:'M3 20c0-3.3 2.7-6 6-6s6 2.7 6 6M15 20c.2-2 1.6-3.5 3.3-3.9'})]) }
 </script>
+
+<style scoped>
+.cg-row {
+  display: flex; align-items: center; gap: 10px;
+  padding: 10px 12px; border-radius: 10px;
+  border: 1px solid var(--bd);
+  cursor: pointer;
+  transition: background .15s var(--ease), border-color .15s var(--ease);
+}
+:global(.dark) .cg-row { background: rgba(255,255,255,.015); }
+:global(.light) .cg-row { background: rgba(10,10,10,.015); }
+.cg-row:hover { border-color: var(--bd-hi); }
+:global(.dark) .cg-row:hover { background: rgba(255,255,255,.03); }
+:global(.light) .cg-row:hover { background: rgba(10,10,10,.03); }
+</style>
 

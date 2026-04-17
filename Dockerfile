@@ -39,7 +39,8 @@ RUN npm run build
 FROM ubuntu:24.04 AS cpp-builder
 
 ENV DEBIAN_FRONTEND=noninteractive
-RUN apt-get update && apt-get install -y \
+RUN sed -i -e 's|security.ubuntu.com|mirrors.edge.kernel.org|g' -e 's|archive.ubuntu.com|mirrors.edge.kernel.org|g' /etc/apt/sources.list.d/ubuntu.sources || true \
+    && apt-get update && apt-get install -y \
     build-essential libpq-dev libssl-dev zlib1g-dev \
     curl unzip ca-certificates cmake ccache \
     && rm -rf /var/lib/apt/lists/*
@@ -73,7 +74,8 @@ FROM ubuntu:24.04
 
 # Install runtime dependencies + PostgreSQL 18 client tools (pg_dump, pg_restore)
 # The PGDG repo is required because Ubuntu 24.04 only ships up to PG 16.
-RUN apt-get update && apt-get install -y \
+RUN sed -i -e 's|security.ubuntu.com|mirrors.edge.kernel.org|g' -e 's|archive.ubuntu.com|mirrors.edge.kernel.org|g' /etc/apt/sources.list.d/ubuntu.sources || true \
+    && apt-get update && apt-get install -y \
     libssl3 \
     zlib1g \
     ca-certificates \

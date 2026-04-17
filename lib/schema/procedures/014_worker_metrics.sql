@@ -395,8 +395,15 @@ BEGIN
         'tasks', v_task_count,
         'messages', jsonb_build_object(
             'total', COALESCE(v_summary.total_push_messages, v_stats.total_messages, 0),
-            'pending', COALESCE(v_summary.total_push_messages - v_summary.total_pop_messages, 
-                               v_stats.pending_messages - v_stats.processing_messages, 0),
+            -- Prefer queen.stats (refreshed ground-truth from messages table) over
+            -- worker_metrics_summary running counters, which can drift negative in queue
+            -- mode and are structurally negative in bus mode (pop fanout > push count).
+            -- GREATEST(0, ...) guards against transient skew during stats refresh.
+            'pending', GREATEST(0, COALESCE(
+                v_stats.pending_messages - v_stats.processing_messages,
+                v_summary.total_push_messages - v_summary.total_pop_messages,
+                0
+            )),
             'processing', COALESCE(v_stats.processing_messages, 0),
             'completed', COALESCE(v_summary.total_ack_success, v_stats.completed_messages, 0),
             'failed', COALESCE(v_summary.total_ack_failed, 0),

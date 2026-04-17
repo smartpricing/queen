@@ -1,4 +1,5 @@
 <template>
+  <div class="topbar-wrap">
   <header class="topbar">
     <div class="crumbs">
       <span>Queen</span>
@@ -58,6 +59,42 @@
       <svg v-else style="width:15px; height:15px;" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.6"><path stroke-linecap="round" stroke-linejoin="round" d="M20 14.5A8 8 0 119.5 4a6.5 6.5 0 0010.5 10.5Z"/></svg>
     </button>
   </header>
+
+  <!-- Status banners -->
+  <div v-if="showBanners" class="status-strip">
+    <div v-if="pushMaintenanceMode" class="status-banner banner-warn">
+      <span class="pulse-amber" style="width:7px; height:7px; flex-shrink:0;" />
+      <span>
+        <strong>Push maintenance active</strong> ·
+        <span class="font-mono tabular-nums">{{ formatNumber(bufferedMessages) }}</span>
+        message{{ bufferedMessages === 1 ? '' : 's' }} buffered on disk
+      </span>
+    </div>
+    <div v-if="popMaintenanceMode" class="status-banner banner-warn">
+      <span class="pulse-ember" style="width:7px; height:7px; flex-shrink:0;" />
+      <span><strong>Pop maintenance active</strong> · consumers are receiving no messages</span>
+    </div>
+    <div v-if="failedCount > 0" class="status-banner banner-bad">
+      <svg style="width:14px; height:14px; flex-shrink:0;" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2">
+        <path stroke-linecap="round" stroke-linejoin="round" d="M12 9v3.75m9-.75a9 9 0 11-18 0 9 9 0 0118 0zm-9 3.75h.008v.008H12v-.008z"/>
+      </svg>
+      <span>
+        <strong>{{ formatNumber(failedCount) }}</strong>
+        failed buffered message{{ failedCount === 1 ? '' : 's' }} on disk
+        <span v-if="failedMB > 0" style="opacity:.7;">· {{ failedMB.toFixed(1) }} MB</span>
+      </span>
+    </div>
+    <div v-if="bufferedMessages > 0 && !pushMaintenanceMode && !popMaintenanceMode && failedCount === 0" class="status-banner banner-info">
+      <svg style="width:14px; height:14px; flex-shrink:0;" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2">
+        <path stroke-linecap="round" stroke-linejoin="round" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/>
+      </svg>
+      <span>
+        <span class="font-mono tabular-nums">{{ formatNumber(bufferedMessages) }}</span>
+        message{{ bufferedMessages === 1 ? '' : 's' }} still draining from disk buffer
+      </span>
+    </div>
+  </div>
+  </div>
 </template>
 
 <script setup>
@@ -65,6 +102,7 @@ import { ref, computed, watch, onMounted, onUnmounted, nextTick } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useTheme } from '@/composables/useTheme'
 import { queues as queuesApi, consumers as consumersApi, system } from '@/api'
+import { formatNumber } from '@/composables/useApi'
 
 const route = useRoute()
 const router = useRouter()
@@ -136,9 +174,18 @@ const handleRefresh = async () => {
 const pushMaintenanceMode = ref(false)
 const popMaintenanceMode = ref(false)
 const bufferedMessages = ref(0)
+const failedCount = ref(0)
+const failedMB = ref(0)
 const pushLoading = ref(false)
 const popLoading = ref(false)
 let maintenanceInterval = null
+
+const showBanners = computed(() =>
+  pushMaintenanceMode.value ||
+  popMaintenanceMode.value ||
+  failedCount.value > 0 ||
+  bufferedMessages.value > 0
+)
 
 const loadMaintenanceStatus = async () => {
   try {
@@ -146,6 +193,8 @@ const loadMaintenanceStatus = async () => {
     pushMaintenanceMode.value = r.data.maintenanceMode || false
     popMaintenanceMode.value = r.data.popMaintenanceMode || false
     bufferedMessages.value = r.data.bufferedMessages || 0
+    failedCount.value = r.data.bufferStats?.failedCount || 0
+    failedMB.value = r.data.bufferStats?.failedFiles?.totalMB || 0
   } catch {}
 }
 

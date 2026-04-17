@@ -87,8 +87,10 @@ USOCKETS_OBJECTS = $(USOCKETS_C_OBJECTS) $(USOCKETS_CPP_OBJECTS)
 TARGET = $(BIN_DIR)/queen-server
 
 # Header-only dependencies (will be downloaded)
-UWS_URL = https://github.com/uNetworking/uWebSockets/archive/refs/heads/master.zip
-USOCKETS_URL = https://github.com/uNetworking/uSockets/archive/refs/heads/master.zip
+UWS_VERSION = v20.76.0
+UWS_URL = https://github.com/uNetworking/uWebSockets/archive/refs/tags/$(UWS_VERSION).zip
+USOCKETS_COMMIT = ae52d1edea0182de655bde4d445858b3b02d6219
+USOCKETS_URL = https://github.com/uNetworking/uSockets/archive/$(USOCKETS_COMMIT).zip
 NLOHMANN_JSON_URL = https://github.com/nlohmann/json/releases/download/v3.11.3/json.hpp
 CPPHTTPLIB_URL = https://raw.githubusercontent.com/yhirose/cpp-httplib/master/httplib.h
 SPDLOG_URL = https://github.com/gabime/spdlog/archive/refs/tags/v1.14.1.zip
@@ -121,20 +123,20 @@ $(VENDOR_DIR)/.deps_ready: setup
 	# Download cpp-httplib (single header for HTTP client)
 	@curl -L $(CPPHTTPLIB_URL) -o $(VENDOR_DIR)/httplib.h
 	
-	# Download uWebSockets
+	# Download uWebSockets (pinned to $(UWS_VERSION))
 	@cd $(VENDOR_DIR) && \
 		curl -L $(UWS_URL) -o uws.zip && \
 		unzip -qo uws.zip && \
 		rm -rf uWebSockets && \
-		mv uWebSockets-master uWebSockets && \
+		mv uWebSockets-* uWebSockets && \
 		rm uws.zip
 	
-	# Download uSockets (required by uWebSockets)
+	# Download uSockets (pinned to commit matching uWebSockets $(UWS_VERSION))
 	@cd $(VENDOR_DIR) && \
 		curl -L $(USOCKETS_URL) -o usockets.zip && \
 		unzip -qo usockets.zip && \
 		rm -rf uSockets && \
-		mv uSockets-master uSockets && \
+		mv uSockets-* uSockets && \
 		rm usockets.zip
 	
 	# Download spdlog

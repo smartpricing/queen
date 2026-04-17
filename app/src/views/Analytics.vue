@@ -197,7 +197,7 @@
             <div class="stat">
               <div class="stat-label">Pending</div>
               <div class="stat-value font-mono" style="color:#22d3ee;">
-                {{ formatNumber(statusData?.messages?.pending || 0) }}
+                {{ formatNumber(Math.max(0, statusData?.messages?.pending || 0)) }}
               </div>
             </div>
             <div class="stat">
@@ -512,7 +512,7 @@ const messageDistributionData = computed(() => {
   
   // Build data array - only include non-zero values to avoid chart clutter
   const entries = [
-    { label: 'Pending', value: data.pending || 0, color: 'rgba(6, 182, 212, 0.8)' },
+    { label: 'Pending', value: Math.max(0, data.pending || 0), color: 'rgba(6, 182, 212, 0.8)' },
     { label: 'Processing', value: data.processing || 0, color: 'rgba(245, 158, 11, 0.8)' },
     { label: 'Completed', value: data.completed || 0, color: 'rgba(16, 185, 129, 0.8)' },
     { label: 'Failed', value: data.failed || 0, color: 'rgba(249, 115, 22, 0.8)' },

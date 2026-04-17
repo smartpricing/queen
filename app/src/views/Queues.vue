@@ -114,7 +114,7 @@
               {{ queue.partitions || 1 }}
             </td>
             <td style="text-align:right;" class="font-mono tabular-nums">
-              <span style="color:#22d3ee;">{{ formatNumber(queue.messages?.pending || 0) }}</span>
+              <span style="color:#22d3ee;">{{ formatNumber(Math.max(0, queue.messages?.pending || 0)) }}</span>
             </td>
             <td style="text-align:right; font-weight:600; color:var(--text-hi);" class="font-mono tabular-nums">
               {{ formatNumber(queue.messages?.total || 0) }}
@@ -263,7 +263,7 @@ const totalMessages = computed(() =>
 )
 
 const totalPending = computed(() =>
-  filteredQueues.value.reduce((sum, q) => sum + (q.messages?.pending || 0), 0)
+  filteredQueues.value.reduce((sum, q) => sum + Math.max(0, q.messages?.pending || 0), 0)
 )
 
 const totalProcessing = computed(() =>
