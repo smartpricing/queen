@@ -12,8 +12,8 @@
 
     <!-- Controls -->
     <div class="card" style="padding:12px 16px; margin-bottom:20px;">
-      <div style="display:flex; flex-wrap:wrap; align-items:center; gap:12px;">
-        <!-- Data Source Toggle -->
+      <!-- Primary row: Source (left) and Range (right) -->
+      <div style="display:flex; flex-wrap:wrap; align-items:center; gap:12px 20px;">
         <div style="display:flex; align-items:center; gap:8px;">
           <span style="font-size:11px; font-weight:500; color:var(--text-low);">Source</span>
           <div class="seg">
@@ -32,35 +32,6 @@
           </div>
         </div>
 
-        <!-- View Mode (only for System) -->
-        <div v-if="dataSource === 'system'" style="display:flex; align-items:center; gap:8px;">
-          <span style="font-size:11px; font-weight:500; color:var(--text-low);">View</span>
-          <div class="seg">
-            <button
-              @click="viewMode = 'individual'"
-              :class="{ on: viewMode === 'individual' }"
-            >Per Server</button>
-            <button
-              @click="viewMode = 'aggregate'"
-              :class="{ on: viewMode === 'aggregate' }"
-            >Aggregate</button>
-          </div>
-        </div>
-
-        <!-- Aggregation Type (only for System) -->
-        <div v-if="dataSource === 'system'" style="display:flex; align-items:center; gap:8px;">
-          <span style="font-size:11px; font-weight:500; color:var(--text-low);">Metric</span>
-          <div class="seg">
-            <button
-              v-for="agg in aggregationTypes"
-              :key="agg.value"
-              @click="aggregationType = agg.value"
-              :class="{ on: aggregationType === agg.value }"
-            >{{ agg.label }}</button>
-          </div>
-        </div>
-
-        <!-- Time Range (hide for postgres stats - point-in-time) -->
         <div v-if="dataSource !== 'postgres'" style="display:flex; align-items:center; gap:8px; margin-left:auto;">
           <span style="font-size:11px; font-weight:500; color:var(--text-low);">Range</span>
           <div class="seg">
@@ -74,6 +45,38 @@
               @click="toggleCustomMode"
               :class="{ on: customMode }"
             >Custom</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- Secondary row: System-only contextual controls -->
+      <div
+        v-if="dataSource === 'system'"
+        style="display:flex; flex-wrap:wrap; align-items:center; gap:12px 20px; padding-top:10px; margin-top:10px; border-top:1px solid var(--bd);"
+      >
+        <div style="display:flex; align-items:center; gap:8px;">
+          <span style="font-size:11px; font-weight:500; color:var(--text-low);">View</span>
+          <div class="seg">
+            <button
+              @click="viewMode = 'individual'"
+              :class="{ on: viewMode === 'individual' }"
+            >Per Server</button>
+            <button
+              @click="viewMode = 'aggregate'"
+              :class="{ on: viewMode === 'aggregate' }"
+            >Aggregate</button>
+          </div>
+        </div>
+
+        <div style="display:flex; align-items:center; gap:8px;">
+          <span style="font-size:11px; font-weight:500; color:var(--text-low);">Metric</span>
+          <div class="seg">
+            <button
+              v-for="agg in aggregationTypes"
+              :key="agg.value"
+              @click="aggregationType = agg.value"
+              :class="{ on: aggregationType === agg.value }"
+            >{{ agg.label }}</button>
           </div>
         </div>
       </div>

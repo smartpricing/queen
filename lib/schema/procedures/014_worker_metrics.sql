@@ -479,8 +479,9 @@ BEGIN
     END;
     
     -- Get throughput from worker_metrics (system-wide or per-queue)
-    IF v_queue IS NOT NULL THEN
-        -- Per-queue throughput from queue_lag_metrics (with proper bucketing)
+    -- When queue / namespace / task filter is set, we scope via queue_lag_metrics
+    -- (pop data only; ingested is not tracked per-queue so it reports 0).
+    IF v_queue IS NOT NULL OR v_namespace IS NOT NULL OR v_task IS NOT NULL THEN
         SELECT 
             COALESCE(jsonb_agg(
                 jsonb_build_object(
@@ -497,17 +498,20 @@ BEGIN
         INTO v_throughput, v_point_count
         FROM (
             SELECT
-                date_trunc('minute', bucket_time) - 
-                    (EXTRACT(minute FROM bucket_time)::integer % v_bucket_minutes) * INTERVAL '1 minute' AS bucket,
-                SUM(pop_count) as pop_count,
-                CASE WHEN SUM(pop_count) > 0 
-                     THEN SUM(avg_lag_ms * pop_count) / SUM(pop_count)
+                date_trunc('minute', qlm.bucket_time) - 
+                    (EXTRACT(minute FROM qlm.bucket_time)::integer % v_bucket_minutes) * INTERVAL '1 minute' AS bucket,
+                SUM(qlm.pop_count) as pop_count,
+                CASE WHEN SUM(qlm.pop_count) > 0 
+                     THEN SUM(qlm.avg_lag_ms * qlm.pop_count) / SUM(qlm.pop_count)
                      ELSE 0 END as avg_lag_ms,
-                MAX(max_lag_ms) as max_lag_ms
-            FROM queen.queue_lag_metrics
-            WHERE queue_name = v_queue
-              AND bucket_time >= v_from_ts
-              AND bucket_time <= v_to_ts
+                MAX(qlm.max_lag_ms) as max_lag_ms
+            FROM queen.queue_lag_metrics qlm
+            JOIN queen.queues q ON q.name = qlm.queue_name
+            WHERE qlm.bucket_time >= v_from_ts
+              AND qlm.bucket_time <= v_to_ts
+              AND (v_queue IS NULL OR q.name = v_queue)
+              AND (v_namespace IS NULL OR q.namespace = v_namespace)
+              AND (v_task IS NULL OR q.task = v_task)
             GROUP BY 1
         ) t;
     ELSE

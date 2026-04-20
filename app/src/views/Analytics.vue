@@ -131,6 +131,7 @@
       <div class="card card-accent" style="margin-bottom:20px;">
         <div class="card-header">
           <h3>Message Flow Over Time</h3>
+          <span v-if="hasActiveFilter" class="muted" style="margin-left:auto;">scoped · processed only</span>
         </div>
         <div class="card-body">
           <BaseChart
@@ -171,6 +172,7 @@
         <div class="card">
           <div class="card-header">
             <h3>Message Status Distribution</h3>
+            <span v-if="hasActiveFilter" class="muted" style="margin-left:auto;">scoped (pending / processing)</span>
           </div>
           <div class="card-body" style="display:flex; align-items:center; justify-content:center;">
             <BaseChart
@@ -191,39 +193,48 @@
       <div class="card" style="margin-bottom:20px;">
         <div class="card-header">
           <h3>Message Counts</h3>
+          <span v-if="hasActiveFilter" class="muted" style="margin-left:auto;">scoped to filter</span>
         </div>
         <div class="card-body">
-          <div style="display:grid; grid-template-columns:repeat(5,1fr); gap:16px;">
+          <div :style="{ display: 'grid', gridTemplateColumns: `repeat(${hasActiveFilter ? 3 : 6}, 1fr)`, gap: '16px' }">
+            <div class="stat">
+              <div class="stat-label">Total</div>
+              <div class="stat-value font-mono" style="color:var(--text-hi);">
+                {{ formatNumber(scopedMessages?.total || 0) }}
+              </div>
+            </div>
             <div class="stat">
               <div class="stat-label">Pending</div>
               <div class="stat-value font-mono" style="color:#22d3ee;">
-                {{ formatNumber(Math.max(0, statusData?.messages?.pending || 0)) }}
+                {{ formatNumber(Math.max(0, scopedMessages?.pending || 0)) }}
               </div>
             </div>
             <div class="stat">
               <div class="stat-label">Processing</div>
               <div class="stat-value font-mono" style="color:#fbbf24;">
-                {{ formatNumber(statusData?.messages?.processing || 0) }}
+                {{ formatNumber(scopedMessages?.processing || 0) }}
               </div>
             </div>
-            <div class="stat">
-              <div class="stat-label">Completed</div>
-              <div class="stat-value font-mono" style="color:#34d399;">
-                {{ formatNumber(statusData?.messages?.completed || 0) }}
+            <template v-if="!hasActiveFilter">
+              <div class="stat">
+                <div class="stat-label">Completed</div>
+                <div class="stat-value font-mono" style="color:#34d399;">
+                  {{ formatNumber(scopedMessages?.completed || 0) }}
+                </div>
               </div>
-            </div>
-            <div class="stat">
-              <div class="stat-label">Failed</div>
-              <div class="stat-value font-mono" style="color:#fb923c;">
-                {{ formatNumber(statusData?.messages?.failed || 0) }}
+              <div class="stat">
+                <div class="stat-label">Failed</div>
+                <div class="stat-value font-mono" style="color:#fb923c;">
+                  {{ formatNumber(scopedMessages?.failed || 0) }}
+                </div>
               </div>
-            </div>
-            <div class="stat">
-              <div class="stat-label">Dead Letter</div>
-              <div class="stat-value font-mono" style="color:#f43f5e;">
-                {{ formatNumber(statusData?.messages?.deadLetter || 0) }}
+              <div class="stat">
+                <div class="stat-label">Dead Letter</div>
+                <div class="stat-value font-mono" style="color:#f43f5e;">
+                  {{ formatNumber(scopedMessages?.deadLetter || 0) }}
+                </div>
               </div>
-            </div>
+            </template>
           </div>
         </div>
       </div>
@@ -234,6 +245,7 @@
         <div class="card">
           <div class="card-header">
             <h3>Active Leases</h3>
+            <span v-if="hasActiveFilter" class="muted" style="margin-left:auto;">system-wide</span>
           </div>
           <div class="card-body" style="display:flex; flex-direction:column; gap:12px;">
             <div style="display:flex; align-items:center; justify-content:space-between;">
@@ -259,6 +271,7 @@
         <div class="card">
           <div class="card-header">
             <h3>Dead Letter Queue</h3>
+            <span v-if="hasActiveFilter" class="muted" style="margin-left:auto;">system-wide</span>
           </div>
           <div class="card-body" style="display:flex; flex-direction:column; gap:12px;">
             <div style="display:flex; align-items:center; justify-content:space-between;">
@@ -322,7 +335,7 @@
 
 <script setup>
 import { ref, computed, watch, onMounted } from 'vue'
-import { analytics, queues as queuesApi, resources } from '@/api'
+import { analytics, resources } from '@/api'
 import { formatNumber } from '@/composables/useApi'
 import { useRefresh } from '@/composables/useRefresh'
 import BaseChart from '@/components/BaseChart.vue'
@@ -460,12 +473,14 @@ const throughputData = computed(() => {
   }
 })
 
-const queueActivityData = computed(() => {
-  if (!allQueues.value.length) {
-    return { labels: [], datasets: [] }
-  }
-  
-  // Apply filters locally as well (in case API doesn't support all filters)
+// Any active filter means we must derive scoped figures from the queues list,
+// because /api/v1/status only scopes throughput (by queue) and the per-queue
+// list — message totals / leases / DLQ / throughput are system-wide.
+const hasActiveFilter = computed(
+  () => !!(queueFilter.value || namespaceFilter.value || taskFilter.value)
+)
+
+const filteredQueues = computed(() => {
   let filtered = [...allQueues.value]
   if (queueFilter.value) {
     filtered = filtered.filter(q => q.name === queueFilter.value)
@@ -476,8 +491,32 @@ const queueActivityData = computed(() => {
   if (taskFilter.value) {
     filtered = filtered.filter(q => q.task === taskFilter.value)
   }
-  
-  const sorted = filtered
+  return filtered
+})
+
+// Message counts scoped to the current filter (falls back to global counts).
+// Note: per-queue data only carries total / pending / processing.
+const scopedMessages = computed(() => {
+  if (!hasActiveFilter.value) {
+    return statusData.value?.messages || {}
+  }
+  return filteredQueues.value.reduce(
+    (acc, q) => {
+      acc.total += q.messages?.total || 0
+      acc.pending += q.messages?.pending || 0
+      acc.processing += q.messages?.processing || 0
+      return acc
+    },
+    { total: 0, pending: 0, processing: 0 }
+  )
+})
+
+const queueActivityData = computed(() => {
+  if (!filteredQueues.value.length) {
+    return { labels: [], datasets: [] }
+  }
+
+  const sorted = [...filteredQueues.value]
     .sort((a, b) => (b.messages?.total || 0) - (a.messages?.total || 0))
     .slice(0, 8)
   
@@ -504,20 +543,23 @@ const queueActivityData = computed(() => {
 })
 
 const messageDistributionData = computed(() => {
-  if (!statusData.value?.messages) {
-    return { labels: [], datasets: [] }
-  }
-  
-  const data = statusData.value.messages
-  
-  // Build data array - only include non-zero values to avoid chart clutter
-  const entries = [
-    { label: 'Pending', value: Math.max(0, data.pending || 0), color: 'rgba(6, 182, 212, 0.8)' },
-    { label: 'Processing', value: data.processing || 0, color: 'rgba(245, 158, 11, 0.8)' },
-    { label: 'Completed', value: data.completed || 0, color: 'rgba(16, 185, 129, 0.8)' },
-    { label: 'Failed', value: data.failed || 0, color: 'rgba(249, 115, 22, 0.8)' },
-    { label: 'Dead Letter', value: data.deadLetter || 0, color: 'rgba(244, 63, 94, 0.8)' }
-  ].filter(e => e.value > 0)
+  const data = scopedMessages.value
+  if (!data) return { labels: [], datasets: [] }
+
+  // When a filter is active we only have pending/processing per queue,
+  // so the full distribution is only meaningful system-wide.
+  const entries = hasActiveFilter.value
+    ? [
+        { label: 'Pending', value: Math.max(0, data.pending || 0), color: 'rgba(6, 182, 212, 0.8)' },
+        { label: 'Processing', value: data.processing || 0, color: 'rgba(245, 158, 11, 0.8)' }
+      ].filter(e => e.value > 0)
+    : [
+        { label: 'Pending', value: Math.max(0, data.pending || 0), color: 'rgba(6, 182, 212, 0.8)' },
+        { label: 'Processing', value: data.processing || 0, color: 'rgba(245, 158, 11, 0.8)' },
+        { label: 'Completed', value: data.completed || 0, color: 'rgba(16, 185, 129, 0.8)' },
+        { label: 'Failed', value: data.failed || 0, color: 'rgba(249, 115, 22, 0.8)' },
+        { label: 'Dead Letter', value: data.deadLetter || 0, color: 'rgba(244, 63, 94, 0.8)' }
+      ].filter(e => e.value > 0)
   
   // If all zeros, return empty to show "no data" message
   if (entries.length === 0) {
@@ -625,9 +667,16 @@ const fetchAnalytics = async () => {
     if (namespaceFilter.value) params.namespace = namespaceFilter.value
     if (taskFilter.value) params.task = taskFilter.value
     
+    // /api/v1/status/queues honors namespace/task filters (and queue),
+    // unlike /api/v1/resources/queues which ignores them.
+    const queueListParams = { limit: 500 }
+    if (namespaceFilter.value) queueListParams.namespace = namespaceFilter.value
+    if (taskFilter.value) queueListParams.task = taskFilter.value
+    if (queueFilter.value) queueListParams.queue = queueFilter.value
+
     const [statusRes, queuesRes, namespacesRes, tasksRes] = await Promise.all([
       analytics.getStatus(params),
-      queuesApi.list({ namespace: namespaceFilter.value, task: taskFilter.value }),
+      analytics.getQueues(queueListParams),
       resources.getNamespaces(),
       resources.getTasks()
     ])

@@ -238,93 +238,14 @@
       </div>
     </div>
 
-    <!-- Available Trace Names (Default View) -->
+    <!-- Initial Prompt (Default View) -->
     <div v-else-if="!currentTraceName" class="card">
-      <div class="card-header">
-        <h3>Available Trace Names</h3>
-        <span class="muted">click to view events</span>
-      </div>
-
-      <div v-if="loadingNames" class="card-body" style="padding:48px 16px; text-align:center;">
-        <div class="spinner" style="margin:0 auto 12px;" />
-        <p style="font-size:13px; color:var(--text-mid);">Loading trace names…</p>
-      </div>
-
-      <div v-else-if="errorNames" class="card-body">
-        <p style="font-size:13px; color:#fb7185;">
-          <strong>Error:</strong> {{ errorNames }}
-        </p>
-      </div>
-
-      <div v-else-if="availableTraceNames.length === 0" class="card-body" style="padding:48px 16px; text-align:center;">
+      <div class="card-body" style="padding:48px 16px; text-align:center;">
         <svg style="width:48px; height:48px; margin:0 auto 12px; color:var(--text-low);" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M20 13V6a2 2 0 00-2-2H6a2 2 0 00-2 2v7m16 0v5a2 2 0 01-2 2H6a2 2 0 01-2-2v-5m16 0h-2.586a1 1 0 00-.707.293l-2.414 2.414a1 1 0 01-.707.293h-3.172a1 1 0 01-.707-.293l-2.414-2.414A1 1 0 006.586 13H4" />
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
         </svg>
-        <p style="font-size:13px; color:var(--text-mid);">No traces found yet</p>
-        <p style="font-size:12px; color:var(--text-low); margin-top:4px;">Traces will appear here once messages are processed with trace names</p>
-      </div>
-
-      <div v-else style="overflow-x:auto;">
-        <table class="t">
-          <thead>
-            <tr>
-              <th>Trace Name</th>
-              <th style="text-align:right;">Traces</th>
-              <th style="text-align:right;">Messages</th>
-              <th>Last Seen</th>
-            </tr>
-          </thead>
-          <tbody>
-            <tr
-              v-for="traceName in availableTraceNames"
-              :key="traceName.trace_name"
-              @click="selectTraceName(traceName.trace_name)"
-              style="cursor:pointer;"
-            >
-              <td>
-                <span style="font-weight:500; color:var(--text-hi);">
-                  {{ traceName.trace_name }}
-                </span>
-              </td>
-              <td style="text-align:right;">
-                <span class="chip chip-warn font-mono tabular-nums">{{ traceName.trace_count }}</span>
-              </td>
-              <td style="text-align:right;">
-                <span class="chip chip-ice font-mono tabular-nums">{{ traceName.message_count }}</span>
-              </td>
-              <td>
-                <span class="font-mono" style="font-size:12px; color:var(--text-mid); white-space:nowrap;">
-                  {{ formatDateTime(traceName.last_seen) }}
-                </span>
-              </td>
-            </tr>
-          </tbody>
-        </table>
-
-        <!-- Pagination for trace names -->
-        <div v-if="totalTraceNames > limitNames" style="padding:12px 16px; border-top:1px solid var(--bd); display:flex; align-items:center; justify-content:space-between;">
-          <p style="font-size:13px; color:var(--text-mid);">
-            Showing <span class="font-mono tabular-nums">{{ offsetNames + 1 }}</span>–<span class="font-mono tabular-nums">{{ Math.min(offsetNames + limitNames, totalTraceNames) }}</span> of <span class="font-mono tabular-nums">{{ totalTraceNames }}</span>
-          </p>
-          <div style="display:flex; gap:8px;">
-            <button
-              @click="previousNamesPage"
-              :disabled="offsetNames === 0"
-              class="btn btn-ghost"
-              style="font-size:12px;"
-            >
-              Previous
-            </button>
-            <button
-              @click="nextNamesPage"
-              :disabled="offsetNames + limitNames >= totalTraceNames"
-              class="btn btn-ghost"
-              style="font-size:12px;"
-            >
-              Next
-            </button>
-          </div>
-        </div>
+        <p style="font-size:14px; font-weight:500; color:var(--text-hi); margin-bottom:4px;">Search for traces</p>
+        <p style="font-size:13px; color:var(--text-mid);">Enter a trace name above and press Search to view events.</p>
       </div>
     </div>
 
@@ -457,7 +378,7 @@
 </template>
 
 <script setup>
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed } from 'vue'
 import { traces as tracesApi } from '@/api'
 import { useRefresh } from '@/composables/useRefresh'
 
@@ -471,14 +392,6 @@ const selectedTrace = ref(null)
 const offset = ref(0)
 const limit = ref(50)
 const totalTraces = ref(0)
-
-// Available trace names state
-const availableTraceNames = ref([])
-const loadingNames = ref(false)
-const errorNames = ref(null)
-const offsetNames = ref(0)
-const limitNames = ref(20)
-const totalTraceNames = ref(0)
 
 const exampleTraceNames = [
   'order-flow-123',
@@ -565,52 +478,11 @@ function clearSearch() {
   traces.value = []
   totalTraces.value = 0
   offset.value = 0
-  loadAvailableTraceNames()
+  error.value = null
 }
 
 function viewTrace(trace) {
   selectedTrace.value = trace
-}
-
-// Load available trace names
-async function loadAvailableTraceNames() {
-  if (!availableTraceNames.value.length) loadingNames.value = true
-  errorNames.value = null
-  
-  try {
-    const response = await tracesApi.getAvailableNames({
-      limit: limitNames.value,
-      offset: offsetNames.value
-    })
-    
-    availableTraceNames.value = response.data.trace_names || []
-    totalTraceNames.value = response.data.total || 0
-  } catch (err) {
-    errorNames.value = err.response?.data?.error || err.message
-    availableTraceNames.value = []
-    totalTraceNames.value = 0
-  } finally {
-    loadingNames.value = false
-  }
-}
-
-function selectTraceName(name) {
-  searchTraceName.value = name
-  searchTraces()
-}
-
-function previousNamesPage() {
-  if (offsetNames.value > 0) {
-    offsetNames.value = Math.max(0, offsetNames.value - limitNames.value)
-    loadAvailableTraceNames()
-  }
-}
-
-function nextNamesPage() {
-  if (offsetNames.value + limitNames.value < totalTraceNames.value) {
-    offsetNames.value += limitNames.value
-    loadAvailableTraceNames()
-  }
 }
 
 // Event type colors
@@ -650,19 +522,12 @@ function formatDateTime(timestamp) {
   })
 }
 
-// Refresh function
+// Refresh function — only refreshes when there's an active search
 const refreshCurrentView = async () => {
   if (currentTraceName.value) {
     await loadPage()
-  } else {
-    await loadAvailableTraceNames()
   }
 }
 
-// Register for global refresh
 useRefresh(refreshCurrentView)
-
-onMounted(() => {
-  loadAvailableTraceNames()
-})
 </script>
