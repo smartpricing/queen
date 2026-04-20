@@ -835,8 +835,8 @@ std::vector<PushResult> AsyncQueueManager::push_messages_internal(const std::vec
                 all_results[idx] = result;
                 }
                 
-            // Call stored procedure
-            std::string sql = "SELECT queen.push_messages_v2($1::jsonb)";
+            // Call stored procedure (v3: CTE pipeline, no catalog DDL).
+            static const std::string sql = "SELECT queen.push_messages_v3($1::jsonb)";
             sendQueryParamsAsync(conn.get(), sql, {messages_array.dump()});
             auto result = getTuplesResult(conn.get());
             

@@ -5,7 +5,7 @@ import os from 'os';
 
 const SERVER_URL = process.env.SERVER_URL || 'http://localhost:6632';
 const QUEUE_NAME = 'queen-long-running';
-const NUM_WORKERS = 1;
+const NUM_WORKERS = 4;
 const CONNECTIONS_PER_WORKER = 100;
 const DURATION = 60 * 60 * 24;
 const MAX_PARTITION = 1000;

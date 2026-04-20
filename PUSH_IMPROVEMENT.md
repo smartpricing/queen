@@ -38,8 +38,8 @@ Key characteristics to preserve:
 Existing table-level invariant (critical for the rewrite):
 
 - `lib/schema/schema.sql:73-75` defines
-  `CREATE UNIQUE INDEX IF NOT EXISTS messages_partition_transaction_unique ON queen.messages(partition_id, transaction_id);`
-  This means the database already enforces uniqueness on `(partition_id, transaction_id)`. The pre-check in the procedure is an optimization to produce a nice `status='duplicate'` response, not a correctness mechanism.
+`CREATE UNIQUE INDEX IF NOT EXISTS messages_partition_transaction_unique ON queen.messages(partition_id, transaction_id);`
+This means the database already enforces uniqueness on `(partition_id, transaction_id)`. The pre-check in the procedure is an optimization to produce a nice `status='duplicate'` response, not a correctness mechanism.
 
 Statement-level trigger:
 
@@ -298,33 +298,37 @@ WITH parsed AS MATERIALIZED (
 
 ## 5. Behavioral compatibility matrix
 
-| Input scenario | Current v2 behavior | New behavior | Contract preserved? |
-|---|---|---|---|
-| Single new message | `status=queued` | `status=queued` | Yes |
-| Single duplicate of pre-existing | `status=duplicate, message_id=existing.id` | Same | Yes |
-| Intra-batch duplicate (both new) | One `status=queued`, the rest `status=duplicate, message_id=winner.id` | Same | Yes |
-| Intra-batch duplicate (matching pre-existing) | All `status=duplicate, message_id=pre-existing.id` | Same | Yes |
-| Two concurrent batches inserting same key | One wins at UNIQUE index, other reports `status=duplicate, message_id=winner.id` | Same | Yes |
-| Empty `items` array | `[]` | `[]` | Yes |
-| `p_check_duplicates=false`, all new | All `status=queued` | All `status=queued` | Yes |
-| `p_check_duplicates=false`, with duplicate | **Unique violation abort** (legacy behavior) | `status=duplicate` (no abort) | **Behavior strictly improved; documented as intentional** |
-| Missing `transactionId` on all items | Each gets fresh UUID, all succeed | Same | Yes |
-| `traceId` present but malformed | Cast error, aborts batch | Cast error, aborts batch | Yes (unchanged) |
-| `producerSub` empty string | Stored as NULL | Stored as NULL | Yes |
-| Unknown queue | Auto-created via Statement A | Auto-created via Statement A | Yes |
+
+| Input scenario                                | Current v2 behavior                                                              | New behavior                  | Contract preserved?                                       |
+| --------------------------------------------- | -------------------------------------------------------------------------------- | ----------------------------- | --------------------------------------------------------- |
+| Single new message                            | `status=queued`                                                                  | `status=queued`               | Yes                                                       |
+| Single duplicate of pre-existing              | `status=duplicate, message_id=existing.id`                                       | Same                          | Yes                                                       |
+| Intra-batch duplicate (both new)              | One `status=queued`, the rest `status=duplicate, message_id=winner.id`           | Same                          | Yes                                                       |
+| Intra-batch duplicate (matching pre-existing) | All `status=duplicate, message_id=pre-existing.id`                               | Same                          | Yes                                                       |
+| Two concurrent batches inserting same key     | One wins at UNIQUE index, other reports `status=duplicate, message_id=winner.id` | Same                          | Yes                                                       |
+| Empty `items` array                           | `[]`                                                                             | `[]`                          | Yes                                                       |
+| `p_check_duplicates=false`, all new           | All `status=queued`                                                              | All `status=queued`           | Yes                                                       |
+| `p_check_duplicates=false`, with duplicate    | **Unique violation abort** (legacy behavior)                                     | `status=duplicate` (no abort) | **Behavior strictly improved; documented as intentional** |
+| Missing `transactionId` on all items          | Each gets fresh UUID, all succeed                                                | Same                          | Yes                                                       |
+| `traceId` present but malformed               | Cast error, aborts batch                                                         | Cast error, aborts batch      | Yes (unchanged)                                           |
+| `producerSub` empty string                    | Stored as NULL                                                                   | Stored as NULL                | Yes                                                       |
+| Unknown queue                                 | Auto-created via Statement A                                                     | Auto-created via Statement A  | Yes                                                       |
+
 
 ## 6. Performance expectations
 
 Baseline: current `push_messages_v2` on a batch of N items.
 
-| Cost dimension | Current | After | Delta |
-|---|---|---|---|
-| Catalog writes per call | 3+ (CREATE TEMP, 2–3 ALTER, DROP at commit) | 0 | **−100%** |
-| JSONB element parses | 4+ passes | 1 pass (parsed CTE) | **−75%** |
-| Plpgsql statements per call | 6–8 | 3 | **−50%+** |
-| Round trips | 1 (plpgsql is server-side) | 1 | same |
-| Per-row message INSERT | 1 (fine) | 1 | same |
-| Index lookups on duplicates | 1 per item (full pre-scan) | 1 per duplicate only | **−fraction that aren't duplicates** |
+
+| Cost dimension              | Current                                     | After                | Delta                                |
+| --------------------------- | ------------------------------------------- | -------------------- | ------------------------------------ |
+| Catalog writes per call     | 3+ (CREATE TEMP, 2–3 ALTER, DROP at commit) | 0                    | **−100%**                            |
+| JSONB element parses        | 4+ passes                                   | 1 pass (parsed CTE)  | **−75%**                             |
+| Plpgsql statements per call | 6–8                                         | 3                    | **−50%+**                            |
+| Round trips                 | 1 (plpgsql is server-side)                  | 1                    | same                                 |
+| Per-row message INSERT      | 1 (fine)                                    | 1                    | same                                 |
+| Index lookups on duplicates | 1 per item (full pre-scan)                  | 1 per duplicate only | **−fraction that aren't duplicates** |
+
 
 Expected headline: sustained push throughput per worker should improve measurably (the exact number depends on concurrency; expect 1.5×–3× on realistic workloads with low duplicate rates, dominated by the elimination of catalog contention). The wins are larger under concurrency because pg_class locking disappears.
 
@@ -464,12 +468,14 @@ Statements A and B upsert concurrently across many parallel calls. `ON CONFLICT 
 
 ## 11. Code locations that change
 
-| File | Change |
-|---|---|
+
+| File                                 | Change                                                                                   |
+| ------------------------------------ | ---------------------------------------------------------------------------------------- |
 | `lib/schema/procedures/001_push.sql` | Replace body of `push_messages_v2` (or add `push_messages_v3` side-by-side for Phase 1). |
-| `lib/queen.hpp` | `JobTypeToSql[JobType::PUSH]` updated if function is renamed; otherwise unchanged. |
-| `client-js/test-v2/push.js` | Add tests listed in §8.1. |
-| `server/ENV_VARIABLES.md` | Document `QUEEN_PUSH_PROC` during Phase 2. |
+| `lib/queen.hpp`                      | `JobTypeToSql[JobType::PUSH]` updated if function is renamed; otherwise unchanged.       |
+| `client-js/test-v2/push.js`          | Add tests listed in §8.1.                                                                |
+| `server/ENV_VARIABLES.md`            | Document `QUEEN_PUSH_PROC` during Phase 2.                                               |
+
 
 ## 12. Out of scope
 
@@ -477,3 +483,4 @@ Statements A and B upsert concurrently across many parallel calls. `ON CONFLICT 
 - Changes to the push request shape at the HTTP layer.
 - Changes to encryption handling, which happens in C++ before the SQL call.
 - Changes to the file-buffer failover path.
+

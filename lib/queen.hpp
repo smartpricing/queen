@@ -239,7 +239,7 @@ JobType {
 
 // map between JobType enum and std::string
 const std::map<JobType, std::string> JobTypeToSql = {
-    {JobType::PUSH, "SELECT queen.push_messages_v2($1::jsonb)"},
+    {JobType::PUSH, "SELECT queen.push_messages_v3($1::jsonb)"},
     {JobType::POP, "SELECT queen.pop_unified_batch($1::jsonb)"},
     {JobType::ACK, "SELECT queen.ack_messages_v2($1::jsonb)"},
     {JobType::TRANSACTION, "SELECT queen.execute_transaction_v2($1::jsonb)"},
