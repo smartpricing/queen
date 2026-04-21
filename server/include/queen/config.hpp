@@ -142,10 +142,46 @@ struct QueueConfig {
     int sidecar_pool_size = 50;             // Number of connections in sidecar pool
     
     // Sidecar micro-batching tuning
-    int sidecar_micro_batch_wait_ms = 5;    // Target cycle time for micro-batching (ms)
+    int sidecar_micro_batch_wait_ms = 5;    // LEGACY. Global fallback for any type-specific
+                                            // QUEEN_<TYPE>_MAX_HOLD_MS that isn't set (libqueen §9).
     int sidecar_max_items_per_tx = 1000;    // Max items per database transaction
     int sidecar_max_batch_size = 1000;      // Max requests per micro-batch
     int sidecar_max_pending_count = 50;     // Max pending requests before forcing immediate send
+
+    // ========================================================================
+    // libqueen tuning (§9 of LIBQUEEN_IMPROVEMENTS.md).
+    // These are read directly from the environment by libqueen itself; the
+    // fields here exist for documentation and optional pre-parse / validation
+    // by the acceptor. Absent values fall back to the per-type defaults.
+    // ========================================================================
+
+    // Concurrency-controller mode: "vegas" (adaptive, default) or "static".
+    std::string queen_concurrency_mode = "vegas";
+
+    // Vegas adaptive-controller tuning (global).
+    int    queen_vegas_min_limit             = 1;
+    int    queen_vegas_max_limit             = 16;
+    int    queen_vegas_alpha                 = 3;
+    int    queen_vegas_beta                  = 6;
+    int    queen_vegas_rtt_window_samples    = 50;
+    int    queen_vegas_rtt_min_window_sec    = 30;
+    int    queen_vegas_update_interval_ms    = 1000;
+
+    // Per-type batch policy defaults. Each type may be overridden individually
+    // by `QUEEN_<TYPE>_{PREFERRED_BATCH_SIZE,MAX_HOLD_MS,MAX_BATCH_SIZE,MAX_CONCURRENT}`.
+    // Values here are for documentation only — libqueen reads env directly.
+    struct QueenTypeDefaults {
+        int preferred_batch_size;
+        int max_hold_ms;
+        int max_batch_size;
+        int max_concurrent;
+    };
+    QueenTypeDefaults queen_push         = { 50,  20, 500, 4};
+    QueenTypeDefaults queen_pop          = { 20,   5, 500, 4};
+    QueenTypeDefaults queen_ack          = { 50,  20, 500, 4};
+    QueenTypeDefaults queen_transaction  = {  1,   0,   1, 1};
+    QueenTypeDefaults queen_renew_lease  = { 10, 100, 100, 2};
+    QueenTypeDefaults queen_custom       = {  1,   0,   1, 1};
     
     // Consumer group subscription
     std::string default_subscription_mode = "";  // "" = all (default), "new" = skip history, "new-only" = same as new
@@ -179,6 +215,31 @@ struct QueueConfig {
         config.sidecar_max_items_per_tx = get_env_int("SIDECAR_MAX_ITEMS_PER_TX", 1000);
         config.sidecar_max_batch_size = get_env_int("SIDECAR_MAX_BATCH_SIZE", 1000);
         config.sidecar_max_pending_count = get_env_int("SIDECAR_MAX_PENDING_COUNT", 50);
+
+        // libqueen tuning (see LIBQUEEN_IMPROVEMENTS.md §9). libqueen reads env
+        // directly at construction; these are mirrored for visibility / logs.
+        config.queen_concurrency_mode       = get_env_string("QUEEN_CONCURRENCY_MODE", "vegas");
+        config.queen_vegas_min_limit        = get_env_int("QUEEN_VEGAS_MIN_LIMIT", 1);
+        config.queen_vegas_max_limit        = get_env_int("QUEEN_VEGAS_MAX_LIMIT", 16);
+        config.queen_vegas_alpha            = get_env_int("QUEEN_VEGAS_ALPHA", 3);
+        config.queen_vegas_beta             = get_env_int("QUEEN_VEGAS_BETA", 6);
+        config.queen_vegas_rtt_window_samples = get_env_int("QUEEN_VEGAS_RTT_WINDOW_SAMPLES", 50);
+        config.queen_vegas_rtt_min_window_sec = get_env_int("QUEEN_VEGAS_RTT_MIN_WINDOW_SEC", 30);
+        config.queen_vegas_update_interval_ms = get_env_int("QUEEN_VEGAS_UPDATE_INTERVAL_MS", 1000);
+
+        auto read_type = [](const char* seg, QueueConfig::QueenTypeDefaults& d) {
+            std::string pfx = std::string("QUEEN_") + seg + "_";
+            d.preferred_batch_size = get_env_int((pfx + "PREFERRED_BATCH_SIZE").c_str(), d.preferred_batch_size);
+            d.max_hold_ms          = get_env_int((pfx + "MAX_HOLD_MS").c_str(),          d.max_hold_ms);
+            d.max_batch_size       = get_env_int((pfx + "MAX_BATCH_SIZE").c_str(),       d.max_batch_size);
+            d.max_concurrent       = get_env_int((pfx + "MAX_CONCURRENT").c_str(),       d.max_concurrent);
+        };
+        read_type("PUSH",        config.queen_push);
+        read_type("POP",         config.queen_pop);
+        read_type("ACK",         config.queen_ack);
+        read_type("TRANSACTION", config.queen_transaction);
+        read_type("RENEW_LEASE", config.queen_renew_lease);
+        read_type("CUSTOM",      config.queen_custom);
         
         config.default_subscription_mode = get_env_string("DEFAULT_SUBSCRIPTION_MODE", "");
         

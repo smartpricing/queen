@@ -88,10 +88,59 @@ Message arrives → Reset to 100ms immediately
 | Variable | Type | Default | Description |
 |----------|------|---------|-------------|
 | `SIDECAR_POOL_SIZE` | int | 50 | Number of connections in sidecar pool |
-| `SIDECAR_MICRO_BATCH_WAIT_MS` | int | 5 | Target cycle time for micro-batching (ms) |
+| `SIDECAR_MICRO_BATCH_WAIT_MS` | int | 5 | **Legacy.** Global fallback for per-type `QUEEN_<TYPE>_MAX_HOLD_MS` when unset. Deprecated in favor of the per-type knobs below. |
 | `SIDECAR_MAX_ITEMS_PER_TX` | int | 1000 | Max items per database transaction |
 | `SIDECAR_MAX_BATCH_SIZE` | int | 1000 | Max requests per micro-batch |
 | `SIDECAR_MAX_PENDING_COUNT` | int | 50 | Max pending requests before forcing immediate send |
+
+### libqueen — per-type batching and concurrency (§9 of LIBQUEEN_IMPROVEMENTS.md)
+
+libqueen separates **batching** (how big), **concurrency** (how many in flight),
+and **scheduling** (who goes first) into independent policies per `JobType`.
+Event-driven drain is triggered by submit-kicks (via `uv_async`), slot-free
+kicks, and a dynamic safety-net timer (re-armed at the end of each drain pass).
+
+#### Concurrency mode
+| Variable | Type | Default | Description |
+|----------|------|---------|-------------|
+| `QUEEN_CONCURRENCY_MODE` | string | `vegas` | `vegas` (adaptive, TCP Vegas-inspired) or `static` (fixed limit). Applies globally. |
+
+#### Vegas adaptive-controller tuning (only when mode=`vegas`)
+| Variable | Type | Default | Description |
+|----------|------|---------|-------------|
+| `QUEEN_VEGAS_MIN_LIMIT` | int | 1 | Lower bound on `limit` |
+| `QUEEN_VEGAS_MAX_LIMIT` | int | 16 | Upper bound on `limit` (effective max is `min(this, QUEEN_<TYPE>_MAX_CONCURRENT)`) |
+| `QUEEN_VEGAS_ALPHA` | int | 3 | "Good queueing" threshold (batches). `queue_load < alpha` → grow. |
+| `QUEEN_VEGAS_BETA` | int | 6 | "Bad queueing" threshold (batches). `queue_load > beta` → shrink. |
+| `QUEEN_VEGAS_RTT_WINDOW_SAMPLES` | int | 50 | EMA window over recent completion RTTs |
+| `QUEEN_VEGAS_RTT_MIN_WINDOW_SEC` | int | 30 | Sliding-minimum window for `rtt_min` |
+| `QUEEN_VEGAS_UPDATE_INTERVAL_MS` | int | 1000 | Minimum time between `limit` adjustments (anti-thrash) |
+
+#### Per-type batch + concurrency knobs
+Each `<TYPE>` ∈ `{PUSH, POP, ACK, TRANSACTION, RENEW_LEASE, CUSTOM}` exposes four
+knobs. Unset values fall back to the plan-recommended defaults in the table.
+
+Variable pattern: `QUEEN_<TYPE>_<KNOB>`.
+
+| Type / Knob          | `PUSH` | `POP` | `ACK` | `TRANSACTION` | `RENEW_LEASE` | `CUSTOM` |
+|----------------------|-------:|------:|------:|--------------:|--------------:|---------:|
+| `PREFERRED_BATCH_SIZE` |   50 |    20 |    50 |             1 |            10 |        1 |
+| `MAX_HOLD_MS`          |   20 |     5 |    20 |             0 |           100 |        0 |
+| `MAX_BATCH_SIZE`       |  500 |   500 |   500 |             1 |           100 |        1 |
+| `MAX_CONCURRENT`       |    4 |     4 |     4 |             1 |             2 |        1 |
+
+- `PREFERRED_BATCH_SIZE` — queue size that triggers an immediate fire.
+- `MAX_HOLD_MS` — fire even below preferred if the oldest job has waited this long.
+- `MAX_BATCH_SIZE` — hard cap on items per fire.
+- `MAX_CONCURRENT` — hard cap on concurrent in-flight batches for the type.
+  Under `QUEEN_CONCURRENCY_MODE=vegas`, this is the upper bound Vegas can grow to.
+
+**Defaults rationale** (see LIBQUEEN_IMPROVEMENTS.md §9.2):
+- `PUSH` / `ACK` `preferred=50` sits above the S1 break-even (~33); `max_hold=20`
+  matches the sweet spot found in the perf campaign.
+- `POP` is latency-sensitive: tighter hold, smaller preferred batch.
+- `TRANSACTION`, `CUSTOM` are atomic (no fusion): batch size 1, concurrency 1.
+- `RENEW_LEASE` is background work: modest batch, longer hold.
 
 ### Consumer Group Subscription
 | Variable | Type | Default | Description |

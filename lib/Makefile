@@ -53,10 +53,11 @@ BUILD_DIR = build
 TEST_TARGET = $(BUILD_DIR)/test_queen
 TEST_SUITE_TARGET = $(BUILD_DIR)/test_suite
 TEST_CONTENTION_TARGET = $(BUILD_DIR)/test_contention
+TEST_UNIT_TARGET = $(BUILD_DIR)/queen_test
 
-.PHONY: all test test-suite test-contention clean help
+.PHONY: all test test-suite test-contention test-unit clean help
 
-all: test
+all: test test-unit
 
 # Build and run basic test
 test: $(TEST_TARGET)
@@ -93,6 +94,29 @@ $(TEST_CONTENTION_TARGET): test_contention.cpp queen.hpp
 	@echo "Compiling test_contention.cpp..."
 	$(CXX) $(CXXFLAGS) $(INCLUDES) test_contention.cpp -o $@ $(LIBS)
 	@echo "✅ Contention benchmark build complete!"
+
+# Unit tests for Layers 1..3 + orchestrator invariants. No PG required.
+test-unit: $(TEST_UNIT_TARGET)
+	@echo "Running libqueen unit tests..."
+	@./$(TEST_UNIT_TARGET)
+
+# Build unit test binary. Links libuv (PerTypeQueue uses uv_mutex_t) and libpq
+# (DBConnection referenced indirectly through slot_pool.hpp includes).
+$(TEST_UNIT_TARGET): queen_test.cpp \
+		queen.hpp \
+		queen/pending_job.hpp \
+		queen/per_type_queue.hpp \
+		queen/batch_policy.hpp \
+		queen/metrics.hpp \
+		queen/slot_pool.hpp \
+		queen/drain_orchestrator.hpp \
+		queen/concurrency/concurrency_controller.hpp \
+		queen/concurrency/static_limit.hpp \
+		queen/concurrency/vegas_limit.hpp
+	@mkdir -p $(BUILD_DIR)
+	@echo "Compiling queen_test.cpp..."
+	$(CXX) $(CXXFLAGS) $(INCLUDES) queen_test.cpp -o $@ $(LIBS)
+	@echo "✅ Unit test build complete!"
 
 # Clean build artifacts
 clean:
