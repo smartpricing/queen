@@ -1,26 +1,29 @@
 # Queen MQ - Partitioned Message Queue backed by PostgreSQL
 
-
+<div align="center">
 
 **Unlimited ordered partitions that never block each other. Consumer groups, replay, transactional delivery — ACID-guaranteed.**
 
 *Note that queen-mq is available also as a experimental PostgreSQL extension, see [pg_qpubsub](pg_qpubsub/README.md) for more details.*
 
-[License](LICENSE.md)
-[Node](https://nodejs.org/)
-[Python](https://www.python.org/)
-[Go](https://go.dev/)
-[PHP](https://www.php.net/)
-[C++](https://en.cppreference.com/w/cpp/17)
-[libuv](https://libuv.org/)
-[libpq](https://www.postgresql.org/)
-[uWebSockets](https://github.com/uNetworking/uWebSockets)
+
+[![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE.md)
+[![Node](https://img.shields.io/badge/node-%3E%3D22.0.0-brightgreen.svg)](https://nodejs.org/)
+[![Python](https://img.shields.io/badge/python-3.8%2B-blue.svg)](https://www.python.org/)
+[![Go](https://img.shields.io/badge/go-1.24%2B-00ADD8.svg)](https://go.dev/)
+[![PHP](https://img.shields.io/badge/php-8.3%2B-777BB4.svg)](https://www.php.net/)
+[![C++](https://img.shields.io/badge/C%2B%2B-17-blue.svg)](https://en.cppreference.com/w/cpp/17)
+[![libuv](https://img.shields.io/badge/libuv-1.48.0-blue.svg)](https://libuv.org/)
+[![libpq](https://img.shields.io/badge/libpq-15.5-blue.svg)](https://www.postgresql.org/)
+[![uWebSockets](https://img.shields.io/badge/uWebSockets-22.0.0-blue.svg)](https://github.com/uNetworking/uWebSockets)
 
 📚 **[Complete Documentation](https://smartpricing.github.io/queen/)** • 🚀 **[Quick Start](https://smartpricing.github.io/queen/guide/quickstart)** • ⚖️ **[Comparison](https://smartpricing.github.io/queen/guide/comparison)**
 
+<p align="center">
+  <img src="assets/queen_logo.png" alt="Queen Logo" width="120" />
+</p>
 
-
-
+</div>
 
 ---
 
