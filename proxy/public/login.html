@@ -4,30 +4,50 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Login · QueenMQ</title>
+    <meta name="color-scheme" content="dark">
+    <meta name="theme-color" content="#141415">
     <link rel="icon" type="image/png" href="/queen_logo.png">
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;450;500;550;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
     <style>
+        /* Cursor palette — mirrors app/src/style.css */
         :root {
-            --ink-0: #07070a; --ink-1: #0b0b0f; --ink-2: #101015;
-            --ink-3: #17171e; --ink-4: #1f1f28;
-            --text-hi: #f5f5f1; --text-mid: #a8a8a0;
-            --text-low: #6a6a62; --text-faint: #3a3a38;
-            --crown-400: #fbbf24; --crown-500: #f59e0b; --crown-600: #d97706;
-            --crown-glow: rgba(251,191,36,0.18);
-            --ember-400: #fb7185; --ember-500: #f43f5e;
-            --ember-glow: rgba(244,63,94,0.18);
-            --ice-400: #22d3ee; --ice-glow: rgba(34,211,238,0.18);
-            --bd: rgba(255,255,255,0.06); --bd-hi: rgba(255,255,255,0.10);
-            --ease: cubic-bezier(.2,.7,.2,1);
+            --ink-0: #141415;
+            --ink-1: #1a1a1b;
+            --ink-2: #1d1d1f;
+            --ink-3: #232325;
+            --ink-4: #252527;
+            --ink-5: #2d2d30;
+
+            --text-hi:   #e6e6e6;
+            --text-mid:  #9a9a9a;
+            --text-low:  #6a6a6a;
+            --text-faint:#464649;
+
+            --accent:    #ffffff;
+            --accent-dim:#d4d4d4;
+
+            --bd:    #26262a;
+            --bd-hi: #35353a;
+
+            --ember-400: #fb7185;
+            --ember-500: #f43f5e;
+            --ember-glow: rgba(244, 63, 94, 0.10);
+
+            --ease: cubic-bezier(.2, .7, .2, 1);
+            color-scheme: dark;
         }
 
         * { margin: 0; padding: 0; box-sizing: border-box; }
 
+        html, body { height: 100%; }
+
         body {
-            font-family: 'Inter', ui-sans-serif, system-ui, sans-serif;
+            font-family: 'Inter', ui-sans-serif, -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
             font-feature-settings: "cv11","ss01","ss03","cv02";
+            font-size: 13px;
+            letter-spacing: -0.005em;
             -webkit-font-smoothing: antialiased;
             background: var(--ink-0);
             color: var(--text-hi);
@@ -35,142 +55,144 @@
             display: flex;
             align-items: center;
             justify-content: center;
-            overflow: hidden;
-            position: relative;
-        }
-
-        /* Ambient vignette */
-        body::before {
-            content: ""; position: fixed; inset: 0; z-index: 0; pointer-events: none;
-            background-image:
-                radial-gradient(1200px 600px at 15% -10%, var(--crown-glow), transparent 60%),
-                radial-gradient(900px 500px at 95% 110%, var(--ice-glow), transparent 55%),
-                radial-gradient(600px 400px at 110% 0%, var(--ember-glow), transparent 60%);
-            opacity: 0.9;
-        }
-
-        /* Grain */
-        body::after {
-            content: ""; position: fixed; inset: 0; z-index: 0; pointer-events: none;
-            background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='140' height='140'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2' stitchTiles='stitch'/%3E%3CfeColorMatrix values='0 0 0 0 1  0 0 0 0 1  0 0 0 0 1  0 0 0 0.06 0'/%3E%3C/filter%3E%3Crect width='140' height='140' filter='url(%23n)'/%3E%3C/svg%3E");
-            mix-blend-mode: overlay; opacity: .35;
+            padding: 20px;
         }
 
         .login-card {
-            position: relative; z-index: 1;
-            width: 100%; max-width: 400px; margin: 1rem;
-            padding: 2.5rem;
-            border-radius: 14px;
+            width: 100%;
+            max-width: 340px;
+            padding: 28px 26px 22px;
+            border-radius: 8px;
             border: 1px solid var(--bd);
-            background: linear-gradient(180deg, rgba(20,20,26,.7), rgba(14,14,18,.7));
-            backdrop-filter: blur(20px); -webkit-backdrop-filter: blur(20px);
-            box-shadow: 0 40px 80px -20px rgba(0,0,0,.6), inset 0 1px 0 rgba(255,255,255,.04);
+            background: var(--ink-2);
         }
 
-        /* Gold accent line on top */
-        .login-card::after {
-            content: ""; position: absolute; top: 0; left: 0; right: 0;
-            height: 1px;
-            background: linear-gradient(90deg, transparent, var(--crown-400), transparent);
-            opacity: .6; border-radius: 14px 14px 0 0;
+        .logo-section {
+            text-align: center;
+            margin-bottom: 22px;
         }
 
-        .logo-section { text-align: center; margin-bottom: 2rem; }
-
-        .logo-glow {
-            display: inline-block; position: relative; margin-bottom: 1rem;
+        .logo-mark {
+            display: inline-block;
+            margin-bottom: 14px;
         }
-        .logo-glow::after {
-            content: ''; position: absolute; inset: -16px;
-            background: radial-gradient(circle, var(--crown-glow) 0%, transparent 70%);
-            border-radius: 50%; z-index: -1;
-        }
-        .logo-glow img {
-            height: 90px; width: auto;
-            filter: drop-shadow(0 0 24px var(--crown-glow));
+        .logo-mark img {
+            display: block;
+            height: 72px;
+            width: auto;
+            max-width: 100%;
+            object-fit: contain;
         }
 
         .logo-section h1 {
-            font-size: 1.625rem; font-weight: 700;
-            letter-spacing: -0.02em; line-height: 1;
+            font-size: 17px;
+            font-weight: 600;
+            letter-spacing: -0.015em;
+            line-height: 1.1;
             color: var(--text-hi);
         }
         .logo-section h1 b {
-            font-weight: 400; font-size: 0.75em;
-            letter-spacing: .08em; margin-left: 4px;
+            font-weight: 500;
+            font-size: 12px;
+            letter-spacing: 0.06em;
+            margin-left: 3px;
             color: var(--text-mid);
         }
         .logo-section p {
-            color: var(--text-low); font-size: 0.8125rem;
-            margin-top: 0.5rem; font-weight: 500;
+            color: var(--text-low);
+            font-size: 11.5px;
+            margin-top: 4px;
+            font-weight: 500;
         }
 
-        .form-group { margin-bottom: 1.25rem; }
+        .form-group {
+            margin-bottom: 12px;
+        }
 
         label {
-            display: block; margin-bottom: 0.5rem;
-            font-size: 10.5px; font-weight: 500;
-            letter-spacing: .14em; text-transform: uppercase;
+            display: block;
+            margin-bottom: 5px;
+            font-size: 10.5px;
+            font-weight: 500;
+            letter-spacing: 0.08em;
+            text-transform: uppercase;
             color: var(--text-low);
         }
 
         input {
-            width: 100%; padding: 10px 12px;
-            background: rgba(255,255,255,.04);
-            border: 1px solid var(--bd-hi);
-            border-radius: 9px; font-size: 14px;
-            font-family: 'Inter', system-ui, sans-serif;
+            width: 100%;
+            padding: 7px 10px;
+            background: var(--ink-3);
+            border: 1px solid var(--bd);
+            border-radius: 5px;
+            font-size: 13px;
+            font-family: inherit;
             color: var(--text-hi);
-            transition: border-color .15s var(--ease), box-shadow .15s var(--ease);
+            transition: border-color .12s var(--ease), background .12s var(--ease), box-shadow .12s var(--ease);
             outline: none;
         }
         input::placeholder { color: var(--text-low); }
-        input:focus {
-            border-color: var(--crown-400);
-            box-shadow: 0 0 0 3px rgba(251,191,36,.15);
-        }
         input:hover:not(:focus) {
-            border-color: rgba(255,255,255,.18);
+            border-color: var(--bd-hi);
+        }
+        input:focus {
+            border-color: var(--bd-hi);
+            background: var(--ink-4);
+            box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.08);
         }
 
         .btn-submit {
-            width: 100%; padding: 12px;
-            background: linear-gradient(180deg, var(--crown-400), var(--crown-600));
-            border: 1px solid var(--crown-600);
-            border-radius: 9px; font-size: 14px;
-            font-family: 'Inter', system-ui, sans-serif;
-            font-weight: 600; color: #1a0f02;
-            cursor: pointer; margin-top: 0.75rem;
-            display: flex; align-items: center; justify-content: center; gap: 8px;
-            transition: filter .15s, box-shadow .15s, transform .1s;
-            box-shadow: 0 6px 22px -10px var(--crown-glow), inset 0 1px 0 rgba(255,255,255,.25);
+            width: 100%;
+            padding: 8px 12px;
+            margin-top: 6px;
+            background: var(--accent);
+            border: 1px solid var(--accent);
+            border-radius: 5px;
+            font-size: 13px;
+            font-family: inherit;
+            font-weight: 500;
+            color: #000;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 8px;
+            transition: background .12s var(--ease), border-color .12s var(--ease), color .12s var(--ease);
         }
         .btn-submit:hover {
-            filter: brightness(1.08);
-            box-shadow: 0 8px 30px -8px var(--crown-glow), inset 0 1px 0 rgba(255,255,255,.25);
-            transform: translateY(-1px);
+            background: var(--accent-dim);
+            border-color: var(--accent-dim);
         }
-        .btn-submit:active { transform: translateY(0); }
+        .btn-submit:active { transform: none; }
         .btn-submit:disabled {
-            opacity: 0.5; cursor: not-allowed;
-            transform: none; box-shadow: none;
+            opacity: 0.6;
+            cursor: not-allowed;
         }
 
         .error {
             background: var(--ember-glow);
-            border: 1px solid rgba(244,63,94,.25);
+            border: 1px solid rgba(244, 63, 94, 0.25);
             color: var(--ember-400);
-            padding: 10px 14px; border-radius: 9px;
-            margin-bottom: 1.25rem; font-size: 13px;
-            display: none; align-items: center; gap: 8px;
+            padding: 7px 10px;
+            border-radius: 4px;
+            margin-bottom: 12px;
+            font-size: 12px;
+            display: none;
+            align-items: center;
+            gap: 7px;
         }
         .error.show { display: flex; }
-        .error-icon { flex-shrink: 0; color: var(--ember-500); }
+        .error-icon {
+            flex-shrink: 0;
+            color: var(--ember-400);
+        }
 
         .spinner {
-            display: none; width: 16px; height: 16px;
-            border: 2px solid rgba(26,15,2,.3);
-            border-top-color: #1a0f02;
+            display: none;
+            width: 12px;
+            height: 12px;
+            border: 1.5px solid rgba(0, 0, 0, 0.20);
+            border-top-color: #000;
             border-radius: 50%;
             animation: spin 0.6s linear infinite;
         }
@@ -178,40 +200,41 @@
         @keyframes spin { to { transform: rotate(360deg); } }
 
         .footer {
-            margin-top: 2rem; text-align: center;
-            padding-top: 1.25rem; border-top: 1px solid var(--bd);
+            margin-top: 18px;
+            text-align: center;
+            padding-top: 14px;
+            border-top: 1px solid var(--bd);
         }
         .footer p {
-            color: var(--text-low); font-size: 11px;
-            font-family: 'JetBrains Mono', monospace;
+            color: var(--text-low);
+            font-size: 10.5px;
+            font-family: 'JetBrains Mono', ui-monospace, monospace;
+            letter-spacing: 0.02em;
         }
 
         *:focus-visible {
-            outline: none;
-            box-shadow: 0 0 0 2px rgba(251,191,36,.5);
+            outline: 1px solid rgba(255, 255, 255, 0.28);
+            outline-offset: 1px;
+            box-shadow: none;
         }
-        ::selection { background: rgba(251,191,36,.3); }
-
-        @media (max-width: 480px) {
-            .login-card { padding: 2rem 1.5rem; }
-            .logo-glow img { height: 72px; }
-            .logo-section h1 { font-size: 1.375rem; }
-        }
+        ::selection { background: rgba(255, 255, 255, 0.14); }
     </style>
 </head>
 <body>
     <div class="login-card">
         <div class="logo-section">
-            <div class="logo-glow">
+            <span class="logo-mark">
                 <img src="/queen_logo.png" alt="Queen">
-            </div>
+            </span>
             <h1>Queen<b>MQ</b></h1>
-            <p>Secure Proxy Access</p>
+            <p>Secure proxy access</p>
         </div>
 
         <div id="error" class="error">
-            <svg class="error-icon" width="14" height="14" fill="currentColor" viewBox="0 0 16 16">
-                <path d="M8 0a8 8 0 1 1 0 16A8 8 0 0 1 8 0zM7 4v5h2V4H7zm0 6v2h2v-2H7z"/>
+            <svg class="error-icon" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.8" viewBox="0 0 24 24">
+                <circle cx="12" cy="12" r="10"/>
+                <line x1="12" y1="8" x2="12" y2="12"/>
+                <line x1="12" y1="16" x2="12.01" y2="16"/>
             </svg>
             <span id="errorText"></span>
         </div>
@@ -234,7 +257,7 @@
                 >
             </div>
             <button type="submit" id="loginBtn" class="btn-submit">
-                <span id="btnText">Sign In</span>
+                <span id="btnText">Sign in</span>
                 <span class="spinner"></span>
             </button>
         </form>
@@ -269,7 +292,7 @@
                 });
                 const data = await response.json();
                 if (response.ok) {
-                    btnText.textContent = 'Success!';
+                    btnText.textContent = 'Success';
                     setTimeout(() => { window.location.href = '/'; }, 200);
                 } else {
                     throw new Error(data.error || 'Login failed');
@@ -279,7 +302,7 @@
                 errorDiv.classList.add('show');
                 loginBtn.disabled = false;
                 loginBtn.classList.remove('loading');
-                btnText.textContent = 'Sign In';
+                btnText.textContent = 'Sign in';
             }
         });
     </script>
