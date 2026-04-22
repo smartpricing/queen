@@ -113,9 +113,9 @@ async function httpConfigure(queue, bearerToken) {
 // Direct SP call via dbPool — bypasses HTTP and JWT entirely. Used by the
 // SP-level tests below so they work regardless of whether the server has
 // auth enabled or not.
-async function callPushMessagesV2(items) {
+async function callPushMessagesV3(items) {
     await dbPool.query(
-        'SELECT queen.push_messages_v2($1::jsonb)',
+        'SELECT queen.push_messages_v3($1::jsonb)',
         [JSON.stringify(items)]
     )
 }
@@ -152,7 +152,7 @@ export async function producerSubRoundTripViaStoredProcedure(client) {
     const q = 'test-auth-sp-roundtrip'
     const tx = `tx-sp-${Date.now()}`
 
-    await callPushMessagesV2([{
+    await callPushMessagesV3([{
         queue: q,
         partition: 'Default',
         transactionId: tx,
@@ -174,7 +174,7 @@ export async function producerSubRoundTripViaStoredProcedure(client) {
         return { success: false, message: `Pop returned producerSub=${JSON.stringify(target.producerSub)}, expected 'sp-test-sub'` }
     }
 
-    return { success: true, message: 'producer_sub round-trips through push_messages_v2 and pop exposes it' }
+    return { success: true, message: 'producer_sub round-trips through push_messages_v3 and pop exposes it' }
 }
 
 // ===========================================================================
@@ -186,7 +186,7 @@ export async function producerSubNullWhenNotProvided(client) {
     const q = 'test-auth-sp-null'
     const tx = `tx-sp-null-${Date.now()}`
 
-    await callPushMessagesV2([{
+    await callPushMessagesV3([{
         queue: q,
         partition: 'Default',
         transactionId: tx,
@@ -221,7 +221,7 @@ export async function producerSubEmptyStringStoredAsNull(client) {
     const q = 'test-auth-sp-empty'
     const tx = `tx-sp-empty-${Date.now()}`
 
-    await callPushMessagesV2([{
+    await callPushMessagesV3([{
         queue: q,
         partition: 'Default',
         transactionId: tx,
