@@ -46,10 +46,13 @@ const measureSeconds = (pre, post) => {
 const rows = [];
 for (const sub of fs.readdirSync(dir)) {
   if (!sub.startsWith('pg')) continue;
-  const m = sub.match(/pg(\d+)c_payload(\d+)kb/);
+  // New-style dirs include `_batch{N}` suffix for sweeps over push_batch;
+  // old-style dirs (single push_batch) don't. Default to 1 when absent.
+  const m = sub.match(/pg(\d+)c_payload(\d+)kb(?:_batch(\d+))?/);
   if (!m) continue;
   const pgCores = +m[1];
   const payloadKb = +m[2];
+  const pushBatch = m[3] ? +m[3] : 1;
   const cdir = path.join(dir, sub);
 
   const pre = loadJson(path.join(cdir, 'pg-stats-pre.json'));
@@ -113,10 +116,11 @@ for (const sub of fs.readdirSync(dir)) {
   rows.push({
     pgCores,
     payloadKb,
+    pushBatch,
     row: [
       pgCores,
       payloadKb,
-      1,
+      pushBatch,
       pgIns.toFixed(1),
       (pgIns * payloadKb * 1024).toFixed(0),
       xact.toFixed(1),
@@ -136,6 +140,9 @@ for (const sub of fs.readdirSync(dir)) {
     ],
   });
 }
-rows.sort((a, b) => a.pgCores - b.pgCores || a.payloadKb - b.payloadKb);
+rows.sort((a, b) =>
+  a.pgCores - b.pgCores ||
+  a.pushBatch - b.pushBatch ||
+  a.payloadKb - b.payloadKb);
 for (const r of rows) fs.appendFileSync(out, r.row.join(',') + '\n');
 console.log(fs.readFileSync(out, 'utf8'));
