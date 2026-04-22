@@ -1,15 +1,7 @@
 <template>
-  <div class="view-container animate-fade-in">
+  <div class="view-container">
 
     <!-- Page head -->
-    <div class="page-head">
-      <div>
-        <div class="eyebrow">Operations</div>
-        <h1>Database <span class="accent">Migration</span></h1>
-        <p>Stream pg_dump directly into pg_restore — no temp file, zero downtime.</p>
-      </div>
-    </div>
-
     <div style="display:flex; flex-direction:column; gap:20px;">
 
       <!-- Step 1: Maintenance Mode -->
@@ -28,13 +20,13 @@
                 :disabled="maintenanceLoading"
                 style="display:inline-flex; align-items:center; gap:8px; padding:7px 14px; font-size:13px; font-weight:500; border-radius:9px; cursor:pointer; transition:all .15s;"
                 :style="pushMaintenanceMode
-                  ? 'background:rgba(251,191,36,.12); color:#fbbf24; border:1px solid rgba(251,191,36,.25);'
+                  ? 'background:rgba(230,180,80,.12); color:var(--warn-400); border:1px solid rgba(230,180,80,.25);'
                   : 'background:rgba(255,255,255,.04); color:var(--text-mid); border:1px solid var(--bd-hi);'"
               >
-                <span style="width:8px; height:8px; border-radius:99px;" :style="pushMaintenanceMode ? 'background:#fbbf24; box-shadow:0 0 8px rgba(251,191,36,.4);' : 'background:var(--text-low);'" />
+                <span style="width:8px; height:8px; border-radius:99px;" :style="pushMaintenanceMode ? 'background:var(--warn-400);' : 'background:var(--text-low);'" />
                 Push Maintenance {{ pushMaintenanceMode ? 'ON' : 'OFF' }}
               </button>
-              <span v-if="pushMaintenanceMode && bufferedMessages > 0" style="font-size:12px; color:#fbbf24;">
+              <span v-if="pushMaintenanceMode && bufferedMessages > 0" style="font-size:12px; color:var(--warn-400);">
                 {{ bufferedMessages }} buffered
               </span>
             </div>
@@ -46,23 +38,23 @@
                 :disabled="maintenanceLoading"
                 style="display:inline-flex; align-items:center; gap:8px; padding:7px 14px; font-size:13px; font-weight:500; border-radius:9px; cursor:pointer; transition:all .15s;"
                 :style="popMaintenanceMode
-                  ? 'background:rgba(251,191,36,.12); color:#fbbf24; border:1px solid rgba(251,191,36,.25);'
+                  ? 'background:rgba(230,180,80,.12); color:var(--warn-400); border:1px solid rgba(230,180,80,.25);'
                   : 'background:rgba(255,255,255,.04); color:var(--text-mid); border:1px solid var(--bd-hi);'"
               >
-                <span style="width:8px; height:8px; border-radius:99px;" :style="popMaintenanceMode ? 'background:#fbbf24; box-shadow:0 0 8px rgba(251,191,36,.4);' : 'background:var(--text-low);'" />
+                <span style="width:8px; height:8px; border-radius:99px;" :style="popMaintenanceMode ? 'background:var(--warn-400);' : 'background:var(--text-low);'" />
                 Pop Maintenance {{ popMaintenanceMode ? 'ON' : 'OFF' }}
               </button>
             </div>
 
             <!-- Status indicator -->
             <div style="margin-left:auto; display:flex; align-items:center; gap:8px;">
-              <span v-if="bothMaintenanceOn" style="display:flex; align-items:center; gap:6px; font-size:12px; font-weight:500; color:#34d399;">
+              <span v-if="bothMaintenanceOn" style="display:flex; align-items:center; gap:6px; font-size:12px; font-weight:500; color:var(--ok-500);">
                 <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2">
                   <path stroke-linecap="round" stroke-linejoin="round" d="M9 12.75L11.25 15 15 9.75M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
                 </svg>
                 Ready to migrate
               </span>
-              <span v-else style="display:flex; align-items:center; gap:6px; font-size:12px; font-weight:500; color:#fbbf24;">
+              <span v-else style="display:flex; align-items:center; gap:6px; font-size:12px; font-weight:500; color:var(--warn-400);">
                 <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2">
                   <path stroke-linecap="round" stroke-linejoin="round" d="M12 9v3.75m-9.303 3.376c-.866 1.5.217 3.374 1.948 3.374h14.71c1.73 0 2.813-1.874 1.948-3.374L13.949 3.378c-.866-1.5-3.032-1.5-3.898 0L2.697 16.126zM12 15.75h.007v.008H12v-.008z" />
                 </svg>
@@ -137,7 +129,7 @@
                 <input
                   v-model="targetConfig.ssl"
                   type="checkbox"
-                  style="accent-color:#fbbf24;"
+                  style="accent-color:var(--warn-400);"
                   :disabled="isMigrating"
                 />
                 <span style="font-size:13px; color:var(--text-mid);">SSL</span>
@@ -159,7 +151,7 @@
               {{ testingConnection ? 'Testing...' : 'Test Connection' }}
             </button>
 
-            <span v-if="connectionResult" style="display:flex; align-items:center; gap:6px; font-size:13px;" :style="connectionResult.success ? 'color:#34d399;' : 'color:#f43f5e;'">
+            <span v-if="connectionResult" style="display:flex; align-items:center; gap:6px; font-size:13px;" :style="connectionResult.success ? 'color:var(--ok-500);' : 'color:var(--ember-500);'">
               <svg v-if="connectionResult.success" class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2">
                 <path stroke-linecap="round" stroke-linejoin="round" d="M9 12.75L11.25 15 15 9.75M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
               </svg>
@@ -204,7 +196,7 @@
               <input
                 v-model="group.include"
                 type="checkbox"
-                style="margin-top:2px; accent-color:#fbbf24;"
+                style="margin-top:2px; accent-color:var(--warn-400);"
               />
               <div style="flex:1; min-width:0;">
                 <div style="display:flex; align-items:center; gap:8px;">
@@ -218,9 +210,9 @@
           </div>
 
           <div style="padding-top:8px; display:flex; justify-content:flex-end; gap:12px; align-items:center;">
-            <button @click="selectAllGroups" :disabled="isMigrating" style="font-size:12px; color:#fbbf24; cursor:pointer; border:none; background:none;" :style="isMigrating ? 'opacity:0.4;' : ''">Select all</button>
+            <button @click="selectAllGroups" :disabled="isMigrating" style="font-size:12px; color:var(--warn-400); cursor:pointer; border:none; background:none;" :style="isMigrating ? 'opacity:0.4;' : ''">Select all</button>
             <span style="font-size:12px; color:var(--text-faint);">|</span>
-            <button @click="selectNoneGroups" :disabled="isMigrating" style="font-size:12px; color:#fbbf24; cursor:pointer; border:none; background:none;" :style="isMigrating ? 'opacity:0.4;' : ''">Schema only</button>
+            <button @click="selectNoneGroups" :disabled="isMigrating" style="font-size:12px; color:var(--warn-400); cursor:pointer; border:none; background:none;" :style="isMigrating ? 'opacity:0.4;' : ''">Schema only</button>
           </div>
         </div>
       </div>
@@ -254,7 +246,7 @@
             <div v-if="!canStartMigration" style="font-size:12px; color:var(--text-low);">
               <span v-if="!connectionTested">Test the target connection first</span>
             </div>
-            <div v-else-if="!bothMaintenanceOn" style="display:flex; align-items:center; gap:6px; font-size:12px; color:#fbbf24;">
+            <div v-else-if="!bothMaintenanceOn" style="display:flex; align-items:center; gap:6px; font-size:12px; color:var(--warn-400);">
               <svg class="w-4 h-4" style="flex-shrink:0;" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2">
                 <path stroke-linecap="round" stroke-linejoin="round" d="M12 9v3.75m-9.303 3.376c-.866 1.5.217 3.374 1.948 3.374h14.71c1.73 0 2.813-1.874 1.948-3.374L13.949 3.378c-.866-1.5-3.032-1.5-3.898 0L2.697 16.126zM12 15.75h.007v.008H12v-.008z" />
               </svg>
@@ -267,16 +259,16 @@
             <!-- Status bar -->
             <div style="display:flex; align-items:center; gap:12px;">
               <!-- Spinner for in-progress -->
-              <svg v-if="isMigrating" class="w-5 h-5 animate-spin" style="color:#fbbf24;" fill="none" viewBox="0 0 24 24">
+              <svg v-if="isMigrating" class="w-5 h-5 animate-spin" style="color:var(--warn-400);" fill="none" viewBox="0 0 24 24">
                 <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4" />
                 <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
               </svg>
               <!-- Success icon -->
-              <svg v-else-if="migrationStatus.status === 'complete'" class="w-5 h-5" style="color:#34d399;" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2">
+              <svg v-else-if="migrationStatus.status === 'complete'" class="w-5 h-5" style="color:var(--ok-500);" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2">
                 <path stroke-linecap="round" stroke-linejoin="round" d="M9 12.75L11.25 15 15 9.75M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
               </svg>
               <!-- Error icon -->
-              <svg v-else-if="migrationStatus.status === 'error'" class="w-5 h-5" style="color:#f43f5e;" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2">
+              <svg v-else-if="migrationStatus.status === 'error'" class="w-5 h-5" style="color:var(--ember-500);" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2">
                 <path stroke-linecap="round" stroke-linejoin="round" d="M12 9v3.75m9.303 3.376c-.866 1.5.217 3.374 1.948 3.374h14.71c1.73 0 2.813-1.874 1.948-3.374L13.949 3.378c-.866-1.5-3.032-1.5-3.898 0L2.697 16.126zM12 15.75h.007v.008H12v-.008z" />
               </svg>
 
@@ -300,7 +292,7 @@
 
             <!-- Error message -->
             <div v-if="migrationStatus.error" style="padding:12px; background:rgba(244,63,94,.08); border:1px solid rgba(244,63,94,.2); border-radius:10px;">
-              <p class="font-mono" style="font-size:13px; color:#fb7185; white-space:pre-wrap; word-break:break-all;">{{ migrationStatus.error }}</p>
+              <p class="font-mono" style="font-size:13px; color:var(--ember-400); white-space:pre-wrap; word-break:break-all;">{{ migrationStatus.error }}</p>
             </div>
 
             <!-- Output logs (collapsible) -->
@@ -345,7 +337,7 @@
           <!-- Validation results -->
           <div v-if="validationResult" style="margin-top:16px;">
             <div v-if="validationResult.error" style="padding:12px; background:rgba(244,63,94,.08); border:1px solid rgba(244,63,94,.2); border-radius:10px;">
-              <p style="font-size:13px; color:#fb7185;">{{ validationResult.error }}</p>
+              <p style="font-size:13px; color:var(--ember-400);">{{ validationResult.error }}</p>
             </div>
 
             <div v-else>
@@ -383,10 +375,10 @@
                       <td class="font-mono tabular-nums" style="text-align:right;">{{ formatNumber(row.sourceCount) }}</td>
                       <td class="font-mono tabular-nums" style="text-align:right;">{{ formatNumber(row.targetCount) }}</td>
                       <td style="text-align:center;">
-                        <svg v-if="row.match" class="w-4 h-4" style="color:#34d399; margin:0 auto;" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2">
+                        <svg v-if="row.match" class="w-4 h-4" style="color:var(--ok-500); margin:0 auto;" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2">
                           <path stroke-linecap="round" stroke-linejoin="round" d="M4.5 12.75l6 6 9-13.5" />
                         </svg>
-                        <svg v-else class="w-4 h-4" style="color:#f43f5e; margin:0 auto;" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2">
+                        <svg v-else class="w-4 h-4" style="color:var(--ember-500); margin:0 auto;" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2">
                           <path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12" />
                         </svg>
                       </td>

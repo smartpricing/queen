@@ -1,18 +1,7 @@
 <template>
-  <div class="view-container animate-fade-in">
+  <div class="view-container">
 
     <!-- Page head -->
-    <div class="page-head">
-      <div>
-        <div class="eyebrow">Queue management</div>
-        <h1><span class="accent">Queues</span></h1>
-        <p v-if="!loading">
-          <b class="font-mono">{{ formatNumber(filteredQueues.length) }}</b> queues ·
-          <b class="font-mono">{{ formatNumber(totalPartitions) }}</b> partitions
-        </p>
-      </div>
-    </div>
-
     <!-- Stat tiles -->
     <div style="display:grid; grid-template-columns:repeat(5,1fr); gap:16px; margin-bottom:20px;">
       <div class="stat">
@@ -22,19 +11,19 @@
       </div>
       <div class="stat">
         <div class="stat-label">Total Messages</div>
-        <div class="stat-value font-mono" style="color:#22d3ee;">{{ formatNumber(totalMessages) }}</div>
+        <div class="stat-value font-mono">{{ formatNumber(totalMessages) }}</div>
       </div>
       <div class="stat">
         <div class="stat-label">Pending</div>
-        <div class="stat-value font-mono" style="color:#fbbf24;">{{ formatNumber(totalPending) }}</div>
+        <div class="stat-value font-mono" :class="{ 'num': true, 'warn': totalPending >= 1000 && totalPending < 10000, 'bad': totalPending >= 10000 }">{{ formatNumber(totalPending) }}</div>
       </div>
       <div class="stat">
         <div class="stat-label">Processing</div>
-        <div class="stat-value font-mono" style="color:#fb923c;">{{ formatNumber(totalProcessing) }}</div>
+        <div class="stat-value font-mono">{{ formatNumber(totalProcessing) }}</div>
       </div>
       <div class="stat">
         <div class="stat-label">Active Queues</div>
-        <div class="stat-value font-mono" style="color:#34d399;">{{ formatNumber(activeQueues) }}</div>
+        <div class="stat-value font-mono">{{ formatNumber(activeQueues) }}</div>
       </div>
     </div>
 
@@ -114,7 +103,7 @@
               {{ queue.partitions || 1 }}
             </td>
             <td style="text-align:right;" class="font-mono tabular-nums">
-              <span style="color:#22d3ee;">{{ formatNumber(Math.max(0, queue.messages?.pending || 0)) }}</span>
+              <span class="num" :class="{ warn: Math.max(0, queue.messages?.pending || 0) >= 1000 && Math.max(0, queue.messages?.pending || 0) < 10000, bad: Math.max(0, queue.messages?.pending || 0) >= 10000 }">{{ formatNumber(Math.max(0, queue.messages?.pending || 0)) }}</span>
             </td>
             <td style="text-align:right; font-weight:600; color:var(--text-hi);" class="font-mono tabular-nums">
               {{ formatNumber(queue.messages?.total || 0) }}
@@ -134,8 +123,7 @@
                 </button>
                 <button
                   @click.stop="confirmDelete(queue)"
-                  class="btn-ghost"
-                  style="padding:6px; border-radius:6px; color:#f43f5e;"
+                  class="row-action-danger"
                   title="Delete queue"
                 >
                   <svg style="width:16px; height:16px;" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.5">

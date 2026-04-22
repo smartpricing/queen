@@ -1,5 +1,5 @@
 <template>
-  <div class="view-container animate-fade-in">
+  <div class="view-container">
 
     <!-- Loading state -->
     <div v-if="loading" style="display:flex; flex-direction:column; gap:20px;">
@@ -16,31 +16,26 @@
     </div>
 
     <template v-else-if="queueData || statusData">
-      <!-- Page head -->
-      <div class="page-head">
-        <div>
-          <div class="eyebrow">
-            <button @click="$router.push('/queues')" style="color:var(--text-low); cursor:pointer; background:none; border:none; padding:0; margin-right:6px;">
-              <svg style="width:16px; height:16px; vertical-align:middle;" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2">
-                <path stroke-linecap="round" stroke-linejoin="round" d="M10 19l-7-7m0 0l7-7m-7 7h18" />
-              </svg>
-            </button>
-            Queue detail
-          </div>
-          <h1><span class="accent">{{ queueData?.name || queueName }}</span></h1>
-          <p>
-            <span v-if="queueData?.namespace" style="margin-right:16px;">Namespace: <b>{{ queueData.namespace }}</b></span>
-            <span v-if="queueData?.task" style="margin-right:16px;">Task: <b>{{ queueData.task }}</b></span>
-            <span style="margin-right:16px;">Partitions: <b class="font-mono">{{ partitions.length }}</b></span>
-            <span style="font-size:11px; color:var(--text-low);">Created: {{ formatDate(queueData?.createdAt) }}</span>
-          </p>
-        </div>
-        <div class="actions">
+      <!-- Compact header: back · queue name · meta · actions -->
+      <div class="detail-bar">
+        <button @click="$router.push('/queues')" class="detail-back" title="Back to queues">
+          <svg style="width:14px; height:14px;" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="1.8">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M10 19l-7-7m0 0l7-7m-7 7h18" />
+          </svg>
+        </button>
+        <span class="detail-name font-mono">{{ queueData?.name || queueName }}</span>
+        <span class="detail-meta font-mono">
+          <span v-if="queueData?.namespace">{{ queueData.namespace }}</span>
+          <span v-if="queueData?.task">· {{ queueData.task }}</span>
+          <span>· {{ partitions.length }} partitions</span>
+          <span v-if="queueData?.createdAt">· {{ formatDate(queueData.createdAt) }}</span>
+        </span>
+        <div class="detail-actions">
           <button @click="showDeleteModal = true" class="btn btn-danger">
-            <svg style="width:16px; height:16px;" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <svg style="width:14px; height:14px;" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
             </svg>
-            Delete Queue
+            Delete queue
           </button>
         </div>
       </div>
@@ -53,19 +48,19 @@
         </div>
         <div class="stat">
           <div class="stat-label">Pending</div>
-          <div class="stat-value font-mono" style="color:#22d3ee;">{{ formatNumber(Math.max(0, totalMessages.pending)) }}</div>
+          <div class="stat-value font-mono num" :class="{ warn: Math.max(0, totalMessages.pending) > 1000 && Math.max(0, totalMessages.pending) < 10000, bad: Math.max(0, totalMessages.pending) >= 10000 }">{{ formatNumber(Math.max(0, totalMessages.pending)) }}</div>
         </div>
         <div class="stat">
           <div class="stat-label">Processing</div>
-          <div class="stat-value font-mono" style="color:#fbbf24;">{{ formatNumber(totalMessages.processing) }}</div>
+          <div class="stat-value font-mono">{{ formatNumber(totalMessages.processing) }}</div>
         </div>
         <div class="stat">
           <div class="stat-label">Completed</div>
-          <div class="stat-value font-mono" style="color:#34d399;">{{ formatNumber(totalMessages.completed) }}</div>
+          <div class="stat-value font-mono">{{ formatNumber(totalMessages.completed) }}</div>
         </div>
         <div class="stat">
           <div class="stat-label">Failed / DLQ</div>
-          <div class="stat-value font-mono" style="color:#f43f5e;">{{ formatNumber(totalMessages.failed + totalMessages.deadLetter) }}</div>
+          <div class="stat-value font-mono num" :class="{ bad: (totalMessages.failed + totalMessages.deadLetter) > 0 }">{{ formatNumber(totalMessages.failed + totalMessages.deadLetter) }}</div>
         </div>
       </div>
 
@@ -175,10 +170,10 @@
                 </td>
                 <td style="text-align:right;" class="font-mono tabular-nums">{{ formatNumber(Math.max(0, partition.messages?.pending || 0)) }}</td>
                 <td style="text-align:right;" class="font-mono tabular-nums">{{ formatNumber(partition.messages?.processing || 0) }}</td>
-                <td style="text-align:right; color:#34d399;" class="font-mono tabular-nums">
+                <td style="text-align:right;" class="font-mono tabular-nums">
                   {{ formatNumber(partition.messages?.completed || 0) }}
                 </td>
-                <td style="text-align:right; color:#f43f5e;" class="font-mono tabular-nums">
+                <td style="text-align:right;" class="font-mono tabular-nums num" :class="{ bad: (partition.messages?.failed || 0) > 0 }">
                   {{ formatNumber(partition.messages?.failed || 0) }}
                 </td>
                 <td style="text-align:right;">

@@ -7,15 +7,83 @@ Real-world performance testing of Queen MQ under sustained production-like workl
 - **Hardware**: 32 cores, 64GB RAM, 2TB NVMe disk
 - **Deployment**: Docker containers (Queen + PostgreSQL)
 - **Network**: Docker bridge network, no CPU pinning
-- **Queen Version**: 0.11.0
+- **Queen Version**: 0.11.0 (historical results) / `nagle` branch @ 86c1547 (April 2026 refresh)
 
 ## Summary
 
 | Test | Throughput | Duration | Resources |
 |------|------------|----------|-----------|
 | **Sustained Load** | ~10,000 req/s | 3 days continuous | Queen: 133 MB RAM, ~3 cores |
-| **Batch Push** | ~31,000 msg/s | Sustained | Disk: ~1 GB/s write |
+| **Batch Push (0.11.0)** | ~31,000 msg/s | Sustained | Disk: ~1 GB/s write |
+| **Batch Push (2026-04 refresh)** | **47,300 msg/s** (batch=100, 1 KB) | 60 s, zero errors | PG at 36-40 % of 24 cores |
+| **High-payload ingestion** | **19,005 msg/s = 194 MB/s** (batch=10, 10 KB) | 60 s, zero errors | PG at ~69 % of 16 cores |
 | **Consumer Groups** | 60,000 msg/s (10 groups) | Sustained | Queen: 1 GB RAM, ~3 cores |
+
+---
+
+## 0. 2026-04 Refresh — Server-Box Saturation Campaign
+
+**Goal**: re-measure peak throughput on a dedicated 32-core box after the libqueen refactor (per-type queues, Triton-style BatchPolicy, Vegas adaptive concurrency, event-driven drain with submit-kick / slot-free-kick).
+
+### Configuration
+
+- **Host**: dedicated 32-core / 62 GB Ubuntu 24.04 bench box
+- **PostgreSQL**: default tuning, `synchronous_commit=on` (note: stricter than the 0.11.0 run below which used `synchronous_commit=off`)
+- **Queen**: `NUM_WORKERS=10`, `SIDECAR_POOL_SIZE=250`, `DB_POOL_SIZE=50`, libqueen defaults (`QUEEN_PUSH_MAX_CONCURRENT=24`, `QUEEN_VEGAS_MAX_LIMIT=32`, `QUEEN_VEGAS_BETA=12`)
+- **Harness**: custom `test-perf/scripts/sweep-cores-payload.sh` sweep over PG cores × push_batch × payload, 60 s per run
+- **Ground truth**: PG `n_tup_ins` diff over the measurement window
+
+### Peak Throughput Results
+
+All rows at `PG_CORES=24`, zero errors, zero non-2xx across all runs, buffer hit ratio 100 %:
+
+| Queen workers | push_batch | payload | **msg/s** | bytes/s | msgs/commit | PG util |
+|---------------|------------|---------|-----------|---------|-------------|---------|
+| 2 | 10 | 1 KB | 24,103 | 24.1 MB/s | 163 | 13 % |
+| 10 | 10 | 1 KB | 35,234 | 35.2 MB/s | 54 | 27 % |
+| 16 | 10 | 1 KB | 35,932 | 35.9 MB/s | 32 | 29 % |
+| **10** | **100** | **1 KB** | **47,300** | **47.3 MB/s** | **110** | **40 %** |
+| 10 | 10 | 10 KB | 18,087 | **185 MB/s** | 40 | ~30 % |
+| 16 | 10 | 10 KB | **19,005** | **194 MB/s** | 26 | 69 % |
+
+### Scaling Behaviour (PG cores sweep, 10 queen workers)
+
+| PG cores | batch=10 / 1 KB | batch=10 / 10 KB (MB/s) |
+|----------|-----------------|--------------------------|
+| 1 | 7,233 | 32.7 |
+| 2 | 11,903 | 58.4 |
+| 4 | 20,613 | 91.1 |
+| 8 | 29,333 | 138.8 |
+| 16 | 33,783 | 184.8 |
+| 24 | **35,234** | **185.2** |
+
+### Bottleneck Hierarchy (this hardware)
+
+```
+  Producer (autocannon 10w × 200c)  ← THE CEILING
+      ~3.6 k req/s @ batch=10
+      ~490 req/s   @ batch=100
+                ↓  HTTP
+  Queen server (10 workers)
+      Observed: 44-73 % of max CPU — 2-5 cores always idle
+                ↓  libpq
+  PostgreSQL (24 cores, default tuning)
+      Observed: 27-40 % of max — 14+ cores always idle
+```
+
+Raising Queen workers 10 → 16 yielded only a 2-6 % gain; PG utilization stayed below 70 %. **The HTTP producer is now the limiting factor**, not Queen or PostgreSQL.
+
+### Campaign-over-Campaign Improvement (120 s, 3-scenario canonical harness)
+
+Comparing the `nagle` branch against the `master` baseline (same hardware, same 3 scenarios, PG ground truth):
+
+| Scenario | master `pg_ins/s` | nagle `pg_ins/s` | Δ | nagle push p99 | Δ p99 |
+|----------|-------------------|-------------------|------|----------------|-------|
+| S0 (2c PG, 1 queen worker) | 5,214 | **9,026** | **+73 %** | 473 ms | **−60 %** |
+| S1 (2c PG, 2 queen workers) | 3,165 | **7,052** | **+123 %** | 618 ms | **−61 %** |
+| S3 (4c PG, 2 queen workers, 2× load) | 2,686 | **7,221** | **+169 %** | 1,156 ms | **−83 %** |
+
+See [`test-perf/results.md`](https://github.com/smartpricing/queen/blob/master/test-perf/results.md) for the full methodology, harness evolution, and per-campaign analysis.
 
 ---
 

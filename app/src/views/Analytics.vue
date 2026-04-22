@@ -1,15 +1,7 @@
 <template>
-  <div class="view-container animate-fade-in">
+  <div class="view-container">
 
     <!-- Page head -->
-    <div class="page-head">
-      <div>
-        <div class="eyebrow">Insights</div>
-        <h1><span class="accent">Analytics</span></h1>
-        <p>Throughput, distribution and health metrics for your message pipeline.</p>
-      </div>
-    </div>
-
     <!-- Filters card -->
     <div class="card" style="margin-bottom:20px;">
       <div class="card-body" style="display:flex; flex-direction:column; gap:16px;">
@@ -205,32 +197,32 @@
             </div>
             <div class="stat">
               <div class="stat-label">Pending</div>
-              <div class="stat-value font-mono" style="color:#22d3ee;">
+              <div class="stat-value font-mono">
                 {{ formatNumber(Math.max(0, scopedMessages?.pending || 0)) }}
               </div>
             </div>
             <div class="stat">
               <div class="stat-label">Processing</div>
-              <div class="stat-value font-mono" style="color:#fbbf24;">
+              <div class="stat-value font-mono">
                 {{ formatNumber(scopedMessages?.processing || 0) }}
               </div>
             </div>
             <template v-if="!hasActiveFilter">
               <div class="stat">
                 <div class="stat-label">Completed</div>
-                <div class="stat-value font-mono" style="color:#34d399;">
+                <div class="stat-value font-mono">
                   {{ formatNumber(scopedMessages?.completed || 0) }}
                 </div>
               </div>
               <div class="stat">
                 <div class="stat-label">Failed</div>
-                <div class="stat-value font-mono" style="color:#fb923c;">
+                <div class="stat-value font-mono num" :class="{ bad: (scopedMessages?.failed || 0) > 0 }">
                   {{ formatNumber(scopedMessages?.failed || 0) }}
                 </div>
               </div>
               <div class="stat">
                 <div class="stat-label">Dead Letter</div>
-                <div class="stat-value font-mono" style="color:#f43f5e;">
+                <div class="stat-value font-mono num" :class="{ bad: (scopedMessages?.deadLetter || 0) > 0 }">
                   {{ formatNumber(scopedMessages?.deadLetter || 0) }}
                 </div>
               </div>
@@ -338,6 +330,7 @@ import { ref, computed, watch, onMounted } from 'vue'
 import { analytics, resources } from '@/api'
 import { formatNumber } from '@/composables/useApi'
 import { useRefresh } from '@/composables/useRefresh'
+import { stateColor, chartColor } from '@/composables/useChartTheme'
 import BaseChart from '@/components/BaseChart.vue'
 
 // State
@@ -526,17 +519,17 @@ const queueActivityData = computed(() => {
       {
         label: 'Pending',
         data: sorted.map(q => q.messages?.pending || 0),
-        backgroundColor: 'rgba(6, 182, 212, 0.7)',
+        backgroundColor: stateColor('Pending').fill,
       },
       {
         label: 'Processing',
         data: sorted.map(q => q.messages?.processing || 0),
-        backgroundColor: 'rgba(245, 158, 11, 0.7)',
+        backgroundColor: stateColor('Processing').fill,
       },
       {
         label: 'Completed',
         data: sorted.map(q => q.messages?.completed || 0),
-        backgroundColor: 'rgba(16, 185, 129, 0.7)',
+        backgroundColor: stateColor('Completed').fill,
       }
     ]
   }
@@ -548,18 +541,21 @@ const messageDistributionData = computed(() => {
 
   // When a filter is active we only have pending/processing per queue,
   // so the full distribution is only meaningful system-wide.
-  const entries = hasActiveFilter.value
+  const baseEntries = hasActiveFilter.value
     ? [
-        { label: 'Pending', value: Math.max(0, data.pending || 0), color: 'rgba(6, 182, 212, 0.8)' },
-        { label: 'Processing', value: data.processing || 0, color: 'rgba(245, 158, 11, 0.8)' }
-      ].filter(e => e.value > 0)
+        { label: 'Pending',    value: Math.max(0, data.pending || 0) },
+        { label: 'Processing', value: data.processing || 0 }
+      ]
     : [
-        { label: 'Pending', value: Math.max(0, data.pending || 0), color: 'rgba(6, 182, 212, 0.8)' },
-        { label: 'Processing', value: data.processing || 0, color: 'rgba(245, 158, 11, 0.8)' },
-        { label: 'Completed', value: data.completed || 0, color: 'rgba(16, 185, 129, 0.8)' },
-        { label: 'Failed', value: data.failed || 0, color: 'rgba(249, 115, 22, 0.8)' },
-        { label: 'Dead Letter', value: data.deadLetter || 0, color: 'rgba(244, 63, 94, 0.8)' }
-      ].filter(e => e.value > 0)
+        { label: 'Pending',     value: Math.max(0, data.pending || 0) },
+        { label: 'Processing',  value: data.processing || 0 },
+        { label: 'Completed',   value: data.completed || 0 },
+        { label: 'Failed',      value: data.failed || 0 },
+        { label: 'Dead Letter', value: data.deadLetter || 0 }
+      ]
+  const entries = baseEntries
+    .filter(e => e.value > 0)
+    .map(e => ({ ...e, color: stateColor(e.label).fill }))
   
   // If all zeros, return empty to show "no data" message
   if (entries.length === 0) {

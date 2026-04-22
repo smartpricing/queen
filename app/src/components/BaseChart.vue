@@ -7,6 +7,7 @@
 <script setup>
 import { ref, watch, onMounted, onUnmounted, nextTick } from 'vue'
 import { useTheme } from '@/composables/useTheme'
+import { chartPalette, chartTheme } from '@/composables/useChartTheme'
 import {
   Chart, LineController, BarController, DoughnutController,
   CategoryScale, LinearScale, PointElement, LineElement,
@@ -31,13 +32,8 @@ const canvas = ref(null)
 const container = ref(null)
 let chart = null
 
-const COLORS = {
-  ice: { line: '#22d3ee', fill: 'rgba(34,211,238,0.15)' },
-  crown: { line: '#fbbf24', fill: 'rgba(251,191,36,0.12)' },
-  ember: { line: '#f43f5e', fill: 'rgba(244,63,94,0.12)' },
-  ok: { line: '#34d399', fill: 'rgba(52,211,153,0.12)' },
-}
-const PALETTE = [COLORS.ice, COLORS.crown, COLORS.ember, COLORS.ok]
+// Palette imported from useChartTheme — single source of truth.
+const PALETTE = chartPalette
 
 function buildChartData(data) {
   const datasets = (data.datasets || []).map((ds, i) => {
@@ -46,9 +42,9 @@ function buildChartData(data) {
       ...ds,
       borderColor: ds.borderColor || c.line,
       backgroundColor: ds.fill ? c.fill : (ds.backgroundColor || c.fill),
-      borderWidth: ds.borderWidth || 1.6,
+      borderWidth: ds.borderWidth || 1.4,
       pointRadius: 0,
-      pointHoverRadius: 4,
+      pointHoverRadius: 3,
       pointHoverBackgroundColor: ds.borderColor || c.line,
       tension: 0.4,
       fill: ds.fill !== false,
@@ -58,11 +54,12 @@ function buildChartData(data) {
 }
 
 function getThemeOptions() {
-  const gridColor = isDark.value ? 'rgba(255,255,255,0.04)' : 'rgba(10,10,10,0.06)'
-  const tickColor = isDark.value ? '#6a6a62' : '#8a8a86'
-  const tooltipBg = isDark.value ? '#17171e' : '#fff'
-  const tooltipText = isDark.value ? '#f5f5f1' : '#0a0a0a'
-  const tooltipBorder = isDark.value ? 'rgba(255,255,255,0.08)' : 'rgba(10,10,10,0.08)'
+  const gridColor = isDark.value ? chartTheme.grid : 'rgba(10,10,10,0.06)'
+  const tickColor = isDark.value ? chartTheme.tick : '#8a8a86'
+  const tooltipBg = isDark.value ? chartTheme.tooltipBg : '#fff'
+  const tooltipText = isDark.value ? chartTheme.tooltipText : '#0a0a0a'
+  const tooltipBody = isDark.value ? chartTheme.tooltipBody : '#6a6a6a'
+  const tooltipBorder = isDark.value ? chartTheme.tooltipBorder : 'rgba(10,10,10,0.08)'
 
   return {
     responsive: true,
@@ -73,15 +70,15 @@ function getThemeOptions() {
       tooltip: {
         backgroundColor: tooltipBg,
         titleColor: tooltipText,
-        bodyColor: tickColor,
+        bodyColor: tooltipBody,
         borderColor: tooltipBorder,
         borderWidth: 1,
-        cornerRadius: 8,
-        padding: { top: 8, bottom: 8, left: 12, right: 12 },
-        titleFont: { family: 'Inter', size: 12, weight: 500 },
+        cornerRadius: 4,
+        padding: { top: 6, bottom: 6, left: 10, right: 10 },
+        titleFont: { family: 'Inter', size: 11.5, weight: 500 },
         bodyFont: { family: 'JetBrains Mono', size: 11 },
         displayColors: true,
-        boxWidth: 8, boxHeight: 8, boxPadding: 4,
+        boxWidth: 7, boxHeight: 7, boxPadding: 3,
       },
     },
     scales: props.type === 'line' || props.type === 'bar' ? {
@@ -110,7 +107,7 @@ function createChart() {
   const mergedOpts = { ...getThemeOptions() }
   if (props.options?.plugins) mergedOpts.plugins = { ...mergedOpts.plugins, ...props.options.plugins }
   if (props.options?.scales?.y?.title) {
-    mergedOpts.scales.y.title = { ...props.options.scales.y.title, color: isDark.value ? '#6a6a62' : '#8a8a86' }
+    mergedOpts.scales.y.title = { ...props.options.scales.y.title, color: isDark.value ? chartTheme.axisTitle : '#8a8a86' }
   }
 
   chart = new Chart(ctx, {

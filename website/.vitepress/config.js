@@ -13,9 +13,11 @@ export default defineConfig({
   title: 'Queen MQ',
   description: 'Modern PostgreSQL-backed Message Queue System',
   base: '/queen/',
+  appearance: 'force-dark',
   head: [
     ['link', { rel: 'icon', type: 'image/png', href: '/queen/queen_head.png' }],
-    ['meta', { name: 'theme-color', content: '#ec4899' }],
+    ['meta', { name: 'theme-color', content: '#141415' }],
+    ['meta', { name: 'color-scheme', content: 'dark' }],
     ['meta', { property: 'og:type', content: 'website' }],
     ['meta', { property: 'og:title', content: 'Queen MQ - PostgreSQL-backed Message Queue' }],
     ['meta', { property: 'og:description', content: 'High-performance, feature-rich message queue system built on PostgreSQL' }],

@@ -1,15 +1,7 @@
 <template>
-  <div class="view-container animate-fade-in">
+  <div class="view-container">
 
     <!-- Page head -->
-    <div class="page-head">
-      <div>
-        <div class="eyebrow">Consumer groups</div>
-        <h1><span class="accent">Consumers</span></h1>
-        <p>Monitor consumer group health, lag, and partition assignments.</p>
-      </div>
-    </div>
-
     <!-- Stats -->
     <div class="grid-4" style="margin-bottom:20px;">
       <div class="stat">
@@ -18,15 +10,15 @@
       </div>
       <div class="stat">
         <div class="stat-label">Active Consumers</div>
-        <div class="stat-value font-mono" style="color:#22d3ee;">{{ formatNumber(totalConsumers) }}</div>
+        <div class="stat-value font-mono">{{ formatNumber(totalConsumers) }}</div>
       </div>
       <div class="stat">
         <div class="stat-label">Partitions Behind</div>
-        <div class="stat-value font-mono" style="color:#fbbf24;">{{ formatNumber(totalPartitionsBehind) }}</div>
+        <div class="stat-value font-mono num" :class="{ warn: totalPartitionsBehind > 0 && totalPartitionsBehind < 1000, bad: totalPartitionsBehind >= 1000 }">{{ formatNumber(totalPartitionsBehind) }}</div>
       </div>
       <div class="stat">
         <div class="stat-label">Lagging Groups</div>
-        <div class="stat-value font-mono" :style="{ color: laggingGroups > 0 ? '#f43f5e' : '#34d399' }">
+        <div class="stat-value font-mono num" :class="{ bad: laggingGroups > 0 }">
           {{ laggingGroups }}
         </div>
       </div>
@@ -36,7 +28,7 @@
     <div class="card" style="margin-bottom:20px;">
       <div class="card-header" style="justify-content:space-between;">
         <div style="display:flex; align-items:center; gap:10px;">
-          <svg style="width:16px; height:16px; color:#fbbf24;" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <svg style="width:14px; height:14px; color:var(--warn-400);" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
           </svg>
           <h3>Lagging Partitions</h3>
@@ -58,7 +50,7 @@
           <div style="margin-bottom:12px;">
             <span class="label-xs">
               Minimum Lag Threshold:
-              <span style="color:#fbbf24; font-weight:600;">{{ getLagLabel(lagThreshold) }}</span>
+              <span style="color:var(--warn-400); font-weight:600;">{{ getLagLabel(lagThreshold) }}</span>
             </span>
           </div>
 
@@ -129,7 +121,7 @@
                   </code>
                 </td>
                 <td style="text-align:right;">
-                  <span class="font-mono tabular-nums" style="font-weight:500; color:#fbbf24;">{{ formatNumber(partition.offset_lag) }}</span>
+                  <span class="font-mono tabular-nums num warn" style="font-weight:500;">{{ formatNumber(partition.offset_lag) }}</span>
                 </td>
                 <td style="text-align:right;">
                   <span class="font-mono tabular-nums" style="font-weight:500;" :style="{ color: (partition.time_lag_seconds || 0) > 600 ? '#f43f5e' : 'var(--text-mid)' }">
@@ -147,7 +139,7 @@
                 <td style="text-align:right;">
                   <button
                     @click="handleSkipPartition(partition)"
-                    class="btn btn-ghost" style="font-size:11px; color:#fbbf24;"
+                    class="btn btn-ghost" style="font-size:11px;"
                     :disabled="skippingPartition === `${partition.consumer_group}-${partition.queue_name}-${partition.partition_name}`"
                   >
                     <span v-if="skippingPartition === `${partition.consumer_group}-${partition.queue_name}-${partition.partition_name}`">Skipping…</span>
@@ -161,7 +153,7 @@
 
         <!-- Empty state -->
         <div v-else style="text-align:center; padding:32px 0;">
-          <svg style="width:48px; height:48px; margin:0 auto 12px; color:#34d399;" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <svg style="width:48px; height:48px; margin:0 auto 12px; color:var(--ok-500);" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
           </svg>
           <p style="font-weight:500; color:var(--text-hi);">No lagging partitions found</p>
@@ -193,7 +185,7 @@
           <input
             v-model="showLaggingOnly"
             type="checkbox"
-            style="width:16px; height:16px; accent-color:#fbbf24;"
+            style="width:16px; height:16px; accent-color:var(--accent);"
           />
           Show lagging only
         </label>
@@ -260,29 +252,29 @@
                 <span
                   style="display:inline-flex; align-items:center; gap:6px; font-size:11px; font-weight:500; padding:2px 8px; border-radius:999px;"
                   :style="consumer.state === 'Lagging'
-                    ? { color: '#fb7185', background: 'rgba(244,63,94,.12)', border: '1px solid rgba(244,63,94,.25)' }
+                    ? { color: 'var(--ember-400)', background: 'rgba(244,113,133,0.10)', border: '1px solid rgba(244,113,133,0.22)' }
                     : consumer.state === 'Dead'
                       ? { color: 'var(--text-mid)', background: 'rgba(255,255,255,.04)', border: '1px solid var(--bd-hi)' }
-                      : { color: '#34d399', background: 'rgba(52,211,153,.1)', border: '1px solid rgba(52,211,153,.2)' }"
+                      : { color: '#4ade80', background: 'rgba(74,222,128,.1)', border: '1px solid rgba(74,222,128,.2)' }"
                 >
                   <span
                     style="width:6px; height:6px; border-radius:99px; display:inline-block;"
                     :style="consumer.state === 'Lagging'
-                      ? { background: '#f43f5e', boxShadow: '0 0 8px rgba(244,63,94,.4)', animation: 'pulse-ring 1.8s ease-out infinite' }
+                      ? { background: '#f43f5e', animation: 'pulse-ring 1.8s ease-out infinite' }
                       : consumer.state === 'Dead'
                         ? { background: 'var(--text-low)' }
-                        : { background: '#34d399', boxShadow: '0 0 8px #34d399' }"
+                        : { background: '#4ade80', boxShadow: 'none' }"
                   />
                   {{ getStatusText(consumer) }}
                 </span>
               </td>
               <td>
-                <span style="font-size:13px; color:#fbbf24;">
+                <span style="font-size:13px; color:var(--warn-400);">
                   {{ consumer.queueName || '-' }}
                 </span>
               </td>
               <td style="text-align:right;">
-                <span class="font-mono tabular-nums" style="font-weight:500; color:#22d3ee;">
+                <span class="font-mono tabular-nums" style="font-weight:500;">
                   {{ consumer.members || 0 }}
                 </span>
               </td>
@@ -338,7 +330,7 @@
                   </button>
                   <button
                     @click="confirmDelete(consumer)"
-                    class="btn btn-ghost btn-icon" style="color:#fb7185;"
+                    class="btn btn-ghost btn-icon btn-danger"
                     title="Delete consumer group for this queue"
                   >
                     <svg style="width:16px; height:16px;" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.5">
@@ -388,7 +380,7 @@
           <div class="grid-4" style="margin-bottom:24px;">
             <div class="stat" style="text-align:center; min-height:auto; padding:16px;">
               <div class="stat-label" style="justify-content:center;">Members</div>
-              <div class="stat-value font-mono" style="font-size:24px; color:#22d3ee;">
+              <div class="stat-value font-mono" style="font-size:24px;">
                 {{ selectedConsumer.members || 0 }}
               </div>
             </div>
@@ -397,9 +389,9 @@
               <div
                 style="font-size:18px; font-weight:600; margin-top:8px;"
                 :style="getStatusText(selectedConsumer) === 'Stable'
-                  ? { color: '#34d399' }
+                  ? { color: '#4ade80' }
                   : getStatusText(selectedConsumer) === 'Warning'
-                    ? { color: '#fbbf24' }
+                    ? { color: 'var(--warn-400)' }
                     : getStatusText(selectedConsumer) === 'Lagging'
                       ? { color: '#f43f5e' }
                       : { color: 'var(--text-hi)' }"
@@ -409,7 +401,7 @@
             </div>
             <div class="stat" style="text-align:center; min-height:auto; padding:16px;">
               <div class="stat-label" style="justify-content:center;">Lag Parts</div>
-              <div class="stat-value font-mono" style="font-size:24px;" :style="{ color: (selectedConsumer.partitionsWithLag || 0) > 0 ? '#fbbf24' : 'var(--text-hi)' }">
+              <div class="stat-value font-mono" style="font-size:24px;" :style="{ color: (selectedConsumer.partitionsWithLag || 0) > 0 ? 'var(--warn-400)' : 'var(--text-hi)' }">
                 {{ selectedConsumer.partitionsWithLag || 0 }}
               </div>
             </div>
@@ -475,7 +467,7 @@
           <input
             v-model="deleteMetadata"
             type="checkbox"
-            style="width:16px; height:16px; accent-color:#fbbf24;"
+            style="width:16px; height:16px; accent-color:var(--accent);"
           />
           Also delete subscription metadata
         </label>

@@ -1,27 +1,24 @@
 # Queen MQ - Partitioned Message Queue backed by PostgreSQL
 
-<div align="center">
+
 
 **Unlimited ordered partitions that never block each other. Consumer groups, replay, transactional delivery — ACID-guaranteed.**
 
 *Note that queen-mq is available also as a experimental PostgreSQL extension, see [pg_qpubsub](pg_qpubsub/README.md) for more details.*
 
-
-[![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE.md)
-[![Node](https://img.shields.io/badge/node-%3E%3D22.0.0-brightgreen.svg)](https://nodejs.org/)
-[![Python](https://img.shields.io/badge/python-3.8%2B-blue.svg)](https://www.python.org/)
-[![C++](https://img.shields.io/badge/C%2B%2B-17-blue.svg)](https://en.cppreference.com/w/cpp/17)
-[![libuv](https://img.shields.io/badge/libuv-1.48.0-blue.svg)](https://libuv.org/)
-[![libpq](https://img.shields.io/badge/libpq-15.5-blue.svg)](https://www.postgresql.org/)
-[![uWebSockets](https://img.shields.io/badge/uWebSockets-22.0.0-blue.svg)](https://github.com/uNetworking/uWebSockets)
+[License](LICENSE.md)
+[Node](https://nodejs.org/)
+[Python](https://www.python.org/)
+[C++](https://en.cppreference.com/w/cpp/17)
+[libuv](https://libuv.org/)
+[libpq](https://www.postgresql.org/)
+[uWebSockets](https://github.com/uNetworking/uWebSockets)
 
 📚 **[Complete Documentation](https://smartpricing.github.io/queen/)** • 🚀 **[Quick Start](https://smartpricing.github.io/queen/guide/quickstart)** • ⚖️ **[Comparison](https://smartpricing.github.io/queen/guide/comparison)**
 
-<p align="center">
-  <img src="assets/queen_logo.png" alt="Queen Logo" width="120" />
-</p>
 
-</div>
+
+
 
 ---
 
@@ -35,11 +32,10 @@ See [examples/base.js](examples/base.js) for a complete (push, consume, transact
 
 Born at [Smartness](https://www.linkedin.com/company/smartness-com/) to power **Smartchat**, Queen solves a unique problem: **unlimited FIFO partitions** where slow processing in one partition doesn't block others.
 
-<p align="center">
-  <img src="assets/dashboard.png" alt="Queen MQ Dashboard" height="350" />
-</p>
+
 
 Perfect for:
+
 - Processing messages in order, without losing them somewhere in the middle
 - Avoid slow message processing blocking other partitions, solving Head of Line Blocking problem
 - When you need tens of thousands of partitions to process messages in parallel, respecting the order of the messages
@@ -48,7 +44,7 @@ Perfect for:
 - Build event-driven microservices with exactly-once delivery guarantees
 - Critical systems that need to be highly available and reliable with zero message loss
 
-Its push peaks for single request is around 45k req/s, with sustatined load (PUSH+POP) around 10k req/s, and with consumer groups around 60k req/s.
+On a 32-core server with 24 PostgreSQL cores, Queen sustains **~47,300 msg/s** push throughput (batch=100, 1 KB payload) and **~194 MB/s** ingestion at 10 KB payloads, with zero errors and PostgreSQL running at 36-40 % of its cap. Sustained mixed PUSH+POP is around 10k req/s, and consumer-group fan-out reaches ~60k msg/s across 10 groups. See [test-perf/results.md](test-perf/results.md) for the full ledger.
 
 ## Quick Start
 
@@ -71,6 +67,7 @@ docker run -p 6632:6632 --network queen -e PG_HOST=qpg -e PG_PORT=5432 -e PG_PAS
 Then in another terminal, use cURL (or the client libraries) to push and consume messages
 
 **Push message:**
+
 ```bash
 curl -X POST http://localhost:6632/api/v1/push \
   -H "Content-Type: application/json" \
@@ -78,37 +75,42 @@ curl -X POST http://localhost:6632/api/v1/push \
 ```
 
 that returns something like:
+
 ```json
 [{"message_id": "...", "status": "queued", ...}]
 ```
 
 **Consume message:**
+
 ```bash
 curl "http://localhost:6632/api/v1/pop/queue/demo?autoAck=true"
 ```
 
 that returns something like:
+
 ```json
 {"messages": [{"data": {"hello": "world"}, ...}], "success": true}
 ```
 
-Then go to the dashboard (http://localhost:6632) to see the messages and the status of the queue.
+Then go to the dashboard ([http://localhost:6632](http://localhost:6632)) to see the messages and the status of the queue.
 
 ## Documentation
 
 📚 **[Complete Documentation](https://smartpricing.github.io/queen/)**
 
 ### Getting Started
+
 - [Quick Start Guide](https://smartpricing.github.io/queen/guide/quickstart)
 - [Basic Concepts](https://smartpricing.github.io/queen/guide/concepts)
 
 ### Client Libraries
+
 - [JavaScript Client](https://smartpricing.github.io/queen/clients/javascript)
 - [Python Client](https://smartpricing.github.io/queen/clients/python)
 - [C++ Client](https://smartpricing.github.io/queen/clients/cpp)
 - [HTTP API Reference](https://smartpricing.github.io/queen/api/http)
 
---- 
+---
 
 ## Structure of the repository
 
@@ -124,38 +126,41 @@ The repository is structured as follows:
 - `app`: Vue.js dashboard (vue 3)
 - `website`: Documentation website (vitepress)
 - `examples`: JS client examples
+
 ---
 
 ## Release History
 
 **JS clients from version 0.12.0 can be run inside a browser**
 
-| Server Version | Description | Compatible Clients |
-|----------------|-------------|-------------------|
-| **0.12.19** | Fix bug that on seek or cg delete do not deleted the watermark  | JS ≥0.7.4, Python ≥0.7.4 |
-| **0.12.18** | Improved charts and filters  | JS ≥0.7.4, Python ≥0.7.4 |
-| **0.12.17** | Improved stats  | JS ≥0.7.4, Python ≥0.7.4 |
-| **0.12.13** | Added watermark tracking for efficient wildcard POP discovery. x20 faster pop on high partition count queues | JS ≥0.7.4, Python ≥0.7.4 |
-| **0.12.12** | Built-in database migration (pg_dump \| pg_restore, no temp file, selective table groups, row count validation) | JS ≥0.7.4, Python ≥0.7.4 |
-| **0.12.10** | Fixed JWKS fetch over HTTPS (cpp-httplib TLS support) | JS ≥0.7.4, Python ≥0.7.4, 0.12.0 if needs to use |
-| **0.12.9** | Fixed server crash (SIGSEGV) on lease renewal, added EdDSA/JWKS auth, fixed examples | JS ≥0.7.4, Python ≥0.7.4, 0.12.0 if needs to use |
-| **0.12.8** | Added single partition move to now to frontend | JS ≥0.7.4, Python ≥0.7.4, 0.12.0 if needs to use |
-| **0.12.7** | Optimized cg metadata creation for new consumer groups | JS ≥0.7.4, Python ≥0.7.4, 0.12.0 if needs to use |
-| **0.12.6** | Improved slow cg discovery when there are tons of partitions | JS ≥0.7.4, Python ≥0.7.4, 0.12.0 if needs to use |
-| **0.12.5** | Fixed cg lag calculation for "new" cg at first message | JS ≥0.7.4, Python ≥0.7.4, 0.12.0 if needs to use |
-| **0.12.4** | Fixed window buffer debounce behavior | JS ≥0.7.4, Python ≥0.7.4, 0.12.0 if needs to use proxy auth |
-| **0.12.3** | Added JWT authentication | JS ≥0.7.4, Python ≥0.7.4, 0.12.0 if needs to use proxy auth |
-| **0.12.x** | New frontend and docs | JS ≥0.7.4, Python ≥0.7.4, 0.12.0 if needs to use proxy auth |
-| **0.11.x** | Libqueen 0.11.0; added stats tables and optimized analytics procedures, added DB statement timeout and stats reconcile interval | JS ≥0.7.4, Python ≥0.7.4 |
-| **0.10.x** | Total rewrite of the engine with libuv and stored procedures, removed streaming engine | JS ≥0.7.4, Python ≥0.7.4 |
-| **0.8.0** | Added Shared Cache with UDP sync for clustered deployment | JS ≥0.7.4, Python ≥0.7.4 |
-| **0.7.5** | First stable release | JS ≥0.7.4, Python ≥0.7.4 |
+
+| Server Version | Description                                                                                                                     | Compatible Clients                                          |
+| -------------- | ------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------- |
+| **0.12.19**    | Fix bug that on seek or cg delete do not deleted the watermark                                                                  | JS ≥0.7.4, Python ≥0.7.4                                    |
+| **0.12.18**    | Improved charts and filters                                                                                                     | JS ≥0.7.4, Python ≥0.7.4                                    |
+| **0.12.17**    | Improved stats                                                                                                                  | JS ≥0.7.4, Python ≥0.7.4                                    |
+| **0.12.13**    | Added watermark tracking for efficient wildcard POP discovery. x20 faster pop on high partition count queues                    | JS ≥0.7.4, Python ≥0.7.4                                    |
+| **0.12.12**    | Built-in database migration (pg_dump | pg_restore, no temp file, selective table groups, row count validation)                  | JS ≥0.7.4, Python ≥0.7.4                                    |
+| **0.12.10**    | Fixed JWKS fetch over HTTPS (cpp-httplib TLS support)                                                                           | JS ≥0.7.4, Python ≥0.7.4, 0.12.0 if needs to use            |
+| **0.12.9**     | Fixed server crash (SIGSEGV) on lease renewal, added EdDSA/JWKS auth, fixed examples                                            | JS ≥0.7.4, Python ≥0.7.4, 0.12.0 if needs to use            |
+| **0.12.8**     | Added single partition move to now to frontend                                                                                  | JS ≥0.7.4, Python ≥0.7.4, 0.12.0 if needs to use            |
+| **0.12.7**     | Optimized cg metadata creation for new consumer groups                                                                          | JS ≥0.7.4, Python ≥0.7.4, 0.12.0 if needs to use            |
+| **0.12.6**     | Improved slow cg discovery when there are tons of partitions                                                                    | JS ≥0.7.4, Python ≥0.7.4, 0.12.0 if needs to use            |
+| **0.12.5**     | Fixed cg lag calculation for "new" cg at first message                                                                          | JS ≥0.7.4, Python ≥0.7.4, 0.12.0 if needs to use            |
+| **0.12.4**     | Fixed window buffer debounce behavior                                                                                           | JS ≥0.7.4, Python ≥0.7.4, 0.12.0 if needs to use proxy auth |
+| **0.12.3**     | Added JWT authentication                                                                                                        | JS ≥0.7.4, Python ≥0.7.4, 0.12.0 if needs to use proxy auth |
+| **0.12.x**     | New frontend and docs                                                                                                           | JS ≥0.7.4, Python ≥0.7.4, 0.12.0 if needs to use proxy auth |
+| **0.11.x**     | Libqueen 0.11.0; added stats tables and optimized analytics procedures, added DB statement timeout and stats reconcile interval | JS ≥0.7.4, Python ≥0.7.4                                    |
+| **0.10.x**     | Total rewrite of the engine with libuv and stored procedures, removed streaming engine                                          | JS ≥0.7.4, Python ≥0.7.4                                    |
+| **0.8.0**      | Added Shared Cache with UDP sync for clustered deployment                                                                       | JS ≥0.7.4, Python ≥0.7.4                                    |
+| **0.7.5**      | First stable release                                                                                                            | JS ≥0.7.4, Python ≥0.7.4                                    |
+
 
 **[Full Release Notes →](https://smartpricing.github.io/queen/server/releases)**
 
---- 
+---
 
-## Bug fixing and improvements 
+## Bug fixing and improvements
 
 - Server 0.12.19: Fix bug that on seek or cg delete do not deleted the watermark
 - Server 0.12.17: Improved stats
@@ -182,10 +187,9 @@ Queen MQ is released under the [Apache 2.0 License](LICENSE.md).
 
 ---
 
-<div align="center">
+
 
 **Built with ❤️ by [Smartness](https://www.linkedin.com/company/smartness-com/)**
 
 *Why "Queen"? Because years ago, when I first read "queue", I read it as "queen" in my mind.*
 
-</div>

@@ -1,83 +1,33 @@
-import { ref, watch } from 'vue'
+import { ref } from 'vue'
 
-const COOKIE_NAME = 'queen-theme'
-const STORAGE_KEY = 'queen-theme'
+// Cursor theme is dark-only. Light mode has been retired.
+// The toggle button is kept in the Header component as a no-op until
+// phase 7 removes it completely; this composable prevents any stored
+// `queen-theme=light` cookie / localStorage value from flipping the app.
 
-// Cookie helpers
-function setCookie(name, value, days = 365) {
-  const expires = new Date()
-  expires.setTime(expires.getTime() + days * 24 * 60 * 60 * 1000)
-  document.cookie = `${name}=${value};expires=${expires.toUTCString()};path=/;SameSite=Lax`
-}
+const isDark = ref(true)
 
-function getCookie(name) {
-  const match = document.cookie.match(new RegExp('(^| )' + name + '=([^;]+)'))
-  return match ? match[2] : null
-}
+// Force dark class on <html>, clean up any lingering light class
+document.documentElement.classList.add('dark')
+document.documentElement.classList.remove('light')
 
-// Get initial theme value immediately (before Vue mounts)
-function getInitialTheme() {
-  // First check cookie
-  const cookieValue = getCookie(COOKIE_NAME)
-  if (cookieValue) {
-    return cookieValue === 'dark'
+// Also scrub persisted "light" preference so it doesn't try to bite again
+try {
+  if (typeof localStorage !== 'undefined' && localStorage.getItem('queen-theme') === 'light') {
+    localStorage.setItem('queen-theme', 'dark')
   }
-  
-  // Then check localStorage
-  const stored = localStorage.getItem(STORAGE_KEY)
-  if (stored) {
-    return stored === 'dark'
+  if (typeof document !== 'undefined') {
+    document.cookie = 'queen-theme=dark;path=/;SameSite=Lax;max-age=31536000'
   }
-  
-  // Fall back to system preference
-  return window.matchMedia('(prefers-color-scheme: dark)').matches
+} catch {
+  // storage/cookies may be unavailable in SSR or strict contexts; ignore
 }
-
-// Global reactive state - initialized with saved preference
-const isDark = ref(getInitialTheme())
-
-// Apply theme to DOM immediately on module load
-document.documentElement.classList.toggle('dark', isDark.value)
-document.documentElement.classList.toggle('light', !isDark.value)
 
 export function useTheme() {
   const toggleTheme = () => {
-    isDark.value = !isDark.value
+    // No-op: dark-only. Kept as a stable API so the Header button doesn't break.
   }
-
-  const setTheme = (dark) => {
-    isDark.value = dark
-  }
-
-  // Re-initialize theme (can be called manually if needed)
-  const initTheme = () => {
-    isDark.value = getInitialTheme()
-  }
-
-  // Sync with DOM, localStorage and cookie on changes
-  watch(isDark, (dark) => {
-    document.documentElement.classList.toggle('dark', dark)
-    document.documentElement.classList.toggle('light', !dark)
-    const themeValue = dark ? 'dark' : 'light'
-    localStorage.setItem(STORAGE_KEY, themeValue)
-    setCookie(COOKIE_NAME, themeValue)
-  })
-
-  return {
-    isDark,
-    toggleTheme,
-    setTheme,
-    initTheme
-  }
+  const setTheme = () => {}
+  const initTheme = () => {}
+  return { isDark, toggleTheme, setTheme, initTheme }
 }
-
-// Listen for system theme changes (only if no saved preference)
-if (typeof window !== 'undefined') {
-  window.matchMedia('(prefers-color-scheme: dark)')
-    .addEventListener('change', (e) => {
-      if (!getCookie(COOKIE_NAME) && !localStorage.getItem(STORAGE_KEY)) {
-        isDark.value = e.matches
-      }
-    })
-}
-

@@ -1,19 +1,11 @@
 <template>
-  <div class="view-container animate-fade-in">
+  <div class="view-container">
 
     <!-- Page head -->
-    <div class="page-head">
-      <div>
-        <div class="eyebrow">Queue browser</div>
-        <h1><span class="accent">Messages</span></h1>
-        <p>Browse, search and inspect messages across all queues.</p>
-      </div>
-    </div>
-
     <!-- Mode Indicator (for Bus Mode) -->
     <div v-if="queueMode && queueMode.type === 'bus'" class="card" style="padding:10px 14px; margin-bottom:16px;">
       <div style="display:flex; align-items:center; gap:8px; font-size:13px;">
-        <svg style="width:18px; height:18px; color:#a78bfa;" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        <svg style="width:16px; height:16px; color:var(--text-mid);" fill="none" stroke="currentColor" viewBox="0 0 24 24">
           <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0zm6 3a2 2 0 11-4 0 2 2 0 014 0zM7 10a2 2 0 11-4 0 2 2 0 014 0z" />
         </svg>
         <span style="font-weight:600; color:var(--text-hi);">Bus Mode Active</span>
@@ -280,7 +272,7 @@
           <p style="color:var(--text-low);">Loading details...</p>
         </div>
 
-        <div v-else-if="detailError" style="font-size:13px; color:#fb7185;">
+        <div v-else-if="detailError" style="font-size:13px; color:var(--ember-400);">
           {{ detailError }}
         </div>
 
@@ -332,7 +324,7 @@
 
               <div v-if="messageDetail.errorMessage">
                 <label class="label-xs" style="display:block; margin-bottom:6px;">Error Message</label>
-                <p style="font-size:13px; color:#fb7185;">{{ messageDetail.errorMessage }}</p>
+                <p style="font-size:13px; color:var(--ember-400);">{{ messageDetail.errorMessage }}</p>
               </div>
 
               <div v-if="messageDetail.retryCount">
@@ -378,7 +370,7 @@
                 <svg v-if="!payloadCopied" style="width:14px; height:14px;" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" />
                 </svg>
-                <svg v-else style="width:14px; height:14px; color:#34d399;" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <svg v-else style="width:14px; height:14px; color:#4ade80;" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7" />
                 </svg>
                 {{ payloadCopied ? 'Copied!' : 'Copy' }}
@@ -413,8 +405,8 @@
           <!-- Actions -->
           <div style="display:flex; flex-direction:column; gap:8px; padding-top:8px;">
             <!-- Completed message info -->
-            <div v-if="messageDetail.status === 'completed'" class="card" style="padding:12px 14px; border-color:rgba(52,211,153,.2);">
-              <div style="display:flex; gap:8px; align-items:center; font-size:13px; color:#34d399;">
+            <div v-if="messageDetail.status === 'completed'" class="card" style="padding:12px 14px; border-color:rgba(74,222,128,.2);">
+              <div style="display:flex; gap:8px; align-items:center; font-size:13px; color:#4ade80;">
                 <svg style="width:18px; height:18px; flex-shrink:0;" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
                 </svg>
@@ -455,7 +447,7 @@
             </button>
           </div>
 
-          <div v-if="actionError" style="font-size:13px; color:#fb7185; margin-top:16px;">
+          <div v-if="actionError" style="font-size:13px; color:var(--ember-400); margin-top:16px;">
             {{ actionError }}
           </div>
         </template>

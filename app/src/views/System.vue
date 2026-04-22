@@ -1,15 +1,7 @@
 <template>
-  <div class="view-container animate-fade-in">
+  <div class="view-container">
 
     <!-- Page head -->
-    <div class="page-head">
-      <div>
-        <div class="eyebrow">Observability</div>
-        <h1>System <span class="accent">Metrics</span></h1>
-        <p>Queue operations, system resources, and Postgres internals.</p>
-      </div>
-    </div>
-
     <!-- Controls -->
     <div class="card" style="padding:12px 16px; margin-bottom:20px;">
       <!-- Primary row: Source (left) and Range (right) -->
@@ -132,7 +124,7 @@
               style="display:inline-flex; align-items:center; gap:6px; padding:3px 10px; border-radius:999px; font-size:11px; font-weight:500; cursor:pointer; border:1px solid var(--bd-hi); transition:.15s;"
               :class="selectedThroughputMetrics[metric.key] ? metric.activeClass : 'opacity-50'"
             >
-              <span style="width:7px; height:7px; border-radius:99px;" :class="selectedThroughputMetrics[metric.key] ? metric.dotClass : 'bg-gray-400'" />
+              <span style="width:6px; height:6px; border-radius:99px;" :style="{ background: selectedThroughputMetrics[metric.key] ? metric.activeDot : 'var(--text-faint)' }" />
               {{ metric.label }}
             </button>
           </div>
@@ -184,7 +176,7 @@
                 style="display:inline-flex; align-items:center; gap:6px; padding:3px 10px; border-radius:999px; font-size:11px; font-weight:500; cursor:pointer; border:1px solid var(--bd-hi); transition:.15s;"
                 :class="selectedEventLoopMetrics[metric.key] ? metric.activeClass : 'opacity-50'"
               >
-                <span style="width:7px; height:7px; border-radius:99px;" :class="selectedEventLoopMetrics[metric.key] ? metric.dotClass : 'bg-gray-400'" />
+                <span style="width:6px; height:6px; border-radius:99px;" :style="{ background: selectedEventLoopMetrics[metric.key] ? metric.activeDot : 'var(--text-faint)' }" />
                 {{ metric.label }}
               </button>
             </div>
@@ -235,7 +227,7 @@
               style="display:inline-flex; align-items:center; gap:6px; padding:3px 10px; border-radius:999px; font-size:11px; font-weight:500; cursor:pointer; border:1px solid var(--bd-hi); transition:.15s;"
               :class="selectedErrorMetrics[metric.key] ? metric.activeClass : 'opacity-50'"
             >
-              <span style="width:7px; height:7px; border-radius:99px;" :class="selectedErrorMetrics[metric.key] ? metric.dotClass : 'bg-gray-400'" />
+              <span style="width:6px; height:6px; border-radius:99px;" :style="{ background: selectedErrorMetrics[metric.key] ? metric.activeDot : 'var(--text-faint)' }" />
               {{ metric.label }}
             </button>
           </div>
@@ -330,7 +322,7 @@
                   <td style="font-weight:500;">{{ worker.workerId }}</td>
                   <td style="color:var(--text-mid);">{{ worker.hostname }}</td>
                   <td style="text-align:right;">
-                    <span class="font-mono tabular-nums" :style="{ color: worker.avgEventLoopLagMs > 100 ? '#fbbf24' : 'var(--text-hi)' }">
+                    <span class="font-mono tabular-nums" :style="{ color: worker.avgEventLoopLagMs > 100 ? 'var(--warn-400)' : 'var(--text-hi)' }">
                       {{ worker.avgEventLoopLagMs }}ms
                     </span>
                   </td>
@@ -339,7 +331,7 @@
                       {{ worker.maxEventLoopLagMs }}ms
                     </span>
                   </td>
-                  <td style="text-align:right; color:#22d3ee;" class="font-mono tabular-nums">{{ worker.freeSlots }}</td>
+                  <td style="text-align:right;" class="font-mono tabular-nums">{{ worker.freeSlots }}</td>
                   <td style="text-align:right;" class="font-mono tabular-nums">{{ worker.dbConnections }}</td>
                   <td style="text-align:right;" class="font-mono tabular-nums">{{ worker.jobQueueSize }}</td>
                   <td style="font-size:12px; color:var(--text-low);">{{ formatTime(worker.lastSeen) }}</td>
@@ -453,11 +445,11 @@
             </div>
             <div class="stat">
               <div class="stat-label">Latest CPU</div>
-              <div class="stat-value font-mono" style="color:#f43f5e;">{{ formatCPU(lastMetrics?.cpu?.user_us?.last) }}</div>
+              <div class="stat-value font-mono" style="color:var(--ember-500);">{{ formatCPU(lastMetrics?.cpu?.user_us?.last) }}</div>
             </div>
             <div class="stat">
               <div class="stat-label">Latest Memory</div>
-              <div class="stat-value font-mono" style="color:#8b5cf6;">{{ formatMemory(lastMetrics?.memory?.rss_bytes?.last) }}</div>
+              <div class="stat-value font-mono" >{{ formatMemory(lastMetrics?.memory?.rss_bytes?.last) }}</div>
             </div>
             <div class="stat">
               <div class="stat-label">DB Active</div>
@@ -492,13 +484,13 @@
                 >
                   <td style="font-weight:500;">{{ replica.hostname }}</td>
                   <td style="text-align:right; color:var(--text-mid);" class="font-mono tabular-nums">{{ replica.port }}</td>
-                  <td style="text-align:right; color:#f43f5e;" class="font-mono tabular-nums">
+                  <td style="text-align:right;" class="font-mono tabular-nums">
                     {{ formatCPU(getLastMetricForReplica(replica)?.cpu?.user_us?.last) }}
                   </td>
-                  <td style="text-align:right; color:#fbbf24;" class="font-mono tabular-nums">
+                  <td style="text-align:right;" class="font-mono tabular-nums">
                     {{ formatCPU(getLastMetricForReplica(replica)?.cpu?.system_us?.last) }}
                   </td>
-                  <td style="text-align:right; color:#8b5cf6;" class="font-mono tabular-nums">
+                  <td style="text-align:right;" class="font-mono tabular-nums">
                     {{ formatMemory(getLastMetricForReplica(replica)?.memory?.rss_bytes?.last) }}
                   </td>
                   <td style="text-align:right;" class="font-mono tabular-nums">
@@ -691,7 +683,7 @@
                   <td class="font-mono" style="font-weight:500;">{{ tbl.table }}</td>
                   <td style="text-align:right; font-weight:500;" class="font-mono tabular-nums">{{ tbl.totalSize }}</td>
                   <td style="text-align:right; color:var(--text-mid);" class="font-mono tabular-nums">{{ tbl.tableSize }}</td>
-                  <td style="text-align:right; color:#22d3ee;" class="font-mono tabular-nums">{{ tbl.indexSize }}</td>
+                  <td style="text-align:right;" class="font-mono tabular-nums">{{ tbl.indexSize }}</td>
                 </tr>
               </tbody>
             </table>
@@ -727,7 +719,7 @@
                     :key="tbl.table"
                   >
                     <td class="font-mono" style="font-size:12px;">{{ tbl.table }}</td>
-                    <td style="text-align:right; color:#fbbf24;" class="font-mono tabular-nums">{{ formatNumber(tbl.deadTuples) }}</td>
+                    <td style="text-align:right;" class="font-mono tabular-nums">{{ formatNumber(tbl.deadTuples) }}</td>
                     <td style="text-align:right;">
                       <span class="font-mono tabular-nums" :style="{ color: tbl.deadPercentage > 10 ? '#f43f5e' : 'var(--text-mid)' }">
                         {{ tbl.deadPercentage || 0 }}%
@@ -740,7 +732,7 @@
                 </tbody>
               </table>
             </div>
-            <div v-else style="text-align:center; padding:32px 0; color:#34d399;">
+            <div v-else style="text-align:center; padding:32px 0; color:var(--ok-500);">
               No dead tuples — tables are clean
             </div>
           </div>
@@ -805,7 +797,7 @@
                 <span style="font-size:12px; font-weight:500; color:var(--text-mid);">
                   PID: {{ query.pid }} · {{ query.state }}
                 </span>
-                <span class="font-mono tabular-nums" style="font-size:12px;" :style="{ color: query.duration > 10 ? '#f43f5e' : '#fbbf24' }">
+                <span class="font-mono tabular-nums" style="font-size:12px;" :style="{ color: query.duration > 10 ? 'var(--ember-400)' : 'var(--warn-400)' }">
                   {{ formatDurationSeconds(query.duration) }}
                 </span>
               </div>
@@ -817,7 +809,7 @@
               </div>
             </div>
           </div>
-          <div v-else style="text-align:center; padding:32px 0; color:#34d399;">
+          <div v-else style="text-align:center; padding:32px 0; color:var(--ok-500);">
             No slow queries running
           </div>
         </div>
@@ -846,7 +838,7 @@
                   :key="tbl.table"
                 >
                   <td class="font-mono" style="font-weight:500;">{{ tbl.table }}</td>
-                  <td style="text-align:right; color:#fbbf24;" class="font-mono tabular-nums">{{ formatNumber(tbl.deadTuples) }}</td>
+                  <td style="text-align:right;" class="font-mono tabular-nums">{{ formatNumber(tbl.deadTuples) }}</td>
                   <td style="text-align:right; color:var(--text-mid);" class="font-mono tabular-nums">{{ tbl.autovacuumCount }}</td>
                   <td style="font-size:12px; color:var(--text-low);">{{ formatTimestamp(tbl.lastAutovacuum) }}</td>
                 </tr>
@@ -912,26 +904,26 @@ const aggregationTypes = [
   { label: 'Minimum', value: 'min' }
 ]
 
-// Metric toggles for throughput
+// Metric toggles — chip color matches the chart series color (monochrome-first).
+//   activeDot = inline dot background; matches the line/bar color in the chart.
+// Push & Pop are just two data series → two greys. Ack = healthy series → green.
 const throughputMetrics = [
-  { key: 'push', label: 'Push', activeClass: 'chip-ice', dotClass: 'bg-ice' },
-  { key: 'pop', label: 'Pop', activeClass: 'chip-warn', dotClass: 'bg-crown' },
-  { key: 'ack', label: 'Ack', activeClass: 'chip-ok', dotClass: 'bg-ok' }
+  { key: 'push', label: 'Push', activeClass: 'chip-mute', activeDot: '#e6e6e6' }, // primary grey
+  { key: 'pop',  label: 'Pop',  activeClass: 'chip-mute', activeDot: '#8a8a92' }, // secondary grey
+  { key: 'ack',  label: 'Ack',  activeClass: 'chip-ok',   activeDot: '#4ade80' }, // healthy
 ]
 const selectedThroughputMetrics = reactive({ push: true, pop: true, ack: true })
 
-// Metric toggles for event loop
 const eventLoopMetrics = [
-  { key: 'avg', label: 'Avg Event Loop', activeClass: 'chip-ice', dotClass: 'bg-ice' },
-  { key: 'max', label: 'Max Event Loop', activeClass: 'chip-bad', dotClass: 'bg-ember' }
+  { key: 'avg', label: 'Avg Event Loop', activeClass: 'chip-mute', activeDot: '#e6e6e6' }, // primary
+  { key: 'max', label: 'Max Event Loop', activeClass: 'chip-bad',  activeDot: '#fb7185' }, // emergency
 ]
 const selectedEventLoopMetrics = reactive({ avg: true, max: true })
 
-// Metric toggles for errors
 const errorMetrics = [
-  { key: 'dbErrors', label: 'DB Errors', activeClass: 'chip-bad', dotClass: 'bg-ember' },
-  { key: 'ackFailed', label: 'Ack Failed', activeClass: 'chip-warn', dotClass: 'bg-crown' },
-  { key: 'dlq', label: 'DLQ', activeClass: 'chip-ice', dotClass: 'bg-ice' }
+  { key: 'dbErrors',  label: 'DB Errors',  activeClass: 'chip-bad',  activeDot: '#fb7185' }, // danger
+  { key: 'ackFailed', label: 'Ack Failed', activeClass: 'chip-warn', activeDot: '#e6b450' }, // warn
+  { key: 'dlq',       label: 'DLQ',        activeClass: 'chip-bad',  activeDot: '#fb7185' }, // danger
 ]
 const selectedErrorMetrics = reactive({ dbErrors: true, ackFailed: true, dlq: true })
 
@@ -1066,18 +1058,16 @@ const perQueueLagOptions = {
   }
 }
 
-// Color palette for per-queue charts (distinct, readable colors)
+// Per-queue chart palette — 5 distinct shades, cycled. Starts with the
+// three greys (primary / secondary / tertiary), then green (healthy) and
+// pink (danger) as the last two differentiators. For >5 queues the palette
+// cycles; distinction remains via the chart legend / tooltip.
 const queueColors = [
-  { border: '#22d3ee', bg: 'rgba(34, 211, 238, 0.12)' },    // ice
-  { border: '#fbbf24', bg: 'rgba(251, 191, 36, 0.12)' },    // crown
-  { border: '#34d399', bg: 'rgba(52, 211, 153, 0.12)' },    // ok
-  { border: '#fb7185', bg: 'rgba(251, 113, 133, 0.12)' },   // ember
-  { border: '#a78bfa', bg: 'rgba(167, 139, 250, 0.12)' },   // violet
-  { border: '#f59e0b', bg: 'rgba(245, 158, 11, 0.12)' },    // amber
-  { border: '#06b6d4', bg: 'rgba(6, 182, 212, 0.12)' },     // cyan
-  { border: '#f43f5e', bg: 'rgba(244, 63, 94, 0.12)' },     // rose
-  { border: '#14b8a6', bg: 'rgba(20, 184, 166, 0.12)' },    // teal
-  { border: '#d97706', bg: 'rgba(217, 119, 6, 0.12)' },     // gold
+  { border: '#e6e6e6', bg: 'rgba(230, 230, 230, 0.10)' }, // chart-1 (primary grey)
+  { border: '#8a8a92', bg: 'rgba(138, 138, 146, 0.10)' }, // chart-2 (secondary grey)
+  { border: '#6a6a6a', bg: 'rgba(106, 106, 106, 0.10)' }, // chart-3 (tertiary grey)
+  { border: '#4ade80', bg: 'rgba(74, 222, 128, 0.12)'  }, // healthy
+  { border: '#fb7185', bg: 'rgba(251, 113, 133, 0.12)' }, // danger
 ]
 
 // Toggle functions
@@ -1162,8 +1152,8 @@ const throughputChartData = computed(() => {
     datasets.push({
       label: 'Push/s',
       data: ts.map(t => t.pushPerSecond || 0),
-      borderColor: '#22d3ee',
-      backgroundColor: 'rgba(34, 211, 238, 0.12)',
+      borderColor: '#e6e6e6',
+      backgroundColor: 'rgba(230, 230, 230, 0.12)',
       fill: true,
       tension: 0
     })
@@ -1173,8 +1163,8 @@ const throughputChartData = computed(() => {
     datasets.push({
       label: 'Pop/s',
       data: ts.map(t => t.popPerSecond || 0),
-      borderColor: '#fbbf24',
-      backgroundColor: 'rgba(251, 191, 36, 0.12)',
+      borderColor: '#8a8a92',
+      backgroundColor: 'rgba(138, 138, 146, 0.12)',
       fill: true,
       tension: 0
     })
@@ -1184,8 +1174,8 @@ const throughputChartData = computed(() => {
     datasets.push({
       label: 'Ack/s',
       data: ts.map(t => t.ackPerSecond || 0),
-      borderColor: '#34d399',
-      backgroundColor: 'rgba(52, 211, 153, 0.12)',
+      borderColor: '#4ade80',
+      backgroundColor: 'rgba(74, 222, 128, 0.12)',
       fill: true,
       tension: 0
     })
@@ -1207,8 +1197,8 @@ const latencyChartData = computed(() => {
       { 
         label: 'Avg Lag (ms)', 
         data: ts.map(t => t.avgLagMs || 0), 
-        borderColor: '#22d3ee',
-        backgroundColor: 'rgba(34, 211, 238, 0.1)',
+        borderColor: '#e6e6e6',
+        backgroundColor: 'rgba(230, 230, 230, 0.1)',
         fill: true,
         tension: 0
       },
@@ -1236,8 +1226,8 @@ const eventLoopChartData = computed(() => {
     datasets.push({
       label: 'Avg Event Loop (ms)',
       data: ts.map(t => t.avgEventLoopLagMs || 0),
-      borderColor: '#22d3ee',
-      backgroundColor: 'rgba(34, 211, 238, 0.12)',
+      borderColor: '#e6e6e6',
+      backgroundColor: 'rgba(230, 230, 230, 0.12)',
       fill: true,
       tension: 0
     })
@@ -1270,15 +1260,15 @@ const connectionPoolChartData = computed(() => {
       { 
         label: 'Free Slots', 
         data: ts.map(t => t.avgFreeSlots || 0), 
-        borderColor: '#22d3ee',
-        backgroundColor: 'rgba(34, 211, 238, 0.12)',
+        borderColor: '#e6e6e6',
+        backgroundColor: 'rgba(230, 230, 230, 0.12)',
         fill: true,
         tension: 0
       },
       { 
         label: 'DB Connections', 
         data: ts.map(t => t.dbConnections || 0), 
-        borderColor: '#fbbf24',
+        borderColor: '#8a8a92',
         fill: false,
         tension: 0
       }
@@ -1309,8 +1299,8 @@ const errorsChartData = computed(() => {
     datasets.push({
       label: 'Ack Failed',
       data: ts.map(t => t.ackFailed || 0),
-      backgroundColor: 'rgba(251, 191, 36, 0.6)',
-      borderColor: '#fbbf24',
+      backgroundColor: 'rgba(138, 138, 146, 0.6)',
+      borderColor: '#8a8a92',
       borderWidth: 1
     })
   }
@@ -1319,8 +1309,8 @@ const errorsChartData = computed(() => {
     datasets.push({
       label: 'DLQ',
       data: ts.map(t => t.dlqCount || 0),
-      backgroundColor: 'rgba(34, 211, 238, 0.6)',
-      borderColor: '#22d3ee',
+      backgroundColor: 'rgba(230, 230, 230, 0.6)',
+      borderColor: '#e6e6e6',
       borderWidth: 1
     })
   }
@@ -1397,7 +1387,7 @@ const cpuChartData = computed(() => {
     const multiDay = isMultiDay(ts)
     const labels = ts.map(t => formatChartLabel(new Date(t.timestamp), multiDay))
     
-    const colors = ['#f43f5e', '#3b82f6', '#10b981', '#f59e0b', '#8b5cf6']
+    const colors = ['#e6e6e6', '#8a8a92', '#6a6a6a', '#4ade80', '#fb7185']
     
     systemData.value.replicas.forEach((replica, i) => {
       const color = colors[i % colors.length]
@@ -1423,16 +1413,16 @@ const cpuChartData = computed(() => {
         { 
           label: 'User CPU (%)', 
           data: ts.map(t => (t.metrics?.cpu?.user_us?.[agg] || 0) / 100), 
-          borderColor: '#22d3ee',
-          backgroundColor: 'rgba(34, 211, 238, 0.12)',
+          borderColor: '#e6e6e6',
+          backgroundColor: 'rgba(230, 230, 230, 0.12)',
           fill: true,
           tension: 0
         },
         { 
           label: 'System CPU (%)', 
           data: ts.map(t => (t.metrics?.cpu?.system_us?.[agg] || 0) / 100), 
-          borderColor: '#fbbf24',
-          backgroundColor: 'rgba(251, 191, 36, 0.12)',
+          borderColor: '#8a8a92',
+          backgroundColor: 'rgba(138, 138, 146, 0.12)',
           fill: true,
           tension: 0
         }
@@ -1453,7 +1443,7 @@ const memoryChartData = computed(() => {
     const multiDay = isMultiDay(ts)
     const labels = ts.map(t => formatChartLabel(new Date(t.timestamp), multiDay))
     
-    const colors = ['#22d3ee', '#fbbf24', '#34d399', '#fb7185', '#a78bfa']
+    const colors = ['#e6e6e6', '#8a8a92', '#4ade80', '#fb7185', '#6a6a6a']
     
     systemData.value.replicas.forEach((replica, i) => {
       const color = colors[i % colors.length]
@@ -1478,8 +1468,8 @@ const memoryChartData = computed(() => {
         { 
           label: 'RSS (MB)', 
           data: ts.map(t => Math.round((t.metrics?.memory?.rss_bytes?.[agg] || 0) / 1024 / 1024)), 
-          borderColor: '#22d3ee',
-          backgroundColor: 'rgba(34, 211, 238, 0.12)',
+          borderColor: '#e6e6e6',
+          backgroundColor: 'rgba(230, 230, 230, 0.12)',
           fill: true,
           tension: 0
         }
@@ -1502,16 +1492,16 @@ const databaseChartData = computed(() => {
       { 
         label: 'Active', 
         data: ts.map(t => t.metrics?.database?.pool_active?.[agg] || 0), 
-        borderColor: '#22d3ee',
-        backgroundColor: 'rgba(34, 211, 238, 0.12)',
+        borderColor: '#e6e6e6',
+        backgroundColor: 'rgba(230, 230, 230, 0.12)',
         fill: true,
         tension: 0
       },
       { 
         label: 'Idle', 
         data: ts.map(t => t.metrics?.database?.pool_idle?.[agg] || 0), 
-        borderColor: '#34d399',
-        backgroundColor: 'rgba(52, 211, 153, 0.12)',
+        borderColor: '#4ade80',
+        backgroundColor: 'rgba(74, 222, 128, 0.12)',
         fill: true,
         tension: 0
       }
@@ -1533,16 +1523,16 @@ const threadPoolChartData = computed(() => {
       { 
         label: 'DB Queue', 
         data: ts.map(t => t.metrics?.threadpool?.db?.queue_size?.[agg] || 0), 
-        borderColor: '#22d3ee',
-        backgroundColor: 'rgba(34, 211, 238, 0.12)',
+        borderColor: '#e6e6e6',
+        backgroundColor: 'rgba(230, 230, 230, 0.12)',
         fill: true,
         tension: 0
       },
       { 
         label: 'System Queue', 
         data: ts.map(t => t.metrics?.threadpool?.system?.queue_size?.[agg] || 0), 
-        borderColor: '#fbbf24',
-        backgroundColor: 'rgba(251, 191, 36, 0.12)',
+        borderColor: '#8a8a92',
+        backgroundColor: 'rgba(138, 138, 146, 0.12)',
         fill: true,
         tension: 0
       }

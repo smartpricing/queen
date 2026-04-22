@@ -9,9 +9,7 @@
       <Header @refresh="handleRefresh" />
       <main class="app-page">
         <router-view v-slot="{ Component }">
-          <transition name="page" mode="out-in">
-            <component :is="Component" ref="pageRef" />
-          </transition>
+          <component :is="Component" ref="pageRef" />
         </router-view>
       </main>
     </section>

@@ -1,15 +1,7 @@
 <template>
-  <div class="view-container animate-fade-in">
+  <div class="view-container">
 
     <!-- Page head -->
-    <div class="page-head">
-      <div>
-        <div class="eyebrow">Observability</div>
-        <h1><span class="accent">Traces</span></h1>
-        <p>Search and explore trace events across your message flows.</p>
-      </div>
-    </div>
-
     <!-- Search Box -->
     <div class="card" style="margin-bottom:16px;">
       <div class="card-body">
@@ -61,15 +53,15 @@
     </div>
 
     <!-- Results Summary -->
-    <div v-if="currentTraceName && traces.length > 0" class="card card-accent" style="margin-bottom:16px; border-color:rgba(251,191,36,.2);">
+    <div v-if="currentTraceName && traces.length > 0" class="card card-accent" style="margin-bottom:16px; border-color:rgba(230,180,80,.2);">
       <div class="card-body" style="padding:12px 16px;">
         <div style="display:flex; align-items:center; gap:12px;">
-          <svg style="width:20px; height:20px; color:#fbbf24; flex-shrink:0;" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <svg style="width:20px; height:20px; color:var(--text-mid); flex-shrink:0;" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
           </svg>
           <div>
             <p style="font-size:13px; font-weight:600; color:var(--text-hi);">
-              Found <span class="font-mono tabular-nums">{{ totalTraces }}</span> trace{{ totalTraces !== 1 ? 's' : '' }} for: <span style="color:#fbbf24;">{{ currentTraceName }}</span>
+              Found <span class="font-mono tabular-nums">{{ totalTraces }}</span> trace{{ totalTraces !== 1 ? 's' : '' }} for: <span style="color:var(--text-hi);">{{ currentTraceName }}</span>
             </p>
             <p style="font-size:12px; color:var(--text-mid); margin-top:2px;">
               <span class="font-mono tabular-nums">{{ uniqueMessages }}</span> unique message{{ uniqueMessages !== 1 ? 's' : '' }} · <span class="font-mono tabular-nums">{{ uniqueQueues }}</span> queue{{ uniqueQueues !== 1 ? 's' : '' }}
@@ -90,7 +82,7 @@
     <!-- Error State -->
     <div v-else-if="error" class="card" style="border-color:rgba(244,63,94,.25);">
       <div class="card-body">
-        <p style="font-size:13px; color:#fb7185;">
+        <p style="font-size:13px; color:var(--ember-400);">
           <strong>Error:</strong> {{ error }}
         </p>
       </div>

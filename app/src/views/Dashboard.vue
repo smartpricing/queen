@@ -1,22 +1,5 @@
 <template>
-  <div class="view-container animate-fade-in">
-
-    <!-- Page head -->
-    <div class="page-head">
-      <div>
-        <div class="eyebrow">Control plane</div>
-        <h1>Good afternoon.</h1>
-        <p v-if="overview">
-          Your fleet processed <b class="font-mono">{{ formatNumber(overview.messages?.total || 0) }}</b> messages
-          across <b class="font-mono">{{ overview.queues || 0 }}</b> queues
-          with <b class="font-mono">{{ formatNumber(totalPartitions) }}</b> partitions.
-        </p>
-      </div>
-      <div class="actions">
-        <router-link to="/queues" class="btn">Browse queues</router-link>
-        <router-link to="/analytics" class="btn">Analytics</router-link>
-      </div>
-    </div>
+  <div class="view-container">
 
     <!-- Range selector -->
     <div style="display:flex; align-items:center; gap:12px; margin-bottom:20px; flex-wrap:wrap;">
@@ -27,8 +10,8 @@
         <span class="pulse" /> live · 30s autorefresh
       </div>
       <div style="margin-left:auto; display:flex; gap:12px;">
-        <div class="legend"><span class="sw" style="background:#22d3ee;"></span> produced</div>
-        <div class="legend"><span class="sw" style="background:#fbbf24;"></span> consumed</div>
+        <div class="legend"><span class="sw" style="background:#e6e6e6;"></span> produced</div>
+        <div class="legend"><span class="sw" style="background:#8a8a92;"></span> consumed</div>
       </div>
     </div>
 
@@ -40,59 +23,37 @@
       <MetricCard label="Throughput" :value="throughput.current" format="raw" unit=" msg/s" :trend="throughput.trend" :loading="loadingStatus" />
     </div>
 
-    <!-- Health indicator strip -->
-    <div class="grid-4" style="gap:12px; margin-bottom:20px;">
-      <div class="card" style="padding:8px 12px;">
-        <div style="display:flex; align-items:center; justify-content:space-between;">
-          <div style="display:flex; align-items:center; gap:6px;">
-            <svg class="w-3.5 h-3.5" style="color:#fbbf24;" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
-            <span style="font-size:11px; font-weight:500; color:var(--text-low);">Time Lag</span>
-          </div>
-          <div style="display:flex; align-items:center; gap:8px; font-size:12px;">
-            <span class="font-mono tabular-nums font-semibold" :style="{ color: lagColor(overview?.lag?.time?.avg) }">{{ formatDuration(overview?.lag?.time?.avg || 0) }}</span>
-            <span style="color:var(--text-faint);">/</span>
-            <span class="font-mono tabular-nums font-semibold" :style="{ color: lagColor(overview?.lag?.time?.max) }">{{ formatDuration(overview?.lag?.time?.max || 0) }}</span>
-          </div>
-        </div>
+    <!-- Health strip — compact inline row, color only when values cross thresholds -->
+    <div class="health-strip" style="margin-bottom:10px;">
+      <div class="hs-item">
+        <svg width="13" height="13" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="1.6"><path stroke-linecap="round" stroke-linejoin="round" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+        <span class="hs-label">Time lag</span>
+        <span class="hs-value num" :class="lagNumClass(overview?.lag?.time?.avg)">{{ formatDuration(overview?.lag?.time?.avg || 0) }}</span>
+        <span class="hs-sep">/</span>
+        <span class="hs-value num" :class="lagNumClass(overview?.lag?.time?.max)">{{ formatDuration(overview?.lag?.time?.max || 0) }}</span>
       </div>
-      <div class="card" style="padding:8px 12px;">
-        <div style="display:flex; align-items:center; justify-content:space-between;">
-          <div style="display:flex; align-items:center; gap:6px;">
-            <svg class="w-3.5 h-3.5" style="color:#22d3ee;" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2"/></svg>
-            <span style="font-size:11px; font-weight:500; color:var(--text-low);">Pending</span>
-          </div>
-          <div style="display:flex; align-items:center; gap:8px; font-size:12px;">
-            <span class="font-mono tabular-nums font-semibold" style="color:var(--text-hi);">{{ formatNumber(overview?.lag?.offset?.avg || 0) }}</span>
-            <span style="color:var(--text-faint);">/</span>
-            <span class="font-mono tabular-nums font-semibold" style="color:var(--text-hi);">{{ formatNumber(overview?.lag?.offset?.max || 0) }}</span>
-          </div>
-        </div>
+      <div class="hs-item">
+        <svg width="13" height="13" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="1.6"><path stroke-linecap="round" stroke-linejoin="round" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2"/></svg>
+        <span class="hs-label">Pending</span>
+        <span class="hs-value num">{{ formatNumber(overview?.lag?.offset?.avg || 0) }}</span>
+        <span class="hs-sep">/</span>
+        <span class="hs-value num" :class="pendingNumClass(overview?.lag?.offset?.max)">{{ formatNumber(overview?.lag?.offset?.max || 0) }}</span>
       </div>
-      <div class="card" style="padding:8px 12px;">
-        <div style="display:flex; align-items:center; justify-content:space-between;">
-          <div style="display:flex; align-items:center; gap:6px;">
-            <svg class="w-3.5 h-3.5" style="color:#fb7185;" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M13 10V3L4 14h7v7l9-11h-7z"/></svg>
-            <span style="font-size:11px; font-weight:500; color:var(--text-low);">Event Loop</span>
-          </div>
-          <div style="display:flex; align-items:center; gap:8px; font-size:12px;">
-            <span class="font-mono tabular-nums font-semibold" :style="{ color: elColor(avgEventLoopLag) }">{{ avgEventLoopLag }}ms</span>
-            <span style="color:var(--text-faint);">/</span>
-            <span class="font-mono tabular-nums font-semibold" :style="{ color: elColor(maxEventLoopLag) }">{{ maxEventLoopLag }}ms</span>
-          </div>
-        </div>
+      <div class="hs-item">
+        <svg width="13" height="13" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="1.6"><path stroke-linecap="round" stroke-linejoin="round" d="M13 10V3L4 14h7v7l9-11h-7z"/></svg>
+        <span class="hs-label">Event loop</span>
+        <span class="hs-value num" :class="elNumClass(avgEventLoopLag)">{{ avgEventLoopLag }}ms</span>
+        <span class="hs-sep">/</span>
+        <span class="hs-value num" :class="elNumClass(maxEventLoopLag)">{{ maxEventLoopLag }}ms</span>
       </div>
-      <div class="card" style="padding:8px 12px;">
-        <div style="display:flex; align-items:center; justify-content:space-between;">
-          <div style="display:flex; align-items:center; gap:6px;">
-            <svg class="w-3.5 h-3.5" style="color:#34d399;" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10"/></svg>
-            <span style="font-size:11px; font-weight:500; color:var(--text-low);">Batch</span>
-          </div>
-          <div style="display:flex; align-items:center; gap:6px; font-size:12px;">
-            <span class="font-mono tabular-nums font-semibold" style="color:#34d399;">{{ batchEfficiency.push }}</span>
-            <span class="font-mono tabular-nums font-semibold" style="color:#22d3ee;">{{ batchEfficiency.pop }}</span>
-            <span class="font-mono tabular-nums font-semibold" style="color:#fbbf24;">{{ batchEfficiency.ack }}</span>
-          </div>
-        </div>
+      <div class="hs-item">
+        <svg width="13" height="13" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="1.6"><path stroke-linecap="round" stroke-linejoin="round" d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10"/></svg>
+        <span class="hs-label">Batch push/pop/ack</span>
+        <span class="hs-value num">{{ batchEfficiency.push }}</span>
+        <span class="hs-sep">·</span>
+        <span class="hs-value num">{{ batchEfficiency.pop }}</span>
+        <span class="hs-sep">·</span>
+        <span class="hs-value num">{{ batchEfficiency.ack }}</span>
       </div>
     </div>
 
@@ -122,12 +83,12 @@
             <div v-for="q in queueTimeLag.slice(0, 6)" :key="q.name">
               <div style="display:flex; justify-content:space-between; font-size:13px; margin-bottom:6px;">
                 <span style="font-weight:500; color:var(--text-hi); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; max-width:140px;">{{ q.name }}</span>
-                <span class="font-mono tabular-nums font-medium" :style="{ color: q.lag > 600 ? '#fb7185' : q.lag > 60 ? '#fbbf24' : '#34d399' }">
+                <span class="font-mono tabular-nums font-medium num" :class="{ warn: q.lag > 60 && q.lag <= 600, bad: q.lag > 600, mute: !q.lag }">
                   {{ q.lag > 0 ? formatDuration(q.lag) : '-' }}
                 </span>
               </div>
               <div class="bar" style="width:100%; display:block;">
-                <i :class="q.lag > 600 ? 'bad' : q.lag > 60 ? 'warn' : ''" :style="{ width: q.pct + '%', background: q.lag > 600 ? 'linear-gradient(90deg,#f43f5e,#e11d48)' : q.lag > 60 ? 'linear-gradient(90deg,#f59e0b,#f43f5e)' : 'linear-gradient(90deg,#06b6d4,#34d399)' }" />
+                <i :class="q.lag > 600 ? 'bad' : q.lag > 60 ? 'warn' : ''" :style="{ width: q.pct + '%' }" />
               </div>
             </div>
           </div>
@@ -275,8 +236,13 @@ const batchEfficiency = computed(() => {
   return { push: b?.push?.toFixed(1) || '0', pop: b?.pop?.toFixed(1) || '0', ack: b?.ack?.toFixed(1) || '0' }
 })
 
-const lagColor = (s) => !s || s === 0 ? 'var(--text-mid)' : s < 60 ? '#34d399' : s < 300 ? '#fbbf24' : '#fb7185'
-const elColor = (ms) => !ms || ms === 0 ? 'var(--text-mid)' : ms < 50 ? '#34d399' : ms < 100 ? '#fbbf24' : '#fb7185'
+const lagColor = (s) => !s || s === 0 ? 'var(--text-mid)' : s < 60 ? '#4ade80' : s < 300 ? '#e6b450' : '#fb7185'
+const elColor = (ms) => !ms || ms === 0 ? 'var(--text-mid)' : ms < 50 ? '#4ade80' : ms < 100 ? '#e6b450' : '#fb7185'
+
+// Threshold → class name helpers (monochrome by default, color only when crossing a threshold)
+const lagNumClass     = (s)  => !s || s === 0 ? ''         : s  < 60  ? ''     : s  < 300 ? 'warn' : 'bad'
+const elNumClass      = (ms) => !ms || ms === 0 ? ''       : ms < 50  ? ''     : ms < 100 ? 'warn' : 'bad'
+const pendingNumClass = (n)  => !n || n < 1000 ? ''        : n  < 10000 ? 'warn' : 'bad'
 
 const formatDuration = (seconds) => {
   if (!seconds || seconds === 0) return '0s'

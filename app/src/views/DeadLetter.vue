@@ -1,14 +1,5 @@
 <template>
-  <div class="view-container animate-fade-in">
-
-    <div class="page-head">
-      <div>
-        <div class="eyebrow">Observability</div>
-        <h1>Dead <span class="accent">letter</span></h1>
-        <p>{{ dlqTotal }} messages parked by policy. Inspect, replay, or purge failed messages.</p>
-      </div>
-      <div class="actions"></div>
-    </div>
+  <div class="view-container">
 
     <!-- Summary stats -->
     <div class="grid-3" style="margin-bottom:24px;">
@@ -93,7 +84,7 @@
             v-for="msg in filteredMessages"
             :key="msg.transactionId || msg.id"
             style="cursor:pointer;"
-            :style="selectedMsg && msgKey(selectedMsg) === msgKey(msg) ? 'background:rgba(251,191,36,.06)' : ''"
+            :style="selectedMsg && msgKey(selectedMsg) === msgKey(msg) ? 'background:rgba(230,180,80,.06)' : ''"
             @click="selectMessage(msg)"
           >
             <td>

@@ -60,12 +60,24 @@ const iconColorClass = computed(() => {
 </script>
 
 <style scoped>
+/* Monochrome icon chip — no more cyan / amber / pink variants; all KPI
+   icons render as neutral grey. The `iconColor` prop is still accepted
+   for API compatibility but has no visible effect. Color now lives on
+   the data (threshold-based .num classes), not the decoration. */
 .stat-icon-badge {
-  position: absolute; top: 16px; right: 16px;
-  width: 40px; height: 40px; border-radius: 10px;
+  position: absolute; top: 10px; right: 10px;
+  width: 22px; height: 22px; border-radius: 4px;
   display: grid; place-items: center;
+  background: var(--ink-3);
+  color: var(--text-mid);
+  border: 1px solid var(--bd);
 }
-.badge-ice   { background: rgba(34,211,238,.12); color: #22d3ee; }
-.badge-crown { background: rgba(251,191,36,.12); color: #fbbf24; }
-.badge-ember { background: rgba(244,63,94,.12);  color: #fb7185; }
+.stat-icon-badge :deep(svg) { width: 13px; height: 13px; }
+
+/* Kept as no-ops so existing :class bindings don't explode */
+.badge-ice, .badge-crown, .badge-ember {
+  background: var(--ink-3);
+  color: var(--text-mid);
+  border-color: var(--bd);
+}
 </style>
