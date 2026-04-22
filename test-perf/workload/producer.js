@@ -12,6 +12,10 @@ const PUSH_BATCH     = parseInt(process.env.PUSH_BATCH     || '10', 10);
 const MAX_PARTITIONS = parseInt(process.env.MAX_PARTITIONS || '500', 10);
 const WARMUP         = process.env.WARMUP === '1';
 const OUTPUT_FILE    = process.env.OUTPUT_FILE || (WARMUP ? '/dev/null' : './producer.json');
+// Target per-message payload size (in bytes). 0 = no padding (tiny default payload).
+// The producer pads `payload.pad` with 'x' characters to reach approximately this size,
+// so each item is ~PAYLOAD_SIZE_BYTES bytes of JSON.
+const PAYLOAD_SIZE_BYTES = parseInt(process.env.PAYLOAD_SIZE_BYTES || '0', 10);
 
 async function ensureQueue() {
   try {
@@ -34,6 +38,19 @@ async function ensureQueue() {
 await ensureQueue();
 
 // Pre-generate one request per partition with PUSH_BATCH items each.
+// Optionally pad each item's payload to PAYLOAD_SIZE_BYTES (approximate).
+function makePayload(p, j) {
+  const base = { message: 'Hello World', partition_id: p, seq: j };
+  if (PAYLOAD_SIZE_BYTES > 0) {
+    const baseStr = JSON.stringify(base);
+    // Account for overhead of the ',"pad":"..."' key/value wrapper. 15 is a safe
+    // upper bound on the structural JSON overhead. Clamp to non-negative.
+    const padLen = Math.max(0, PAYLOAD_SIZE_BYTES - baseStr.length - 15);
+    base.pad = 'x'.repeat(padLen);
+  }
+  return base;
+}
+
 const requests = [];
 for (let p = 0; p <= MAX_PARTITIONS; p++) {
   const items = [];
@@ -41,7 +58,7 @@ for (let p = 0; p <= MAX_PARTITIONS; p++) {
     items.push({
       queue: QUEUE_NAME,
       partition: `${p}`,
-      payload: { message: 'Hello World', partition_id: p, seq: j }
+      payload: makePayload(p, j)
     });
   }
   requests.push({

@@ -49,16 +49,23 @@ vegas_config_from_env(uint16_t per_type_max_concurrent) noexcept {
     VegasLimit::Config c;
     c.min_limit =
         static_cast<uint16_t>(detail::env_int("QUEEN_VEGAS_MIN_LIMIT", 1));
+    // Global Vegas ceiling. Default raised from 16 → 32 (2026-04-22) so the
+    // per-type `MAX_CONCURRENT` defaults (24 for PUSH, 16 for ACK/POP) are
+    // not clipped. Operators who tune per-type MAX_CONCURRENT above 32 must
+    // also bump this knob.
     uint16_t env_max =
-        static_cast<uint16_t>(detail::env_int("QUEEN_VEGAS_MAX_LIMIT", 16));
+        static_cast<uint16_t>(detail::env_int("QUEEN_VEGAS_MAX_LIMIT", 32));
     // Effective max is the tighter of per-type `MAX_CONCURRENT` and global
     // `QUEEN_VEGAS_MAX_LIMIT` (plan §9.3).
     c.max_limit =
         (per_type_max_concurrent < env_max) ? per_type_max_concurrent : env_max;
     c.alpha =
         static_cast<uint16_t>(detail::env_int("QUEEN_VEGAS_ALPHA", 3));
+    // Shrink threshold raised 6 → 12 (2026-04-22) to scale with the new
+    // default `MAX_CONCURRENT=24` for PUSH. Must be less than MAX_CONCURRENT
+    // for Vegas to ever shrink (because queue_load ≤ in_flight ≤ cap).
     c.beta =
-        static_cast<uint16_t>(detail::env_int("QUEEN_VEGAS_BETA", 6));
+        static_cast<uint16_t>(detail::env_int("QUEEN_VEGAS_BETA", 12));
     c.rtt_window_samples = static_cast<uint16_t>(
         detail::env_int("QUEEN_VEGAS_RTT_WINDOW_SAMPLES", 50));
     c.rtt_min_window = std::chrono::seconds(

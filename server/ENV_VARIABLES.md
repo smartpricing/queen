@@ -109,9 +109,9 @@ kicks, and a dynamic safety-net timer (re-armed at the end of each drain pass).
 | Variable | Type | Default | Description |
 |----------|------|---------|-------------|
 | `QUEEN_VEGAS_MIN_LIMIT` | int | 1 | Lower bound on `limit` |
-| `QUEEN_VEGAS_MAX_LIMIT` | int | 16 | Upper bound on `limit` (effective max is `min(this, QUEEN_<TYPE>_MAX_CONCURRENT)`) |
+| `QUEEN_VEGAS_MAX_LIMIT` | int | **32** | Upper bound on `limit` (effective max is `min(this, QUEEN_<TYPE>_MAX_CONCURRENT)`). Raised 2026-04-22 from 16 so per-type `MAX_CONCURRENT` defaults are not clipped. |
 | `QUEEN_VEGAS_ALPHA` | int | 3 | "Good queueing" threshold (batches). `queue_load < alpha` → grow. |
-| `QUEEN_VEGAS_BETA` | int | 6 | "Bad queueing" threshold (batches). `queue_load > beta` → shrink. |
+| `QUEEN_VEGAS_BETA` | int | **12** | "Bad queueing" threshold (batches). `queue_load > beta` → shrink. Raised 2026-04-22 from 6 to scale with new `MAX_CONCURRENT=24` (must satisfy `beta < MAX_CONCURRENT`). |
 | `QUEEN_VEGAS_RTT_WINDOW_SAMPLES` | int | 50 | EMA window over recent completion RTTs |
 | `QUEEN_VEGAS_RTT_MIN_WINDOW_SEC` | int | 30 | Sliding-minimum window for `rtt_min` |
 | `QUEEN_VEGAS_UPDATE_INTERVAL_MS` | int | 1000 | Minimum time between `limit` adjustments (anti-thrash) |
@@ -127,7 +127,7 @@ Variable pattern: `QUEEN_<TYPE>_<KNOB>`.
 | `PREFERRED_BATCH_SIZE` |   50 |    20 |    50 |             1 |            10 |        1 |
 | `MAX_HOLD_MS`          |   20 |     5 |    20 |             0 |           100 |        0 |
 | `MAX_BATCH_SIZE`       |  500 |   500 |   500 |             1 |           100 |        1 |
-| `MAX_CONCURRENT`       |    4 |     4 |     4 |             1 |             2 |        1 |
+| `MAX_CONCURRENT`       | **24** | **16** | **16** |         1 |             2 |        1 |
 
 - `PREFERRED_BATCH_SIZE` — queue size that triggers an immediate fire.
 - `MAX_HOLD_MS` — fire even below preferred if the oldest job has waited this long.
@@ -135,12 +135,20 @@ Variable pattern: `QUEEN_<TYPE>_<KNOB>`.
 - `MAX_CONCURRENT` — hard cap on concurrent in-flight batches for the type.
   Under `QUEEN_CONCURRENCY_MODE=vegas`, this is the upper bound Vegas can grow to.
 
-**Defaults rationale** (see LIBQUEEN_IMPROVEMENTS.md §9.2):
+**Defaults rationale** (see LIBQUEEN_IMPROVEMENTS.md §9.2 + 2026-04-22 sweep):
 - `PUSH` / `ACK` `preferred=50` sits above the S1 break-even (~33); `max_hold=20`
   matches the sweet spot found in the perf campaign.
 - `POP` is latency-sensitive: tighter hold, smaller preferred batch.
 - `TRANSACTION`, `CUSTOM` are atomic (no fusion): batch size 1, concurrency 1.
 - `RENEW_LEASE` is background work: modest batch, longer hold.
+- **`MAX_CONCURRENT` raised 2026-04-22** from the original plan value of 4 →
+  24 (PUSH) and 16 (ACK/POP). The Vegas-uncapped sweep
+  (`test-perf/results/sweep_2026-04-22_07-41-19`) showed the old cap throttled
+  throughput by ~74% on S1-equivalent hardware. Vegas self-limits well below
+  these ceilings in practice (converges to ~17 for 1 KB payloads, ~6 for 10 KB),
+  so the raised cap just gives Vegas room to explore. ACK/POP are lower
+  because their advisory-lock contention bounds usable parallelism independent
+  of PG core count.
 
 ### Consumer Group Subscription
 | Variable | Type | Default | Description |

@@ -160,9 +160,9 @@ struct QueueConfig {
 
     // Vegas adaptive-controller tuning (global).
     int    queen_vegas_min_limit             = 1;
-    int    queen_vegas_max_limit             = 16;
+    int    queen_vegas_max_limit             = 32;   // 2026-04-22: was 16
     int    queen_vegas_alpha                 = 3;
-    int    queen_vegas_beta                  = 6;
+    int    queen_vegas_beta                  = 12;   // 2026-04-22: was 6
     int    queen_vegas_rtt_window_samples    = 50;
     int    queen_vegas_rtt_min_window_sec    = 30;
     int    queen_vegas_update_interval_ms    = 1000;
@@ -170,18 +170,22 @@ struct QueueConfig {
     // Per-type batch policy defaults. Each type may be overridden individually
     // by `QUEEN_<TYPE>_{PREFERRED_BATCH_SIZE,MAX_HOLD_MS,MAX_BATCH_SIZE,MAX_CONCURRENT}`.
     // Values here are for documentation only — libqueen reads env directly.
+    //
+    // `max_concurrent` raised 2026-04-22 from 4 → 24 (PUSH) and 4 → 16 (ACK/POP)
+    // based on Vegas-uncapped sweep (test-perf/results/sweep_2026-04-22_07-41-19):
+    // the old cap of 4 throttled throughput by ~74% vs letting Vegas explore.
     struct QueenTypeDefaults {
         int preferred_batch_size;
         int max_hold_ms;
         int max_batch_size;
         int max_concurrent;
     };
-    QueenTypeDefaults queen_push         = { 50,  20, 500, 4};
-    QueenTypeDefaults queen_pop          = { 20,   5, 500, 4};
-    QueenTypeDefaults queen_ack          = { 50,  20, 500, 4};
-    QueenTypeDefaults queen_transaction  = {  1,   0,   1, 1};
-    QueenTypeDefaults queen_renew_lease  = { 10, 100, 100, 2};
-    QueenTypeDefaults queen_custom       = {  1,   0,   1, 1};
+    QueenTypeDefaults queen_push         = { 50,  20, 500, 24};
+    QueenTypeDefaults queen_pop          = { 20,   5, 500, 16};
+    QueenTypeDefaults queen_ack          = { 50,  20, 500, 16};
+    QueenTypeDefaults queen_transaction  = {  1,   0,   1,  1};
+    QueenTypeDefaults queen_renew_lease  = { 10, 100, 100,  2};
+    QueenTypeDefaults queen_custom       = {  1,   0,   1,  1};
     
     // Consumer group subscription
     std::string default_subscription_mode = "";  // "" = all (default), "new" = skip history, "new-only" = same as new
@@ -220,9 +224,9 @@ struct QueueConfig {
         // directly at construction; these are mirrored for visibility / logs.
         config.queen_concurrency_mode       = get_env_string("QUEEN_CONCURRENCY_MODE", "vegas");
         config.queen_vegas_min_limit        = get_env_int("QUEEN_VEGAS_MIN_LIMIT", 1);
-        config.queen_vegas_max_limit        = get_env_int("QUEEN_VEGAS_MAX_LIMIT", 16);
+        config.queen_vegas_max_limit        = get_env_int("QUEEN_VEGAS_MAX_LIMIT", 32);
         config.queen_vegas_alpha            = get_env_int("QUEEN_VEGAS_ALPHA", 3);
-        config.queen_vegas_beta             = get_env_int("QUEEN_VEGAS_BETA", 6);
+        config.queen_vegas_beta             = get_env_int("QUEEN_VEGAS_BETA", 12);
         config.queen_vegas_rtt_window_samples = get_env_int("QUEEN_VEGAS_RTT_WINDOW_SAMPLES", 50);
         config.queen_vegas_rtt_min_window_sec = get_env_int("QUEEN_VEGAS_RTT_MIN_WINDOW_SEC", 30);
         config.queen_vegas_update_interval_ms = get_env_int("QUEEN_VEGAS_UPDATE_INTERVAL_MS", 1000);

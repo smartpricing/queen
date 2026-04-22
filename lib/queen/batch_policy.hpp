@@ -76,15 +76,27 @@ struct BatchPolicyDefaults {
 
 inline BatchPolicyDefaults
 default_batch_policy_for(JobType t) noexcept {
-    // Defaults per LIBQUEEN_IMPROVEMENTS.md §9.2.
+    // Defaults per LIBQUEEN_IMPROVEMENTS.md §9.2, with `max_concurrent` raised
+    // from the original plan values (4/4/4 for PUSH/POP/ACK) to the empirically
+    // optimal ceiling discovered by the 2026-04-22 Vegas-uncapped sweep
+    // (see test-perf/results/sweep_2026-04-22_07-41-19):
+    //
+    //   - Vegas naturally converges well below these ceilings on small PG
+    //     (to ~17 for 1 KB payloads, ~6 for 10 KB) driven by observed RTT.
+    //   - The old cap of 4 artificially throttled throughput by ~74% on a
+    //     2-core PG / 2-worker S1-equivalent run.
+    //   - Raising PUSH to 24 lets Vegas explore the real knee; ACK/POP to 16
+    //     because their advisory-lock contention caps usable parallelism.
+    //
+    // Layout: {preferred, max_hold_ms, max_batch, max_concurrent}.
     switch (t) {
-        case JobType::PUSH:        return {50,  20,  500, 4};
-        case JobType::POP:         return {20,   5,  500, 4};
-        case JobType::ACK:         return {50,  20,  500, 4};
-        case JobType::TRANSACTION: return { 1,   0,    1, 1};
-        case JobType::RENEW_LEASE: return {10, 100,  100, 2};
-        case JobType::CUSTOM:      return { 1,   0,    1, 1};
-        default:                   return { 1,   5,    1, 1};
+        case JobType::PUSH:        return {50,  20,  500, 24};
+        case JobType::POP:         return {20,   5,  500, 16};
+        case JobType::ACK:         return {50,  20,  500, 16};
+        case JobType::TRANSACTION: return { 1,   0,    1,  1};
+        case JobType::RENEW_LEASE: return {10, 100,  100,  2};
+        case JobType::CUSTOM:      return { 1,   0,    1,  1};
+        default:                   return { 1,   5,    1,  1};
     }
 }
 
