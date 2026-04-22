@@ -9,6 +9,8 @@
 [License](LICENSE.md)
 [Node](https://nodejs.org/)
 [Python](https://www.python.org/)
+[Go](https://go.dev/)
+[PHP](https://www.php.net/)
 [C++](https://en.cppreference.com/w/cpp/17)
 [libuv](https://libuv.org/)
 [libpq](https://www.postgresql.org/)
@@ -61,7 +63,7 @@ docker run --name qpg --network queen -e POSTGRES_PASSWORD=postgres -p 5433:5432
 sleep 2
 
 # Start Queen Server
-docker run -p 6632:6632 --network queen -e PG_HOST=qpg -e PG_PORT=5432 -e PG_PASSWORD=postgres -e NUM_WORKERS=2 -e DB_POOL_SIZE=5 -e SIDECAR_POOL_SIZE=30 smartnessai/queen-mq:0.12.19
+docker run -p 6632:6632 --network queen -e PG_HOST=qpg -e PG_PORT=5432 -e PG_PASSWORD=postgres -e NUM_WORKERS=2 -e DB_POOL_SIZE=5 -e SIDECAR_POOL_SIZE=30 smartnessai/queen-mq:0.13.0
 ```
 
 Then in another terminal, use cURL (or the client libraries) to push and consume messages
@@ -107,6 +109,8 @@ Then go to the dashboard ([http://localhost:6632](http://localhost:6632)) to see
 
 - [JavaScript Client](https://smartpricing.github.io/queen/clients/javascript)
 - [Python Client](https://smartpricing.github.io/queen/clients/python)
+- [Go Client](https://smartpricing.github.io/queen/clients/go)
+- [PHP / Laravel Client](https://smartpricing.github.io/queen/clients/laravel)
 - [C++ Client](https://smartpricing.github.io/queen/clients/cpp)
 - [HTTP API Reference](https://smartpricing.github.io/queen/api/http)
 
@@ -121,6 +125,8 @@ The repository is structured as follows:
 - `pg_qpubsub`: PostgreSQL extension for using queen-mq semantics as a PostgreSQL extension
 - `client-js`: JavaScript client library (browser and node.js)
 - `client-py`: Python client library (python 3.8+)
+- `client-go`: Go client library (go 1.21+)
+- `client-laravel`: PHP / Laravel client library (php 8.1+)
 - `client-cpp`: C++ client library (cpp 17)
 - `proxy`: Proxy server (authentication)
 - `app`: Vue.js dashboard (vue 3)

@@ -34,6 +34,8 @@ export default defineConfig({
         items: [
           { text: 'JavaScript Client', link: '/clients/javascript' },
           { text: 'Python Client', link: '/clients/python' },
+          { text: 'Go Client', link: '/clients/go' },
+          { text: 'PHP / Laravel Client', link: '/clients/laravel' },
           { text: 'C++ Client', link: '/clients/cpp' },
           { text: 'HTTP API', link: '/api/http' }
         ]
@@ -100,6 +102,8 @@ export default defineConfig({
           items: [
             { text: 'JavaScript Client', link: '/clients/javascript' },
             { text: 'Python Client', link: '/clients/python' },
+            { text: 'Go Client', link: '/clients/go' },
+            { text: 'PHP / Laravel Client', link: '/clients/laravel' },
             { text: 'C++ Client', link: '/clients/cpp' }
           ]
         },
