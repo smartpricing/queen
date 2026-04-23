@@ -293,12 +293,32 @@ CREATE TABLE IF NOT EXISTS queen.stats_history (
 CREATE INDEX IF NOT EXISTS idx_stats_history_time ON queen.stats_history(bucket_time DESC);
 CREATE INDEX IF NOT EXISTS idx_stats_history_lookup ON queen.stats_history(stat_type, stat_key, bucket_time DESC);
 -- ============================================================================
+-- Legacy index cleanup (safe to re-run; see DISCOVERY.md finding #3)
+-- ============================================================================
+-- These two indexes were discovered to be redundant with
+-- messages_partition_transaction_unique (partition_id, transaction_id):
+--   - idx_messages_transaction_id       (transaction_id)           → prefix
+--   - idx_messages_txn_partition        (transaction_id, partition_id) → reversed columns
+--
+-- Neither is referenced by any hot query path (push's ON CONFLICT uses the
+-- UNIQUE, pop's cursor scan uses idx_messages_partition_created). On
+-- long-running instances these grew to 3–4 GB each, pushing the total
+-- messages index footprint above shared_buffers and causing cache thrashing.
+--
+-- The DROPs below are idempotent (IF EXISTS). On fresh databases they are
+-- no-ops; on existing databases they reclaim the space at server startup.
+-- Schema apply takes an AccessExclusive lock per DROP — acceptable because
+-- it runs at Queen boot before workload resumes.
+DROP INDEX IF EXISTS queen.idx_messages_transaction_id;
+DROP INDEX IF EXISTS queen.idx_messages_txn_partition;
+
+-- ============================================================================
 -- Indexes
 -- ============================================================================
 
 CREATE INDEX IF NOT EXISTS idx_queues_name ON queen.queues(name);
 -- NOTE: idx_messages_partition_created_id removed - duplicate of idx_messages_partition_created
-CREATE INDEX IF NOT EXISTS idx_messages_transaction_id ON queen.messages(transaction_id);
+-- NOTE: idx_messages_transaction_id removed - see "Legacy index cleanup" above.
 
 
 CREATE INDEX IF NOT EXISTS idx_messages_consumed_acked_at ON queen.messages_consumed(acked_at DESC);
@@ -323,7 +343,7 @@ CREATE INDEX IF NOT EXISTS idx_message_trace_names_trace_id ON queen.message_tra
 CREATE INDEX IF NOT EXISTS idx_system_state_key ON queen.system_state(key);
 
 -- Stored procedure indexes
-CREATE INDEX IF NOT EXISTS idx_messages_txn_partition ON queen.messages(transaction_id, partition_id);
+-- NOTE: idx_messages_txn_partition removed - see "Legacy index cleanup" at top.
 CREATE INDEX IF NOT EXISTS idx_messages_partition_created ON queen.messages (partition_id, created_at, id);
 -- NOTE: idx_partition_lookup_queue_message_ts removed - it prevented HOT updates
 -- causing severe bloat on this high-update table (600x bloat in 10 hours)

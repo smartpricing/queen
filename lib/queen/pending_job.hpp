@@ -63,7 +63,7 @@ inline const std::map<JobType, std::string>&
 JobTypeToSqlTable() {
     static const std::map<JobType, std::string> table = {
         {JobType::PUSH,        "SELECT queen.push_messages_v3($1::jsonb)"},
-        {JobType::POP,         "SELECT queen.pop_unified_batch($1::jsonb)"},
+        {JobType::POP,         "SELECT queen.pop_unified_batch_v2($1::jsonb)"},
         {JobType::ACK,         "SELECT queen.ack_messages_v2($1::jsonb)"},
         {JobType::TRANSACTION, "SELECT queen.execute_transaction_v2($1::jsonb)"},
         {JobType::RENEW_LEASE, "SELECT queen.renew_lease_v2($1::jsonb)"},
