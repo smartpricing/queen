@@ -137,8 +137,44 @@ DOC_PID=$!
 ) &
 ATTR_PID=$!
 
+# pg_stat_statements snapshot every 30s — one line per query per snapshot.
+# Format: ts,query_prefix,calls,total_ms,rows
+# Also snapshot queen function stats + table stats so we can diff per interval.
+(
+  while [ $(NOW) -lt $END ]; do
+    TS=$(NOW)
+    # Key queries by their prefix signature so we can find them across snapshots
+    $PG -c "
+      SELECT '$TS,' || regexp_replace(LEFT(query, 60), '\s+', ' ', 'g') || ',' ||
+             calls || ',' || ROUND(total_exec_time::numeric,0) || ',' || rows
+      FROM pg_stat_statements
+      WHERE query LIKE '%push_messages_v3%'
+         OR query LIKE '%pop_unified_batch_v2_noorder%'
+         OR query LIKE '%update_partition_lookup_v1%'
+         OR query LIKE '%reconcile_partition_lookup_v1%'
+      ORDER BY total_exec_time DESC" 2>/dev/null >> "$OUT/pg_stat_snapshots.jsonl"
+    # Function-level totals
+    $PG -c "
+      SELECT '$TS,FN,' || funcname || ',' || calls || ',' ||
+             ROUND(total_time::numeric,0) || ',' || ROUND(self_time::numeric,0)
+      FROM pg_stat_user_functions
+      WHERE schemaname='queen'
+        AND funcname IN ('push_messages_v3','pop_unified_batch_v2_noorder',
+                         'update_partition_lookup_v1','reconcile_partition_lookup_v1',
+                         'update_partition_lookup_trigger')" 2>/dev/null >> "$OUT/pg_stat_snapshots.jsonl"
+    # Messages table size snapshot
+    $PG -c "
+      SELECT '$TS,TBL,' || relname || ',' || n_live_tup || ',' || n_dead_tup || ',' || n_tup_ins
+      FROM pg_stat_user_tables
+      WHERE schemaname='queen'
+        AND relname IN ('messages','partition_lookup','partition_consumers','messages_consumed')" 2>/dev/null >> "$OUT/pg_stat_snapshots.jsonl"
+    sleep 30
+  done
+) &
+STAT_PID=$!
+
 # ---- wait for duration ----
-wait $WAIT_PID $TAB_PID $WAL_PID $ACT_PID $DOC_PID $ATTR_PID 2>/dev/null || true
+wait $WAIT_PID $TAB_PID $WAL_PID $ACT_PID $DOC_PID $ATTR_PID $STAT_PID 2>/dev/null || true
 
 # ---- snapshots at end ----
 $PG -c "SELECT relname, n_tup_ins, n_tup_upd, n_tup_hot_upd, n_tup_del, n_live_tup, n_dead_tup, seq_scan, idx_scan

@@ -3,7 +3,7 @@
    Workers: 1
    Connections per worker: 50
    Total connections: 50
-   Duration: 120s
+   Duration: 900s
 
 Worker 1 ready (1/1)
 
@@ -14,14 +14,14 @@ Worker 1 finished (1/1)
 ==================================================
       CONSUMER AGGREGATED RESULTS
 ==================================================
-Total requests:  801
-2xx:             801
+Total requests:  10978
+2xx:             10978
 non-2xx:         0
-errors:          286
-timeouts:        286
-Throughput:      6.7 req/s
-Latency avg:     3822.88 ms
-Latency p50:     3469.00 ms
-Latency p99:     9683.00 ms
-Latency max:     10001.00 ms
+errors:          1566
+timeouts:        1566
+Throughput:      12.2 req/s
+Latency avg:     2668.00 ms
+Latency p50:     1833.00 ms
+Latency p99:     9536.00 ms
+Latency max:     9993.00 ms
 ==================================================
