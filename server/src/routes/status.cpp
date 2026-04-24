@@ -252,6 +252,47 @@ void setup_status_routes(uWS::App* app, const RouteContext& ctx) {
         }
     });
     
+    // GET /api/v1/analytics/queue-ops - Per-queue ops time series (PR 3)
+    // Returns push / pop / ack / trx rates + lag + partition lifecycle per
+    // queue. Source: queen.queue_lag_metrics (extended columns).
+    app->get("/api/v1/analytics/queue-ops", [ctx](auto* res, auto* req) {
+        // Check authentication - READ_ONLY required for analytics
+        REQUIRE_AUTH(res, req, ctx, auth::AccessLevel::READ_ONLY);
+
+        try {
+            std::string filters_json = build_filters_json(
+                get_query_param(req, "from"),
+                get_query_param(req, "to"),
+                get_query_param(req, "queue")
+            );
+            submit_sp_call(ctx, res,
+                "SELECT queen.get_queue_ops_v1($1::jsonb)",
+                {filters_json});
+        } catch (const std::exception& e) {
+            send_error_response(res, e.what(), 500);
+        }
+    });
+
+    // GET /api/v1/analytics/retention - Retention / eviction time series (async via stored procedure)
+    // Aggregates queen.retention_history by bucket; split by retention_type.
+    app->get("/api/v1/analytics/retention", [ctx](auto* res, auto* req) {
+        // Check authentication - READ_ONLY required for analytics
+        REQUIRE_AUTH(res, req, ctx, auth::AccessLevel::READ_ONLY);
+
+        try {
+            std::string filters_json = build_filters_json(
+                get_query_param(req, "from"),
+                get_query_param(req, "to"),
+                get_query_param(req, "queue")
+            );
+            submit_sp_call(ctx, res,
+                "SELECT queen.get_retention_timeseries_v1($1::jsonb)",
+                {filters_json});
+        } catch (const std::exception& e) {
+            send_error_response(res, e.what(), 500);
+        }
+    });
+
     // GET /api/v1/analytics/postgres-stats - PostgreSQL internal stats (async via stored procedure)
     app->get("/api/v1/analytics/postgres-stats", [ctx](auto* res, auto* req) {
         // Check authentication - READ_ONLY required for analytics

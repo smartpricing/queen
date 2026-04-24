@@ -25,6 +25,7 @@
 #include <string>
 #include <thread>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 #include "queen/batch_policy.hpp"
@@ -1228,7 +1229,16 @@ class Queen {
                                         if (job->job.auto_ack) {
                                             _metrics->record_ack_request();
                                             _metrics->record_ack_messages(message_count, message_count, 0);
+                                            // Credit this auto-ack back to the same queue for
+                                            // per-queue ack counters (PR 3c).
+                                            _metrics->record_ack_with_queue(
+                                                job->job.queue_name, message_count, 0);
                                         }
+                                    } else {
+                                        // Empty pop response (no messages + no wait deadline,
+                                        // or wait deadline already expired). Track per-queue so
+                                        // operators can see polling pressure on idle queues.
+                                        _metrics->record_pop_empty(job->job.queue_name);
                                     }
                                 }
 
@@ -1242,10 +1252,12 @@ class Queen {
                         case JobType::PUSH: {
                             _update_pop_backoff_tracker(job->job.queue_name, job->job.partition_name);
                             if (_metrics) {
-                                _metrics->record_push_request();
-                                if (job->job.item_count > 0) {
-                                    _metrics->record_push_messages(job->job.item_count);
-                                }
+                                // record_push_with_queue also bumps the aggregate
+                                // _push_request_count / _push_message_count, so it
+                                // replaces the previous record_push_request + messages pair.
+                                _metrics->record_push_with_queue(
+                                    job->job.queue_name,
+                                    job->job.item_count > 0 ? job->job.item_count : 0);
                             }
                             _jobs_done++;
                             job->callback(job_results.dump());
@@ -1256,13 +1268,27 @@ class Queen {
                                 _metrics->record_ack_request();
                                 size_t total = job->job.item_count > 0 ? job->job.item_count : job_results.size();
                                 size_t success = 0, failed = 0, dlq = 0;
+                                // Per-queue tallies (PR 3c). ack_messages_v2
+                                // already returns `queueName` for every
+                                // result item, so per-queue attribution is
+                                // free — no extra JOIN needed.
+                                struct QS { size_t s = 0; size_t f = 0; };
+                                std::unordered_map<std::string, QS> by_queue;
                                 for (const auto& result : job_results) {
                                     bool is_success = result.contains("success") && result["success"].get<bool>();
                                     if (is_success) success++; else failed++;
                                     if (result.contains("dlq") && result["dlq"].get<bool>()) dlq++;
+                                    // Attribute per-queue when the proc returned it; otherwise skip silently.
+                                    if (result.contains("queueName") && result["queueName"].is_string()) {
+                                        auto& q = by_queue[result["queueName"].get<std::string>()];
+                                        if (is_success) q.s++; else q.f++;
+                                    }
                                 }
                                 _metrics->record_ack_messages(total, success, failed);
                                 for (size_t i = 0; i < dlq; ++i) _metrics->record_dlq();
+                                for (const auto& [qn, qs] : by_queue) {
+                                    _metrics->record_ack_with_queue(qn, qs.s, qs.f);
+                                }
                             }
                             _jobs_done++;
                             job->callback(job_results.dump());
@@ -1271,8 +1297,20 @@ class Queen {
                         case JobType::TRANSACTION: {
                             if (_metrics) {
                                 _metrics->record_transaction();
+                                // Per-queue transaction attribution (PR 3c).
+                                // 004_transaction.sql now returns `queueName` for
+                                // push-ops; we credit each distinct queue once per
+                                // transaction so a transaction that spans multiple
+                                // queues shows up under each of them.
+                                std::unordered_set<std::string> queues_touched;
                                 for (const auto& result : job_results) {
                                     if (result.contains("dlq") && result["dlq"].get<bool>()) _metrics->record_dlq();
+                                    if (result.contains("queueName") && result["queueName"].is_string()) {
+                                        queues_touched.insert(result["queueName"].get<std::string>());
+                                    }
+                                }
+                                for (const auto& qn : queues_touched) {
+                                    _metrics->record_transaction_with_queue(qn);
                                 }
                             }
                             _jobs_done++;
@@ -1501,6 +1539,12 @@ class Queen {
 
     void
     _send_empty_response(std::shared_ptr<PendingJob>& job) noexcept(true) {
+        // Long-poll expired with nothing to return — count as an empty pop
+        // for this queue so polling pressure is visible on idle queues.
+        if (_metrics) {
+            _metrics->record_pop_request();
+            _metrics->record_pop_empty(job->job.queue_name);
+        }
         auto response = nlohmann::json::array();
         response.push_back({
             {"idx", 0},

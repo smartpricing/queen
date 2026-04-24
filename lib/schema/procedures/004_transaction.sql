@@ -87,7 +87,10 @@ BEGIN
                     'success', v_op_success,
                     'transactionId', v_txn_id,
                     'messageId', v_message_id::text,
-                    'partitionId', v_partition_id::text
+                    'partitionId', v_partition_id::text,
+                    -- v_queue_name is already set above for the push branch;
+                    -- libqueen uses this to attribute per-queue transaction counters.
+                    'queueName', v_queue_name
                 );
                 
             WHEN 'ack' THEN

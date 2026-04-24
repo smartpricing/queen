@@ -61,24 +61,60 @@ public:
     void record_db_error() { _db_error_count++; }
     void record_dlq() { _dlq_count++; }
 
-    // Record pop with lag measurement (called once per message popped)
-    // Note: Same message can be popped by multiple consumer groups
+    // --- Per-queue counters (all single-threaded, event-loop-only) ---
+    //
+    // These credit the _queue_ops map that is flushed to queue_lag_metrics at
+    // each minute boundary. Queue-name is known at libqueen call-time for
+    // push/pop (from JobRequest) and for ack/trx (from the SQL result items).
+    // RENEW_LEASE is deliberately NOT tracked per-queue (no queue info without
+    // a hot-path JOIN — see plan).
+
+    // Record push requests for a specific queue. Called once per HTTP push
+    // regardless of how many messages the call contained.
+    void record_push_with_queue(const std::string& queue_name, size_t n_messages) {
+        _push_request_count++;
+        _push_message_count += n_messages;
+        if (queue_name.empty()) return;
+        auto& q = _queue_ops[queue_name];
+        q.push_request_count++;
+        q.push_message_count += n_messages;
+    }
+
+    // Record pop with lag measurement (called once per message popped).
+    // Note: same message can be popped by multiple consumer groups.
     void record_pop_with_lag(const std::string& queue_name, uint64_t lag_ms) {
         _pop_message_count++;
-        
-        // NOTE: No mutex needed! All operations run on the same event loop thread.
-        // The Queen event loop is single-threaded (libuv), so:
-        // - record_* are called from job result handlers
-        // - record_stats_sample is called from _uv_stats_timer_cb
-        // - check_and_flush is called from _uv_stats_timer_cb
-        // All on the same thread, no races possible.
-        
-        auto& stats = _queue_lag_stats[queue_name];
+        auto& stats = _queue_ops[queue_name];
         stats.pop_count++;
         stats.total_lag_ms += lag_ms;
         if (lag_ms > stats.max_lag_ms) {
             stats.max_lag_ms = lag_ms;
         }
+    }
+
+    // Record an empty pop (consumer asked, nothing came back). Helpful for
+    // tuning polling backoff.
+    void record_pop_empty(const std::string& queue_name) {
+        if (queue_name.empty()) return;
+        _queue_ops[queue_name].pop_empty_count++;
+    }
+
+    // Record per-queue ack counts (success/failed). Called once per
+    // distinct queue observed in an ACK batch.
+    void record_ack_with_queue(const std::string& queue_name,
+                               size_t success, size_t failed) {
+        if (queue_name.empty()) return;
+        auto& q = _queue_ops[queue_name];
+        q.ack_request_count++;
+        q.ack_success_count += success;
+        q.ack_failed_count  += failed;
+    }
+
+    // Record one transaction attributed to a queue (called per distinct
+    // queue referenced by that transaction's push ops).
+    void record_transaction_with_queue(const std::string& queue_name) {
+        if (queue_name.empty()) return;
+        _queue_ops[queue_name].transaction_count++;
     }
 
     // --- Event loop health (called from stats timer) ---
@@ -139,7 +175,7 @@ public:
         _dlq_count = 0;
         
         _aggregates.reset();
-        _queue_lag_stats.clear();
+        _queue_ops.clear();
         
         return true;
     }
@@ -170,13 +206,32 @@ private:
     std::atomic<uint64_t> _db_error_count{0};
     std::atomic<uint64_t> _dlq_count{0};
     
-    // --- Per-queue lag tracking (no mutex needed - single-threaded event loop) ---
-    struct QueueLagStats {
-        uint64_t pop_count = 0;
-        uint64_t total_lag_ms = 0;
+    // --- Per-queue ops tracking (no mutex needed - single-threaded event loop) ---
+    // All fields are deltas for the current minute bucket; flushed + cleared
+    // at each minute boundary. See comments on the record_* methods above for
+    // which ops credit which field.
+    struct QueueOpsStats {
+        // Pop side (original — kept for lag aggregation compatibility).
+        uint64_t pop_count = 0;          // messages popped (non-empty pops)
+        uint64_t total_lag_ms = 0;       // sum of per-message lag → avg_lag_ms on flush
         uint64_t max_lag_ms = 0;
+
+        // Push side.
+        uint64_t push_request_count = 0;
+        uint64_t push_message_count = 0;
+
+        // Empty-pop diagnostic (useful for poll tuning; not shown by default).
+        uint64_t pop_empty_count = 0;
+
+        // Ack side.
+        uint64_t ack_request_count = 0;
+        uint64_t ack_success_count = 0;
+        uint64_t ack_failed_count = 0;
+
+        // Transactions touching this queue (push-ops inside a trx).
+        uint64_t transaction_count = 0;
     };
-    std::unordered_map<std::string, QueueLagStats> _queue_lag_stats;
+    std::unordered_map<std::string, QueueOpsStats> _queue_ops;
     
     // --- Running aggregates for current minute (no mutex needed) ---
     struct MinuteAggregates {
@@ -249,11 +304,12 @@ private:
         // Copy aggregates
         MinuteAggregates agg = _aggregates;
         
-        // Compute lag aggregates
+        // Compute lag aggregates across all queues (same math as before — now
+        // read from the unified _queue_ops map instead of a separate lag map).
         uint64_t total_lag_count = 0;
         uint64_t total_lag_sum = 0;
         uint64_t max_lag = 0;
-        for (const auto& [queue, stats] : _queue_lag_stats) {
+        for (const auto& [queue, stats] : _queue_ops) {
             total_lag_count += stats.pop_count;
             total_lag_sum += stats.total_lag_ms;
             if (stats.max_lag_ms > max_lag) {
@@ -335,43 +391,85 @@ private:
     
     void flush_queue_lag_metrics() {
         // No lock needed - single-threaded event loop
-        if (_queue_lag_stats.empty()) return;
-        
+        if (_queue_ops.empty()) return;
+
         std::string bucket_time = format_bucket_time();
-        
-        // Build SINGLE batched INSERT with UNNEST (one SQL call for all queues)
-        // This avoids N separate SQL submissions
+
+        // Build SINGLE batched INSERT for all queues that saw any activity
+        // this minute. One SQL call per worker per minute regardless of the
+        // number of queues touched.
         nlohmann::json batch = nlohmann::json::array();
-        for (const auto& [queue_name, stats] : _queue_lag_stats) {
-            if (stats.pop_count == 0) continue;
+        for (const auto& [queue_name, s] : _queue_ops) {
+            // Skip queues with zero total activity to keep the batch lean.
+            if (s.pop_count == 0
+                && s.push_request_count == 0
+                && s.pop_empty_count == 0
+                && s.ack_request_count == 0
+                && s.transaction_count == 0) continue;
+
             batch.push_back({
-                {"queue", queue_name},
-                {"pop_count", stats.pop_count},
-                {"avg_lag_ms", stats.total_lag_ms / stats.pop_count},
-                {"max_lag_ms", stats.max_lag_ms}
+                {"queue",               queue_name},
+                {"pop_count",           s.pop_count},
+                {"avg_lag_ms",          s.pop_count > 0 ? s.total_lag_ms / s.pop_count : 0},
+                {"max_lag_ms",          s.max_lag_ms},
+                {"push_request_count",  s.push_request_count},
+                {"push_message_count",  s.push_message_count},
+                {"pop_empty_count",     s.pop_empty_count},
+                {"ack_request_count",   s.ack_request_count},
+                {"ack_success_count",   s.ack_success_count},
+                {"ack_failed_count",    s.ack_failed_count},
+                {"transaction_count",   s.transaction_count}
             });
         }
-        
+
         if (batch.empty()) return;
-        
-        // Single SQL with JSON array parameter
+
+        // Single SQL with JSON array parameter — upserts on (bucket_time,
+        // queue_name), summing counters and taking max of max_lag_ms. The
+        // weighted-average update for avg_lag_ms guards against divide-by-
+        // zero when both sides have pop_count=0 (i.e. only non-pop activity
+        // this bucket).
         std::string sql = R"(
-            INSERT INTO queen.queue_lag_metrics (bucket_time, queue_name, pop_count, avg_lag_ms, max_lag_ms)
-            SELECT 
+            INSERT INTO queen.queue_lag_metrics (
+                bucket_time, queue_name,
+                pop_count, avg_lag_ms, max_lag_ms,
+                push_request_count, push_message_count, pop_empty_count,
+                ack_request_count, ack_success_count, ack_failed_count,
+                transaction_count
+            )
+            SELECT
                 $1::timestamptz,
                 item->>'queue',
                 (item->>'pop_count')::bigint,
                 (item->>'avg_lag_ms')::bigint,
-                (item->>'max_lag_ms')::bigint
+                (item->>'max_lag_ms')::bigint,
+                (item->>'push_request_count')::bigint,
+                (item->>'push_message_count')::bigint,
+                (item->>'pop_empty_count')::bigint,
+                (item->>'ack_request_count')::bigint,
+                (item->>'ack_success_count')::bigint,
+                (item->>'ack_failed_count')::bigint,
+                (item->>'transaction_count')::bigint
             FROM jsonb_array_elements($2::jsonb) AS item
             ON CONFLICT (bucket_time, queue_name) DO UPDATE SET
                 pop_count = queen.queue_lag_metrics.pop_count + EXCLUDED.pop_count,
-                avg_lag_ms = (queen.queue_lag_metrics.avg_lag_ms * queen.queue_lag_metrics.pop_count 
-                            + EXCLUDED.avg_lag_ms * EXCLUDED.pop_count) 
-                            / NULLIF(queen.queue_lag_metrics.pop_count + EXCLUDED.pop_count, 0),
-                max_lag_ms = GREATEST(queen.queue_lag_metrics.max_lag_ms, EXCLUDED.max_lag_ms)
+                avg_lag_ms = CASE
+                    WHEN (queen.queue_lag_metrics.pop_count + EXCLUDED.pop_count) > 0
+                    THEN (queen.queue_lag_metrics.avg_lag_ms * queen.queue_lag_metrics.pop_count
+                          + EXCLUDED.avg_lag_ms * EXCLUDED.pop_count)
+                         / (queen.queue_lag_metrics.pop_count + EXCLUDED.pop_count)
+                    ELSE queen.queue_lag_metrics.avg_lag_ms
+                END,
+                max_lag_ms = GREATEST(queen.queue_lag_metrics.max_lag_ms, EXCLUDED.max_lag_ms),
+                push_request_count = queen.queue_lag_metrics.push_request_count + EXCLUDED.push_request_count,
+                push_message_count = queen.queue_lag_metrics.push_message_count + EXCLUDED.push_message_count,
+                pop_empty_count    = queen.queue_lag_metrics.pop_empty_count    + EXCLUDED.pop_empty_count,
+                ack_request_count  = queen.queue_lag_metrics.ack_request_count  + EXCLUDED.ack_request_count,
+                ack_success_count  = queen.queue_lag_metrics.ack_success_count  + EXCLUDED.ack_success_count,
+                ack_failed_count   = queen.queue_lag_metrics.ack_failed_count   + EXCLUDED.ack_failed_count,
+                transaction_count  = queen.queue_lag_metrics.transaction_count  + EXCLUDED.transaction_count
         )";
-        
+
         if (_flush_callback) {
             _flush_callback(sql, {bucket_time, batch.dump()});
         }

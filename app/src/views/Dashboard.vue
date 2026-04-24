@@ -1,7 +1,7 @@
 <template>
   <div class="view-container">
 
-    <!-- Range selector -->
+    <!-- Range selector + active-queue filter chip -->
     <div style="display:flex; align-items:center; gap:12px; margin-bottom:20px; flex-wrap:wrap;">
       <div class="seg">
         <button v-for="r in timeRanges" :key="r.value" :class="{ on: selectedRange === r.value }" @click="selectedRange = r.value">{{ r.label }}</button>
@@ -9,6 +9,18 @@
       <div style="display:flex; align-items:center; gap:8px; font-size:11px; font-family:'JetBrains Mono',monospace; color:var(--text-mid);">
         <span class="pulse" /> live · 30s autorefresh
       </div>
+      <!-- Filter chip: appears when operator drilled into a single queue. Click
+           × to clear; charts snap back to system-wide view. -->
+      <button
+        v-if="filterQueue"
+        class="filter-chip"
+        @click="clearQueueFilter"
+        title="Clear queue filter"
+      >
+        <span>filtered by</span>
+        <span class="filter-chip-queue">{{ filterQueue }}</span>
+        <span class="filter-chip-x">×</span>
+      </button>
       <div style="margin-left:auto; display:flex; gap:12px;">
         <div class="legend"><span class="sw" style="background:#e6e6e6;"></span> produced</div>
         <div class="legend"><span class="sw" style="background:#8a8a92;"></span> consumed</div>
@@ -57,44 +69,136 @@
       </div>
     </div>
 
-    <!-- Charts row -->
-    <div class="grid-2-1" style="margin-bottom:20px;">
-      <div class="card card-accent">
-        <div class="card-header">
-          <h3>Throughput · {{ selectedRange }}</h3>
-          <span v-if="chartData.labels.length" class="chip chip-ice"><span class="dot"></span>{{ throughput.current }} msg/s</span>
+    <!-- Small multiples — 3x3 grid of mini-charts on a shared time axis -->
+    <div class="sm-grid" style="margin-bottom:20px;">
+      <!-- 1. Throughput push / pop / ack -->
+      <div class="sm-card">
+        <div class="sm-head">
+          <span class="sm-title">Throughput · msg/s</span>
+          <span v-if="chartData.labels.length" class="sm-chip">{{ throughput.current }}/s</span>
         </div>
-        <div class="card-body">
-          <BaseChart v-if="chartData.labels.length > 0" type="line" :data="chartData" :options="chartOptions" height="260px" />
-          <div v-else style="height:260px; display:flex; align-items:center; justify-content:center; color:var(--text-mid);">
-            <span class="spinner" style="margin-right:8px;" /> Loading…
-          </div>
-        </div>
+        <BaseChart v-if="chartData.labels.length > 0" type="line" :data="chartData" :options="miniOpts('msg/s')" height="140px" />
+        <div v-else class="sm-empty">—</div>
       </div>
 
-      <!-- Queue time lag -->
-      <div class="card">
-        <div class="card-header">
-          <h3>Queue time lag</h3>
-          <span class="muted">max per queue</span>
+      <!-- 2. Pending delta over the window (cumulative push - ack). -->
+      <div class="sm-card">
+        <div class="sm-head">
+          <span class="sm-title">Pending Δ · msgs (window)</span>
+          <span v-if="pendingDeltaLatest !== 0" class="sm-chip"
+                :class="{ 'sm-chip-warn': pendingDeltaLatest > 0, 'sm-chip-ok': pendingDeltaLatest < 0 }">
+            {{ pendingDeltaLatest > 0 ? '+' : '' }}{{ formatNumber(pendingDeltaLatest) }}
+          </span>
         </div>
-        <div class="card-body">
-          <div v-if="queueTimeLag.length > 0" style="display:flex; flex-direction:column; gap:14px;">
-            <div v-for="q in queueTimeLag.slice(0, 6)" :key="q.name">
-              <div style="display:flex; justify-content:space-between; font-size:13px; margin-bottom:6px;">
-                <span style="font-weight:500; color:var(--text-hi); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; max-width:140px;">{{ q.name }}</span>
-                <span class="font-mono tabular-nums font-medium num" :class="{ warn: q.lag > 60 && q.lag <= 600, bad: q.lag > 600, mute: !q.lag }">
-                  {{ q.lag > 0 ? formatDuration(q.lag) : '-' }}
-                </span>
-              </div>
-              <div class="bar" style="width:100%; display:block;">
-                <i :class="q.lag > 600 ? 'bad' : q.lag > 60 ? 'warn' : ''" :style="{ width: q.pct + '%' }" />
-              </div>
+        <BaseChart v-if="pendingDeltaChartData.labels.length > 0" type="line" :data="pendingDeltaChartData" :options="miniOpts('msgs')" height="140px" />
+        <div v-else class="sm-empty">—</div>
+      </div>
+
+      <!-- 3. Queen CPU user / sys (or per-replica when >1 replica) -->
+      <div class="sm-card">
+        <div class="sm-head">
+          <span class="sm-title">Queen CPU · %<span v-if="hasMultipleReplicas" style="font-weight:400; color:var(--text-faint);"> · per replica</span></span>
+          <span v-if="cpuLatest > 0" class="sm-chip">{{ cpuLatest.toFixed(1) }}%</span>
+        </div>
+        <BaseChart v-if="cpuChartData.labels.length > 0" type="line" :data="cpuChartData" :options="miniOpts('%', v => v.toFixed(1) + '%')" height="140px" />
+        <div v-else class="sm-empty">—</div>
+      </div>
+
+      <!-- 3. Time lag avg / max -->
+      <div class="sm-card">
+        <div class="sm-head">
+          <span class="sm-title">Lag · ms</span>
+          <span v-if="lagLatestMax > 0" class="sm-chip" :class="{ 'sm-chip-warn': lagLatestMax > 60000, 'sm-chip-bad': lagLatestMax > 300000 }">{{ formatLagShort(lagLatestMax) }}</span>
+        </div>
+        <BaseChart v-if="lagChartData.labels.length > 0" type="line" :data="lagChartData" :options="miniOpts('ms', formatLagShort)" height="140px" />
+        <div v-else class="sm-empty">—</div>
+      </div>
+
+      <!-- 4. Event loop lag avg / max -->
+      <div class="sm-card">
+        <div class="sm-head">
+          <span class="sm-title">Event loop · ms</span>
+          <span v-if="maxEventLoopLag > 0" class="sm-chip" :class="{ 'sm-chip-warn': maxEventLoopLag > 50, 'sm-chip-bad': maxEventLoopLag > 100 }">{{ maxEventLoopLag }}ms</span>
+        </div>
+        <BaseChart v-if="elChartData.labels.length > 0" type="line" :data="elChartData" :options="miniOpts('ms')" height="140px" />
+        <div v-else class="sm-empty">—</div>
+      </div>
+
+      <!-- 5. Errors: db / ack failed / dlq -->
+      <div class="sm-card">
+        <div class="sm-head">
+          <span class="sm-title">Errors</span>
+          <span v-if="errorTotal > 0" class="sm-chip sm-chip-bad">{{ formatNumber(errorTotal) }}</span>
+        </div>
+        <BaseChart v-if="errorsChartData.labels.length > 0" type="bar" :data="errorsChartData" :options="miniOpts('count')" height="140px" />
+        <div v-else class="sm-empty">—</div>
+      </div>
+
+      <!-- 6. Retention ops stacked -->
+      <div class="sm-card">
+        <div class="sm-head">
+          <span class="sm-title">Retention · msgs</span>
+          <span v-if="retentionTotal > 0" class="sm-chip">{{ formatNumber(retentionTotal) }}</span>
+        </div>
+        <BaseChart v-if="retentionChartData.labels.length > 0" type="bar" :data="retentionChartData" :options="miniOptsStacked('msgs')" height="140px" />
+        <div v-else class="sm-empty">—</div>
+      </div>
+
+      <!-- 7. Partitions created / deleted -->
+      <div class="sm-card">
+        <div class="sm-head">
+          <span class="sm-title">Partitions · events</span>
+          <span v-if="(partitionCreatedTotal + partitionDeletedTotal) > 0" class="sm-chip">
+            <span style="color:#4ade80;">+{{ formatNumber(partitionCreatedTotal) }}</span>
+            <span style="color:var(--text-faint); margin:0 4px;">/</span>
+            <span style="color:#fb7185;">-{{ formatNumber(partitionDeletedTotal) }}</span>
+          </span>
+        </div>
+        <BaseChart v-if="partitionChartData.labels.length > 0" type="bar" :data="partitionChartData" :options="miniOpts('count')" height="140px" />
+        <div v-else class="sm-empty">—</div>
+      </div>
+
+      <!-- 8. DB pool: active / idle / free slots -->
+      <div class="sm-card">
+        <div class="sm-head">
+          <span class="sm-title">DB pool · conns</span>
+          <span v-if="poolLatest" class="sm-chip">{{ poolLatest.active }}/{{ poolLatest.size }}</span>
+        </div>
+        <BaseChart v-if="poolChartData.labels.length > 0" type="line" :data="poolChartData" :options="miniOpts('conns')" height="140px" />
+        <div v-else class="sm-empty">—</div>
+      </div>
+    </div>
+
+    <!-- Queue time lag (secondary, compact list). Clicking a row filters the
+         small-multiples above to that single queue. Click × in the top chip
+         to clear, or click the same row again. -->
+    <div class="card" style="margin-bottom:20px;">
+      <div class="card-header">
+        <h3>Queue time lag</h3>
+        <span class="muted">max per queue · click to drill down</span>
+      </div>
+      <div class="card-body">
+        <div v-if="queueTimeLag.length > 0" class="grid-3" style="gap:16px 24px;">
+          <div
+            v-for="q in queueTimeLag.slice(0, 9)"
+            :key="q.name"
+            class="ql-row"
+            :class="{ 'ql-row-active': filterQueue === q.name }"
+            @click="toggleQueueFilter(q.name)"
+          >
+            <div style="display:flex; justify-content:space-between; font-size:13px; margin-bottom:6px;">
+              <span style="font-weight:500; color:var(--text-hi); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; max-width:160px;">{{ q.name }}</span>
+              <span class="font-mono tabular-nums font-medium num" :class="{ warn: q.lag > 60 && q.lag <= 600, bad: q.lag > 600, mute: !q.lag }">
+                {{ q.lag > 0 ? formatDuration(q.lag) : '-' }}
+              </span>
+            </div>
+            <div class="bar" style="width:100%; display:block;">
+              <i :class="q.lag > 600 ? 'bad' : q.lag > 60 ? 'warn' : ''" :style="{ width: q.pct + '%' }" />
             </div>
           </div>
-          <div v-else style="height:200px; display:flex; align-items:center; justify-content:center; color:var(--text-low); font-size:13px;">
-            No consumer groups
-          </div>
+        </div>
+        <div v-else style="height:60px; display:flex; align-items:center; justify-content:center; color:var(--text-low); font-size:13px;">
+          No consumer groups
         </div>
       </div>
     </div>
@@ -170,7 +274,7 @@
 
 <script setup>
 import { ref, computed, onMounted, onUnmounted, watch, h } from 'vue'
-import { resources, queues as queuesApi, analytics, consumers as consumersApi } from '@/api'
+import { resources, queues as queuesApi, analytics, consumers as consumersApi, system as systemApi } from '@/api'
 import { formatNumber } from '@/composables/useApi'
 import { useRefresh } from '@/composables/useRefresh'
 import MetricCard from '@/components/MetricCard.vue'
@@ -181,6 +285,13 @@ const overview = ref(null)
 const queues = ref([])
 const consumers = ref([])
 const statusData = ref(null)
+// Populated by PR 2 (retention timeseries) and PR 3 (per-queue ops / partitions).
+// Kept as empty arrays so computed charts render nothing instead of exploding.
+const retentionData = ref([])
+const partitionOpsData = ref([])
+// Per-replica system metrics, used only when more than one replica is present
+// to split the CPU small-multiple into one line per (hostname, workerId).
+const systemMetricsData = ref(null)
 
 const loadingOverview = ref(true)
 const loadingQueues = ref(true)
@@ -194,10 +305,28 @@ const timeRanges = [
   { label: '24h', value: '24h', minutes: 1440 },
 ]
 
+// Active queue drilldown. When non-empty, all multiples are scoped to this
+// queue via the `queue` query param on /api/v1/status (which routes
+// get_status_v3 into its queue-filtered branch). Click a row in the queue
+// time lag list to set; click × in the filter chip or the same row again to clear.
+const filterQueue = ref('')
+const toggleQueueFilter = (name) => {
+  filterQueue.value = (filterQueue.value === name) ? '' : name
+  // Refetch immediately so the user sees the filtered view without waiting for the 30s interval.
+  fetchStatus()
+  fetchRetention()
+  fetchQueueOps()
+}
+const clearQueueFilter = () => { if (filterQueue.value) toggleQueueFilter(filterQueue.value) }
+
 const getTimeRangeParams = () => {
   const r = timeRanges.find(x => x.value === selectedRange.value) || timeRanges[0]
   const now = new Date()
-  return { from: new Date(now.getTime() - r.minutes * 60 * 1000).toISOString(), to: now.toISOString() }
+  const params = { from: new Date(now.getTime() - r.minutes * 60 * 1000).toISOString(), to: now.toISOString() }
+  // Scope every analytics call to the drilldown queue when active. The
+  // status/queue-ops/retention procedures all accept a `queue` filter field.
+  if (filterQueue.value) params.queue = filterQueue.value
+  return params
 }
 
 const totalPartitions = computed(() =>
@@ -256,20 +385,271 @@ const formatChartLabel = (date, multi) => multi
   ? date.toLocaleString('en-US', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })
   : date.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' })
 
+// Reversed history (ascending time) for all charts — computed once.
+const history = computed(() => {
+  if (!statusData.value?.throughput?.length) return []
+  return [...statusData.value.throughput].reverse()
+})
+const multiDay = computed(() => {
+  const h = history.value
+  if (h.length < 2) return false
+  return new Date(h[0].timestamp).toDateString() !== new Date(h[h.length-1].timestamp).toDateString()
+})
+const chartLabels = computed(() => history.value.map(h => formatChartLabel(new Date(h.timestamp), multiDay.value)))
+
+// Format lag (stored in ms) with human-friendly scale: ms → s → m.
+const formatLagShort = (v) => {
+  const n = Number(v) || 0
+  if (n < 1) return '0'
+  if (n < 1000) return `${Math.round(n)}ms`
+  if (n < 60000) return `${(n / 1000).toFixed(1)}s`
+  return `${(n / 60000).toFixed(1)}m`
+}
+
+// Shared mini-chart options (small multiples look).
+const miniOpts = (yLabel, tickFmt) => ({
+  plugins: { legend: { display: false } },
+  scales: {
+    y: {
+      title: { display: true, text: yLabel, font: { size: 10 } },
+      ticks: tickFmt ? { callback: tickFmt } : undefined,
+    }
+  }
+})
+const miniOptsStacked = (yLabel) => ({
+  plugins: { legend: { display: false } },
+  scales: {
+    x: { stacked: true },
+    y: { stacked: true, title: { display: true, text: yLabel, font: { size: 10 } } }
+  }
+})
+
+// 1. Throughput — Push / Pop / Ack on the same axis. Push vs Ack is the
+// producer/consumer view of the system; Pop shows the read-side pressure
+// separately (matters in bus mode where one message is popped by many
+// consumer groups). Push/Pop are grey siblings; Ack is green (semantic
+// "healthy completion") so the eye quickly spots when acks lag pops.
 const chartData = computed(() => {
-  if (!statusData.value?.throughput?.length) return { labels: [], datasets: [] }
-  const hist = [...statusData.value.throughput].reverse()
-  let multi = false
-  if (hist.length > 1) { const f = new Date(hist[0].timestamp); const l = new Date(hist[hist.length-1].timestamp); multi = f.toDateString() !== l.toDateString() }
+  const h = history.value
+  if (!h.length) return { labels: [], datasets: [] }
   return {
-    labels: hist.map(h => formatChartLabel(new Date(h.timestamp), multi)),
+    labels: chartLabels.value,
     datasets: [
-      { label: 'In (msg/s)', data: hist.map(h => h.ingestedPerSecond || 0), fill: true },
-      { label: 'Out (msg/s)', data: hist.map(h => h.processedPerSecond || 0), fill: true },
+      { label: 'Push/s', data: h.map(x => Number(x.ingestedPerSecond) || 0),
+        fill: true, borderColor: '#e6e6e6', backgroundColor: 'rgba(230,230,230,0.12)' },
+      { label: 'Pop/s',  data: h.map(x => Number(x.popPerSecond) || 0),
+        fill: false, borderColor: '#8a8a92' },
+      { label: 'Ack/s',  data: h.map(x => Number(x.processedPerSecond) || 0),
+        fill: true, borderColor: '#4ade80', backgroundColor: 'rgba(74,222,128,0.10)' },
     ]
   }
 })
-const chartOptions = { plugins: { legend: { display: false } }, scales: { y: { title: { display: true, text: 'msg/s', font: { size: 11 } } } } }
+
+// 2. Pending Δ — cumulative (ingested - processed) across the window,
+// anchored at 0 on the left edge. Positive slope = pending is growing
+// (we're falling behind), negative slope = catching up. Not absolute
+// pending; deliberately labeled "Δ (window)" to make that clear.
+const pendingDeltaSeries = computed(() => {
+  const h = history.value
+  if (!h.length) return []
+  let cum = 0
+  return h.map(x => {
+    const ingested = Number(x.ingested) || 0
+    const processed = Number(x.processed) || 0
+    cum += (ingested - processed)
+    return cum
+  })
+})
+const pendingDeltaChartData = computed(() => {
+  const series = pendingDeltaSeries.value
+  if (!series.length) return { labels: [], datasets: [] }
+  // Two overlaid series: fill area (accent color for visibility on mini chart)
+  // plus a zero baseline marker so operators see which side they're on.
+  return {
+    labels: chartLabels.value,
+    datasets: [
+      { label: 'Pending Δ', data: series, fill: true,
+        borderColor: '#e6b450', backgroundColor: 'rgba(230,180,80,0.12)' }
+    ]
+  }
+})
+const pendingDeltaLatest = computed(() => {
+  const s = pendingDeltaSeries.value
+  return s.length ? s[s.length - 1] : 0
+})
+
+// 2. Queen CPU.
+// - Single-replica deploys: show the aggregate user / system split so the
+//   operator sees the kernel vs user work balance.
+// - Multi-replica deploys: flip to one line per replica so fanout imbalance
+//   is visible. We use the dedicated getSystemMetrics feed (per-replica
+//   time series) rather than the status_v3 average, which would hide skew.
+const replicaIdentity = (r) => `${r.hostname}:${r.port}:${r.worker_id || r.workerId || ''}`
+const hasMultipleReplicas = computed(() => (systemMetricsData.value?.replicas || []).length > 1)
+
+const cpuChartData = computed(() => {
+  // Multi-replica: plot one line per replica (user+sys summed).
+  if (hasMultipleReplicas.value) {
+    const replicas = systemMetricsData.value?.replicas || []
+    // Use the first replica's time-series as the shared time axis.
+    const ts = replicas[0]?.timeSeries || []
+    if (!ts.length) return { labels: [], datasets: [] }
+    const multi = ts.length >= 2 &&
+      new Date(ts[0].timestamp).toDateString() !== new Date(ts[ts.length - 1].timestamp).toDateString()
+    const labels = ts.map(t => formatChartLabel(new Date(t.timestamp), multi))
+    const palette = ['#e6e6e6', '#8a8a92', '#6a6a6a', '#4ade80', '#fb7185', '#e6b450']
+    const datasets = replicas.map((r, i) => {
+      const color = palette[i % palette.length]
+      return {
+        label: r.hostname.substring(0, 10),  // keep legend short
+        data: (r.timeSeries || []).map(t =>
+          ((t.metrics?.cpu?.user_us?.avg || 0) + (t.metrics?.cpu?.system_us?.avg || 0)) / 100),
+        fill: false,
+        borderColor: color,
+      }
+    })
+    return { labels, datasets }
+  }
+  // Single-replica fallback: show user / system split from status_v3.
+  const h = history.value
+  const hasCpu = h.some(x => x.queenCpuUserPct != null || x.queenCpuSysPct != null)
+  if (!hasCpu) return { labels: [], datasets: [] }
+  return {
+    labels: chartLabels.value,
+    datasets: [
+      { label: 'User %',   data: h.map(x => Number(x.queenCpuUserPct) || 0), fill: true },
+      { label: 'System %', data: h.map(x => Number(x.queenCpuSysPct)  || 0), fill: true },
+    ]
+  }
+})
+const cpuLatest = computed(() => {
+  if (hasMultipleReplicas.value) {
+    // Show the hottest replica's latest CPU — the one operators care about.
+    const replicas = systemMetricsData.value?.replicas || []
+    let max = 0
+    for (const r of replicas) {
+      const last = r.timeSeries?.[r.timeSeries.length - 1]
+      if (!last) continue
+      const v = ((last.metrics?.cpu?.user_us?.avg || 0) + (last.metrics?.cpu?.system_us?.avg || 0)) / 100
+      if (v > max) max = v
+    }
+    return max
+  }
+  const last = history.value[history.value.length - 1]
+  if (!last) return 0
+  return (Number(last.queenCpuUserPct) || 0) + (Number(last.queenCpuSysPct) || 0)
+})
+
+// 3. Time lag avg / max
+const lagChartData = computed(() => {
+  const h = history.value
+  if (!h.length) return { labels: [], datasets: [] }
+  return {
+    labels: chartLabels.value,
+    datasets: [
+      { label: 'Avg (ms)', data: h.map(x => Number(x.avgLagMs) || 0), fill: true },
+      { label: 'Max (ms)', data: h.map(x => Number(x.maxLagMs) || 0), fill: false, borderColor: '#fb7185' },
+    ]
+  }
+})
+const lagLatestMax = computed(() => {
+  const last = history.value[history.value.length - 1]
+  return last ? (Number(last.maxLagMs) || 0) : 0
+})
+
+// 4. Event loop lag
+const elChartData = computed(() => {
+  const h = history.value
+  const has = h.some(x => x.avgEventLoopLagMs != null || x.maxEventLoopLagMs != null)
+  if (!has) return { labels: [], datasets: [] }
+  return {
+    labels: chartLabels.value,
+    datasets: [
+      { label: 'Avg (ms)', data: h.map(x => Number(x.avgEventLoopLagMs) || 0), fill: true },
+      { label: 'Max (ms)', data: h.map(x => Number(x.maxEventLoopLagMs) || 0), fill: false, borderColor: '#fb7185' },
+    ]
+  }
+})
+
+// 5. Errors: db / ack failed / dlq (stacked-ish bars; we use simple bars)
+const errorsChartData = computed(() => {
+  const h = history.value
+  const has = h.some(x => (x.dbErrors || 0) + (x.ackFailed || 0) + (x.dlqCount || 0) > 0)
+  if (!has) return { labels: [], datasets: [] }
+  return {
+    labels: chartLabels.value,
+    datasets: [
+      { label: 'DB errors', data: h.map(x => Number(x.dbErrors) || 0), backgroundColor: 'rgba(244,63,94,0.6)', borderColor: '#f43f5e' },
+      { label: 'Ack failed', data: h.map(x => Number(x.ackFailed) || 0), backgroundColor: 'rgba(230,180,80,0.5)', borderColor: '#e6b450' },
+      { label: 'DLQ', data: h.map(x => Number(x.dlqCount) || 0), backgroundColor: 'rgba(230,230,230,0.5)', borderColor: '#e6e6e6' },
+    ]
+  }
+})
+const errorTotal = computed(() => history.value.reduce((s, x) =>
+  s + (Number(x.dbErrors) || 0) + (Number(x.ackFailed) || 0) + (Number(x.dlqCount) || 0), 0))
+
+// 6. Retention ops (populated in PR 2; empty placeholder safe today)
+const retentionChartData = computed(() => {
+  const rows = retentionData.value || []
+  if (!rows.length) return { labels: [], datasets: [] }
+  const labels = rows.map(r => formatChartLabel(new Date(r.bucket), false))
+  return {
+    labels,
+    datasets: [
+      { label: 'Retention', data: rows.map(r => Number(r.retentionMsgs) || 0), backgroundColor: 'rgba(230,230,230,0.6)', borderColor: '#e6e6e6' },
+      { label: 'Completed', data: rows.map(r => Number(r.completedRetentionMsgs) || 0), backgroundColor: 'rgba(138,138,146,0.6)', borderColor: '#8a8a92' },
+      { label: 'Evicted', data: rows.map(r => Number(r.evictionMsgs) || 0), backgroundColor: 'rgba(230,180,80,0.5)', borderColor: '#e6b450' },
+    ]
+  }
+})
+const retentionTotal = computed(() => (retentionData.value || []).reduce((s, r) =>
+  s + (Number(r.retentionMsgs) || 0) + (Number(r.completedRetentionMsgs) || 0) + (Number(r.evictionMsgs) || 0), 0))
+
+// 7. Partitions created / deleted — both as positive bars on a shared axis.
+// Earlier versions plotted deleted as negative to get a diverging view, but
+// when a retention sweep deletes thousands while creates trickle in tens,
+// the positive side gets compressed to invisibility. Two honest series side
+// by side is more truthful; Chart.js groups them on the same tick.
+const partitionChartData = computed(() => {
+  const rows = partitionOpsData.value || []
+  if (!rows.length) return { labels: [], datasets: [] }
+  const labels = rows.map(r => formatChartLabel(new Date(r.bucket), false))
+  return {
+    labels,
+    datasets: [
+      { label: 'Created', data: rows.map(r => Number(r.partitionsCreated) || 0),
+        backgroundColor: 'rgba(74,222,128,0.5)', borderColor: '#4ade80', borderWidth: 1 },
+      { label: 'Deleted', data: rows.map(r => Number(r.partitionsDeleted) || 0),
+        backgroundColor: 'rgba(251,113,133,0.5)', borderColor: '#fb7185', borderWidth: 1 },
+    ]
+  }
+})
+// Totals for the chip so operators see at-a-glance magnitude balance.
+const partitionCreatedTotal = computed(() => (partitionOpsData.value || []).reduce((s, r) => s + (Number(r.partitionsCreated) || 0), 0))
+const partitionDeletedTotal = computed(() => (partitionOpsData.value || []).reduce((s, r) => s + (Number(r.partitionsDeleted) || 0), 0))
+
+// 8. DB pool active / idle / size (free slots from worker_metrics as bonus)
+const poolChartData = computed(() => {
+  const h = history.value
+  const has = h.some(x => x.dbPoolActive != null || x.dbPoolIdle != null || x.minFreeSlots != null)
+  if (!has) return { labels: [], datasets: [] }
+  return {
+    labels: chartLabels.value,
+    datasets: [
+      { label: 'Active', data: h.map(x => Number(x.dbPoolActive) || 0), fill: true },
+      { label: 'Idle', data: h.map(x => Number(x.dbPoolIdle) || 0), fill: false },
+      { label: 'Free slots', data: h.map(x => Number(x.minFreeSlots) || 0), fill: false, borderColor: '#4ade80' },
+    ]
+  }
+})
+const poolLatest = computed(() => {
+  const last = history.value[history.value.length - 1]
+  if (!last) return null
+  const active = Math.round(Number(last.dbPoolActive) || 0)
+  const idle = Math.round(Number(last.dbPoolIdle) || 0)
+  const size = Math.round(Number(last.dbPoolSize) || (active + idle))
+  return { active, idle, size }
+})
 
 const queueTimeLag = computed(() => {
   if (!consumers.value.length) return []
@@ -346,10 +726,55 @@ const fetchOverview = async () => { if (!overview.value) loadingOverview.value =
 const fetchQueues = async () => { if (!queues.value.length) loadingQueues.value = true; try { const r = await queuesApi.list(); queues.value = r.data?.queues || r.data || [] } catch {} finally { loadingQueues.value = false } }
 const fetchConsumers = async () => { if (!consumers.value.length) loadingConsumers.value = true; try { const r = await consumersApi.list(); consumers.value = Array.isArray(r.data) ? r.data : r.data?.consumer_groups || [] } catch {} finally { loadingConsumers.value = false } }
 const fetchStatus = async () => { if (!statusData.value) loadingStatus.value = true; try { statusData.value = (await analytics.getStatus(getTimeRangeParams())).data } catch {} finally { loadingStatus.value = false } }
-const fetchAll = async () => { await Promise.all([fetchOverview(), fetchQueues(), fetchConsumers(), fetchStatus()]) }
+const fetchRetention = async () => {
+  try {
+    const r = await systemApi.getRetention(getTimeRangeParams())
+    retentionData.value = r.data?.series || []
+  } catch { retentionData.value = [] }
+}
+// Queue-ops feed: aggregate per-bucket partitions_created/deleted across all
+// queues for the Dashboard's "Partitions" small multiple. The System view
+// consumes the full per-queue series separately.
+const fetchQueueOps = async () => {
+  try {
+    const r = await systemApi.getQueueOps(getTimeRangeParams())
+    const series = r.data?.series || []
+    // Aggregate to one row per bucket.
+    const byBucket = {}
+    for (const row of series) {
+      const b = byBucket[row.bucket] ||= { bucket: row.bucket, partitionsCreated: 0, partitionsDeleted: 0 }
+      b.partitionsCreated += Number(row.partitionsCreated) || 0
+      b.partitionsDeleted += Number(row.partitionsDeleted) || 0
+    }
+    partitionOpsData.value = Object.values(byBucket).sort((a, b) => a.bucket.localeCompare(b.bucket))
+  } catch { partitionOpsData.value = [] }
+}
+// Per-replica system metrics. Only consumed by the CPU small-multiple when
+// more than one replica is present; otherwise the status-v3 average is used.
+// This fetch is cheap — same payload the System view already uses. We do NOT
+// scope it by filterQueue because CPU is system-wide regardless of queue.
+const fetchSystemMetrics = async () => {
+  try {
+    const r = timeRanges.find(x => x.value === selectedRange.value) || timeRanges[0]
+    const now = new Date()
+    const params = {
+      from: new Date(now.getTime() - r.minutes * 60 * 1000).toISOString(),
+      to: now.toISOString(),
+    }
+    const res = await systemApi.getSystemMetrics(params)
+    systemMetricsData.value = res.data
+  } catch { systemMetricsData.value = null }
+}
+const fetchAll = async () => {
+  await Promise.all([
+    fetchOverview(), fetchQueues(), fetchConsumers(),
+    fetchStatus(), fetchRetention(), fetchQueueOps(),
+    fetchSystemMetrics(),
+  ])
+}
 
 useRefresh(fetchAll)
-watch(selectedRange, fetchStatus)
+watch(selectedRange, () => { fetchStatus(); fetchRetention(); fetchQueueOps(); fetchSystemMetrics() })
 
 let interval = null
 onMounted(() => { fetchAll(); interval = setInterval(fetchAll, 30000) })
@@ -373,5 +798,84 @@ function ConsumersIcon(p) { return h('svg', { ...p, fill:'none', viewBox:'0 0 24
 .cg-row:hover { border-color: var(--bd-hi); }
 :global(.dark) .cg-row:hover { background: rgba(255,255,255,.03); }
 :global(.light) .cg-row:hover { background: rgba(10,10,10,.03); }
+
+/* Small-multiples grid: dense 3x3 on wide screens (9 cells), 2xN on medium,
+   1xN on mobile. 3-wide reads better than 4-wide at this chart density. */
+.sm-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 10px;
+}
+@media (max-width: 1280px) { .sm-grid { grid-template-columns: repeat(2, 1fr); } }
+@media (max-width: 640px)  { .sm-grid { grid-template-columns: 1fr; } }
+
+.sm-card {
+  border: 1px solid var(--bd);
+  background: var(--ink-2);
+  border-radius: 10px;
+  padding: 10px 12px 6px;
+  display: flex; flex-direction: column;
+  min-height: 178px;
+}
+.sm-head {
+  display: flex; align-items: center; justify-content: space-between;
+  margin-bottom: 6px; gap: 8px;
+}
+.sm-title {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-mid);
+  letter-spacing: .02em;
+  text-transform: uppercase;
+}
+.sm-chip {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 11px;
+  color: var(--text-hi);
+  background: var(--ink-3);
+  border: 1px solid var(--bd);
+  padding: 1px 6px;
+  border-radius: 99px;
+  white-space: nowrap;
+}
+.sm-chip-ok   { color: #4ade80; border-color: rgba(74,222,128,0.3); }
+.sm-chip-warn { color: #e6b450; border-color: rgba(230,180,80,0.3); }
+.sm-chip-bad  { color: #fb7185; border-color: rgba(251,113,133,0.3); }
+.sm-empty {
+  flex: 1;
+  display: flex; align-items: center; justify-content: center;
+  color: var(--text-faint); font-size: 18px;
+}
+
+/* Filter chip — pill above the multiples showing active drilldown. */
+.filter-chip {
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 3px 8px 3px 10px;
+  border-radius: 99px;
+  border: 1px solid var(--bd-hi);
+  background: var(--ink-3);
+  color: var(--text-mid);
+  font-size: 11px;
+  font-family: 'JetBrains Mono', monospace;
+  cursor: pointer;
+  transition: background .15s var(--ease), border-color .15s var(--ease), color .15s var(--ease);
+}
+.filter-chip:hover { background: var(--ink-4); color: var(--text-hi); border-color: var(--text-low); }
+.filter-chip-queue { color: var(--text-hi); font-weight: 500; }
+.filter-chip-x { color: var(--text-low); font-size: 14px; line-height: 1; padding-left: 2px; }
+
+/* Clickable queue lag row — subtle affordance, strong active state. */
+.ql-row {
+  padding: 4px 8px;
+  margin: -4px -8px;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: background .12s var(--ease);
+}
+.ql-row:hover { background: rgba(255,255,255,0.03); }
+.ql-row-active {
+  background: rgba(255,255,255,0.06);
+  box-shadow: inset 2px 0 0 var(--accent);
+}
 </style>
 

@@ -244,6 +244,45 @@
         </div>
       </div>
 
+      <!-- Retention & Eviction Jobs -->
+      <div class="card" style="margin-bottom:16px;">
+        <div class="card-header">
+          <h3>Retention &amp; Eviction Jobs</h3>
+          <span class="muted">messages deleted by retention / eviction workers</span>
+        </div>
+        <div class="card-body">
+          <div v-if="retentionChartData.labels.length > 0">
+            <div style="display:flex; gap:24px; flex-wrap:wrap; margin-bottom:14px;">
+              <div class="stat" style="padding:8px 12px;">
+                <div class="stat-label">Retention</div>
+                <div class="stat-value font-mono">{{ formatNumber(retentionTotals?.retentionMsgs || 0) }}</div>
+              </div>
+              <div class="stat" style="padding:8px 12px;">
+                <div class="stat-label">Completed retention</div>
+                <div class="stat-value font-mono">{{ formatNumber(retentionTotals?.completedRetentionMsgs || 0) }}</div>
+              </div>
+              <div class="stat" style="padding:8px 12px;">
+                <div class="stat-label">Eviction</div>
+                <div class="stat-value font-mono">{{ formatNumber(retentionTotals?.evictionMsgs || 0) }}</div>
+              </div>
+              <div class="stat" style="padding:8px 12px;">
+                <div class="stat-label">Events</div>
+                <div class="stat-value font-mono">{{ formatNumber(retentionTotals?.eventCount || 0) }}</div>
+              </div>
+            </div>
+            <BaseChart
+              type="bar"
+              :data="retentionChartData"
+              :options="retentionChartOptions"
+              height="240px"
+            />
+          </div>
+          <div v-else style="text-align:center; padding:32px 0; color:var(--text-low);">
+            No retention / eviction events in this range
+          </div>
+        </div>
+      </div>
+
       <!-- Per-Queue Metrics -->
       <div class="card" style="margin-bottom:16px;">
         <div class="card-header">
@@ -251,7 +290,7 @@
         </div>
         <div class="card-body">
           <template v-if="availableQueues.length > 0">
-            <div style="display:flex; align-items:center; gap:8px; margin-bottom:16px;">
+            <div style="display:flex; align-items:center; gap:8px; margin-bottom:12px;">
               <span style="font-size:12px; color:var(--text-low); white-space:nowrap;">Filter queues:</span>
               <MultiSelect
                 v-model="selectedQueues"
@@ -263,16 +302,30 @@
                 {{ selectedQueues.length }} of {{ availableQueues.length }}
               </span>
             </div>
+            <!-- Op selector: choose which per-queue chart to show -->
+            <div style="display:flex; align-items:center; gap:8px; flex-wrap:wrap; margin-bottom:14px;">
+              <span style="font-size:12px; color:var(--text-low); white-space:nowrap;">Op:</span>
+              <button
+                v-for="op in queueOpTabs"
+                :key="op.key"
+                @click="selectedQueueOp = op.key"
+                style="display:inline-flex; align-items:center; gap:6px; padding:3px 10px; border-radius:999px; font-size:11px; font-weight:500; cursor:pointer; border:1px solid var(--bd-hi); transition:.15s;"
+                :class="selectedQueueOp === op.key ? op.activeClass : 'opacity-50'"
+              >
+                <span style="width:6px; height:6px; border-radius:99px;" :style="{ background: selectedQueueOp === op.key ? op.activeDot : 'var(--text-faint)' }" />
+                {{ op.label }}
+              </button>
+            </div>
             <div>
-              <h4 class="label-xs" style="margin-bottom:10px;">Pop Throughput by Queue</h4>
+              <h4 class="label-xs" style="margin-bottom:10px;">{{ queueOpActive.label }} by Queue (per second)</h4>
               <BaseChart
-                v-if="queuePopChartData.labels.length > 0"
+                v-if="queueOpsRateChartData.labels.length > 0"
                 type="line"
-                :data="queuePopChartData"
+                :data="queueOpsRateChartData"
                 :options="perQueueThroughputOptions"
                 height="340px"
               />
-              <div v-else style="text-align:center; padding:48px 0; color:var(--text-low);">No per-queue data available</div>
+              <div v-else style="text-align:center; padding:48px 0; color:var(--text-low);">No per-queue data for this op yet</div>
             </div>
             <div style="margin-top:20px;">
               <h4 class="label-xs" style="margin-bottom:10px;">Avg Latency by Queue</h4>
@@ -288,7 +341,44 @@
           </template>
           <div v-else style="text-align:center; padding:32px 0; color:var(--text-low);">
             <p>No per-queue metrics recorded yet.</p>
-            <p style="font-size:12px; margin-top:4px;">Queue lag data is collected when messages are popped from queues.</p>
+            <p style="font-size:12px; margin-top:4px;">Per-queue data is collected as soon as libqueen flushes its first minute boundary.</p>
+          </div>
+        </div>
+      </div>
+
+      <!-- Partitions per queue (PR 3d snapshot + PR 3b created/deleted) -->
+      <div class="card" style="margin-bottom:16px;">
+        <div class="card-header">
+          <h3>Partitions</h3>
+          <span class="muted">count &amp; creation / deletion rate per queue</span>
+        </div>
+        <div class="card-body">
+          <template v-if="partitionCountChartData.labels.length > 0 || partitionRateChartData.labels.length > 0">
+            <div>
+              <h4 class="label-xs" style="margin-bottom:10px;">Partition count by Queue</h4>
+              <BaseChart
+                v-if="partitionCountChartData.labels.length > 0"
+                type="line"
+                :data="partitionCountChartData"
+                :options="perQueuePartitionCountOptions"
+                height="280px"
+              />
+              <div v-else style="text-align:center; padding:32px 0; color:var(--text-low);">No partition-count snapshots yet</div>
+            </div>
+            <div style="margin-top:20px;">
+              <h4 class="label-xs" style="margin-bottom:10px;">Partition creation / deletion rate (events per bucket, across all queues)</h4>
+              <BaseChart
+                v-if="partitionRateChartData.labels.length > 0"
+                type="bar"
+                :data="partitionRateChartData"
+                :options="partitionRateChartOptions"
+                height="240px"
+              />
+              <div v-else style="text-align:center; padding:32px 0; color:var(--text-low);">No partition create/delete events in this range</div>
+            </div>
+          </template>
+          <div v-else style="text-align:center; padding:32px 0; color:var(--text-low);">
+            <p>No partition metrics recorded yet.</p>
           </div>
         </div>
       </div>
@@ -871,7 +961,10 @@ const workerData = ref(null)
 const systemData = ref(null)
 const postgresData = ref(null)
 const queueLagData = ref(null)
+const queueOpsData = ref(null)
+const retentionData = ref(null)
 const selectedQueues = ref([])
+const selectedQueueOp = ref('pop')  // default chart: Pop/s by queue
 
 const timeRanges = [
   { label: '15m', value: 15 },
@@ -1019,6 +1112,54 @@ const errorsChartOptions = {
       beginAtZero: true,
       min: 0,
       title: { display: true, text: 'Errors', font: { size: 11 } }
+    }
+  }
+}
+
+// Retention / eviction stacked bar chart — matches the Dashboard small-multiple palette.
+const retentionChartOptions = {
+  plugins: { legend: { display: true, position: 'top', labels: { boxWidth: 12, padding: 8, font: { size: 11 } } } },
+  scales: {
+    x: { stacked: true },
+    y: {
+      stacked: true,
+      beginAtZero: true,
+      min: 0,
+      title: { display: true, text: 'Messages deleted', font: { size: 11 } }
+    }
+  }
+}
+
+// Per-queue ops tabs: selects which counter is plotted in the per-queue chart.
+const queueOpTabs = [
+  { key: 'pop',  label: 'Pop/s',   activeClass: 'chip-mute', activeDot: '#8a8a92', field: 'popPerSecond',  yLabel: 'Pops/s' },
+  { key: 'push', label: 'Push/s',  activeClass: 'chip-mute', activeDot: '#e6e6e6', field: 'pushPerSecond', yLabel: 'Pushes/s' },
+  { key: 'ack',  label: 'Ack/s',   activeClass: 'chip-ok',   activeDot: '#4ade80', field: 'ackPerSecond',  yLabel: 'Acks/s' },
+  { key: 'trx',  label: 'Trx',     activeClass: 'chip-mute', activeDot: '#e6b450', field: 'transactions',  yLabel: 'Transactions' },
+]
+const queueOpActive = computed(() => queueOpTabs.find(t => t.key === selectedQueueOp.value) || queueOpTabs[0])
+
+const perQueuePartitionCountOptions = {
+  plugins: {
+    legend: { display: true, position: 'top', labels: { boxWidth: 12, padding: 8, font: { size: 11 } } }
+  },
+  scales: {
+    y: {
+      beginAtZero: true,
+      min: 0,
+      title: { display: true, text: 'Partitions', font: { size: 11 } },
+      ticks: { precision: 0 }
+    }
+  }
+}
+
+const partitionRateChartOptions = {
+  plugins: { legend: { display: true, position: 'top', labels: { boxWidth: 12, padding: 8, font: { size: 11 } } } },
+  scales: {
+    y: {
+      beginAtZero: true,
+      title: { display: true, text: 'Events / bucket', font: { size: 11 } },
+      ticks: { precision: 0 }
     }
   }
 }
@@ -1318,11 +1459,114 @@ const errorsChartData = computed(() => {
   return { labels, datasets }
 })
 
+// Retention / eviction time series
+const retentionTotals = computed(() => retentionData.value?.totals || null)
+const retentionChartData = computed(() => {
+  const rows = retentionData.value?.series || []
+  if (!rows.length) return { labels: [], datasets: [] }
+  const multiDay = rows.length >= 2 &&
+    new Date(rows[0].bucket).toDateString() !== new Date(rows[rows.length-1].bucket).toDateString()
+  const labels = rows.map(r => formatChartLabel(new Date(r.bucket), multiDay))
+  return {
+    labels,
+    datasets: [
+      { label: 'Retention',          data: rows.map(r => Number(r.retentionMsgs) || 0),
+        backgroundColor: 'rgba(230,230,230,0.6)', borderColor: '#e6e6e6', borderWidth: 1 },
+      { label: 'Completed retention', data: rows.map(r => Number(r.completedRetentionMsgs) || 0),
+        backgroundColor: 'rgba(138,138,146,0.6)', borderColor: '#8a8a92', borderWidth: 1 },
+      { label: 'Eviction',           data: rows.map(r => Number(r.evictionMsgs) || 0),
+        backgroundColor: 'rgba(230,180,80,0.5)', borderColor: '#e6b450', borderWidth: 1 },
+    ]
+  }
+})
+
+// Per-queue ops time series helpers (PR 3e) — pivots queue_ops data.
+const buildPerQueueOpsChart = (valueAccessor) => {
+  const raw = queueOpsData.value?.series || []
+  if (!raw.length) return { labels: [], datasets: [] }
+  const bucketSet = new Set(raw.map(r => r.bucket))
+  const buckets = [...bucketSet].sort()
+  const multiDay = buckets.length >= 2 &&
+    new Date(buckets[0]).toDateString() !== new Date(buckets[buckets.length - 1]).toDateString()
+  const labels = buckets.map(b => formatChartLabel(new Date(b), multiDay))
+
+  const queuesAvailable = [...new Set(raw.map(r => r.queueName))]
+  const pick = selectedQueues.value.length > 0
+    ? queuesAvailable.filter(q => selectedQueues.value.includes(q))
+    : queuesAvailable
+  pick.sort()
+
+  const lookup = {}
+  raw.forEach(r => { lookup[`${r.queueName}|${r.bucket}`] = r })
+
+  const datasets = pick.map((q, i) => {
+    const color = queueColors[i % queueColors.length]
+    return {
+      label: q,
+      data: buckets.map(b => {
+        const entry = lookup[`${q}|${b}`]
+        return entry ? (Number(valueAccessor(entry)) || 0) : 0
+      }),
+      borderColor: color.border,
+      backgroundColor: color.bg,
+      fill: false,
+      tension: 0
+    }
+  })
+  return { labels, datasets }
+}
+const queueOpsRateChartData = computed(() => {
+  const field = queueOpActive.value.field
+  return buildPerQueueOpsChart(e => e[field])
+})
+
+// Partition count snapshot per queue (line chart over time, ~one value per minute)
+const partitionCountChartData = computed(() => buildPerQueueOpsChart(e => e.partitionCount))
+
+// Partition create / delete rate across all queues (bar chart summed per bucket)
+const partitionRateChartData = computed(() => {
+  const raw = queueOpsData.value?.series || []
+  if (!raw.length) return { labels: [], datasets: [] }
+  const bucketSet = new Set(raw.map(r => r.bucket))
+  const buckets = [...bucketSet].sort()
+  const multiDay = buckets.length >= 2 &&
+    new Date(buckets[0]).toDateString() !== new Date(buckets[buckets.length - 1]).toDateString()
+  const labels = buckets.map(b => formatChartLabel(new Date(b), multiDay))
+
+  const created = {}
+  const deleted = {}
+  buckets.forEach(b => { created[b] = 0; deleted[b] = 0 })
+  for (const r of raw) {
+    created[r.bucket] = (created[r.bucket] || 0) + (Number(r.partitionsCreated) || 0)
+    deleted[r.bucket] = (deleted[r.bucket] || 0) + (Number(r.partitionsDeleted) || 0)
+  }
+
+  // Only render if there's any activity — avoids an empty chart plot.
+  const hasActivity = buckets.some(b => created[b] > 0 || deleted[b] > 0)
+  if (!hasActivity) return { labels: [], datasets: [] }
+
+  return {
+    labels,
+    datasets: [
+      { label: 'Created', data: buckets.map(b => created[b]),
+        backgroundColor: 'rgba(74,222,128,0.5)', borderColor: '#4ade80', borderWidth: 1 },
+      { label: 'Deleted', data: buckets.map(b => -deleted[b]),
+        backgroundColor: 'rgba(251,113,133,0.5)', borderColor: '#fb7185', borderWidth: 1 },
+    ]
+  }
+})
+
 // Per-Queue Chart Data
+// availableQueues is the union of queues seen in the pop-only lag stream
+// (queueLagData) and the new per-op stream (queueOpsData). The server returns
+// queueOpsData.queues separately for UI filter convenience.
 const availableQueues = computed(() => {
-  const raw = queueLagData.value || []
-  const names = new Set(raw.map(r => r.queueName))
-  return [...names].sort()
+  const s = new Set()
+  const lag = queueLagData.value || []
+  for (const r of lag) s.add(r.queueName)
+  const ops = queueOpsData.value?.queues || []
+  for (const q of ops) s.add(q)
+  return [...s].sort()
 })
 
 const queuesToShow = computed(() => {
@@ -1653,18 +1897,28 @@ const fetchData = async () => {
         to: to.toISOString()
       }
       
-      const [workerRes, systemRes, queueLagRes] = await Promise.all([
+      const [workerRes, systemRes, queueLagRes, queueOpsRes, retentionRes] = await Promise.all([
         system.getWorkerMetrics(params),
         system.getSystemMetrics(params),
         system.getQueueLag(params).catch(e => {
           console.warn('Failed to fetch per-queue lag metrics:', e.message)
           return { data: [] }
+        }),
+        system.getQueueOps(params).catch(e => {
+          console.warn('Failed to fetch per-queue ops metrics:', e.message)
+          return { data: { series: [], queues: [] } }
+        }),
+        system.getRetention(params).catch(e => {
+          console.warn('Failed to fetch retention timeseries:', e.message)
+          return { data: { series: [], totals: {} } }
         })
       ])
-      
+
       workerData.value = workerRes.data
       systemData.value = systemRes.data
       queueLagData.value = queueLagRes.data
+      queueOpsData.value = queueOpsRes.data
+      retentionData.value = retentionRes.data
     }
   } catch (err) {
     console.error('Failed to fetch system metrics:', err)

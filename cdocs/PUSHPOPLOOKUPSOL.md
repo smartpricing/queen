@@ -1,6 +1,6 @@
 # PUSHPOPLOOKUPSOL — The solution to the combined-load throughput collapse
 
-Companion document to [`PUSHVSPOP.md`](./PUSHVSPOP.md).
+Companion document to `[PUSHVSPOP.md](./PUSHVSPOP.md)`.
 
 `PUSHVSPOP.md` diagnoses **why** combined push+pop throughput collapses on
 the legacy schema. This document describes **what we actually built**
@@ -17,15 +17,15 @@ observed throughput).
 Two coupled changes, both required:
 
 1. **PUSHPOPLOOKUPSOL** — `queen.partition_lookup` is no longer maintained
-   inside the push transaction. The `trg_update_partition_lookup` trigger
+  inside the push transaction. The `trg_update_partition_lookup` trigger
    is **dropped**. Instead, `push_messages_v3` returns a `partition_updates`
    summary in its response, and libqueen fires a **fire-and-forget**
    `queen.update_partition_lookup_v1()` call after the HTTP response has
    been returned to the client. A periodic
    `PartitionLookupReconcileService` calls
    `queen.reconcile_partition_lookup_v1()` every 5 s as a safety net.
-2. **`pop_unified_batch_v3`** — the wildcard candidate scan has
-   no `ORDER BY` and no `LIMIT`. Coordination across concurrent consumers
+2. `**pop_unified_batch_v3`** — the wildcard candidate scan has
+  no `ORDER BY` and no `LIMIT`. Coordination across concurrent consumers
    is done by `pg_try_advisory_xact_lock(partition_id)`, a non-blocking
    probe that releases on xact end. (Earlier drafts of this doc
    referred to this procedure as `pop_unified_batch_v2_noorder`; it
@@ -33,14 +33,16 @@ Two coupled changes, both required:
 
 Measured on a 4-CPU Docker PG 16 at 1001 partitions, combined load, 5 min:
 
-|                     | before (trigger, LIMIT 64) | after (this design) |
-| ------------------- | -------------------------- | ------------------- |
-| push throughput     | ~7 k req/s                 | **~15.6 k msg/s**   |
-| pop throughput      | lagging                    | **~15.4 k msg/s**   |
-| push/pop balance    | pop never catches up       | **99.3 %**          |
-| partition coverage  | 64/1001 (6.4 %)            | **1001/1001 < 30 s** |
-| `push_waits_on_push` | ~36                       | **0**               |
-| `pop_waits_on_push`  | ~0.2                      | **0**               |
+
+|                      | before (trigger, LIMIT 64) | after (this design)  |
+| -------------------- | -------------------------- | -------------------- |
+| push throughput      | ~7 k req/s                 | **~15.6 k msg/s**    |
+| pop throughput       | lagging                    | **~15.4 k msg/s**    |
+| push/pop balance     | pop never catches up       | **99.3 %**           |
+| partition coverage   | 64/1001 (6.4 %)            | **1001/1001 < 30 s** |
+| `push_waits_on_push` | ~36                        | **0**                |
+| `pop_waits_on_push`  | ~0.2                       | **0**                |
+
 
 ---
 
@@ -54,7 +56,7 @@ serialize on:
 
 1. `Lock/tuple` — waiting for the holder to release the row lock;
 2. `Lock/transactionid` — waiting for the holder's xact to commit so the
-   `WHERE EXCLUDED.last_message_created_at > queen.partition_lookup.last_message_created_at`
+  `WHERE EXCLUDED.last_message_created_at > queen.partition_lookup.last_message_created_at`
    predicate can evaluate.
 
 At 1k partitions × 200 connections × 20-msg batches this produced
@@ -106,21 +108,21 @@ Pop's claim mechanics are a secondary concern — but not a non-issue, as
 ### 3.2 Design principles
 
 1. **Nothing on `partition_lookup` in the push critical path.** Push
-   commits as soon as `queen.messages` has the rows. Any downstream
+  commits as soon as `queen.messages` has the rows. Any downstream
    bookkeeping is asynchronous.
 2. **Bounded staleness, not zero staleness.** `partition_lookup` may lag
-   physical message arrival by a few ms (happy path) up to 5 s (worst
+  physical message arrival by a few ms (happy path) up to 5 s (worst
    case after a libqueen crash). Pop must tolerate this, and does — the
    watermark + `EXISTS` cache was already designed around probabilistic
    freshness.
 3. **Monotonic writes, idempotent callers.** Both
-   `update_partition_lookup_v1` and `reconcile_partition_lookup_v1`
+  `update_partition_lookup_v1` and `reconcile_partition_lookup_v1`
    use `ON CONFLICT DO UPDATE ... WHERE newer > current`. Reordering,
    retries, and concurrent callers are all safe.
 4. **Non-blocking pop claim.** Pop never takes row locks on
-   `partition_lookup`. Advisory locks only.
+  `partition_lookup`. Advisory locks only.
 5. **A single writer advisory ID (`737002`) on the reconciler** so
-   multiple server instances don't reconcile concurrently (primary
+  multiple server instances don't reconcile concurrently (primary
    writer is the faster path; the reconciler just needs to *eventually*
    run).
 
@@ -160,13 +162,13 @@ emergency rollback.
     ]
   }
   ```
-- **`items`** is the unchanged per-item result list consumed by the HTTP
-  response.
-- **`partition_updates`** is computed in a new CTE pair — `partition_max`
-  (`DISTINCT ON (partition_id)`) and `partition_updates_json` — which
-  mirror the computation the old statement-level trigger did on
-  `new_messages`. Empty array when nothing was inserted (e.g. all
-  duplicates).
+- `**items**` is the unchanged per-item result list consumed by the HTTP
+response.
+- `**partition_updates**` is computed in a new CTE pair — `partition_max`
+(`DISTINCT ON (partition_id)`) and `partition_updates_json` — which
+mirror the computation the old statement-level trigger did on
+`new_messages`. Empty array when nothing was inserted (e.g. all
+duplicates).
 
 ### 4.3 `queen.update_partition_lookup_v1(p_updates jsonb)` — primary writer
 
@@ -195,16 +197,16 @@ WHERE
 
 Key properties:
 
-- **`ORDER BY partition_id`** establishes a global lock-acquisition order
-  across concurrent callers. Two concurrent calls with overlapping
-  partition sets will take locks in the same order, so they can never
-  deadlock.
+- `**ORDER BY partition_id**` establishes a global lock-acquisition order
+across concurrent callers. Two concurrent calls with overlapping
+partition sets will take locks in the same order, so they can never
+deadlock.
 - **Monotonic `WHERE`** — same structure as the old trigger, but now
-  serving async updates. Out-of-order arrivals (e.g. a slow primary
-  writer followed by the reconciler) never regress `last_message_*`.
+serving async updates. Out-of-order arrivals (e.g. a slow primary
+writer followed by the reconciler) never regress `last_message_*`.
 - **Still causes row locks**, but those locks are on the async path and
-  don't block the HTTP response to the producer. Throughput on this path
-  is bounded by the push rate, not gated by it.
+don't block the HTTP response to the producer. Throughput on this path
+is bounded by the push rate, not gated by it.
 
 ### 4.4 `queen.reconcile_partition_lookup_v1(p_lookback_seconds int)` — safety net
 
@@ -304,12 +306,12 @@ if (partition_updates.is_array() && !partition_updates.empty()) {
 This is **fire-and-forget** by design:
 
 - The callback logs warnings on failure but doesn't retry or surface
-  errors to the producer.
+errors to the producer.
 - If the SQL call is lost (crash, queue eviction, PG connection reset),
-  the reconciler recovers within `reconcile_interval_ms` (default 5 s)
-  via `reconcile_partition_lookup_v1`.
+the reconciler recovers within `reconcile_interval_ms` (default 5 s)
+via `reconcile_partition_lookup_v1`.
 - Successful primary-writer calls are idempotent with the reconciler's
-  output (monotonic `WHERE`).
+output (monotonic `WHERE`).
 
 ### 4.6 `PartitionLookupReconcileService`
 
@@ -321,7 +323,7 @@ the HTTP worker loops). Each cycle:
 
 1. `BEGIN` on a pooled connection.
 2. `pg_try_advisory_xact_lock(737002)`. If another server instance holds
-   it, log at DEBUG and skip the cycle.
+  it, log at DEBUG and skip the cycle.
 3. `SELECT queen.reconcile_partition_lookup_v1($lookback)`.
 4. Log the returned row count at INFO if non-zero; DEBUG otherwise.
 5. `COMMIT` (releases the advisory lock).
@@ -391,33 +393,33 @@ message is lost, delivery is only delayed.
 
 ### 5.2 Crash-path staleness
 
-| failure                                            | bound on staleness       |
-| -------------------------------------------------- | ------------------------ |
-| libqueen worker crashes between push commit and submit() | `reconcile_interval_ms` (5 s default) |
-| update_partition_lookup_v1 fails (PG err, network) | `reconcile_interval_ms` (5 s default) |
-| Reconciler holder dies mid-cycle                   | `reconcile_interval_ms` (next instance takes over) |
-| Server completely offline for N seconds, N ≤ lookback | `reconcile_interval_ms` after restart |
-| Server completely offline for N seconds, N > lookback | partition catches up on next push to it (via primary writer) — can be indefinite for truly idle partitions |
+
+| failure                                                  | bound on staleness                                                                                         |
+| -------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------- |
+| libqueen worker crashes between push commit and submit() | `reconcile_interval_ms` (5 s default)                                                                      |
+| update_partition_lookup_v1 fails (PG err, network)       | `reconcile_interval_ms` (5 s default)                                                                      |
+| Reconciler holder dies mid-cycle                         | `reconcile_interval_ms` (next instance takes over)                                                         |
+| Server completely offline for N seconds, N ≤ lookback    | `reconcile_interval_ms` after restart                                                                      |
+| Server completely offline for N seconds, N > lookback    | partition catches up on next push to it (via primary writer) — can be indefinite for truly idle partitions |
+
 
 ### 5.3 Ordering guarantees
 
 - The `WHERE` clause on both `update_partition_lookup_v1` and
-  `reconcile_partition_lookup_v1` compares `(last_message_created_at,
-  last_message_id)` lexicographically. Earlier writes never overwrite
-  later ones regardless of which path applies them.
+`reconcile_partition_lookup_v1` compares `(last_message_created_at, last_message_id)` lexicographically. Earlier writes never overwrite
+later ones regardless of which path applies them.
 - `ORDER BY partition_id` inside `update_partition_lookup_v1` makes the
-  function deadlock-free under concurrent callers.
+function deadlock-free under concurrent callers.
 - The reconciler uses `FOR UPDATE SKIP LOCKED`, so it is never a waiter
-  on the primary writer.
+on the primary writer.
 
 ### 5.4 What would break it
 
 - Two separate writers using the same `partition_lookup` row but
-  computing `last_message_*` from *different* source-of-truth tables.
-  Not the case here — both paths read from `queen.messages` (directly
-  or via the `partition_updates` relayed from push).
-- A non-monotonic writer (e.g. a backfill tool) dropping the `WHERE
-  newer > current` predicate. Don't do that.
+computing `last_message_*` from *different* source-of-truth tables.
+Not the case here — both paths read from `queen.messages` (directly
+or via the `partition_updates` relayed from push).
+- A non-monotonic writer (e.g. a backfill tool) dropping the `WHERE newer > current` predicate. Don't do that.
 
 ---
 
@@ -429,23 +431,23 @@ File: `lib/schema/procedures/002c_pop_unified_v3.sql`. Wired into
 ### 6.1 Differences vs the legacy `pop_unified_batch` (v1)
 
 1. **Advisory lock** (`pg_try_advisory_xact_lock(partition_id)`)
-   replaces `FOR UPDATE OF pl SKIP LOCKED`. Non-blocking, no row locks
+  replaces `FOR UPDATE OF pl SKIP LOCKED`. Non-blocking, no row locks
    on `partition_lookup`. Push never takes this lock, so push-vs-pop
    coordination on `partition_lookup` is not just reduced — it is
    **architecturally absent**.
 2. **No `ORDER BY`** in the candidate scan. Legacy v1 (and the v2
-   prototype that was reverted) used
+  prototype that was reverted) used
    `ORDER BY pc.last_consumed_at ASC NULLS LAST` for fairness. At 30k
    partitions this produces a full-eligible-set sort per pop call,
    measured as catastrophic in
    `test-perf/scripts/collision/run-30k.sh`.
 3. **No `LIMIT`.** An intermediate version used `LIMIT 64`. At 1001+
-   partitions this caused severe **partition starvation**: concurrent
+  partitions this caused severe **partition starvation**: concurrent
    pops only ever saw the first 64 partitions (by physical index order
    on `idx_partition_lookup_queue`) and raced each other for that
    subset. Measured pop coverage at 1001 partitions:
-   - with `LIMIT 64`: 64/1001 partitions popped per 30 s window (6.4 %).
-   - without `LIMIT`: **1001/1001 partitions within 30 s** (100 %).
+  - with `LIMIT 64`: 64/1001 partitions popped per 30 s window (6.4 %).
+  - without `LIMIT`: **1001/1001 partitions within 30 s** (100 %).
 
 ### 6.2 Why removing `LIMIT` is safe (and why the candidate scan doesn't blow up)
 
@@ -480,14 +482,14 @@ fairness across consumer groups. In the current design fairness comes
 from two places:
 
 - **Across concurrent consumers on one queue** — `pg_try_advisory_xact_lock`
-  is effectively a random-probe distribution: different pops starting
-  the scan at overlapping index positions claim different partitions
-  because advisory locks are held for the xact duration.
+is effectively a random-probe distribution: different pops starting
+the scan at overlapping index positions claim different partitions
+because advisory locks are held for the xact duration.
 - **Within a single consumer process** — the physical index scan order
-  (stable but arbitrary UUID order) is a sufficient approximation. The
-  workload doesn't require strict fairness; it requires absence of
-  starvation. Empirically, coverage is 70 % of partitions in any 10 s
-  window and 91 % in any 30 s window (see §7).
+(stable but arbitrary UUID order) is a sufficient approximation. The
+workload doesn't require strict fairness; it requires absence of
+starvation. Empirically, coverage is 70 % of partitions in any 10 s
+window and 91 % in any 30 s window (see §7).
 
 ### 6.4 Why pop still oscillates slightly around push
 
@@ -496,17 +498,17 @@ rate in any real-time throughput graph. Mechanisms, in order of
 contribution:
 
 1. **Eligible-pool size varies with push/pop phase offset.** When push
-   is ahead, the eligible pool widens → advisory-lock hit rate rises →
+  is ahead, the eligible pool widens → advisory-lock hit rate rises →
    pop surges. When pop catches up, pool narrows → hit rate drops →
    pop slows. Self-correcting.
-2. **`update_partition_lookup_v1` is async.** Pop's view of "partition
-   X has new data" lags physical message arrival by a few ms, and
+2. `**update_partition_lookup_v1` is async.** Pop's view of "partition
+  X has new data" lags physical message arrival by a few ms, and
    lags in bursts because the async update queue shares libqueen
    worker slots with pushes.
 3. **HTTP long-poll parking.** Many consumer connections are parked at
-   the server. A push burst unparks many of them within ms.
+  the server. A push burst unparks many of them within ms.
 4. **CPU sharing on the DB.** Push/pop compete for the same cores; any
-   flush, checkpoint, or buffer eviction that favors one transiently
+  flush, checkpoint, or buffer eviction that favors one transiently
    shifts the other.
 
 Self-correcting, bounded amplitude, near-zero lock contention. Not a
@@ -521,13 +523,15 @@ regression — a signature of a correctly tuned lock-free handoff. See
 
 Sampled every 60 s:
 
-| window    | push/s  | pop/s   | pop/push | lag<5s | lag<30s | lag≥30s | pop-cov 30s | lock waits |
-| --------- | ------- | ------- | -------- | ------ | ------- | ------- | ----------- | ---------- |
-| 0→60 s    | 15.81 k | 13.27 k | 83.9 %   | 644    | 1001    | 0       | 803/1001    | 0          |
-| 60→120 s  | 15.61 k | 12.29 k | 78.7 %   | 665    | 1001    | 0       | 768/1001    | 0          |
+
+| window    | push/s  | pop/s   | pop/push | lag<5s | lag<30s | lag≥30s | pop-cov 30s | lock waits    |
+| --------- | ------- | ------- | -------- | ------ | ------- | ------- | ----------- | ------------- |
+| 0→60 s    | 15.81 k | 13.27 k | 83.9 %   | 644    | 1001    | 0       | 803/1001    | 0             |
+| 60→120 s  | 15.61 k | 12.29 k | 78.7 %   | 665    | 1001    | 0       | 768/1001    | 0             |
 | 120→180 s | 15.68 k | 12.32 k | 78.6 %   | 713    | 1001    | 0       | 697/1001    | 5 (transient) |
-| 180→240 s | 15.90 k | 10.94 k | 68.8 %   | 765    | 1001    | 0       | 678/1001    | 1          |
-| 240→300 s | 14.81 k | 28.49 k | catch-up | 706    | 1001    | 0       | 510/1001    | 1          |
+| 180→240 s | 15.90 k | 10.94 k | 68.8 %   | 765    | 1001    | 0       | 678/1001    | 1             |
+| 240→300 s | 14.81 k | 28.49 k | catch-up | 706    | 1001    | 0       | 510/1001    | 1             |
+
 
 Totals over 5 min:
 
@@ -539,12 +543,14 @@ Totals over 5 min:
 
 ### 7.2 Comparison vs prior designs
 
-| Design                                                  | combined throughput | `push_waits_on_push` | pop coverage (30 s) |
-| ------------------------------------------------------- | ------------------- | -------------------- | ------------------- |
-| v1 trigger + v1 pop                                     | ~7 k req/s push     | **~36**              | ~620 eligible, 16 combined |
-| v1 trigger + v2 advisory-lock pop                       | ~3.3 k msg/s        | ~28                  | unchanged           |
-| PUSHPOPLOOKUPSOL + v2_noorder with `LIMIT 64`           | ~6.8 k msg/s        | **0**                | **64/1001**         |
-| PUSHPOPLOOKUPSOL + v2_noorder **without** `LIMIT` (now) | **~31 k msg/s combined** | **0**            | **~1001/1001**      |
+
+| Design                                                  | combined throughput      | `push_waits_on_push` | pop coverage (30 s)        |
+| ------------------------------------------------------- | ------------------------ | -------------------- | -------------------------- |
+| v1 trigger + v1 pop                                     | ~7 k req/s push          | **~36**              | ~620 eligible, 16 combined |
+| v1 trigger + v2 advisory-lock pop                       | ~3.3 k msg/s             | ~28                  | unchanged                  |
+| PUSHPOPLOOKUPSOL + v2_noorder with `LIMIT 64`           | ~6.8 k msg/s             | **0**                | **64/1001**                |
+| PUSHPOPLOOKUPSOL + v2_noorder **without** `LIMIT` (now) | **~31 k msg/s combined** | **0**                | **~1001/1001**             |
+
 
 Both halves of the design are necessary. PUSHPOPLOOKUPSOL alone raises
 push throughput but leaves pop starved at 1001 partitions. Removing
@@ -559,11 +565,13 @@ queue, same schema, same config. The system held.
 
 **Live throughput**
 
-| 10-s sample | messages count | push/s |
-| ----------- | -------------- | ------ |
-| T = 10 s    | 57,686,753     | —      |
+
+| 10-s sample | messages count | push/s    |
+| ----------- | -------------- | --------- |
+| T = 10 s    | 57,686,753     | —         |
 | T = 20 s    | 58,769,943     | **108 k** |
-| T = 30 s    | 59,752,843     | **98 k** |
+| T = 30 s    | 59,752,843     | **98 k**  |
+
 
 Parallel 30-s sample across the same window: ~81 k push/s + ~78 k pop/s
 observed at one point (consumer briefly catching up); stabilized around
@@ -574,16 +582,18 @@ the earlier 15 k ramp.
 **Wait-event breakdown** — 30 samples × all active backends over 15 s,
 grouped by query category:
 
-| Category | Total | Top waits |
-| -------- | ----- | --------- |
-| **push** — `push_messages_v3` | 204 running | 85 `LWLock/WALWrite`, 65 `LWLock/BufferContent`, 28 `Lock/extend`, 13 `LWLock/WALInsert`, 9 `IO/WalSync` — **0 `Lock/tuple`, 0 `Lock/transactionid`** |
-| **pop** — `pop_unified_batch_v3` | 316 running | 51 `LWLock/WALWrite`, 32 `LWLock/BufferContent`, 5 `IO/WalSync` — **0 `Lock/tuple`, 0 `Lock/transactionid`** |
-| **upd_pl** — `update_partition_lookup_v1` (async) | 5 running | **146 `Lock/transactionid`**, **48 `Lock/tuple`**, 36 `LWLock/WALWrite`, 11 `IO/WalSync` |
+
+| Category                                          | Total       | Top waits                                                                                                                                             |
+| ------------------------------------------------- | ----------- | ----------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **push** — `push_messages_v3`                     | 204 running | 85 `LWLock/WALWrite`, 65 `LWLock/BufferContent`, 28 `Lock/extend`, 13 `LWLock/WALInsert`, 9 `IO/WalSync` — **0 `Lock/tuple`, 0 `Lock/transactionid*`* |
+| **pop** — `pop_unified_batch_v3`                  | 316 running | 51 `LWLock/WALWrite`, 32 `LWLock/BufferContent`, 5 `IO/WalSync` — **0 `Lock/tuple`, 0 `Lock/transactionid`**                                          |
+| **upd_pl** — `update_partition_lookup_v1` (async) | 5 running   | **146 `Lock/transactionid`**, **48 `Lock/tuple`**, 36 `LWLock/WALWrite`, 11 `IO/WalSync`                                                              |
+
 
 **What this picture shows**
 
 1. **Push has zero row-lock waits at 100 k msg/s.** Every push-side wait
-   is one of the irreducible costs of PostgreSQL doing that volume of
+  is one of the irreducible costs of PostgreSQL doing that volume of
    inserts: WAL buffer flushes (`WALWrite`, `WALInsert`), heap page
    extension (`Lock/extend`, `IO/DataFileExtend`), buffer pool pressure
    (`BufferContent`, `BufferMapping`), WAL fsync (`WalSync`). No
@@ -592,24 +602,26 @@ grouped by query category:
    11 k/s showed `Lock/tuple = 3.68` and `Lock/transactionid = 6.65`.
    We went from 11 k → 100 k and from two busy row-lock waits → zero.
 2. **Pop has zero row-lock waits at ~78 k msg/s.** Same story: only
-   WAL / buffer / I-O waits from the work it has to do (update
+  WAL / buffer / I-O waits from the work it has to do (update
    `partition_consumers`, insert into `messages_consumed`).
 3. **The async path absorbs ALL the row-lock contention.** The
-   `update_partition_lookup_v1` call is now the single serialization
+  `update_partition_lookup_v1` call is now the single serialization
    point in the system (146 `Lock/transactionid` + 48 `Lock/tuple`
    samples). This is exactly what PUSHPOPLOOKUPSOL was designed to do:
    move the contention **off the hot path** into an asynchronous path
    where its only cost is bounded staleness of `partition_lookup`.
 
-**`partition_lookup` staleness under stress**
+`**partition_lookup` staleness under stress**
 
-| measurement                               | value           |
-| ----------------------------------------- | --------------- |
-| avg age of `updated_at`                   | **~17.7 s**     |
-| max age of `updated_at`                   | ~44 s           |
-| rows with `updated_at > 5 s`              | 713 / 1001      |
-| rows with `updated_at > 30 s`             | 242 / 1001      |
-| partitions with **actual** last-message > 30 s old (direct scan) | **244 / 1001**  |
+
+| measurement                                                      | value          |
+| ---------------------------------------------------------------- | -------------- |
+| avg age of `updated_at`                                          | **~17.7 s**    |
+| max age of `updated_at`                                          | ~44 s          |
+| rows with `updated_at > 5 s`                                     | 713 / 1001     |
+| rows with `updated_at > 30 s`                                    | 242 / 1001     |
+| partitions with **actual** last-message > 30 s old (direct scan) | **244 / 1001** |
+
 
 The `actual` column is the critical one. The async writer is behind by
 ~17 s on average, but the 242 rows with stale `updated_at` almost
@@ -626,12 +638,12 @@ for a write-heavy workload. If even higher throughput is ever needed,
 the knobs are:
 
 - Larger `shared_buffers` and `max_wal_size` to reduce eviction and
-  checkpoint pressure.
+checkpoint pressure.
 - Faster disks (SSD vs NVMe — `IO/WalSync` drops).
 - `synchronous_commit = off` or `remote_write` — trades durability for
-  throughput.
+throughput.
 - Partition `queen.messages` by time (e.g. daily) so heap extension
-  spreads across multiple relations.
+spreads across multiple relations.
 - UNLOGGED `queen.messages` for workloads that can rebuild on crash.
 
 None of these are related to our design; they are PostgreSQL tuning
@@ -660,28 +672,28 @@ PARTITION_LOOKUP_RECONCILE_LOOKBACK_SECONDS = 60
 ### 8.2 Tuning
 
 - **Lower interval** (e.g. 2000) → faster healing of missed updates, at
-  the cost of one extra `reconcile_partition_lookup_v1` call every
-  N ms. Cycle cost is ~45 ms at 1k partitions, so anything above 500 ms
-  is safe.
+the cost of one extra `reconcile_partition_lookup_v1` call every
+N ms. Cycle cost is ~45 ms at 1k partitions, so anything above 500 ms
+is safe.
 - **Higher lookback** (e.g. 600) → more forgiving after a long outage.
-  At the cost of larger per-cycle work (`stale` CTE scans more rows).
+At the cost of larger per-cycle work (`stale` CTE scans more rows).
 - **Disable reconciler** — there is intentionally no "off" switch.
-  Rely on running the service; if you need to gate it for a test, stop
-  the service programmatically and rely on the primary writer
-  exclusively.
+Rely on running the service; if you need to gate it for a test, stop
+the service programmatically and rely on the primary writer
+exclusively.
 
 ### 8.3 Observability
 
 Logs to watch:
 
 - `PartitionLookupReconcileService: fixed N partition_lookup rows` at
-  INFO — any non-zero value is a signal that primary-writer calls were
-  dropped. Occasional small numbers during restarts are expected; a
-  sustained high rate indicates a problem with the fire-and-forget
-  path.
+INFO — any non-zero value is a signal that primary-writer calls were
+dropped. Occasional small numbers during restarts are expected; a
+sustained high rate indicates a problem with the fire-and-forget
+path.
 - `[libqueen] update_partition_lookup_v1 failed: <error>` at WARN — per
-  individual primary-writer failure. Reconciler recovers; investigate
-  if high volume.
+individual primary-writer failure. Reconciler recovers; investigate
+if high volume.
 
 PG queries:
 
@@ -704,18 +716,11 @@ WHERE query LIKE '%reconcile_partition_lookup_v1%';
 If PUSHPOPLOOKUPSOL needs to be rolled back in an incident:
 
 1. Recreate the trigger from the function body still present in
-   `schema.sql`:
-   ```sql
-   CREATE OR REPLACE TRIGGER trg_update_partition_lookup
-       AFTER INSERT ON queen.messages
-       REFERENCING NEW TABLE AS new_messages
-       FOR EACH STATEMENT
-       EXECUTE FUNCTION queen.update_partition_lookup_trigger();
-   ```
+  `schema.sql`:
 2. Stop `PartitionLookupReconcileService` (or accept the extra but
-   harmless UPSERTs it will still do; idempotent with the trigger).
+  harmless UPSERTs it will still do; idempotent with the trigger).
 3. libqueen will still emit the fire-and-forget call; it is idempotent
-   with the trigger, harmless.
+  with the trigger, harmless.
 
 No schema rollback is needed — `update_partition_lookup_v1` and
 `reconcile_partition_lookup_v1` stay callable, both paths are
@@ -725,13 +730,15 @@ idempotent.
 
 ## 9. Alternatives considered and rejected
 
-| Option | Why not |
-| ------ | ------- |
-| **A. Keep trigger but `ON CONFLICT DO NOTHING` only; background sweeper updates `last_message_*`.** | Adds a second source of truth for `last_message_*`. Requires the sweeper to own the whole eventual-consistency story, and the "happy path" still pays the trigger cost for the INSERT half. |
-| **B. Per-partition `pg_try_advisory_xact_lock` inside the trigger.** | Validated in a one-off experiment: removes push-vs-push but exposes `push_waits_on_pop` because pop's legacy `FOR UPDATE` still touches the row. Combined throughput ~3.3 k msg/s. Half a fix. |
-| **C. Drop `partition_lookup` entirely; derive on demand from `queen.messages`.** | Architecturally cleanest. Rejected because pop's discovery would have to scan `queen.messages` with a `DISTINCT ON (partition_id)` over the recent-window — measured as non-trivial at 3 M rows, and the `partition_lookup` table provides a natural hot-set cache that the watermark logic already depends on. |
-| **D. New `partition_lookup_leased` coordination table for pop.** | Tried; adds another contention surface without removing push-vs-push. Rolled back. |
-| **E. Move partition_lookup UPSERT inline into `push_messages_v3`'s CTE chain.** | Same fundamental cost as the trigger (the UPSERT is what blocks, not the trigger machinery). Same push-vs-push serialization. |
+
+| Option                                                                                              | Why not                                                                                                                                                                                                                                                                                                         |
+| --------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **A. Keep trigger but `ON CONFLICT DO NOTHING` only; background sweeper updates `last_message_*`.** | Adds a second source of truth for `last_message_*`. Requires the sweeper to own the whole eventual-consistency story, and the "happy path" still pays the trigger cost for the INSERT half.                                                                                                                     |
+| **B. Per-partition `pg_try_advisory_xact_lock` inside the trigger.**                                | Validated in a one-off experiment: removes push-vs-push but exposes `push_waits_on_pop` because pop's legacy `FOR UPDATE` still touches the row. Combined throughput ~3.3 k msg/s. Half a fix.                                                                                                                  |
+| **C. Drop `partition_lookup` entirely; derive on demand from `queen.messages`.**                    | Architecturally cleanest. Rejected because pop's discovery would have to scan `queen.messages` with a `DISTINCT ON (partition_id)` over the recent-window — measured as non-trivial at 3 M rows, and the `partition_lookup` table provides a natural hot-set cache that the watermark logic already depends on. |
+| **D. New `partition_lookup_leased` coordination table for pop.**                                    | Tried; adds another contention surface without removing push-vs-push. Rolled back.                                                                                                                                                                                                                              |
+| **E. Move partition_lookup UPSERT inline into `push_messages_v3`'s CTE chain.**                     | Same fundamental cost as the trigger (the UPSERT is what blocks, not the trigger machinery). Same push-vs-push serialization.                                                                                                                                                                                   |
+
 
 ---
 
@@ -762,50 +769,49 @@ push commits into a **single** `update_partition_lookup_v1` call every
 N milliseconds (e.g. N = 50 ms):
 
 1. After a push commit, instead of submitting the CUSTOM job
-   immediately, append `partition_updates` into a per-worker in-memory
+  immediately, append `partition_updates` into a per-worker in-memory
    accumulator (already thread-local, no extra sync).
 2. A light timer (e.g. fires from the event loop every N ms, or when
-   the accumulator crosses a size threshold like 256 partition entries)
+  the accumulator crosses a size threshold like 256 partition entries)
    flushes the accumulator into a single `CUSTOM` job.
 3. Server-side, pre-aggregate duplicates: if the accumulator already
-   contains a newer `(partition_id, last_message_id, last_message_created_at)`
+  contains a newer `(partition_id, last_message_id, last_message_created_at)`
    tuple for the same partition, drop the older one before flushing.
    This is pure N log N on the flushed batch, cheap.
 
 Shape of the change: ~30 lines in `lib/queen.hpp` around the existing
 `submit(JobRequest{ op_type = CUSTOM, ... })` block. No schema change
 — `update_partition_lookup_v1` already accepts an arbitrarily long
-`jsonb` array of updates and handles duplicates via `ORDER BY
-partition_id` + the monotonic `WHERE` clause.
+`jsonb` array of updates and handles duplicates via `ORDER BY partition_id` + the monotonic `WHERE` clause.
 
 ### 10.3 Expected effect
 
 - **5 k async calls/s → ~20 calls/s** at 50 ms batch interval.
 - Per-call payload grows from 1-20 partitions → 100-500 partitions;
-  `update_partition_lookup_v1` does ordered UPSERT in a single
-  statement so wall-clock cost scales near-linearly with rows, not
-  with call count.
+`update_partition_lookup_v1` does ordered UPSERT in a single
+statement so wall-clock cost scales near-linearly with rows, not
+with call count.
 - The PL-UPDATE serialization pressure collapses: at 20 calls/s there
-  is essentially never a second caller waiting on the first.
-  `Lock/transactionid` and `Lock/tuple` on `update_partition_lookup_v1`
-  should go to zero in steady state.
+is essentially never a second caller waiting on the first.
+`Lock/transactionid` and `Lock/tuple` on `update_partition_lookup_v1`
+should go to zero in steady state.
 - `partition_lookup` staleness drops from ~17 s avg to ~50 ms
-  (worst-case = one flush interval).
+(worst-case = one flush interval).
 
 ### 10.4 Trade-offs to be aware of
 
 - **Slightly higher per-partition staleness in the unlucky-timing
-  case** (a push that lands right after a flush waits up to 50 ms for
-  the next flush instead of being submitted immediately). In practice
-  the current ~17 s staleness is *worse* than this, so the batched
-  version strictly dominates once load is high enough to warrant it.
+case** (a push that lands right after a flush waits up to 50 ms for
+the next flush instead of being submitted immediately). In practice
+the current ~17 s staleness is *worse* than this, so the batched
+version strictly dominates once load is high enough to warrant it.
 - **Crash window grows** — between crash and restart, a libqueen worker
-  can lose up to N ms worth of accumulated `partition_updates` instead
-  of ≤1 ms. Still bounded by the reconciler (5 s cycle), so no data
-  loss — just slightly longer worst-case time to catch up after a
-  crash.
+can lose up to N ms worth of accumulated `partition_updates` instead
+of ≤1 ms. Still bounded by the reconciler (5 s cycle), so no data
+loss — just slightly longer worst-case time to catch up after a
+crash.
 - **One more in-memory structure to manage per worker.** Small
-  complexity cost.
+complexity cost.
 
 ### 10.5 When to do it
 
@@ -813,9 +819,9 @@ Triggers that should motivate implementing this:
 
 - `avg age of partition_lookup.updated_at > ~5 s` in steady state.
 - Pop throughput starts to under-read because pop's `partition_lookup`
-  view is materially behind the actual message arrival.
+view is materially behind the actual message arrival.
 - Reconciler reports large `fixed N partition_lookup rows` batches
-  consistently (indicating primary-writer backpressure, not crashes).
+consistently (indicating primary-writer backpressure, not crashes).
 
 At current loads none of these are observable. The optimization is
 deliberately filed as "future headroom" rather than implemented
@@ -826,7 +832,7 @@ preemptively.
 ## 11. Reproduction
 
 All repro instructions for the benchmark harness are in
-[`PUSHVSPOP.md` §5](./PUSHVSPOP.md). The same harness reproduces the
+`[PUSHVSPOP.md` §5](./PUSHVSPOP.md). The same harness reproduces the
 combined-load throughput numbers in §7 above; the only difference is
 that the schema under test is HEAD (with PUSHPOPLOOKUPSOL applied and
 `pop_unified_batch_v3` wired in).
@@ -868,15 +874,18 @@ GROUP BY 1 ORDER BY n DESC;
 
 ## 12. File summary
 
-| File | Change |
-| ---- | ------ |
-| `lib/schema/schema.sql` | `DROP TRIGGER IF EXISTS trg_update_partition_lookup` |
-| `lib/schema/procedures/001_push.sql` | `push_messages_v3` returns `{items, partition_updates}` via new `partition_max` / `partition_updates_json` CTEs |
-| `lib/schema/procedures/016_partition_lookup.sql` (new) | `queen.update_partition_lookup_v1`, `queen.reconcile_partition_lookup_v1` |
-| `lib/schema/procedures/002c_pop_unified_v2_noorder.sql` | No `ORDER BY`, no `LIMIT`, advisory-lock claim |
-| `lib/queen/pending_job.hpp` | `JobType::POP → pop_unified_batch_v3` |
-| `lib/queen.hpp` | Parse `{items, partition_updates}` from `push_messages_v3`; fire `update_partition_lookup_v1` as `JobType::CUSTOM` post-response |
-| `server/include/queen/partition_lookup_reconcile_service.hpp` (new) | Service header |
-| `server/src/services/partition_lookup_reconcile_service.cpp` (new) | Service implementation (advisory lock 737002) |
-| `server/include/queen/config.hpp` | Added `partition_lookup_reconcile_interval_ms`, `partition_lookup_reconcile_lookback_seconds` + env overrides |
-| `server/src/acceptor_server.cpp` | Instantiate & start service on `Worker 0` |
+
+| File                                                                | Change                                                                                                                           |
+| ------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------- |
+| `lib/schema/schema.sql`                                             | `DROP TRIGGER IF EXISTS trg_update_partition_lookup`                                                                             |
+| `lib/schema/procedures/001_push.sql`                                | `push_messages_v3` returns `{items, partition_updates}` via new `partition_max` / `partition_updates_json` CTEs                  |
+| `lib/schema/procedures/016_partition_lookup.sql` (new)              | `queen.update_partition_lookup_v1`, `queen.reconcile_partition_lookup_v1`                                                        |
+| `lib/schema/procedures/002c_pop_unified_v2_noorder.sql`             | No `ORDER BY`, no `LIMIT`, advisory-lock claim                                                                                   |
+| `lib/queen/pending_job.hpp`                                         | `JobType::POP → pop_unified_batch_v3`                                                                                            |
+| `lib/queen.hpp`                                                     | Parse `{items, partition_updates}` from `push_messages_v3`; fire `update_partition_lookup_v1` as `JobType::CUSTOM` post-response |
+| `server/include/queen/partition_lookup_reconcile_service.hpp` (new) | Service header                                                                                                                   |
+| `server/src/services/partition_lookup_reconcile_service.cpp` (new)  | Service implementation (advisory lock 737002)                                                                                    |
+| `server/include/queen/config.hpp`                                   | Added `partition_lookup_reconcile_interval_ms`, `partition_lookup_reconcile_lookback_seconds` + env overrides                    |
+| `server/src/acceptor_server.cpp`                                    | Instantiate & start service on `Worker 0`                                                                                        |
+
+

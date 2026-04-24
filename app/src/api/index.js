@@ -121,6 +121,10 @@ export const system = {
   getWorkerMetrics: (params) => client.get('/api/v1/analytics/worker-metrics', { params }),
   // Per-Queue Lag & Pop Throughput
   getQueueLag: (params) => client.get('/api/v1/analytics/queue-lag', { params }),
+  // Per-Queue Ops (push / pop / ack / trx + partition lifecycle)
+  getQueueOps: (params) => client.get('/api/v1/analytics/queue-ops', { params }),
+  // Retention / Eviction time series
+  getRetention: (params) => client.get('/api/v1/analytics/retention', { params }),
   // PostgreSQL Stats
   getPostgresStats: () => client.get('/api/v1/analytics/postgres-stats'),
 }

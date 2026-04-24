@@ -66,21 +66,41 @@ CREATE INDEX IF NOT EXISTS idx_worker_metrics_bucket ON queen.worker_metrics(buc
 CREATE INDEX IF NOT EXISTS idx_worker_metrics_worker ON queen.worker_metrics(hostname, worker_id);
 CREATE INDEX IF NOT EXISTS idx_worker_metrics_created ON queen.worker_metrics(created_at);
 
--- Per-queue lag metrics (aggregated across all workers)
+-- Per-queue ops metrics (aggregated across all workers).
+-- Historically this table only tracked pop_count + lag; it now also tracks
+-- per-queue push / ack / transaction counts (flushed from libqueen's
+-- in-memory WorkerMetrics at minute boundaries) and partition lifecycle
+-- events (bumped by statement-level triggers on queen.partitions).
+-- Idempotent ALTERs below let upgrades pick up the new columns safely.
 CREATE TABLE IF NOT EXISTS queen.queue_lag_metrics (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     bucket_time TIMESTAMPTZ NOT NULL,
     queue_name VARCHAR(512) NOT NULL,
-    
+
     -- Aggregated across all workers for this queue
     pop_count BIGINT DEFAULT 0,
     avg_lag_ms BIGINT DEFAULT 0,
     max_lag_ms BIGINT DEFAULT 0,
-    
+
     created_at TIMESTAMPTZ DEFAULT NOW(),
-    
+
     UNIQUE(bucket_time, queue_name)
 );
+
+-- Per-queue ops counters (PR 3). Flushed once/minute per worker from libqueen.
+ALTER TABLE queen.queue_lag_metrics ADD COLUMN IF NOT EXISTS push_request_count BIGINT DEFAULT 0;
+ALTER TABLE queen.queue_lag_metrics ADD COLUMN IF NOT EXISTS push_message_count BIGINT DEFAULT 0;
+ALTER TABLE queen.queue_lag_metrics ADD COLUMN IF NOT EXISTS pop_empty_count    BIGINT DEFAULT 0;
+ALTER TABLE queen.queue_lag_metrics ADD COLUMN IF NOT EXISTS ack_request_count  BIGINT DEFAULT 0;
+ALTER TABLE queen.queue_lag_metrics ADD COLUMN IF NOT EXISTS ack_success_count  BIGINT DEFAULT 0;
+ALTER TABLE queen.queue_lag_metrics ADD COLUMN IF NOT EXISTS ack_failed_count   BIGINT DEFAULT 0;
+ALTER TABLE queen.queue_lag_metrics ADD COLUMN IF NOT EXISTS transaction_count  BIGINT DEFAULT 0;
+-- Partition lifecycle counters (PR 3b). Bumped by queen.partitions INSERT /
+-- DELETE statement-level triggers. partition_count is a snapshot written once
+-- per minute by StatsService::run_fast_aggregation.
+ALTER TABLE queen.queue_lag_metrics ADD COLUMN IF NOT EXISTS partitions_created INTEGER DEFAULT 0;
+ALTER TABLE queen.queue_lag_metrics ADD COLUMN IF NOT EXISTS partitions_deleted INTEGER DEFAULT 0;
+ALTER TABLE queen.queue_lag_metrics ADD COLUMN IF NOT EXISTS partition_count    INTEGER;
 
 CREATE INDEX IF NOT EXISTS idx_queue_lag_bucket ON queen.queue_lag_metrics(bucket_time DESC);
 CREATE INDEX IF NOT EXISTS idx_queue_lag_queue ON queen.queue_lag_metrics(queue_name);
@@ -478,33 +498,25 @@ BEGIN
         ELSE 360
     END;
     
-    -- Get throughput from worker_metrics (system-wide or per-queue)
-    -- When queue / namespace / task filter is set, we scope via queue_lag_metrics
-    -- (pop data only; ingested is not tracked per-queue so it reports 0).
+    -- Get throughput from worker_metrics (system-wide or per-queue).
+    -- When queue / namespace / task filter is set we aggregate queue_lag_metrics
+    -- (now carries per-queue push/pop/ack counts thanks to PR 3c). System-health
+    -- signals that aren't scoped to a queue (event-loop lag, DB errors, CPU,
+    -- DB pool) still come from worker_metrics / system_metrics so the Dashboard
+    -- can show "this queue's throughput vs the system's health" side by side.
     IF v_queue IS NOT NULL OR v_namespace IS NOT NULL OR v_task IS NOT NULL THEN
-        SELECT 
-            COALESCE(jsonb_agg(
-                jsonb_build_object(
-                    'timestamp', to_char(bucket, 'YYYY-MM-DD"T"HH24:MI:SS"Z"'),
-                    'ingested', 0,
-                    'processed', pop_count,
-                    'ingestedPerSecond', 0,
-                    'processedPerSecond', ROUND(pop_count::numeric / (v_bucket_minutes * 60), 2),
-                    'avgLagMs', avg_lag_ms,
-                    'maxLagMs', max_lag_ms
-                ) ORDER BY bucket DESC
-            ), '[]'::jsonb),
-            COUNT(*)
-        INTO v_throughput, v_point_count
-        FROM (
+        WITH qlm AS (
             SELECT
-                date_trunc('minute', qlm.bucket_time) - 
+                date_trunc('minute', qlm.bucket_time) -
                     (EXTRACT(minute FROM qlm.bucket_time)::integer % v_bucket_minutes) * INTERVAL '1 minute' AS bucket,
-                SUM(qlm.pop_count) as pop_count,
-                CASE WHEN SUM(qlm.pop_count) > 0 
+                SUM(qlm.pop_count)           AS pop_msg,
+                SUM(qlm.push_message_count)  AS push_msg,
+                SUM(qlm.ack_success_count + qlm.ack_failed_count) AS ack_msg,
+                SUM(qlm.ack_failed_count)    AS ack_fail,
+                CASE WHEN SUM(qlm.pop_count) > 0
                      THEN SUM(qlm.avg_lag_ms * qlm.pop_count) / SUM(qlm.pop_count)
-                     ELSE 0 END as avg_lag_ms,
-                MAX(qlm.max_lag_ms) as max_lag_ms
+                     ELSE 0 END AS avg_lag_ms,
+                MAX(qlm.max_lag_ms)          AS max_lag_ms
             FROM queen.queue_lag_metrics qlm
             JOIN queen.queues q ON q.name = qlm.queue_name
             WHERE qlm.bucket_time >= v_from_ts
@@ -513,47 +525,143 @@ BEGIN
               AND (v_namespace IS NULL OR q.namespace = v_namespace)
               AND (v_task IS NULL OR q.task = v_task)
             GROUP BY 1
-        ) t;
-    ELSE
-        -- System-wide throughput from worker_metrics (aggregated with worker health)
-        SELECT 
-            COALESCE(jsonb_agg(
-                jsonb_build_object(
-                    'timestamp', to_char(bucket, 'YYYY-MM-DD"T"HH24:MI:SS"Z"'),
-                    'ingested', push_msg,
-                    'processed', ack_msg,
-                    'ingestedPerSecond', ROUND(push_msg::numeric / (v_bucket_minutes * 60), 2),
-                    'processedPerSecond', ROUND(ack_msg::numeric / (v_bucket_minutes * 60), 2),
-                    'avgLagMs', avg_lag,
-                    'maxLagMs', max_lag,
-                    -- NEW: Worker health per bucket
-                    'avgEventLoopLagMs', avg_el_lag,
-                    'maxEventLoopLagMs', max_el_lag,
-                    'minFreeSlots', min_slots,
-                    'dbErrors', db_errs
-                ) ORDER BY bucket DESC
-            ), '[]'::jsonb),
-            COUNT(*)
-        INTO v_throughput, v_point_count
-        FROM (
-            SELECT 
-                date_trunc('minute', bucket_time) - 
+        ),
+        -- System-wide signals (not scoped to queue). These still matter when
+        -- drilling into a queue because they tell the operator if the apparent
+        -- slowdown is queue-specific or a global resource issue.
+        wm AS (
+            SELECT
+                date_trunc('minute', bucket_time) -
                     (EXTRACT(minute FROM bucket_time)::integer % v_bucket_minutes) * INTERVAL '1 minute' AS bucket,
-                SUM(push_message_count) as push_msg,
-                SUM(ack_message_count) as ack_msg,
-                CASE WHEN SUM(lag_count) > 0 
-                     THEN SUM(avg_lag_ms * lag_count) / SUM(lag_count)
-                     ELSE 0 END as avg_lag,
-                MAX(max_lag_ms) as max_lag,
-                -- Worker health aggregates
-                ROUND(AVG(avg_event_loop_lag_ms)) as avg_el_lag,
-                MAX(max_event_loop_lag_ms) as max_el_lag,
-                MIN(min_free_slots) as min_slots,
-                SUM(db_error_count) as db_errs
+                ROUND(AVG(avg_event_loop_lag_ms)) AS avg_el_lag,
+                MAX(max_event_loop_lag_ms)        AS max_el_lag,
+                MIN(min_free_slots)               AS min_slots,
+                SUM(db_error_count)               AS db_errs,
+                SUM(dlq_count)                    AS dlq_cnt
             FROM queen.worker_metrics
             WHERE bucket_time >= v_from_ts AND bucket_time <= v_to_ts
             GROUP BY 1
-        ) t;
+        ),
+        sm AS (
+            SELECT
+                date_trunc('minute', timestamp) -
+                    (EXTRACT(minute FROM timestamp)::integer % v_bucket_minutes) * INTERVAL '1 minute' AS bucket,
+                AVG(((metrics->'cpu'->'user_us'->>'avg')::numeric) / 100.0)          AS cpu_user_pct,
+                AVG(((metrics->'cpu'->'system_us'->>'avg')::numeric) / 100.0)        AS cpu_sys_pct,
+                AVG(((metrics->'memory'->'rss_bytes'->>'avg')::numeric) / 1048576.0) AS rss_mb,
+                AVG((metrics->'database'->'pool_active'->>'avg')::numeric)           AS db_pool_active,
+                AVG((metrics->'database'->'pool_idle'->>'avg')::numeric)             AS db_pool_idle,
+                AVG((metrics->'database'->'pool_size'->>'avg')::numeric)             AS db_pool_size
+            FROM queen.system_metrics
+            WHERE timestamp >= v_from_ts AND timestamp <= v_to_ts
+            GROUP BY 1
+        )
+        SELECT
+            COALESCE(jsonb_agg(
+                jsonb_build_object(
+                    'timestamp', to_char(qlm.bucket, 'YYYY-MM-DD"T"HH24:MI:SS"Z"'),
+                    'ingested', COALESCE(qlm.push_msg, 0),
+                    'processed', COALESCE(qlm.ack_msg, qlm.pop_msg, 0),
+                    'popMessages', COALESCE(qlm.pop_msg, 0),
+                    'ingestedPerSecond', ROUND(COALESCE(qlm.push_msg, 0)::numeric / (v_bucket_minutes * 60), 2),
+                    'processedPerSecond', ROUND(COALESCE(qlm.ack_msg, 0)::numeric / (v_bucket_minutes * 60), 2),
+                    'popPerSecond', ROUND(COALESCE(qlm.pop_msg, 0)::numeric / (v_bucket_minutes * 60), 2),
+                    'avgLagMs', qlm.avg_lag_ms,
+                    'maxLagMs', qlm.max_lag_ms,
+                    'avgEventLoopLagMs', wm.avg_el_lag,
+                    'maxEventLoopLagMs', wm.max_el_lag,
+                    'minFreeSlots', wm.min_slots,
+                    'dbErrors', wm.db_errs,
+                    'ackFailed', qlm.ack_fail,
+                    'dlqCount', wm.dlq_cnt,
+                    'queenCpuUserPct', ROUND(sm.cpu_user_pct, 2),
+                    'queenCpuSysPct', ROUND(sm.cpu_sys_pct, 2),
+                    'queenRssMb', ROUND(sm.rss_mb, 1),
+                    'dbPoolActive', ROUND(sm.db_pool_active, 1),
+                    'dbPoolIdle', ROUND(sm.db_pool_idle, 1),
+                    'dbPoolSize', ROUND(sm.db_pool_size, 1)
+                ) ORDER BY qlm.bucket DESC
+            ), '[]'::jsonb),
+            COUNT(*)
+        INTO v_throughput, v_point_count
+        FROM qlm
+        LEFT JOIN wm ON wm.bucket = qlm.bucket
+        LEFT JOIN sm ON sm.bucket = qlm.bucket;
+    ELSE
+        -- System-wide throughput from worker_metrics (aggregated with worker health).
+        -- LEFT JOIN queen.system_metrics (bucket-aligned) to attach per-bucket
+        -- CPU %, RSS MB and DB pool numbers. Values from system_metrics.metrics
+        -- are stored as: cpu.user_us.avg / cpu.system_us.avg (0..10000 = %*100),
+        -- memory.rss_bytes.avg (bytes), database.pool_active.avg / pool_idle.avg.
+        -- We aggregate across replicas/workers with AVG for CPU / memory / pool.
+        WITH wm AS (
+            SELECT
+                date_trunc('minute', bucket_time) -
+                    (EXTRACT(minute FROM bucket_time)::integer % v_bucket_minutes) * INTERVAL '1 minute' AS bucket,
+                SUM(push_message_count) as push_msg,
+                SUM(pop_message_count)  as pop_msg,
+                SUM(ack_message_count)  as ack_msg,
+                CASE WHEN SUM(lag_count) > 0
+                     THEN SUM(avg_lag_ms * lag_count) / SUM(lag_count)
+                     ELSE 0 END as avg_lag,
+                MAX(max_lag_ms) as max_lag,
+                ROUND(AVG(avg_event_loop_lag_ms)) as avg_el_lag,
+                MAX(max_event_loop_lag_ms) as max_el_lag,
+                MIN(min_free_slots) as min_slots,
+                SUM(db_error_count) as db_errs,
+                SUM(dlq_count) as dlq_cnt,
+                SUM(ack_failed_count) as ack_fail
+            FROM queen.worker_metrics
+            WHERE bucket_time >= v_from_ts AND bucket_time <= v_to_ts
+            GROUP BY 1
+        ),
+        sm AS (
+            SELECT
+                date_trunc('minute', timestamp) -
+                    (EXTRACT(minute FROM timestamp)::integer % v_bucket_minutes) * INTERVAL '1 minute' AS bucket,
+                -- CPU percentages (user + system) averaged across replicas/workers.
+                -- metrics.cpu.*_us.avg is percent * 100 (0..10000+), divide by 100.
+                AVG(((metrics->'cpu'->'user_us'->>'avg')::numeric) / 100.0) as cpu_user_pct,
+                AVG(((metrics->'cpu'->'system_us'->>'avg')::numeric) / 100.0) as cpu_sys_pct,
+                AVG(((metrics->'memory'->'rss_bytes'->>'avg')::numeric) / 1024.0 / 1024.0) as rss_mb,
+                AVG((metrics->'database'->'pool_active'->>'avg')::numeric) as db_pool_active,
+                AVG((metrics->'database'->'pool_idle'->>'avg')::numeric) as db_pool_idle,
+                AVG((metrics->'database'->'pool_size'->>'avg')::numeric) as db_pool_size
+            FROM queen.system_metrics
+            WHERE timestamp >= v_from_ts AND timestamp <= v_to_ts
+            GROUP BY 1
+        )
+        SELECT
+            COALESCE(jsonb_agg(
+                jsonb_build_object(
+                    'timestamp', to_char(wm.bucket, 'YYYY-MM-DD"T"HH24:MI:SS"Z"'),
+                    'ingested', wm.push_msg,
+                    'processed', wm.ack_msg,
+                    'popMessages', wm.pop_msg,
+                    'ingestedPerSecond', ROUND(wm.push_msg::numeric / (v_bucket_minutes * 60), 2),
+                    'processedPerSecond', ROUND(wm.ack_msg::numeric / (v_bucket_minutes * 60), 2),
+                    'popPerSecond', ROUND(wm.pop_msg::numeric / (v_bucket_minutes * 60), 2),
+                    'avgLagMs', wm.avg_lag,
+                    'maxLagMs', wm.max_lag,
+                    'avgEventLoopLagMs', wm.avg_el_lag,
+                    'maxEventLoopLagMs', wm.max_el_lag,
+                    'minFreeSlots', wm.min_slots,
+                    'dbErrors', wm.db_errs,
+                    'ackFailed', wm.ack_fail,
+                    'dlqCount', wm.dlq_cnt,
+                    -- System metrics per bucket (null when no sample yet)
+                    'queenCpuUserPct', ROUND(sm.cpu_user_pct, 2),
+                    'queenCpuSysPct', ROUND(sm.cpu_sys_pct, 2),
+                    'queenRssMb', ROUND(sm.rss_mb, 1),
+                    'dbPoolActive', ROUND(sm.db_pool_active, 1),
+                    'dbPoolIdle', ROUND(sm.db_pool_idle, 1),
+                    'dbPoolSize', ROUND(sm.db_pool_size, 1)
+                ) ORDER BY wm.bucket DESC
+            ), '[]'::jsonb),
+            COUNT(*)
+        INTO v_throughput, v_point_count
+        FROM wm
+        LEFT JOIN sm ON sm.bucket = wm.bucket;
     END IF;
     
     -- NEW: Get current worker health (last 2 minutes)
@@ -880,6 +988,187 @@ BEGIN
 END;
 $$;
 
+-- ============================================================================
+-- Partition lifecycle triggers (PR 3b)
+-- ============================================================================
+-- Bump per-queue partitions_created / partitions_deleted counters on
+-- queen.queue_lag_metrics at the current minute bucket. Both triggers are
+-- AFTER ... FOR EACH STATEMENT with a transition table, so they run exactly
+-- once per INSERT / DELETE statement regardless of how many rows were
+-- affected. They aggregate by queue before upserting, so one UPSERT is
+-- issued per distinct queue touched per statement.
+--
+-- Hot-path analysis (see PLAN.md):
+--   - INSERT side: push_messages_v3 Statement B uses ON CONFLICT DO NOTHING,
+--     so the transition table is empty when partitions already exist
+--     (common case). The trigger function body therefore short-circuits on
+--     an empty CTE input and performs zero DB writes.
+--   - DELETE side: runs from the retention service, off the hot path.
+-- ============================================================================
+
+CREATE OR REPLACE FUNCTION queen.bump_partitions_created_trigger()
+RETURNS TRIGGER AS $$
+BEGIN
+    INSERT INTO queen.queue_lag_metrics (bucket_time, queue_name, partitions_created)
+    SELECT
+        date_trunc('minute', NOW()),
+        q.name,
+        COUNT(*)
+    FROM new_partitions np
+    JOIN queen.queues q ON q.id = np.queue_id
+    GROUP BY q.name
+    ON CONFLICT (bucket_time, queue_name) DO UPDATE
+    SET partitions_created = queen.queue_lag_metrics.partitions_created + EXCLUDED.partitions_created;
+    RETURN NULL;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE OR REPLACE FUNCTION queen.bump_partitions_deleted_trigger()
+RETURNS TRIGGER AS $$
+BEGIN
+    -- On DELETE, the queue row may or may not still exist (CASCADE). We
+    -- resolve queue name via old_partitions.queue_id JOINed against
+    -- queen.queues; partitions deleted because their queue was removed fall
+    -- through to a conservative '__orphaned__' bucket so the count still
+    -- shows up somewhere.
+    INSERT INTO queen.queue_lag_metrics (bucket_time, queue_name, partitions_deleted)
+    SELECT
+        date_trunc('minute', NOW()),
+        COALESCE(q.name, '__orphaned__'),
+        COUNT(*)
+    FROM old_partitions op
+    LEFT JOIN queen.queues q ON q.id = op.queue_id
+    GROUP BY COALESCE(q.name, '__orphaned__')
+    ON CONFLICT (bucket_time, queue_name) DO UPDATE
+    SET partitions_deleted = queen.queue_lag_metrics.partitions_deleted + EXCLUDED.partitions_deleted;
+    RETURN NULL;
+END;
+$$ LANGUAGE plpgsql;
+
+DROP TRIGGER IF EXISTS trg_partitions_created_counter ON queen.partitions;
+CREATE TRIGGER trg_partitions_created_counter
+    AFTER INSERT ON queen.partitions
+    REFERENCING NEW TABLE AS new_partitions
+    FOR EACH STATEMENT
+    EXECUTE FUNCTION queen.bump_partitions_created_trigger();
+
+DROP TRIGGER IF EXISTS trg_partitions_deleted_counter ON queen.partitions;
+CREATE TRIGGER trg_partitions_deleted_counter
+    AFTER DELETE ON queen.partitions
+    REFERENCING OLD TABLE AS old_partitions
+    FOR EACH STATEMENT
+    EXECUTE FUNCTION queen.bump_partitions_deleted_trigger();
+
+-- ============================================================================
+-- queen.get_queue_ops_v1: Per-queue ops time series for the System view
+-- ============================================================================
+-- Returns pop / push / ack / trx throughput + lag + partition lifecycle per
+-- queue bucketed on the range's natural bucket (same rule as get_status_v3).
+-- Uses the extended queue_lag_metrics columns populated by libqueen and the
+-- partition-lifecycle triggers.
+-- ============================================================================
+CREATE OR REPLACE FUNCTION queen.get_queue_ops_v1(
+    p_filters JSONB DEFAULT '{}'::jsonb
+)
+RETURNS JSONB
+LANGUAGE plpgsql
+AS $$
+DECLARE
+    v_from_ts TIMESTAMPTZ;
+    v_to_ts TIMESTAMPTZ;
+    v_queue TEXT;
+    v_duration_minutes INTEGER;
+    v_bucket_minutes INTEGER;
+    v_series JSONB;
+    v_queues JSONB;
+BEGIN
+    v_from_ts := COALESCE((p_filters->>'from')::timestamptz, NOW() - INTERVAL '1 hour');
+    v_to_ts := COALESCE((p_filters->>'to')::timestamptz, NOW());
+    v_queue := p_filters->>'queue';
+
+    v_duration_minutes := EXTRACT(EPOCH FROM (v_to_ts - v_from_ts)) / 60;
+    v_bucket_minutes := CASE
+        WHEN v_duration_minutes <= 60 THEN 1
+        WHEN v_duration_minutes <= 360 THEN 5
+        WHEN v_duration_minutes <= 1440 THEN 15
+        WHEN v_duration_minutes <= 10080 THEN 60
+        ELSE 360
+    END;
+
+    WITH rolled AS (
+        SELECT
+            date_trunc('minute', bucket_time) -
+                (EXTRACT(minute FROM bucket_time)::integer % v_bucket_minutes) * INTERVAL '1 minute' AS bucket,
+            queue_name,
+            SUM(push_request_count) AS push_req,
+            SUM(push_message_count) AS push_msg,
+            SUM(pop_count)          AS pop_msg,
+            SUM(pop_empty_count)    AS pop_empty,
+            SUM(ack_request_count)  AS ack_req,
+            SUM(ack_success_count)  AS ack_ok,
+            SUM(ack_failed_count)   AS ack_fail,
+            SUM(transaction_count)  AS trx_cnt,
+            SUM(partitions_created) AS parts_created,
+            SUM(partitions_deleted) AS parts_deleted,
+            MAX(partition_count)    AS parts_snapshot,
+            CASE WHEN SUM(pop_count) > 0
+                 THEN SUM(avg_lag_ms * pop_count) / SUM(pop_count)
+                 ELSE 0 END AS avg_lag_ms,
+            MAX(max_lag_ms) AS max_lag_ms
+        FROM queen.queue_lag_metrics
+        WHERE bucket_time >= v_from_ts
+          AND bucket_time <= v_to_ts
+          AND (v_queue IS NULL OR queue_name = v_queue)
+        GROUP BY 1, 2
+    )
+    SELECT
+        COALESCE(jsonb_agg(
+            jsonb_build_object(
+                'bucket', to_char(bucket, 'YYYY-MM-DD"T"HH24:MI:SS"Z"'),
+                'queueName', queue_name,
+                'pushRequests',       push_req,
+                'pushMessages',       push_msg,
+                'popMessages',        pop_msg,
+                'popEmpty',           pop_empty,
+                'ackRequests',        ack_req,
+                'ackSuccess',         ack_ok,
+                'ackFailed',          ack_fail,
+                'transactions',       trx_cnt,
+                'partitionsCreated',  parts_created,
+                'partitionsDeleted',  parts_deleted,
+                'partitionCount',     parts_snapshot,
+                'avgLagMs',           avg_lag_ms,
+                'maxLagMs',           max_lag_ms,
+                -- Rate-normalized helpers so the UI doesn't have to divide:
+                'pushPerSecond',      ROUND(push_msg::numeric / (v_bucket_minutes * 60), 2),
+                'popPerSecond',       ROUND(pop_msg::numeric  / (v_bucket_minutes * 60), 2),
+                'ackPerSecond',       ROUND((ack_ok + ack_fail)::numeric / (v_bucket_minutes * 60), 2)
+            ) ORDER BY bucket ASC, queue_name
+        ), '[]'::jsonb)
+    INTO v_series
+    FROM rolled;
+
+    -- Distinct queue list (for UI filters)
+    SELECT COALESCE(jsonb_agg(qn ORDER BY qn), '[]'::jsonb) INTO v_queues
+    FROM (
+        SELECT DISTINCT queue_name AS qn
+        FROM queen.queue_lag_metrics
+        WHERE bucket_time >= v_from_ts AND bucket_time <= v_to_ts
+          AND (v_queue IS NULL OR queue_name = v_queue)
+    ) q;
+
+    RETURN jsonb_build_object(
+        'timeRange', jsonb_build_object(
+            'from', to_char(v_from_ts, 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"'),
+            'to',   to_char(v_to_ts,   'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"')
+        ),
+        'bucketMinutes', v_bucket_minutes,
+        'series',  v_series,
+        'queues',  v_queues
+    );
+END;
+$$;
+
 -- Grant permissions
 GRANT EXECUTE ON FUNCTION queen.get_worker_throughput_v1(TIMESTAMPTZ, TIMESTAMPTZ, INTEGER) TO PUBLIC;
 GRANT EXECUTE ON FUNCTION queen.get_queue_lag_v1(TIMESTAMPTZ, TIMESTAMPTZ, TEXT) TO PUBLIC;
@@ -889,4 +1178,5 @@ GRANT EXECUTE ON FUNCTION queen.get_system_overview_v3() TO PUBLIC;
 GRANT EXECUTE ON FUNCTION queen.get_status_v3(JSONB) TO PUBLIC;
 GRANT EXECUTE ON FUNCTION queen.get_worker_metrics_timeseries_v1(JSONB) TO PUBLIC;
 GRANT EXECUTE ON FUNCTION queen.cleanup_worker_metrics_v1(INTEGER) TO PUBLIC;
+GRANT EXECUTE ON FUNCTION queen.get_queue_ops_v1(JSONB) TO PUBLIC;
 

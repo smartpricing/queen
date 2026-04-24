@@ -190,7 +190,27 @@ void StatsService::run_fast_aggregation() {
         
         sendQueryParamsAsync(conn.get(), "SELECT queen.aggregate_system_stats_v2()", {});
         getTuplesResult(conn.get());
-        
+
+        // PR 3d: snapshot partition_count per queue into queue_lag_metrics
+        // (current-minute bucket). This gives the System view a time series
+        // of "partitions per queue" without needing a per-event table.
+        // UPSERT overwrites the snapshot column only; counter columns written
+        // by libqueen / triggers keep accumulating independently.
+        std::string partition_snapshot_sql = R"(
+            INSERT INTO queen.queue_lag_metrics (bucket_time, queue_name, partition_count)
+            SELECT
+                date_trunc('minute', NOW()),
+                q.name,
+                s.child_count
+            FROM queen.stats s
+            JOIN queen.queues q ON q.id = s.queue_id
+            WHERE s.stat_type = 'queue'
+            ON CONFLICT (bucket_time, queue_name) DO UPDATE
+            SET partition_count = EXCLUDED.partition_count
+        )";
+        sendQueryParamsAsync(conn.get(), partition_snapshot_sql, {});
+        getCommandResult(conn.get());
+
         spdlog::trace("StatsService: Queue/partition aggregation complete");
         
     } catch (const std::exception& e) {
