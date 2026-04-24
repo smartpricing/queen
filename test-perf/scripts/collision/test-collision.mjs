@@ -78,8 +78,9 @@ function parseArgs() {
       default: throw new Error(`unknown arg: ${k}`);
     }
   }
-  if (!['pop_unified_batch', 'pop_unified_batch_v2'].includes(out.procedure)) {
-    throw new Error(`--procedure must be pop_unified_batch or pop_unified_batch_v2, got: ${out.procedure}`);
+  const validProcs = ['pop_unified_batch', 'pop_unified_batch_v2', 'pop_unified_batch_v2_noorder'];
+  if (!validProcs.includes(out.procedure)) {
+    throw new Error(`--procedure must be one of ${validProcs.join(', ')}, got: ${out.procedure}`);
   }
   return out;
 }

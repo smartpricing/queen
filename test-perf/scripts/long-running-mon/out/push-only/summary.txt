@@ -1,0 +1,69 @@
+================================================================================
+  Summary for /Users/alice/Work/queen/test-perf/scripts/long-running-mon/out/push-only (duration=120s)
+================================================================================
+
+  TABLE DELTAS  (ins / upd / hot_upd / del  |  HOT% = hot_upd / upd)
+  relname                       ins        upd    hot_upd        del     HOT%
+  ----------------------------------------------------------------------------
+  consumer_watermarks             0          0          0          0     0.0%
+  messages                  1995930          0          0          0     0.0%
+  messages_consumed               0          0          0          0     0.0%
+  partition_consumers             0          0          0          0     0.0%
+  partition_lookup              973     112535     109656          0    97.4%
+  partitions                    973          0          0          0     0.0%
+  queues                          0          0          0          0     0.0%
+
+  WAL
+  wal_records:           10571295 (     88094/s)
+  wal_fpi:                   4855 (        40/s)     <-- full-page images
+  wal_bytes:           1333452376 (     10.60 MB/s)
+  wal_buffers_full:             0
+  wal_write ops:            13065
+  wal_sync ops:             13027 (       109/s)
+  wal_write_time ms:            0
+  wal_sync_time ms:             0
+
+  WAIT EVENTS  (46 samples over 120s @ 2s period)
+  wait_event_type        wait_event                          total   avg/sample
+  ----------------------------------------------------------------------------
+  Lock                   transactionid                         320         6.96
+  NULL                   NULL                                  164         3.57
+  Lock                   tuple                                  61         1.33
+  LWLock                 WALWrite                               31         0.67
+  IO                     WALSync                                25         0.54
+  LWLock                 WALInsert                               8         0.17
+  LWLock                 BufferContent                           7         0.15
+  IO                     WALWrite                                5         0.11
+  Lock                   extend                                  5         0.11
+  Client                 ClientRead                              3         0.07
+  LWLock                 LockManager                             3         0.07
+  Timeout                SpinDelay                               1         0.02
+  LWLock                 BufferMapping                           1         0.02
+  IO                     WALInitWrite                            1         0.02
+  IO                     DataFileExtend                          1         0.02
+
+  DOCKER stats (32 samples)
+  CPU%  avg= 355.2  p50= 370.0  p95= 482.3  max= 595.0
+  Mem%  avg=  13.5  max=  15.4
+
+  LOCK ATTRIBUTION on queen.partition_lookup  (159 samples, 250ms period)
+  metric                            avg      max
+  --------------------------------------------------
+  eligible                       619.67     1001
+  unlocked                       592.11     1001
+  locked_by_push                  27.55       66
+  locked_by_pop                    0.00        0
+  locked_by_other                  0.00        0
+  push_waits_on_push               8.64       49
+  push_waits_on_pop                0.00        0
+  push_waits_on_other              0.00        0
+  pop_waits_on_push                0.00        0
+  pop_waits_on_pop                 0.00        0
+  active_pushes                   10.99       20
+  active_pops                      0.00        0
+
+  POP SKIP ATTRIBUTION (fraction of eligible rows that pop would skip):
+    skipped because push holds:    4.4%
+    skipped because pop holds:     0.0%
+    skipped because other holds:   0.0%
+    freely claimable:             95.6%

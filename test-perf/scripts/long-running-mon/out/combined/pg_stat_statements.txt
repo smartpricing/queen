@@ -1,0 +1,19 @@
+ calls | total_ms | mean_ms  | pct  | rows_per_call |                                                query                                                 
+-------+----------+----------+------+---------------+------------------------------------------------------------------------------------------------------
+  4303 |  1781283 |   413.96 | 30.8 |           1.0 | SELECT queen.push_messages_v3($1::jsonb)
+  4303 |  1749902 |   406.67 | 30.3 |           1.0 | WITH parsed AS MATERIALIZED ( SELECT (t.idx - $2)::int AS idx, COALESCE((t.item->>$3)::uuid, gen_ran
+  4303 |  1632499 |   379.39 | 28.2 |           4.9 | WITH batch_max AS ( SELECT DISTINCT ON (partition_id) partition_id, created_at as max_created_at, id
+  5446 |   270041 |    49.59 |  4.7 |           1.0 | SELECT queen.pop_unified_batch($1::jsonb)
+ 16362 |   123208 |     7.53 |  2.1 |           1.0 | SELECT COALESCE(jsonb_agg( jsonb_build_object( $41, sub.id::text, $42, sub.transaction_id, $43, sub.
+ 28043 |    98598 |     3.52 |  1.7 |           0.6 | SELECT pl.partition_id, p.name, q.id, q.lease_time, q.window_buffer, q.delayed_processing, pl.last_m
+   126 |    14953 |   118.67 |  0.3 |           1.0 | SELECT $1 || queen.debug_lock_attribution($2)::text
+     1 |    13852 | 13851.77 |  0.2 |           0.0 | WITH messages_to_evict AS ( SELECT DISTINCT m.id, p.id as partition_id FROM queen.messages m JOIN qu
+     1 |    12236 | 12235.66 |  0.2 |           1.0 | SELECT queen.refresh_all_stats_v1($1)
+     1 |    12207 | 12207.41 |  0.2 |           1.0 | SELECT queen.compute_partition_stats_v3(p_force)
+     1 |    11737 | 11737.23 |  0.2 |         302.0 | WITH recent_push_activity AS ( -- Partitions with push activity since last computation (indexed on u
+   126 |     8127 |    64.50 |  0.1 |           1.0 | WITH -- All partition_lookup rows that match pop's wildcard WHERE clause -- (consumer_group = __QUEU
+  4303 |     8032 |     1.87 |  0.1 |           1.0 | WITH flat AS ( SELECT (i->>$7)::int AS idx, i->>$8 AS message_id, i->>$9 AS transaction_id, (i->>$10
+ 14728 |     7619 |     0.52 |  0.1 |           1.0 | INSERT INTO queen.messages_consumed (partition_id, consumer_group, messages_completed, acked_at) VAL
+    12 |     5757 |   479.76 |  0.1 |           1.0 | SELECT queen.increment_message_counts_v1()
+(15 rows)
+

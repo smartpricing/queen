@@ -1,0 +1,24 @@
+1777012949,128,active,NULL,NULL,SELECT queen.pop_unified_batch($1::jsonb)
+1777012949,6231,active,NULL,NULL,SELECT '1777012949,' || queen.debug_lock_attribution('queen-long-running')::text
+1777012949,138,active,NULL,NULL,SELECT queen.pop_unified_batch($1::jsonb)
+1777012953,128,active,NULL,NULL,SELECT queen.pop_unified_batch($1::jsonb)
+1777012953,6338,active,NULL,NULL, SELECT '1777012953,'||relname||','||n_tup_ins||','||n_tup_upd||','||n_tup_hot_upd||','||n_live_tup||','||n_dead_tup FRO
+1777012953,6336,active,NULL,NULL, SELECT '1777012953,'||COALESCE(wait_event_type,'NULL')||','||COALESCE(wait_event,'NULL')||','||cnt FROM ( SELECT wait_e
+1777012953,6339,active,NULL,NULL,SELECT '1777012953,' || queen.debug_lock_attribution('queen-long-running')::text
+1777012953,142,active,NULL,NULL,SELECT queen.pop_unified_batch($1::jsonb)
+1777012963,3415,active,NULL,NULL, WITH messages_to_evict AS ( SELECT DISTINCT m.id, p.id as partition_id FROM queen.messages m JOIN queen.partitions p ON
+1777012963,142,active,NULL,NULL,SELECT queen.pop_unified_batch($1::jsonb)
+1777012963,6556,active,NULL,NULL,SELECT '1777012963,' || queen.debug_lock_attribution('queen-long-running')::text
+1777012971,142,active,NULL,NULL,SELECT queen.pop_unified_batch($1::jsonb)
+1777012975,142,active,NULL,NULL,SELECT queen.pop_unified_batch($1::jsonb)
+1777012975,6898,active,NULL,NULL,SELECT '1777012975,' || queen.debug_lock_attribution('queen-long-running')::text
+1777012980,128,active,NULL,NULL,SELECT queen.pop_unified_batch($1::jsonb)
+1777012980,7019,active,NULL,NULL,SELECT '1777012980,' || queen.debug_lock_attribution('queen-long-running')::text
+1777012984,142,active,NULL,NULL,SELECT queen.pop_unified_batch($1::jsonb)
+1777012988,128,active,NULL,NULL,SELECT queen.pop_unified_batch($1::jsonb)
+1777012992,128,active,NULL,NULL,SELECT queen.pop_unified_batch($1::jsonb)
+1777012992,7342,active,NULL,NULL,SELECT '1777012992,' || queen.debug_lock_attribution('queen-long-running')::text
+1777012996,7469,active,NULL,NULL,SELECT '1777012996,' || queen.debug_lock_attribution('queen-long-running')::text
+1777013001,7601,active,NULL,NULL,SELECT '1777013001,' || queen.debug_lock_attribution('queen-long-running')::text
+1777013021,3414,active,NULL,NULL, WITH messages_to_evict AS ( SELECT DISTINCT m.id, p.id as partition_id FROM queen.messages m JOIN queen.partitions p ON
+1777013062,9573,active,NULL,NULL,SELECT '1777013062,' || queen.debug_lock_attribution('queen-long-running')::text

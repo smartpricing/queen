@@ -1,0 +1,410 @@
+
+1777013092,autovacuum worker,relation,normal,0,0,0,0,0
+1777013092,autovacuum worker,relation,vacuum,0,0,0,0,0
+
+1777013092,client backend,relation,bulkwrite,0,0,0,0,0
+1777013092,client backend,relation,normal,0,0,277,0,0
+1777013092,client backend,relation,vacuum,0,0,0,0,0
+1777013092,client backend,temp relation,normal,0,0,0,0,0
+
+
+
+1777013095,autovacuum worker,relation,normal,0,0,0,0,0
+1777013095,autovacuum worker,relation,vacuum,0,0,0,0,0
+
+1777013095,client backend,relation,bulkwrite,0,0,0,0,0
+1777013095,client backend,relation,normal,0,0,923,0,0
+1777013095,client backend,relation,vacuum,0,0,0,0,0
+1777013095,client backend,temp relation,normal,0,0,0,0,0
+
+
+
+1777013098,autovacuum worker,relation,normal,0,0,0,0,0
+1777013098,autovacuum worker,relation,vacuum,0,0,0,0,0
+
+1777013098,client backend,relation,bulkwrite,0,0,0,0,0
+1777013098,client backend,relation,normal,0,0,1968,0,0
+1777013098,client backend,relation,vacuum,0,0,0,0,0
+1777013098,client backend,temp relation,normal,0,0,0,0,0
+
+
+
+1777013101,autovacuum worker,relation,normal,0,0,0,0,0
+1777013101,autovacuum worker,relation,vacuum,0,0,0,0,0
+
+1777013101,client backend,relation,bulkwrite,0,0,0,0,0
+1777013101,client backend,relation,normal,0,0,3321,0,0
+1777013101,client backend,relation,vacuum,0,0,0,0,0
+1777013101,client backend,temp relation,normal,0,0,0,0,0
+
+
+
+1777013103,autovacuum worker,relation,normal,0,0,0,0,0
+1777013103,autovacuum worker,relation,vacuum,0,0,0,0,0
+
+1777013103,client backend,relation,bulkwrite,0,0,0,0,0
+1777013103,client backend,relation,normal,0,0,4492,0,0
+1777013103,client backend,relation,vacuum,0,0,0,0,0
+1777013103,client backend,temp relation,normal,0,0,0,0,0
+
+
+
+1777013106,autovacuum worker,relation,normal,0,0,0,0,0
+1777013106,autovacuum worker,relation,vacuum,0,0,0,0,0
+
+1777013106,client backend,relation,bulkwrite,0,0,0,0,0
+1777013106,client backend,relation,normal,0,0,5733,0,0
+1777013106,client backend,relation,vacuum,0,0,0,0,0
+1777013106,client backend,temp relation,normal,0,0,0,0,0
+
+
+
+1777013108,autovacuum worker,relation,normal,0,0,0,0,0
+1777013108,autovacuum worker,relation,vacuum,0,0,0,0,0
+
+1777013108,client backend,relation,bulkwrite,0,0,0,0,0
+1777013108,client backend,relation,normal,0,0,6125,0,0
+1777013108,client backend,relation,vacuum,0,0,0,0,0
+1777013108,client backend,temp relation,normal,0,0,0,0,0
+
+
+
+1777013111,autovacuum worker,relation,normal,0,0,0,0,0
+1777013111,autovacuum worker,relation,vacuum,0,0,0,0,0
+
+1777013111,client backend,relation,bulkwrite,0,0,0,0,0
+1777013111,client backend,relation,normal,0,0,6799,0,0
+1777013111,client backend,relation,vacuum,0,0,0,0,0
+1777013111,client backend,temp relation,normal,0,0,0,0,0
+
+
+
+1777013114,autovacuum worker,relation,normal,0,0,0,0,0
+1777013114,autovacuum worker,relation,vacuum,0,0,0,0,0
+
+1777013114,client backend,relation,bulkwrite,0,0,0,0,0
+1777013114,client backend,relation,normal,0,0,7804,0,0
+1777013114,client backend,relation,vacuum,0,0,0,0,0
+1777013114,client backend,temp relation,normal,0,0,0,0,0
+
+
+
+1777013116,autovacuum worker,relation,normal,0,0,0,0,0
+1777013116,autovacuum worker,relation,vacuum,0,0,0,0,0
+
+1777013116,client backend,relation,bulkwrite,0,0,0,0,0
+1777013116,client backend,relation,normal,0,0,8426,0,0
+1777013116,client backend,relation,vacuum,0,0,0,0,0
+1777013116,client backend,temp relation,normal,0,0,0,0,0
+
+
+
+1777013119,autovacuum worker,relation,normal,0,0,0,0,0
+1777013119,autovacuum worker,relation,vacuum,0,0,0,0,0
+
+1777013119,client backend,relation,bulkwrite,0,0,0,0,0
+1777013119,client backend,relation,normal,0,0,8711,0,0
+1777013119,client backend,relation,vacuum,0,0,0,0,0
+1777013119,client backend,temp relation,normal,0,0,0,0,0
+
+
+
+1777013121,autovacuum worker,relation,normal,0,0,0,0,0
+1777013121,autovacuum worker,relation,vacuum,0,0,0,0,0
+
+1777013121,client backend,relation,bulkwrite,0,0,0,0,0
+1777013121,client backend,relation,normal,0,0,9156,0,0
+1777013121,client backend,relation,vacuum,0,0,0,0,0
+1777013121,client backend,temp relation,normal,0,0,0,0,0
+
+
+
+1777013124,autovacuum worker,relation,normal,0,0,0,0,0
+1777013124,autovacuum worker,relation,vacuum,0,0,0,0,0
+
+1777013124,client backend,relation,bulkwrite,0,0,0,0,0
+1777013124,client backend,relation,normal,0,0,9638,0,0
+1777013124,client backend,relation,vacuum,0,0,0,0,0
+1777013124,client backend,temp relation,normal,0,0,0,0,0
+
+
+
+1777013127,autovacuum worker,relation,normal,0,0,2,0,0
+1777013127,autovacuum worker,relation,vacuum,0,0,0,0,0
+
+1777013127,client backend,relation,bulkwrite,0,0,0,0,0
+1777013127,client backend,relation,normal,0,0,10224,0,0
+1777013127,client backend,relation,vacuum,0,0,0,0,0
+1777013127,client backend,temp relation,normal,0,0,0,0,0
+
+
+
+1777013129,autovacuum worker,relation,normal,0,0,2,0,0
+1777013129,autovacuum worker,relation,vacuum,0,0,0,0,0
+
+1777013129,client backend,relation,bulkwrite,0,0,0,0,0
+1777013129,client backend,relation,normal,0,0,10959,0,0
+1777013129,client backend,relation,vacuum,0,0,0,0,0
+1777013129,client backend,temp relation,normal,0,0,0,0,0
+
+
+
+1777013133,autovacuum worker,relation,normal,0,0,2,0,0
+1777013133,autovacuum worker,relation,vacuum,0,0,0,0,0
+
+1777013133,client backend,relation,bulkwrite,0,0,0,0,0
+1777013133,client backend,relation,normal,0,0,11354,0,0
+1777013133,client backend,relation,vacuum,0,0,0,0,0
+1777013133,client backend,temp relation,normal,0,0,0,0,0
+
+
+
+1777013135,autovacuum worker,relation,normal,0,0,2,0,0
+1777013135,autovacuum worker,relation,vacuum,0,0,0,0,0
+
+1777013135,client backend,relation,bulkwrite,0,0,0,0,0
+1777013135,client backend,relation,normal,0,0,11906,0,0
+1777013135,client backend,relation,vacuum,0,0,0,0,0
+1777013135,client backend,temp relation,normal,0,0,0,0,0
+
+
+
+1777013138,autovacuum worker,relation,normal,0,0,2,0,0
+1777013138,autovacuum worker,relation,vacuum,0,0,0,0,0
+
+1777013138,client backend,relation,bulkwrite,0,0,0,0,0
+1777013138,client backend,relation,normal,0,0,12488,0,0
+1777013138,client backend,relation,vacuum,0,0,0,0,0
+1777013138,client backend,temp relation,normal,0,0,0,0,0
+
+
+
+1777013142,autovacuum worker,relation,normal,0,0,2,0,0
+1777013142,autovacuum worker,relation,vacuum,0,0,0,0,0
+
+1777013142,client backend,relation,bulkwrite,0,0,0,0,0
+1777013142,client backend,relation,normal,0,0,13039,0,0
+1777013142,client backend,relation,vacuum,0,0,0,0,0
+1777013142,client backend,temp relation,normal,0,0,0,0,0
+
+
+
+1777013145,autovacuum worker,relation,normal,0,0,2,0,0
+1777013145,autovacuum worker,relation,vacuum,0,0,0,0,0
+
+1777013145,client backend,relation,bulkwrite,0,0,0,0,0
+1777013145,client backend,relation,normal,0,0,13418,0,0
+1777013145,client backend,relation,vacuum,0,0,0,0,0
+1777013145,client backend,temp relation,normal,0,0,0,0,0
+
+
+
+1777013148,autovacuum worker,relation,normal,0,0,2,0,0
+1777013148,autovacuum worker,relation,vacuum,0,0,0,0,0
+
+1777013148,client backend,relation,bulkwrite,0,0,0,0,0
+1777013148,client backend,relation,normal,0,0,13739,0,0
+1777013148,client backend,relation,vacuum,0,0,0,0,0
+1777013148,client backend,temp relation,normal,0,0,0,0,0
+
+
+
+1777013150,autovacuum worker,relation,normal,0,0,2,0,0
+1777013150,autovacuum worker,relation,vacuum,0,0,0,0,0
+
+1777013150,client backend,relation,bulkwrite,0,0,0,0,0
+1777013150,client backend,relation,normal,0,0,14187,0,0
+1777013150,client backend,relation,vacuum,0,0,0,0,0
+1777013150,client backend,temp relation,normal,0,0,0,0,0
+
+
+
+1777013153,autovacuum worker,relation,normal,0,0,2,0,0
+1777013153,autovacuum worker,relation,vacuum,0,0,0,0,0
+
+1777013153,client backend,relation,bulkwrite,0,0,0,0,0
+1777013153,client backend,relation,normal,0,0,14745,0,0
+1777013153,client backend,relation,vacuum,0,0,0,0,0
+1777013153,client backend,temp relation,normal,0,0,0,0,0
+
+
+
+1777013156,autovacuum worker,relation,normal,0,0,2,0,0
+1777013156,autovacuum worker,relation,vacuum,0,0,0,0,0
+
+1777013156,client backend,relation,bulkwrite,0,0,0,0,0
+1777013156,client backend,relation,normal,0,0,14997,0,0
+1777013156,client backend,relation,vacuum,0,0,0,0,0
+1777013156,client backend,temp relation,normal,0,0,0,0,0
+
+
+
+1777013159,autovacuum worker,relation,normal,0,0,2,0,0
+1777013159,autovacuum worker,relation,vacuum,0,0,0,0,0
+
+1777013159,client backend,relation,bulkwrite,0,0,0,0,0
+1777013159,client backend,relation,normal,0,0,15620,0,0
+1777013159,client backend,relation,vacuum,0,0,0,0,0
+1777013159,client backend,temp relation,normal,0,0,0,0,0
+
+
+
+1777013162,autovacuum worker,relation,normal,0,0,2,0,0
+1777013162,autovacuum worker,relation,vacuum,0,0,0,0,0
+
+1777013162,client backend,relation,bulkwrite,0,0,0,0,0
+1777013162,client backend,relation,normal,0,0,16066,0,0
+1777013162,client backend,relation,vacuum,0,0,0,0,0
+1777013162,client backend,temp relation,normal,0,0,0,0,0
+
+
+
+1777013165,autovacuum worker,relation,normal,0,0,2,0,0
+1777013165,autovacuum worker,relation,vacuum,0,0,0,0,0
+
+1777013165,client backend,relation,bulkwrite,0,0,0,0,0
+1777013165,client backend,relation,normal,0,0,16697,0,0
+1777013165,client backend,relation,vacuum,0,0,0,0,0
+1777013165,client backend,temp relation,normal,0,0,0,0,0
+
+
+
+1777013167,autovacuum worker,relation,normal,0,0,2,0,0
+1777013167,autovacuum worker,relation,vacuum,0,0,0,0,0
+
+1777013167,client backend,relation,bulkwrite,0,0,0,0,0
+1777013167,client backend,relation,normal,0,0,17082,0,0
+1777013167,client backend,relation,vacuum,0,0,0,0,0
+1777013167,client backend,temp relation,normal,0,0,0,0,0
+
+
+
+1777013170,autovacuum worker,relation,normal,0,0,2,0,0
+1777013170,autovacuum worker,relation,vacuum,0,0,0,0,0
+
+1777013170,client backend,relation,bulkwrite,0,0,0,0,0
+1777013170,client backend,relation,normal,0,0,17516,0,0
+1777013170,client backend,relation,vacuum,0,0,0,0,0
+1777013170,client backend,temp relation,normal,0,0,0,0,0
+
+
+
+1777013173,autovacuum worker,relation,normal,0,0,2,0,0
+1777013173,autovacuum worker,relation,vacuum,0,0,0,0,0
+
+1777013173,client backend,relation,bulkwrite,0,0,0,0,0
+1777013173,client backend,relation,normal,0,0,17845,0,0
+1777013173,client backend,relation,vacuum,0,0,0,0,0
+1777013173,client backend,temp relation,normal,0,0,0,0,0
+
+
+
+1777013176,autovacuum worker,relation,normal,0,0,2,0,0
+1777013176,autovacuum worker,relation,vacuum,0,0,0,0,0
+
+1777013176,client backend,relation,bulkwrite,0,0,0,0,0
+1777013176,client backend,relation,normal,0,0,18304,0,0
+1777013176,client backend,relation,vacuum,0,0,0,0,0
+1777013176,client backend,temp relation,normal,0,0,0,0,0
+
+
+
+1777013179,autovacuum worker,relation,normal,0,0,3,0,0
+1777013179,autovacuum worker,relation,vacuum,0,0,0,0,0
+
+1777013179,client backend,relation,bulkwrite,0,0,0,0,0
+1777013179,client backend,relation,normal,0,0,18704,0,0
+1777013179,client backend,relation,vacuum,0,0,0,0,0
+1777013179,client backend,temp relation,normal,0,0,0,0,0
+
+
+
+1777013182,autovacuum worker,relation,normal,0,0,3,0,0
+1777013182,autovacuum worker,relation,vacuum,0,0,0,0,0
+
+1777013182,client backend,relation,bulkwrite,0,0,0,0,0
+1777013182,client backend,relation,normal,0,0,19144,0,0
+1777013182,client backend,relation,vacuum,0,0,0,0,0
+1777013182,client backend,temp relation,normal,0,0,0,0,0
+
+
+
+1777013186,autovacuum worker,relation,normal,0,0,3,0,0
+1777013186,autovacuum worker,relation,vacuum,0,0,0,0,0
+
+1777013186,client backend,relation,bulkwrite,0,0,0,0,0
+1777013186,client backend,relation,normal,0,0,19626,0,0
+1777013186,client backend,relation,vacuum,0,0,0,0,0
+1777013186,client backend,temp relation,normal,0,0,0,0,0
+
+
+
+1777013189,autovacuum worker,relation,normal,0,0,3,0,0
+1777013189,autovacuum worker,relation,vacuum,0,0,0,0,0
+
+1777013189,client backend,relation,bulkwrite,0,0,0,0,0
+1777013189,client backend,relation,normal,0,0,19971,0,0
+1777013189,client backend,relation,vacuum,0,0,0,0,0
+1777013189,client backend,temp relation,normal,0,0,0,0,0
+
+
+
+1777013192,autovacuum worker,relation,normal,0,0,3,0,0
+1777013192,autovacuum worker,relation,vacuum,0,0,0,0,0
+
+1777013192,client backend,relation,bulkwrite,0,0,0,0,0
+1777013192,client backend,relation,normal,0,0,20246,0,0
+1777013192,client backend,relation,vacuum,0,0,0,0,0
+1777013192,client backend,temp relation,normal,0,0,0,0,0
+
+
+
+1777013194,autovacuum worker,relation,normal,0,0,3,0,0
+1777013194,autovacuum worker,relation,vacuum,0,0,0,0,0
+
+1777013194,client backend,relation,bulkwrite,0,0,0,0,0
+1777013194,client backend,relation,normal,0,0,20963,0,0
+1777013194,client backend,relation,vacuum,0,0,0,0,0
+1777013194,client backend,temp relation,normal,0,0,0,0,0
+
+
+
+1777013197,autovacuum worker,relation,normal,0,0,3,0,0
+1777013197,autovacuum worker,relation,vacuum,0,0,0,0,0
+
+1777013197,client backend,relation,bulkwrite,0,0,0,0,0
+1777013197,client backend,relation,normal,0,0,21353,0,0
+1777013197,client backend,relation,vacuum,0,0,0,0,0
+1777013197,client backend,temp relation,normal,0,0,0,0,0
+
+
+
+1777013201,autovacuum worker,relation,normal,0,0,3,0,0
+1777013201,autovacuum worker,relation,vacuum,0,0,0,0,0
+
+1777013201,client backend,relation,bulkwrite,0,0,0,0,0
+1777013201,client backend,relation,normal,0,0,21633,0,0
+1777013201,client backend,relation,vacuum,0,0,0,0,0
+1777013201,client backend,temp relation,normal,0,0,0,0,0
+
+
+
+1777013206,autovacuum worker,relation,normal,0,0,3,0,0
+1777013206,autovacuum worker,relation,vacuum,0,0,0,0,0
+
+1777013206,client backend,relation,bulkwrite,0,0,0,0,0
+1777013206,client backend,relation,normal,0,0,21849,0,0
+1777013206,client backend,relation,vacuum,0,0,0,0,0
+1777013206,client backend,temp relation,normal,0,0,0,0,0
+
+
+
+1777013209,autovacuum worker,relation,normal,0,0,3,0,0
+1777013209,autovacuum worker,relation,vacuum,0,0,0,0,0
+
+1777013209,client backend,relation,bulkwrite,0,0,0,0,0
+1777013209,client backend,relation,normal,0,0,21849,0,0
+1777013209,client backend,relation,vacuum,0,0,0,0,0
+1777013209,client backend,temp relation,normal,0,0,0,0,0
+
+
