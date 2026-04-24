@@ -272,7 +272,13 @@ struct JobsConfig {
     int stats_interval_ms = 10000;            // 10 seconds - Fast aggregation interval
     int stats_reconcile_interval_ms = 120000; // 2 minutes - Full reconciliation interval (scans messages table)
     int stats_history_retention_days = 7;     // 7 days - How long to keep stats history
-    
+
+    // PUSHPOPLOOKUPSOL: partition_lookup reconciliation (safety-net for
+    // queen.update_partition_lookup_v1 calls missed during crashes or
+    // transient failures of the per-push follow-up call).
+    int partition_lookup_reconcile_interval_ms = 5000;  // 5 seconds
+    int partition_lookup_reconcile_lookback_seconds = 60;
+
     static JobsConfig from_env() {
         JobsConfig config;
         
@@ -292,7 +298,13 @@ struct JobsConfig {
         config.stats_interval_ms = get_env_int("STATS_INTERVAL_MS", 10000);
         config.stats_reconcile_interval_ms = get_env_int("STATS_RECONCILE_INTERVAL_MS", 120000);
         config.stats_history_retention_days = get_env_int("STATS_HISTORY_RETENTION_DAYS", 7);
-        
+
+        // PUSHPOPLOOKUPSOL: partition_lookup reconcile service
+        config.partition_lookup_reconcile_interval_ms =
+            get_env_int("PARTITION_LOOKUP_RECONCILE_INTERVAL_MS", 5000);
+        config.partition_lookup_reconcile_lookback_seconds =
+            get_env_int("PARTITION_LOOKUP_RECONCILE_LOOKBACK_SECONDS", 60);
+
         return config;
     }
 };

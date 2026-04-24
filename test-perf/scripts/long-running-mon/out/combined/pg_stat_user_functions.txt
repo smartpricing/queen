@@ -1,19 +1,19 @@
-            funcname             | calls | total_ms | self_ms | mean_ms  | pct  
----------------------------------+-------+----------+---------+----------+------
- push_messages_v3                |  3713 |  1048772 |  629182 |   282.46 | 53.9
- update_partition_lookup_trigger |  3713 |   419588 |  419588 |   113.01 | 21.6
- pop_unified_batch               |  2864 |   407493 |  407493 |   142.28 | 20.9
- debug_lock_attribution          |    64 |    17879 |   17879 |   279.36 |  0.9
- refresh_all_stats_v1            |     1 |    16907 |      10 | 16906.57 |  0.9
- compute_partition_stats_v3      |     1 |    16860 |   16860 | 16859.61 |  0.9
- increment_message_counts_v1     |    11 |    14911 |   14911 |  1355.57 |  0.8
- get_status_v3                   |     2 |      761 |     761 |   380.41 |  0.0
- get_consumer_groups_v4          |     2 |      671 |     671 |   335.29 |  0.0
- get_system_overview_v3          |     2 |      670 |     670 |   335.05 |  0.0
- aggregate_queue_stats_v2        |    12 |      625 |     625 |    52.06 |  0.0
- aggregate_namespace_stats_v1    |    12 |      506 |     506 |    42.17 |  0.0
- get_queues_v2                   |     2 |      498 |     498 |   249.21 |  0.0
- is_stats_leader                 |    13 |      383 |     383 |    29.43 |  0.0
- aggregate_system_stats_v2       |    12 |      171 |     171 |    14.21 |  0.0
+           funcname            | calls | total_ms | self_ms | mean_ms  | pct  
+-------------------------------+-------+----------+---------+----------+------
+ push_messages_v3              |  5114 |   698443 |  698443 |   136.57 | 58.5
+ pop_unified_batch_v2_noorder  |  1609 |   317024 |  317024 |   197.03 | 26.6
+ update_partition_lookup_v1    |  4880 |    91804 |   91804 |    18.81 |  7.7
+ increment_message_counts_v1   |    11 |    20124 |   20124 |  1829.44 |  1.7
+ reconcile_partition_lookup_v1 |    22 |    18852 |   18852 |   856.92 |  1.6
+ debug_lock_attribution        |    72 |    16131 |   16131 |   224.04 |  1.4
+ refresh_all_stats_v1          |     1 |    14815 |      26 | 14814.79 |  1.2
+ compute_partition_stats_v3    |     1 |    14711 |   14711 | 14711.33 |  1.2
+ aggregate_namespace_stats_v1  |    12 |      255 |     255 |    21.27 |  0.0
+ aggregate_queue_stats_v2      |    12 |      236 |     236 |    19.70 |  0.0
+ is_stats_leader               |    12 |      226 |     226 |    18.83 |  0.0
+ aggregate_system_stats_v2     |    12 |      223 |     223 |    18.61 |  0.0
+ get_status_v3                 |     4 |      191 |     191 |    47.82 |  0.0
+ get_consumer_groups_v4        |     4 |      152 |     152 |    37.91 |  0.0
+ get_queues_v2                 |     4 |       97 |      97 |    24.28 |  0.0
 (15 rows)
 

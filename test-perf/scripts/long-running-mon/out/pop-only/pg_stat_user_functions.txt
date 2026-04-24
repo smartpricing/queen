@@ -1,19 +1,19 @@
            funcname            | calls | total_ms | self_ms | mean_ms | pct  
 -------------------------------+-------+----------+---------+---------+------
- pop_unified_batch             |  2337 |   119793 |  119793 |   51.26 | 79.9
- refresh_all_stats_v1          |     1 |     9851 |      16 | 9850.90 |  6.6
- compute_partition_stats_v3    |     1 |     9827 |    9827 | 9827.42 |  6.6
- debug_lock_attribution        |   178 |     8210 |    8210 |   46.12 |  5.5
- increment_message_counts_v1   |    12 |     1860 |    1860 |  155.02 |  1.2
- aggregate_queue_stats_v2      |    12 |       86 |      86 |    7.18 |  0.1
- is_stats_leader               |    13 |       71 |      71 |    5.48 |  0.0
- get_consumer_groups_v4        |     1 |       70 |      70 |   70.31 |  0.0
- get_system_overview_v3        |     1 |       63 |      63 |   63.48 |  0.0
- aggregate_namespace_stats_v1  |    12 |       44 |      44 |    3.68 |  0.0
- get_status_v3                 |     1 |       44 |      44 |   44.02 |  0.0
- aggregate_task_stats_v1       |    12 |       33 |      33 |    2.71 |  0.0
- aggregate_system_stats_v2     |    12 |       30 |      30 |    2.46 |  0.0
- get_queues_v2                 |     1 |       16 |      16 |   15.97 |  0.0
- update_worker_metrics_summary |     4 |       11 |      11 |    2.77 |  0.0
+ pop_unified_batch_v2_noorder  |  2105 |    98655 |   98655 |   46.87 | 81.8
+ debug_lock_attribution        |   203 |     6869 |    6869 |   33.84 |  5.7
+ refresh_all_stats_v1          |     1 |     5276 |       9 | 5275.73 |  4.4
+ compute_partition_stats_v3    |     1 |     5259 |    5259 | 5259.08 |  4.4
+ reconcile_partition_lookup_v1 |    22 |     2275 |    2275 |  103.41 |  1.9
+ increment_message_counts_v1   |    11 |     1782 |    1782 |  162.03 |  1.5
+ update_partition_lookup_v1    |   327 |      215 |     215 |    0.66 |  0.2
+ is_stats_leader               |    11 |       97 |      97 |    8.85 |  0.1
+ aggregate_queue_stats_v2      |    11 |       87 |      87 |    7.88 |  0.1
+ get_queue_v2                  |     1 |       43 |      43 |   42.93 |  0.0
+ aggregate_system_stats_v2     |    11 |       36 |      36 |    3.26 |  0.0
+ aggregate_namespace_stats_v1  |    11 |       26 |      26 |    2.37 |  0.0
+ aggregate_task_stats_v1       |    11 |       16 |      16 |    1.41 |  0.0
+ update_worker_metrics_summary |     4 |       12 |      12 |    2.89 |  0.0
+ cleanup_orphaned_stats_v2     |     1 |        1 |       1 |    0.85 |  0.0
 (15 rows)
 

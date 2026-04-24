@@ -1,7 +1,7 @@
-consumer_watermarks,0,15,15,0,0,15,0,11977
-messages,462780,0,0,0,1963746,0,0,483053
-messages_consumed,5338,0,0,0,6973,0,0,0
-partition_consumers,0,11448,11111,0,811,113,74,1540959
-partition_lookup,0,6917,6759,0,811,37,12045,7204
-partitions,0,0,0,0,0,0,7384,2026370
-queues,0,1,1,0,0,1,7531,1530838
+consumer_watermarks,0,14,14,0,0,14,0,6659
+messages,666240,0,0,0,2230061,0,0,695633
+messages_consumed,943,0,0,0,2577,0,0,0
+partition_consumers,0,1992,1965,0,826,361,6697,16631
+partition_lookup,0,918,918,0,826,357,6768,30545
+partitions,0,0,0,0,0,0,11818,756403
+queues,0,1,1,0,0,1,16959,61057

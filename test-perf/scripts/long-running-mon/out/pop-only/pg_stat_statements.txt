@@ -1,19 +1,19 @@
- calls | total_ms | mean_ms  | pct  | rows_per_call |                                                query                                                 
--------+----------+----------+------+---------------+------------------------------------------------------------------------------------------------------
-  2393 |   125052 |    52.26 | 48.4 |           1.0 | SELECT queen.pop_unified_batch($1::jsonb)
-  1629 |    48365 |    29.69 | 18.7 |           1.0 | SELECT COALESCE(jsonb_agg( jsonb_build_object( $41, sub.id::text, $42, sub.transaction_id, $43, sub.
-     2 |    23955 | 11977.71 |  9.3 |           0.0 | WITH messages_to_evict AS ( SELECT DISTINCT m.id, p.id as partition_id FROM queen.messages m JOIN qu
-  5071 |    11284 |     2.23 |  4.4 |           0.3 | SELECT pl.partition_id, p.name, q.id, q.lease_time, q.window_buffer, q.delayed_processing, pl.last_m
-     1 |     9855 |  9854.63 |  3.8 |           1.0 | SELECT queen.refresh_all_stats_v1($1)
-     1 |     9828 |  9828.20 |  3.8 |           1.0 | SELECT queen.compute_partition_stats_v3(p_force)
-   178 |     8221 |    46.18 |  3.2 |           1.0 | SELECT $1 || queen.debug_lock_attribution($2)::text
-     1 |     7518 |  7517.78 |  2.9 |         658.0 | WITH recent_push_activity AS ( -- Partitions with push activity since last computation (indexed on u
-   178 |     3157 |    17.73 |  1.2 |           1.0 | WITH -- All partition_lookup rows that match pop's wildcard WHERE clause -- (consumer_group = __QUEU
-     1 |     2047 |  2046.70 |  0.8 |          66.0 | WITH message_counts AS ( SELECT partition_id, COUNT(*) as msg_count FROM queen.messages GROUP BY par
-    12 |     1862 |   155.15 |  0.7 |           1.0 | SELECT queen.increment_message_counts_v1()
-    12 |     1628 |   135.71 |  0.6 |           0.0 | WITH recent_messages AS ( SELECT partition_id, id, created_at FROM queen.messages WHERE created_at >
-  1629 |      795 |     0.49 |  0.3 |           0.5 | INSERT INTO queen.partition_consumers (partition_id, consumer_group) VALUES (v_partition_id, v_req.c
-  1611 |      760 |     0.47 |  0.3 |           1.0 | INSERT INTO queen.messages_consumed (partition_id, consumer_group, messages_completed, acked_at) VAL
-  1611 |      520 |     0.32 |  0.2 |           1.0 | SELECT created_at FROM queen.messages WHERE id = v_last_msg_id
+ calls | total_ms | mean_ms | pct  | rows_per_call |                                                query                                                 
+-------+----------+---------+------+---------------+------------------------------------------------------------------------------------------------------
+  2106 |   103346 |   49.07 | 52.4 |           1.0 | SELECT queen.pop_unified_batch_v2_noorder($1::jsonb)
+  1634 |    33883 |   20.74 | 17.2 |           1.0 | SELECT COALESCE(jsonb_agg( jsonb_build_object( $50, sub.id::text, $51, sub.transaction_id, $52, sub.
+     2 |    13904 | 6952.05 |  7.1 |           0.0 | WITH messages_to_evict AS ( SELECT DISTINCT m.id, p.id as partition_id FROM queen.messages m JOIN qu
+  5216 |     9558 |    1.83 |  4.8 |           6.2 | SELECT pl.partition_id, p.name AS partition_name, q.id AS queue_id, q.lease_time AS lease_time, q.wi
+   203 |     6885 |   33.91 |  3.5 |           1.0 | SELECT $1 || queen.debug_lock_attribution($2)::text
+     1 |     5276 | 5276.16 |  2.7 |           1.0 | SELECT queen.refresh_all_stats_v1($1)
+     1 |     5259 | 5259.14 |  2.7 |           1.0 | SELECT queen.compute_partition_stats_v3(p_force)
+     1 |     3313 | 3313.29 |  1.7 |         800.0 | WITH recent_push_activity AS ( -- Partitions with push activity since last computation (indexed on u
+   203 |     2313 |   11.39 |  1.2 |           1.0 | WITH -- All partition_lookup rows that match pop's wildcard WHERE clause -- (consumer_group = __QUEU
+    22 |     2303 |  104.69 |  1.2 |           1.0 | SELECT queen.reconcile_partition_lookup_v1($1::int)
+    22 |     2074 |   94.27 |  1.1 |           0.0 | WITH -- Partition_lookup rows that are candidates for reconciliation. We -- consider a row stale if 
+     1 |     1838 | 1837.68 |  0.9 |          26.0 | WITH message_counts AS ( SELECT partition_id, COUNT(*) as msg_count FROM queen.messages GROUP BY par
+    11 |     1784 |  162.20 |  0.9 |           1.0 | SELECT queen.increment_message_counts_v1()
+    11 |     1537 |  139.75 |  0.8 |           0.0 | WITH recent_messages AS ( SELECT partition_id, id, created_at FROM queen.messages WHERE created_at >
+  1634 |      667 |    0.41 |  0.3 |           0.5 | INSERT INTO queen.partition_consumers (partition_id, consumer_group) VALUES (v_partition_id, v_req.c
 (15 rows)
 

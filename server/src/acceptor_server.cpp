@@ -8,6 +8,7 @@
 #include "queen/retention_service.hpp"
 #include "queen/eviction_service.hpp"
 #include "queen/stats_service.hpp"
+#include "queen/partition_lookup_reconcile_service.hpp"
 #include "queen/shared_state_manager.hpp"
 #include "queen/auth/auth_middleware.hpp"
 #include "queen.hpp"
@@ -40,6 +41,7 @@ static std::shared_ptr<queen::MetricsCollector> global_metrics_collector;
 static std::shared_ptr<queen::RetentionService> global_retention_service;
 static std::shared_ptr<queen::EvictionService> global_eviction_service;
 static std::shared_ptr<queen::StatsService> global_stats_service;
+static std::shared_ptr<queen::PartitionLookupReconcileService> global_partition_lookup_reconcile_service;
 
 // These globals need to be accessible from route files (non-static, in queen namespace)
 namespace queen {
@@ -464,6 +466,21 @@ static void worker_thread(const Config& config, int worker_id, int num_workers,
                     config.jobs.stats_history_retention_days
                 );
                 global_stats_service->start();
+
+                // PUSHPOPLOOKUPSOL: partition_lookup safety-net reconciler.
+                // Primary maintenance is done by libqueen after each push
+                // commit via queen.update_partition_lookup_v1(); this service
+                // catches anything missed during crashes or transient
+                // failures of that call.
+                spdlog::info("[Worker 0] Starting background partition_lookup reconcile service...");
+                global_partition_lookup_reconcile_service =
+                    std::make_shared<queen::PartitionLookupReconcileService>(
+                        global_async_db_pool,
+                        global_system_thread_pool,
+                        config.jobs.partition_lookup_reconcile_interval_ms,
+                        config.jobs.partition_lookup_reconcile_lookback_seconds
+                    );
+                global_partition_lookup_reconcile_service->start();
             }
         } else {
             spdlog::warn("[Worker {}] Database connection: UNAVAILABLE (Pool: 0/{}) - Will use file buffer for failover", 

@@ -1,0 +1,27 @@
+
+🚀 Multi-process load test starting
+   Workers: 1
+   Connections per worker: 50
+   Total connections: 50
+   Duration: 120s
+
+Worker 1 ready (1/1)
+
+⏱️  All workers ready, starting benchmark...
+
+Worker 1 finished (1/1)
+
+==================================================
+      CONSUMER AGGREGATED RESULTS
+==================================================
+Total requests:  1633
+2xx:             1633
+non-2xx:         0
+errors:          250
+timeouts:        250
+Throughput:      13.6 req/s
+Latency avg:     2054.59 ms
+Latency p50:     2143.00 ms
+Latency p99:     4487.00 ms
+Latency max:     4729.00 ms
+==================================================

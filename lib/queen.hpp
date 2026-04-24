@@ -1109,6 +1109,22 @@ class Queen {
                 auto data = PQgetvalue(res, 0, 0);
                 auto json_results = nlohmann::json::parse(data);
 
+                // PUSHPOPLOOKUPSOL: push_messages_v3 now returns
+                //   { "items": [...], "partition_updates": [...] }
+                // Extract partition_updates here for the post-commit follow-up
+                // call, then re-point json_results at the items array so the
+                // existing per-job dispatch below continues to work unchanged.
+                nlohmann::json partition_updates = nlohmann::json::array();
+                if (!slot.jobs.empty()
+                    && slot.jobs[0]->job.op_type == JobType::PUSH
+                    && json_results.is_object()
+                    && json_results.contains("items")) {
+                    if (json_results.contains("partition_updates")) {
+                        partition_updates = std::move(json_results["partition_updates"]);
+                    }
+                    json_results = std::move(json_results["items"]);
+                }
+
                 if (!json_results.is_array()) {
                     for (auto& job : slot.jobs) {
                         job->callback(json_results.dump());
@@ -1270,6 +1286,36 @@ class Queen {
                         }
                     }
                 }
+
+                // PUSHPOPLOOKUPSOL: after all per-job callbacks for a PUSH
+                // drain have fired, enqueue a single CUSTOM job to refresh
+                // partition_lookup for the partitions this drain touched.
+                // Fire-and-forget: failures are logged and healed by the
+                // periodic PartitionLookupReconcileService.
+                if (partition_updates.is_array() && !partition_updates.empty()) {
+                    JobRequest pl_job;
+                    pl_job.op_type    = JobType::CUSTOM;
+                    pl_job.request_id = "pl-refresh";
+                    pl_job.sql        = "SELECT queen.update_partition_lookup_v1($1::jsonb)";
+                    pl_job.params     = { partition_updates.dump() };
+                    pl_job.item_count = partition_updates.size();
+                    uint16_t wid = _worker_id;
+                    submit(std::move(pl_job), [wid](std::string result) {
+                        try {
+                            auto r = nlohmann::json::parse(result);
+                            if (r.is_object()
+                                && r.contains("success")
+                                && r["success"].is_boolean()
+                                && !r["success"].get<bool>()) {
+                                spdlog::warn("[Worker {}] [libqueen] update_partition_lookup_v1 failed: {}",
+                                             wid, r.value("error", "unknown"));
+                            }
+                        } catch (...) {
+                            // Swallowed: reconciler heals eventually.
+                        }
+                    });
+                }
+
                 slot.jobs.clear();
                 slot.job_idx_ranges.clear();
             } else {

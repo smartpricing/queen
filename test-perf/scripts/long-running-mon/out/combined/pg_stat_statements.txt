@@ -1,19 +1,19 @@
  calls  | total_ms | mean_ms  | pct  | rows_per_call |                                                query                                                 
 --------+----------+----------+------+---------------+------------------------------------------------------------------------------------------------------
-   3714 |  1061362 |   285.77 | 31.5 |           1.0 | SELECT queen.push_messages_v3($1::jsonb)
-   3714 |   956899 |   257.65 | 28.4 |           1.0 | WITH parsed AS MATERIALIZED ( SELECT (t.idx - 1)::int AS idx, COALESCE((t.item->>'messageId')::uuid,
-   2872 |   417121 |   145.24 | 12.4 |           1.0 | SELECT queen.pop_unified_batch($1::jsonb)
-   3714 |   401726 |   108.17 | 11.9 |           1.9 | WITH batch_max AS ( SELECT DISTINCT ON (partition_id) partition_id, created_at AS max_created_at, id
-   5768 |   169174 |    29.33 |  5.0 |           1.0 | SELECT COALESCE(jsonb_agg( jsonb_build_object( $41, sub.id::text, $42, sub.transaction_id, $43, sub.
-  12040 |   124744 |    10.36 |  3.7 |           0.5 | SELECT pl.partition_id, p.name, q.id, q.lease_time, q.window_buffer, q.delayed_processing, pl.last_m
-   3714 |    23891 |     6.43 |  0.7 |           1.0 | WITH flat AS ( SELECT (i->>'idx')::int AS idx, i->>'message_id' AS message_id, i->>'transaction_id' 
- 474191 |    22833 |     0.05 |  0.7 |           1.0 | SELECT 1 FROM ONLY "queen"."partitions" x WHERE "id" OPERATOR(pg_catalog.=) $1 FOR KEY SHARE OF x
-     64 |    17938 |   280.28 |  0.5 |           1.0 | SELECT $1 || queen.debug_lock_attribution($2)::text
-      1 |    17310 | 17309.99 |  0.5 |           0.0 | WITH messages_to_evict AS ( SELECT DISTINCT m.id, p.id as partition_id FROM queen.messages m JOIN qu
-      1 |    16907 | 16906.82 |  0.5 |           1.0 | SELECT queen.refresh_all_stats_v1($1)
-      1 |    16860 | 16859.65 |  0.5 |           1.0 | SELECT queen.compute_partition_stats_v3(p_force)
-      1 |    16285 | 16284.83 |  0.5 |         204.0 | WITH recent_push_activity AS ( -- Partitions with push activity since last computation (indexed on u
-     11 |    14982 |  1362.00 |  0.4 |           1.0 | SELECT queen.increment_message_counts_v1()
-   5374 |    14511 |     2.70 |  0.4 |           1.0 | INSERT INTO queen.messages_consumed (partition_id, consumer_group, messages_completed, acked_at) VAL
+   5115 |   713848 |   139.56 | 31.5 |           1.0 | SELECT queen.push_messages_v3($1::jsonb)
+   5115 |   601990 |   117.69 | 26.5 |           1.0 | WITH parsed AS MATERIALIZED ( SELECT (t.idx - $2)::int AS idx, COALESCE((t.item->>$3)::uuid, gen_ran
+   1620 |   325938 |   201.20 | 14.4 |           1.0 | SELECT queen.pop_unified_batch_v2_noorder($1::jsonb)
+   1004 |   125544 |   125.04 |  5.5 |           1.0 | SELECT COALESCE(jsonb_agg( jsonb_build_object( $50, sub.id::text, $51, sub.transaction_id, $52, sub.
+   5115 |    92392 |    18.06 |  4.1 |           1.0 | SELECT queen.update_partition_lookup_v1($1::jsonb)
+   5115 |    88969 |    17.39 |  3.9 |           0.0 | INSERT INTO queen.partition_lookup ( queue_name, partition_id, last_message_id, last_message_created
+   6730 |    60675 |     9.02 |  2.7 |           4.9 | SELECT pl.partition_id, p.name AS partition_name, q.id AS queue_id, q.lease_time AS lease_time, q.wi
+   5115 |    24870 |     4.86 |  1.1 |           1.0 | WITH flat AS ( SELECT (i->>$7)::int AS idx, i->>$8 AS message_id, i->>$9 AS transaction_id, (i->>$10
+ 668604 |    21888 |     0.03 |  1.0 |           1.0 | SELECT $2 FROM ONLY "queen"."partitions" x WHERE "id" OPERATOR(pg_catalog.=) $1 FOR KEY SHARE OF x
+      1 |    21140 | 21139.90 |  0.9 |           0.0 | WITH messages_to_evict AS ( SELECT DISTINCT m.id, p.id as partition_id FROM queen.messages m JOIN qu
+     11 |    20198 |  1836.22 |  0.9 |           1.0 | SELECT queen.increment_message_counts_v1()
+     23 |    18994 |   825.83 |  0.8 |           1.0 | SELECT queen.reconcile_partition_lookup_v1($1::int)
+     11 |    18106 |  1646.03 |  0.8 |          49.1 | WITH recent_messages AS ( SELECT partition_id, id, created_at FROM queen.messages WHERE created_at >
+     23 |    18066 |   785.48 |  0.8 |          36.3 | WITH -- Partition_lookup rows that are candidates for reconciliation. We -- consider a row stale if 
+     72 |    16135 |   224.10 |  0.7 |           1.0 | SELECT $1 || queen.debug_lock_attribution($2)::text
 (15 rows)
 

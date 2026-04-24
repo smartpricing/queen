@@ -16,6 +16,12 @@ HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 OUT="$HERE/out/$SCEN"
 mkdir -p "$OUT"
 
+# Workload logs live in a SEPARATE directory so monitor.sh's rm -rf of $OUT
+# doesn't wipe in-progress node stdout redirects.
+WLOG="$HERE/workload-logs/$SCEN"
+mkdir -p "$WLOG"
+rm -f "$WLOG"/*.log
+
 PG="docker exec queen-pg-5433 psql -U postgres -d queen -v ON_ERROR_STOP=1"
 
 echo "=== Resetting pg_stat_statements + pg_stat_user_functions ==="
@@ -28,24 +34,24 @@ case "$SCEN" in
   push-only)
     ( cd /Users/alice/Work/queen/examples && \
       NUM_WORKERS=2 CONNECTIONS_PER_WORKER=100 DURATION=$DUR \
-      node long-running/producer-cluster.js > "$OUT/workload.log" 2>&1 ) &
+      node long-running/producer-cluster.js > "$WLOG/producer.log" 2>&1 ) &
     WORK_PID=$!
     ;;
   pop-only)
     ( cd /Users/alice/Work/queen/examples && \
       NUM_WORKERS=1 CONNECTIONS_PER_WORKER=50 DURATION=$DUR BATCH_SIZE=1000 \
-      node long-running/consumer-clustered.js > "$OUT/workload.log" 2>&1 ) &
+      node long-running/consumer-clustered.js > "$WLOG/consumer.log" 2>&1 ) &
     WORK_PID=$!
     ;;
   combined)
     ( cd /Users/alice/Work/queen/examples && \
       NUM_WORKERS=2 CONNECTIONS_PER_WORKER=100 DURATION=$DUR \
-      node long-running/producer-cluster.js > "$OUT/producer.log" 2>&1 ) &
+      node long-running/producer-cluster.js > "$WLOG/producer.log" 2>&1 ) &
     PUSH_PID=$!
     sleep 2
     ( cd /Users/alice/Work/queen/examples && \
       NUM_WORKERS=1 CONNECTIONS_PER_WORKER=50 DURATION=$DUR BATCH_SIZE=1000 \
-      node long-running/consumer-clustered.js > "$OUT/consumer.log" 2>&1 ) &
+      node long-running/consumer-clustered.js > "$WLOG/consumer.log" 2>&1 ) &
     POP_PID=$!
     WORK_PID="$PUSH_PID $POP_PID"
     ;;
@@ -58,6 +64,9 @@ sleep 3
 bash "$HERE/monitor.sh" "$SCEN" "$DUR"
 
 wait $WORK_PID 2>/dev/null || true
+
+# Copy workload logs back into $OUT for bundling.
+cp "$WLOG"/*.log "$OUT/" 2>/dev/null || true
 
 echo ""
 echo "=== pg_stat_statements (top by total_exec_time) ==="
@@ -91,10 +100,11 @@ $PG -c "
   LIMIT 15" | tee "$OUT/pg_stat_user_functions.txt"
 
 echo ""
-echo "=== Workload output tail ==="
-tail -40 "$OUT"/workload.log 2>/dev/null || true
-if [ "$SCEN" = "combined" ]; then
-  echo "--- producer log ---"; tail -25 "$OUT/producer.log"
-  echo "--- consumer log ---"; tail -25 "$OUT/consumer.log"
-fi
+echo "=== Workload output ==="
+for f in "$OUT/producer.log" "$OUT/consumer.log"; do
+  if [ -s "$f" ]; then
+    echo "--- $(basename $f) (last 35 lines) ---"
+    tail -35 "$f"
+  fi
+done
 echo "=== done: $SCEN (results in $OUT) ==="

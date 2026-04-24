@@ -5,62 +5,64 @@
   TABLE DELTAS  (ins / upd / hot_upd / del  |  HOT% = hot_upd / upd)
   relname                       ins        upd    hot_upd        del     HOT%
   ----------------------------------------------------------------------------
-  consumer_watermarks             0         15         15          0   100.0%
-  messages                   392800          0          0          0     0.0%
-  messages_consumed            5126          0          0          0     0.0%
-  partition_consumers             0      11022      10685          0    96.9%
-  partition_lookup                0       6570       6412          0    97.6%
+  consumer_watermarks             0         12         12          0   100.0%
+  messages                   621330          0          0          0     0.0%
+  messages_consumed             932          0          0          0     0.0%
+  partition_consumers             0       1968       1941          0    98.6%
+  partition_lookup                0        877        877          0   100.0%
   partitions                      0          0          0          0     0.0%
   queues                          0          0          0          0     0.0%
 
   WAL
-  wal_records:            2069637 (     17247/s)
-  wal_fpi:                   8010 (        67/s)     <-- full-page images
-  wal_bytes:            300187608 (      2.39 MB/s)
+  wal_records:            3205109 (     26709/s)
+  wal_fpi:                   9342 (        78/s)     <-- full-page images
+  wal_bytes:            448123502 (      3.56 MB/s)
   wal_buffers_full:             0
-  wal_write ops:             1793
-  wal_sync ops:              1784 (        15/s)
+  wal_write ops:             5101
+  wal_sync ops:              5090 (        42/s)
   wal_write_time ms:            0
   wal_sync_time ms:             0
 
-  WAIT EVENTS  (34 samples over 120s @ 2s period)
+  WAIT EVENTS  (35 samples over 120s @ 2s period)
   wait_event_type        wait_event                          total   avg/sample
   ----------------------------------------------------------------------------
-  NULL                   NULL                                  308         9.06
-  LWLock                 WALWrite                              135         3.97
-  Lock                   transactionid                          86         2.53
-  LWLock                 BufferContent                          27         0.79
-  IO                     WALSync                                24         0.71
-  LWLock                 WALInsert                              12         0.35
-  Client                 ClientRead                             12         0.35
-  LWLock                 LockManager                             6         0.18
-  IO                     DataFileExtend                          4         0.12
-  LWLock                 BufferMapping                           4         0.12
-  IO                     WALWrite                                3         0.09
-  Lock                   extend                                  3         0.09
+  NULL                   NULL                                  319         9.11
+  LWLock                 WALWrite                              165         4.71
+  IO                     WALSync                                26         0.74
+  Lock                   transactionid                          19         0.54
+  Client                 ClientRead                             19         0.54
+  LWLock                 WALInsert                              15         0.43
+  LWLock                 BufferContent                          15         0.43
+  Lock                   extend                                  7         0.20
+  IO                     DataFileExtend                          5         0.14
+  LWLock                 LockManager                             4         0.11
+  IO                     WALWrite                                2         0.06
+  LWLock                 BufferMapping                           2         0.06
+  Timeout                VacuumDelay                             1         0.03
+  IO                     WALInitSync                             1         0.03
 
-  DOCKER stats (33 samples)
-  CPU%  avg= 422.0  p50= 441.6  p95= 470.5  max= 477.9
-  Mem%  avg=  24.1  max=  24.2
+  DOCKER stats (32 samples)
+  CPU%  avg= 431.4  p50= 435.3  p95= 499.8  max= 501.4
+  Mem%  avg=  17.4  max=  18.3
 
-  LOCK ATTRIBUTION on queen.partition_lookup  (64 samples, 250ms period)
+  LOCK ATTRIBUTION on queen.partition_lookup  (72 samples, 250ms period)
   metric                            avg      max
   --------------------------------------------------
-  eligible                        14.25       41
-  unlocked                         4.91       27
-  locked_by_push                   3.03       19
-  locked_by_pop                    6.31       25
+  eligible                         9.60       49
+  unlocked                         9.60       49
+  locked_by_push                   0.00        0
+  locked_by_pop                    0.00        0
   locked_by_other                  0.00        0
-  push_waits_on_push               0.02        1
-  push_waits_on_pop                2.27        7
+  push_waits_on_push               0.00        0
+  push_waits_on_pop                0.00        0
   push_waits_on_other              0.00        0
   pop_waits_on_push                0.00        0
-  pop_waits_on_pop                 0.05        3
-  active_pushes                   10.05       16
-  active_pops                      4.50       10
+  pop_waits_on_pop                 0.04        3
+  active_pushes                    7.94       18
+  active_pops                      1.92       10
 
   POP SKIP ATTRIBUTION (fraction of eligible rows that pop would skip):
-    skipped because push holds:   21.3%
-    skipped because pop holds:    44.3%
+    skipped because push holds:    0.0%
+    skipped because pop holds:     0.0%
     skipped because other holds:   0.0%
-    freely claimable:             34.4%
+    freely claimable:            100.0%

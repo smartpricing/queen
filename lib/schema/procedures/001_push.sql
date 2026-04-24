@@ -155,6 +155,12 @@ DECLARE
     -- Map of "partition_id<US>transaction_id" -> inserted message id::text.
     -- Only contains keys we actually inserted in Statement C.
     v_inserted jsonb;
+    -- PUSHPOPLOOKUPSOL: per-partition {queue_name, partition_id, last_message_id,
+    -- last_message_created_at} for the rows we just inserted. Returned as the
+    -- `partition_updates` field of the response so libqueen can fire a
+    -- follow-up queen.update_partition_lookup_v1() call after push commits.
+    -- Empty array (not NULL) when no rows were actually inserted.
+    v_partition_updates jsonb;
     v_results  jsonb;
 BEGIN
     -- Statement A: ensure queues exist (single DISTINCT scan of input).
@@ -243,7 +249,9 @@ BEGIN
         FROM items
         WHERE dup_rank = 1
         ON CONFLICT (partition_id, transaction_id) DO NOTHING
-        RETURNING id, transaction_id, partition_id
+        -- PUSHPOPLOOKUPSOL: also RETURN created_at so we can build
+        -- partition_updates below for the post-commit partition_lookup refresh.
+        RETURNING id, transaction_id, partition_id, created_at
     ),
     items_json AS (
         SELECT jsonb_agg(jsonb_build_object(
@@ -263,14 +271,42 @@ BEGIN
             ),
             '{}'::jsonb
         ) AS v FROM inserted
+    ),
+    -- PUSHPOPLOOKUPSOL: DISTINCT ON (partition_id) over the rows we just
+    -- inserted, picking the latest (created_at, id) tuple per partition.
+    -- This mirrors what the old trigger's `batch_max` CTE computed.
+    partition_max AS (
+        SELECT DISTINCT ON (partition_id)
+            partition_id,
+            id         AS last_message_id,
+            created_at AS last_message_created_at
+        FROM inserted
+        ORDER BY partition_id, created_at DESC, id DESC
+    ),
+    partition_updates_json AS (
+        SELECT COALESCE(
+            jsonb_agg(jsonb_build_object(
+                'queue_name',              q.name,
+                'partition_id',            pm.partition_id::text,
+                'last_message_id',         pm.last_message_id::text,
+                'last_message_created_at', pm.last_message_created_at
+            )),
+            '[]'::jsonb
+        ) AS v
+        FROM partition_max pm
+        JOIN queen.partitions p ON p.id       = pm.partition_id
+        JOIN queen.queues     q ON q.id       = p.queue_id
     )
-    SELECT items_json.v, inserted_json.v
-    INTO v_items, v_inserted
-    FROM items_json, inserted_json;
+    SELECT items_json.v, inserted_json.v, partition_updates_json.v
+    INTO v_items, v_inserted, v_partition_updates
+    FROM items_json, inserted_json, partition_updates_json;
 
     -- Fast-exit for empty input (jsonb_agg returns NULL on empty set).
     IF v_items IS NULL THEN
-        RETURN '[]'::jsonb;
+        RETURN jsonb_build_object(
+            'items',             '[]'::jsonb,
+            'partition_updates', '[]'::jsonb
+        );
     END IF;
 
     -- Statement D: build the response under a FRESH statement snapshot.
@@ -347,7 +383,19 @@ BEGIN
     INTO v_results
     FROM flat f CROSS JOIN winners w;
 
-    RETURN v_results;
+    -- PUSHPOPLOOKUPSOL: response shape is now an object with two fields:
+    --   items:             the per-input-row result array (as before).
+    --   partition_updates: per-partition max {queue_name, partition_id,
+    --                      last_message_id, last_message_created_at} for the
+    --                      rows actually inserted by this call. Empty array
+    --                      when every input row was a duplicate.
+    -- The libqueen PUSH handler unwraps `items` before returning to the HTTP
+    -- caller and fires a follow-up SELECT queen.update_partition_lookup_v1()
+    -- with `partition_updates`.
+    RETURN jsonb_build_object(
+        'items',             COALESCE(v_results,          '[]'::jsonb),
+        'partition_updates', COALESCE(v_partition_updates, '[]'::jsonb)
+    );
 END;
 $$;
 

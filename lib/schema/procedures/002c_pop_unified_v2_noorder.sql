@@ -93,13 +93,20 @@ BEGIN
             END IF;
 
             v_claimed := FALSE;
-            -- *** THE ONLY DIFFERENCE VS v2: no ORDER BY ***
-            -- Scan short-circuits at LIMIT 16 without sorting the full
-            -- eligible set. Fair distribution across concurrent consumers
-            -- still comes from pg_try_advisory_xact_lock; fair distribution
-            -- across partitions for a single consumer is lost (consumer
-            -- tends to cluster on the low end of the queue_name UNIQUE
-            -- index scan order).
+            -- Differences vs v2:
+            --   (a) no ORDER BY pc.last_consumed_at — eliminates the sort
+            --       over the full eligible set and the thundering-herd on the
+            --       same top-sorted candidates under many concurrent pops
+            --       (measured: with ORDER BY + LIMIT 16, 50 pop connections
+            --       all raced the same 16 candidates, causing 300+ client
+            --       timeouts in combined).
+            --   (b) LIMIT 64 (up from v2's 16) — gives more candidate slack
+            --       under high pop concurrency so pops distribute across
+            --       partitions instead of saturating the candidate pool.
+            -- Fair distribution across concurrent consumers still comes from
+            -- pg_try_advisory_xact_lock; distribution for a single consumer
+            -- follows the physical scan order of the UNIQUE(queue_name,
+            -- partition_id) index, which is stable but arbitrary.
             FOR v_cand IN
                 SELECT
                     pl.partition_id,
@@ -124,7 +131,7 @@ BEGIN
                            AND pl.last_message_id > pc.last_consumed_id))
                   AND (q.window_buffer IS NULL OR q.window_buffer = 0
                        OR pl.last_message_created_at <= v_now - (q.window_buffer || ' seconds')::interval)
-                LIMIT 16
+                LIMIT 64
             LOOP
                 IF pg_try_advisory_xact_lock(
                         hashtextextended(v_cand.partition_id::text, c_lock_ns)

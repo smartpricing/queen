@@ -419,11 +419,13 @@ ALTER TABLE queen.stats SET (
 -- Triggers
 -- ============================================================================
 
--- Statement-level trigger to update partition_lookup when messages are inserted
--- Uses REFERENCING NEW TABLE to batch all inserts into a single trigger call
--- NOTE: Using CREATE OR REPLACE for idempotent deployments (PostgreSQL 14+)
-CREATE OR REPLACE TRIGGER trg_update_partition_lookup
-    AFTER INSERT ON queen.messages
-    REFERENCING NEW TABLE AS new_messages
-    FOR EACH STATEMENT
-    EXECUTE FUNCTION queen.update_partition_lookup_trigger();
+-- PUSHPOPLOOKUPSOL: partition_lookup is now maintained by libqueen after each
+-- successful push commit via queen.update_partition_lookup_v1(), plus a
+-- periodic queen.reconcile_partition_lookup_v1() safety-net every 5s. The
+-- synchronous trigger is unconditionally dropped on schema apply to remove
+-- the push-vs-push row-lock contention it caused.
+--
+-- Rollback: remove this DROP and re-add the CREATE OR REPLACE TRIGGER block
+-- below. The trigger function body (queen.update_partition_lookup_trigger)
+-- is still defined above for this purpose.
+DROP TRIGGER IF EXISTS trg_update_partition_lookup ON queen.messages;

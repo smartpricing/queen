@@ -6,61 +6,61 @@
   relname                       ins        upd    hot_upd        del     HOT%
   ----------------------------------------------------------------------------
   consumer_watermarks             0          0          0          0     0.0%
-  messages                  1531860          0          0          0     0.0%
+  messages                  1587810          0          0          0     0.0%
   messages_consumed               0          0          0          0     0.0%
   partition_consumers             0          0          0          0     0.0%
-  partition_lookup              777      30246      30048          0    99.3%
-  partitions                    778          0          0          1     0.0%
+  partition_lookup              388      13143      11983          0    91.2%
+  partitions                    810          0          0          0     0.0%
   queues                          0          0          0          0     0.0%
 
   WAL
-  wal_records:            7953246 (     66277/s)
-  wal_fpi:                   1445 (        12/s)     <-- full-page images
-  wal_bytes:           1002554589 (      7.97 MB/s)
+  wal_records:            8170017 (     68083/s)
+  wal_fpi:                     40 (         0/s)     <-- full-page images
+  wal_bytes:           1020169205 (      8.11 MB/s)
   wal_buffers_full:             0
-  wal_write ops:             5242
-  wal_sync ops:              5233 (        44/s)
+  wal_write ops:             7760
+  wal_sync ops:              7755 (        65/s)
   wal_write_time ms:            0
   wal_sync_time ms:             0
 
   WAIT EVENTS  (41 samples over 120s @ 2s period)
   wait_event_type        wait_event                          total   avg/sample
   ----------------------------------------------------------------------------
-  NULL                   NULL                                  206         5.02
-  LWLock                 WALWrite                              197         4.80
-  LWLock                 BufferContent                          38         0.93
-  Lock                   transactionid                          34         0.83
-  IO                     WALSync                                25         0.61
-  LWLock                 WALInsert                              10         0.24
-  IO                     WALWrite                                4         0.10
-  Lock                   extend                                  4         0.10
+  NULL                   NULL                                  254         6.20
+  LWLock                 WALWrite                              148         3.61
+  LWLock                 BufferContent                          69         1.68
+  Lock                   transactionid                          36         0.88
+  IO                     WALSync                                32         0.78
+  LWLock                 WALInsert                              24         0.59
+  Client                 ClientRead                             12         0.29
+  IO                     WALWrite                                3         0.07
   IO                     DataFileExtend                          3         0.07
-  LWLock                 LockManager                             3         0.07
-  LWLock                 pg_stat_statements                      2         0.05
-  Client                 ClientRead                              2         0.05
+  LWLock                 LockManager                             1         0.02
+  LWLock                 ProcArray                               1         0.02
+  Lock                   extend                                  1         0.02
 
   DOCKER stats (32 samples)
-  CPU%  avg= 417.4  p50= 437.1  p95= 496.8  max= 524.3
-  Mem%  avg=  22.8  max=  23.2
+  CPU%  avg= 443.2  p50= 435.4  p95= 489.9  max= 505.0
+  Mem%  avg=  14.9  max=  15.1
 
-  LOCK ATTRIBUTION on queen.partition_lookup  (113 samples, 250ms period)
+  LOCK ATTRIBUTION on queen.partition_lookup  (99 samples, 250ms period)
   metric                            avg      max
   --------------------------------------------------
-  eligible                       486.23      811
-  unlocked                       473.34      811
-  locked_by_push                  12.89       29
+  eligible                       180.88      330
+  unlocked                       174.02      324
+  locked_by_push                   0.00        0
   locked_by_pop                    0.00        0
-  locked_by_other                  0.00        0
-  push_waits_on_push               0.47        6
+  locked_by_other                  6.86       16
+  push_waits_on_push               0.24        4
   push_waits_on_pop                0.00        0
   push_waits_on_other              0.00        0
   pop_waits_on_push                0.00        0
   pop_waits_on_pop                 0.00        0
-  active_pushes                    9.28       20
+  active_pushes                    9.66       18
   active_pops                      0.00        0
 
   POP SKIP ATTRIBUTION (fraction of eligible rows that pop would skip):
-    skipped because push holds:    2.7%
+    skipped because push holds:    0.0%
     skipped because pop holds:     0.0%
-    skipped because other holds:   0.0%
-    freely claimable:             97.3%
+    skipped because other holds:   3.8%
+    freely claimable:             96.2%
