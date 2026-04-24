@@ -149,7 +149,7 @@ ATTR_PID=$!
              calls || ',' || ROUND(total_exec_time::numeric,0) || ',' || rows
       FROM pg_stat_statements
       WHERE query LIKE '%push_messages_v3%'
-         OR query LIKE '%pop_unified_batch_v2_noorder%'
+         OR query LIKE '%pop_unified_batch_v3%'
          OR query LIKE '%update_partition_lookup_v1%'
          OR query LIKE '%reconcile_partition_lookup_v1%'
       ORDER BY total_exec_time DESC" 2>/dev/null >> "$OUT/pg_stat_snapshots.jsonl"
@@ -159,7 +159,7 @@ ATTR_PID=$!
              ROUND(total_time::numeric,0) || ',' || ROUND(self_time::numeric,0)
       FROM pg_stat_user_functions
       WHERE schemaname='queen'
-        AND funcname IN ('push_messages_v3','pop_unified_batch_v2_noorder',
+        AND funcname IN ('push_messages_v3','pop_unified_batch_v3',
                          'update_partition_lookup_v1','reconcile_partition_lookup_v1',
                          'update_partition_lookup_trigger')" 2>/dev/null >> "$OUT/pg_stat_snapshots.jsonl"
     # Messages table size snapshot

@@ -1,21 +1,40 @@
 -- ============================================================================
--- pop_unified_batch_v2_noorder: v2 minus the ORDER BY
+-- pop_unified_batch_v3: the production wildcard-pop procedure
 -- ============================================================================
--- Benchmark-only variant used to isolate the cost of
---   ORDER BY pc.last_consumed_at ASC NULLS LAST
--- in the wildcard candidate scan at large partition counts.
+-- This is the procedure libqueen dispatches for JobType::POP (see
+-- lib/queen/pending_job.hpp). It is a descendant of pop_unified_batch_v2
+-- with two deliberate simplifications that were validated at scale:
+--
+--   (a) NO ORDER BY in the wildcard candidate scan.
+--       ORDER BY pc.last_consumed_at ASC NULLS LAST sorts the full
+--       eligible set on every pop — catastrophic at 15k-30k partitions
+--       (full-table sort per pop call).
+--   (b) NO LIMIT on the candidate scan.
+--       An earlier variant used LIMIT 16 / LIMIT 64. At 1001+ partitions
+--       this caused severe starvation: concurrent pops only saw the first
+--       N partitions by physical index order and competed for that same
+--       small set. Without LIMIT the candidate scan rides the
+--       idx_partition_lookup_queue index; the advisory-lock probe exits
+--       the loop as soon as a partition is claimed, so total work per
+--       pop is O(number of concurrent claim misses) not O(partitions).
+--
+-- Coordination is by pg_try_advisory_xact_lock(partition_id) — a
+-- non-blocking probe that releases on xact end. Push never takes this
+-- lock (partition_lookup writes are now async via PUSHPOPLOOKUPSOL;
+-- see cdocs/PUSHPOPLOOKUPSOL.md), so push-vs-pop row-lock contention
+-- on partition_lookup is eliminated by design.
+--
+-- History: this is the procedure previously named
+-- pop_unified_batch_v2_noorder. The rename to _v3 aligns it with the
+-- push_messages_v3 naming scheme; the body is byte-for-byte identical.
+-- The schema drops the old name on re-apply (see schema.sql).
 --
 -- Identical to pop_unified_batch_v2 in every other respect:
---   - Advisory-lock partition claim (non-blocking to push).
 --   - Watermark prelude + EXISTS maintenance.
 --   - Common path unchanged.
---
--- This lets us A/B the ORDER BY contribution at 15k–30k partitions without
--- also removing the advisory-lock fix. Do NOT wire this into
--- pending_job.hpp; it exists purely so the collision bench can call it.
 -- ============================================================================
 
-CREATE OR REPLACE FUNCTION queen.pop_unified_batch_v2_noorder(p_requests JSONB)
+CREATE OR REPLACE FUNCTION queen.pop_unified_batch_v3(p_requests JSONB)
 RETURNS JSONB
 LANGUAGE plpgsql
 AS $$
@@ -93,20 +112,21 @@ BEGIN
             END IF;
 
             v_claimed := FALSE;
-            -- Differences vs v2:
-            --   (a) no ORDER BY pc.last_consumed_at — eliminates the sort
-            --       over the full eligible set and the thundering-herd on the
-            --       same top-sorted candidates under many concurrent pops
-            --       (measured: with ORDER BY + LIMIT 16, 50 pop connections
-            --       all raced the same 16 candidates, causing 300+ client
-            --       timeouts in combined).
-            --   (b) LIMIT 64 (up from v2's 16) — gives more candidate slack
-            --       under high pop concurrency so pops distribute across
-            --       partitions instead of saturating the candidate pool.
-            -- Fair distribution across concurrent consumers still comes from
+            -- Candidate loop: scan eligible partitions and claim the first
+            -- one whose advisory lock we can acquire non-blockingly. See the
+            -- file header for the design rationale on the absence of
+            -- ORDER BY and LIMIT. Short version:
+            --   * ORDER BY (removed): full-set sort per call, unacceptable
+            --     at 15k-30k partitions.
+            --   * LIMIT 64 (removed): caused partition starvation — only
+            --     the first 64 partitions by index order were ever visible
+            --     to concurrent pops (measured at 1001 partitions: pop
+            --     coverage 64/1001 with LIMIT, 1001/1001 without).
+            -- Fair distribution across concurrent consumers comes from
             -- pg_try_advisory_xact_lock; distribution for a single consumer
             -- follows the physical scan order of the UNIQUE(queue_name,
-            -- partition_id) index, which is stable but arbitrary.
+            -- partition_id) index, which is stable but arbitrary — the
+            -- advisory-lock EXIT keeps per-call work bounded in practice.
             FOR v_cand IN
                 SELECT
                     pl.partition_id,
@@ -131,7 +151,7 @@ BEGIN
                            AND pl.last_message_id > pc.last_consumed_id))
                   AND (q.window_buffer IS NULL OR q.window_buffer = 0
                        OR pl.last_message_created_at <= v_now - (q.window_buffer || ' seconds')::interval)
-                LIMIT 64
+                -- NO LIMIT: advisory-loop EXIT is the implicit bound.
             LOOP
                 IF pg_try_advisory_xact_lock(
                         hashtextextended(v_cand.partition_id::text, c_lock_ns)
@@ -443,4 +463,4 @@ BEGIN
 END;
 $$;
 
-GRANT EXECUTE ON FUNCTION queen.pop_unified_batch_v2_noorder(JSONB) TO PUBLIC;
+GRANT EXECUTE ON FUNCTION queen.pop_unified_batch_v3(JSONB) TO PUBLIC;

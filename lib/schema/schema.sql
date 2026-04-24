@@ -429,3 +429,11 @@ ALTER TABLE queen.stats SET (
 -- below. The trigger function body (queen.update_partition_lookup_trigger)
 -- is still defined above for this purpose.
 DROP TRIGGER IF EXISTS trg_update_partition_lookup ON queen.messages;
+
+-- pop_unified_batch_v2_noorder was renamed to pop_unified_batch_v3 (see
+-- lib/schema/procedures/002c_pop_unified_v3.sql). This DROP makes the
+-- schema apply idempotent: fresh databases never see the old name, and
+-- upgraded databases have the orphaned old function removed on first
+-- re-apply. Safe to remove this line once all deployments have
+-- re-applied the schema at least once.
+DROP FUNCTION IF EXISTS queen.pop_unified_batch_v2_noorder(JSONB);

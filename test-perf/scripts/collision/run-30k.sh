@@ -84,7 +84,7 @@ done
 docker exec "$PG_CONTAINER" psql -U postgres -d queen -tAc "
   SELECT string_agg(proname, ',' ORDER BY proname)
   FROM pg_proc
-  WHERE proname IN ('pop_unified_batch','pop_unified_batch_v2','pop_unified_batch_v2_noorder')
+  WHERE proname IN ('pop_unified_batch','pop_unified_batch_v2','pop_unified_batch_v3')
     AND pronamespace = (SELECT oid FROM pg_namespace WHERE nspname='queen')
 " | tee "$OUT_DIR/installed-procs.txt"
 
@@ -152,11 +152,11 @@ run_bench() {
     $V_FLAG
 }
 
-log "Running $RUNS repeats of each variant in alternating order (v1 -> v2 -> v2_noorder)"
+log "Running $RUNS repeats of each variant in alternating order (v1 -> v2 -> v3)"
 for i in $(seq 1 "$RUNS"); do
   run_bench "pop_unified_batch"              "$i"
   run_bench "pop_unified_batch_v2"           "$i"
-  run_bench "pop_unified_batch_v2_noorder"   "$i"
+  run_bench "pop_unified_batch_v3"           "$i"
 done
 
 log "Aggregating"
@@ -175,7 +175,7 @@ function load(proc) {
 
 const v1  = load('pop_unified_batch');
 const v2  = load('pop_unified_batch_v2');
-const v2n = load('pop_unified_batch_v2_noorder');
+const v2n = load('pop_unified_batch_v3');
 
 function stat(arr, p) {
   const vals = arr.map(r => {
