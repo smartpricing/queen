@@ -1,19 +1,19 @@
-            funcname             | calls | total_ms | self_ms | mean_ms | pct  
----------------------------------+-------+----------+---------+---------+------
- push_messages_v3                |  4302 |  1777132 |  138718 |  413.09 | 47.7
- update_partition_lookup_trigger |  4302 |  1638413 | 1638413 |  380.85 | 43.9
- pop_unified_batch               |  5405 |   264976 |  264976 |   49.02 |  7.1
- debug_lock_attribution          |   126 |    14943 |   14943 |  118.60 |  0.4
- refresh_all_stats_v1            |     2 |    13020 |       2 | 6509.77 |  0.3
- compute_partition_stats_v3      |     2 |    12989 |   12989 | 6494.35 |  0.3
- increment_message_counts_v1     |    11 |     5657 |    5657 |  514.25 |  0.2
- get_consumer_groups_v4          |     5 |      444 |     444 |   88.84 |  0.0
- get_status_v3                   |     4 |      357 |     357 |   89.28 |  0.0
- get_queue_v2                    |     1 |      302 |     302 |  301.99 |  0.0
- get_system_overview_v3          |     5 |      254 |     254 |   50.79 |  0.0
- is_stats_leader                 |    12 |      137 |     137 |   11.46 |  0.0
- aggregate_queue_stats_v2        |    13 |      107 |     107 |    8.20 |  0.0
- get_queues_v2                   |     5 |       75 |      75 |   14.91 |  0.0
- aggregate_system_stats_v2       |    13 |       44 |      44 |    3.39 |  0.0
+            funcname             | calls | total_ms | self_ms | mean_ms  | pct  
+---------------------------------+-------+----------+---------+----------+------
+ push_messages_v3                |  3713 |  1048772 |  629182 |   282.46 | 53.9
+ update_partition_lookup_trigger |  3713 |   419588 |  419588 |   113.01 | 21.6
+ pop_unified_batch               |  2864 |   407493 |  407493 |   142.28 | 20.9
+ debug_lock_attribution          |    64 |    17879 |   17879 |   279.36 |  0.9
+ refresh_all_stats_v1            |     1 |    16907 |      10 | 16906.57 |  0.9
+ compute_partition_stats_v3      |     1 |    16860 |   16860 | 16859.61 |  0.9
+ increment_message_counts_v1     |    11 |    14911 |   14911 |  1355.57 |  0.8
+ get_status_v3                   |     2 |      761 |     761 |   380.41 |  0.0
+ get_consumer_groups_v4          |     2 |      671 |     671 |   335.29 |  0.0
+ get_system_overview_v3          |     2 |      670 |     670 |   335.05 |  0.0
+ aggregate_queue_stats_v2        |    12 |      625 |     625 |    52.06 |  0.0
+ aggregate_namespace_stats_v1    |    12 |      506 |     506 |    42.17 |  0.0
+ get_queues_v2                   |     2 |      498 |     498 |   249.21 |  0.0
+ is_stats_leader                 |    13 |      383 |     383 |    29.43 |  0.0
+ aggregate_system_stats_v2       |    12 |      171 |     171 |    14.21 |  0.0
 (15 rows)
 

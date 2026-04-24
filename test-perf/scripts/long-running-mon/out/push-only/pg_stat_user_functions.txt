@@ -1,19 +1,19 @@
             funcname             | calls | total_ms | self_ms | mean_ms | pct  
 ---------------------------------+-------+----------+---------+---------+------
- push_messages_v3                | 13606 |  1235950 |  305768 |   90.84 | 56.4
- update_partition_lookup_trigger | 13606 |   930181 |  930181 |   68.37 | 42.5
- debug_lock_attribution          |   159 |     7784 |    7784 |   48.95 |  0.4
- refresh_all_stats_v1            |     1 |     5503 |      14 | 5502.83 |  0.3
- compute_partition_stats_v3      |     1 |     5484 |    5484 | 5484.25 |  0.3
- increment_message_counts_v1     |    12 |     3086 |    3086 |  257.19 |  0.1
- aggregate_queue_stats_v2        |    12 |      401 |     401 |   33.45 |  0.0
- get_status_v3                   |     4 |      341 |     341 |   85.29 |  0.0
- get_consumer_groups_v4          |     4 |      225 |     225 |   56.31 |  0.0
- is_stats_leader                 |    12 |      162 |     162 |   13.54 |  0.0
- aggregate_namespace_stats_v1    |    12 |      161 |     161 |   13.42 |  0.0
- aggregate_system_stats_v2       |    12 |      143 |     143 |   11.94 |  0.0
- get_system_overview_v3          |     4 |      117 |     117 |   29.19 |  0.0
- get_queue_v2                    |     1 |       51 |      51 |   50.56 |  0.0
- get_queues_v2                   |     4 |       47 |      47 |   11.84 |  0.0
+ push_messages_v3                | 10512 |   673805 |  647333 |   64.10 | 93.2
+ update_partition_lookup_trigger | 10512 |    26471 |   26471 |    2.52 |  3.7
+ debug_lock_attribution          |   113 |     7833 |    7833 |   69.32 |  1.1
+ increment_message_counts_v1     |    13 |     6860 |    6860 |  527.66 |  0.9
+ refresh_all_stats_v1            |     1 |     3102 |     100 | 3102.02 |  0.4
+ compute_partition_stats_v3      |     1 |     2903 |    2903 | 2903.40 |  0.4
+ aggregate_queue_stats_v2        |    13 |      445 |     445 |   34.23 |  0.1
+ aggregate_system_stats_v2       |    13 |      353 |     353 |   27.16 |  0.0
+ get_queues_v2                   |     4 |      299 |     299 |   74.66 |  0.0
+ get_consumer_groups_v4          |     4 |      298 |     298 |   74.44 |  0.0
+ get_status_v3                   |     4 |      226 |     226 |   56.55 |  0.0
+ is_stats_leader                 |    13 |      192 |     192 |   14.76 |  0.0
+ get_system_overview_v3          |     4 |      161 |     161 |   40.13 |  0.0
+ aggregate_task_stats_v1         |    13 |       71 |      71 |    5.47 |  0.0
+ aggregate_namespace_stats_v1    |    13 |       62 |      62 |    4.74 |  0.0
 (15 rows)
 

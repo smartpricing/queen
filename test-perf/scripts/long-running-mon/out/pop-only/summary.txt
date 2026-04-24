@@ -5,40 +5,42 @@
   TABLE DELTAS  (ins / upd / hot_upd / del  |  HOT% = hot_upd / upd)
   relname                       ins        upd    hot_upd        del     HOT%
   ----------------------------------------------------------------------------
-  consumer_watermarks             1          8          8          0   100.0%
+  consumer_watermarks             1          2          2          0   100.0%
   messages                        0          0          0          0     0.0%
-  messages_consumed            1885          0          0          0     0.0%
-  partition_consumers           907       3776       3776          0   100.0%
+  messages_consumed            1521          0          0          0     0.0%
+  partition_consumers           765       3078       3078          0   100.0%
   partition_lookup                0          0          0          0     0.0%
   partitions                      0          0          0          0     0.0%
   queues                          0          0          0          0     0.0%
 
   WAL
-  wal_records:              33519 (       279/s)
-  wal_fpi:                     44 (         0/s)     <-- full-page images
-  wal_bytes:              3472617 (      0.03 MB/s)
+  wal_records:              26627 (       222/s)
+  wal_fpi:                     25 (         0/s)     <-- full-page images
+  wal_bytes:              2711813 (      0.02 MB/s)
   wal_buffers_full:             0
-  wal_write ops:              351
-  wal_sync ops:               349 (         3/s)
+  wal_write ops:              449
+  wal_sync ops:               444 (         4/s)
   wal_write_time ms:            0
   wal_sync_time ms:             0
 
-  WAIT EVENTS  (38 samples over 120s @ 2s period)
+  WAIT EVENTS  (36 samples over 120s @ 2s period)
   wait_event_type        wait_event                          total   avg/sample
   ----------------------------------------------------------------------------
-  NULL                   NULL                                   76         2.00
+  NULL                   NULL                                  105         2.92
+  Client                 ClientRead                              3         0.08
+  IO                     WALSync                                 2         0.06
 
-  DOCKER stats (34 samples)
-  CPU%  avg= 107.5  p50=  68.7  p95= 282.3  max= 284.2
-  Mem%  avg=  16.0  max=  17.2
+  DOCKER stats (33 samples)
+  CPU%  avg= 199.5  p50= 209.4  p95= 427.8  max= 437.8
+  Mem%  avg=  23.6  max=  24.4
 
-  LOCK ATTRIBUTION on queen.partition_lookup  (266 samples, 250ms period)
+  LOCK ATTRIBUTION on queen.partition_lookup  (178 samples, 250ms period)
   metric                            avg      max
   --------------------------------------------------
-  eligible                       131.45      874
-  unlocked                       128.48      859
+  eligible                       166.49      742
+  unlocked                       161.03      742
   locked_by_push                   0.00        0
-  locked_by_pop                    2.96       26
+  locked_by_pop                    5.46       31
   locked_by_other                  0.00        0
   push_waits_on_push               0.00        0
   push_waits_on_pop                0.00        0
@@ -46,10 +48,10 @@
   pop_waits_on_push                0.00        0
   pop_waits_on_pop                 0.00        0
   active_pushes                    0.00        0
-  active_pops                      0.48        3
+  active_pops                      0.83        7
 
   POP SKIP ATTRIBUTION (fraction of eligible rows that pop would skip):
     skipped because push holds:    0.0%
-    skipped because pop holds:     2.3%
+    skipped because pop holds:     3.3%
     skipped because other holds:   0.0%
-    freely claimable:             97.7%
+    freely claimable:             96.7%

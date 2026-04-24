@@ -1,24 +1,61 @@
-1777012949,128,active,NULL,NULL,SELECT queen.pop_unified_batch($1::jsonb)
-1777012949,6231,active,NULL,NULL,SELECT '1777012949,' || queen.debug_lock_attribution('queen-long-running')::text
-1777012949,138,active,NULL,NULL,SELECT queen.pop_unified_batch($1::jsonb)
-1777012953,128,active,NULL,NULL,SELECT queen.pop_unified_batch($1::jsonb)
-1777012953,6338,active,NULL,NULL, SELECT '1777012953,'||relname||','||n_tup_ins||','||n_tup_upd||','||n_tup_hot_upd||','||n_live_tup||','||n_dead_tup FRO
-1777012953,6336,active,NULL,NULL, SELECT '1777012953,'||COALESCE(wait_event_type,'NULL')||','||COALESCE(wait_event,'NULL')||','||cnt FROM ( SELECT wait_e
-1777012953,6339,active,NULL,NULL,SELECT '1777012953,' || queen.debug_lock_attribution('queen-long-running')::text
-1777012953,142,active,NULL,NULL,SELECT queen.pop_unified_batch($1::jsonb)
-1777012963,3415,active,NULL,NULL, WITH messages_to_evict AS ( SELECT DISTINCT m.id, p.id as partition_id FROM queen.messages m JOIN queen.partitions p ON
-1777012963,142,active,NULL,NULL,SELECT queen.pop_unified_batch($1::jsonb)
-1777012963,6556,active,NULL,NULL,SELECT '1777012963,' || queen.debug_lock_attribution('queen-long-running')::text
-1777012971,142,active,NULL,NULL,SELECT queen.pop_unified_batch($1::jsonb)
-1777012975,142,active,NULL,NULL,SELECT queen.pop_unified_batch($1::jsonb)
-1777012975,6898,active,NULL,NULL,SELECT '1777012975,' || queen.debug_lock_attribution('queen-long-running')::text
-1777012980,128,active,NULL,NULL,SELECT queen.pop_unified_batch($1::jsonb)
-1777012980,7019,active,NULL,NULL,SELECT '1777012980,' || queen.debug_lock_attribution('queen-long-running')::text
-1777012984,142,active,NULL,NULL,SELECT queen.pop_unified_batch($1::jsonb)
-1777012988,128,active,NULL,NULL,SELECT queen.pop_unified_batch($1::jsonb)
-1777012992,128,active,NULL,NULL,SELECT queen.pop_unified_batch($1::jsonb)
-1777012992,7342,active,NULL,NULL,SELECT '1777012992,' || queen.debug_lock_attribution('queen-long-running')::text
-1777012996,7469,active,NULL,NULL,SELECT '1777012996,' || queen.debug_lock_attribution('queen-long-running')::text
-1777013001,7601,active,NULL,NULL,SELECT '1777013001,' || queen.debug_lock_attribution('queen-long-running')::text
-1777013021,3414,active,NULL,NULL, WITH messages_to_evict AS ( SELECT DISTINCT m.id, p.id as partition_id FROM queen.messages m JOIN queen.partitions p ON
-1777013062,9573,active,NULL,NULL,SELECT '1777013062,' || queen.debug_lock_attribution('queen-long-running')::text
+1777016923,28378,active,NULL,NULL, WITH messages_to_evict AS ( SELECT DISTINCT m.id, p.id as partition_id FROM queen.messages m JOIN queen.partitions p ON
+1777016923,30567,active,NULL,NULL,SELECT '1777016923,' || queen.debug_lock_attribution('queen-long-running')::text
+1777016923,30568,active,NULL,NULL, SELECT '1777016923,'||relname||','||n_tup_ins||','||n_tup_upd||','||n_tup_hot_upd||','||n_live_tup||','||n_dead_tup FRO
+1777016923,30570,active,NULL,NULL, SELECT '1777016923,'||COALESCE(wait_event_type,'NULL')||','||COALESCE(wait_event,'NULL')||','||cnt FROM ( SELECT wait_e
+1777016928,28378,active,NULL,NULL, WITH messages_to_evict AS ( SELECT DISTINCT m.id, p.id as partition_id FROM queen.messages m JOIN queen.partitions p ON
+1777016928,28391,active,NULL,NULL,SELECT queen.pop_unified_batch($1::jsonb)
+1777016928,28388,active,NULL,NULL,SELECT queen.pop_unified_batch($1::jsonb)
+1777016928,30649,active,NULL,NULL,SELECT '1777016928,' || queen.debug_lock_attribution('queen-long-running')::text
+1777016928,28393,active,NULL,NULL,SELECT queen.pop_unified_batch($1::jsonb)
+1777016932,28391,active,NULL,NULL,SELECT queen.pop_unified_batch($1::jsonb)
+1777016932,28388,active,NULL,NULL,SELECT queen.pop_unified_batch($1::jsonb)
+1777016937,28391,active,NULL,NULL,SELECT queen.pop_unified_batch($1::jsonb)
+1777016937,28393,active,NULL,NULL,SELECT queen.pop_unified_batch($1::jsonb)
+1777016937,28388,active,NULL,NULL,SELECT queen.pop_unified_batch($1::jsonb)
+1777016941,28388,active,NULL,NULL,SELECT queen.pop_unified_batch($1::jsonb)
+1777016941,28370,active,NULL,NULL,SELECT queen.increment_message_counts_v1()
+1777016941,30934,active,NULL,NULL, SELECT '1777016941,'||wal_records||','||wal_fpi||','||wal_bytes||','||wal_buffers_full||','||wal_write||','||wal_sync||
+1777016946,28388,active,NULL,NULL,SELECT queen.pop_unified_batch($1::jsonb)
+1777016946,31019,active,NULL,NULL,SELECT '1777016945,' || queen.debug_lock_attribution('queen-long-running')::text
+1777016950,28388,active,NULL,NULL,SELECT queen.pop_unified_batch($1::jsonb)
+1777016950,28391,active,NULL,NULL,SELECT queen.pop_unified_batch($1::jsonb)
+1777016954,28388,active,NULL,NULL,SELECT queen.pop_unified_batch($1::jsonb)
+1777016954,28391,active,NULL,NULL,SELECT queen.pop_unified_batch($1::jsonb)
+1777016959,28391,active,NULL,NULL,SELECT queen.pop_unified_batch($1::jsonb)
+1777016959,28388,active,NULL,NULL,SELECT queen.pop_unified_batch($1::jsonb)
+1777016959,31320,active,NULL,NULL, SELECT '1777016959,'||COALESCE(wait_event_type,'NULL')||','||COALESCE(wait_event,'NULL')||','||cnt FROM ( SELECT wait_e
+1777016959,31321,active,NULL,NULL, SELECT '1777016959,'||relname||','||n_tup_ins||','||n_tup_upd||','||n_tup_hot_upd||','||n_live_tup||','||n_dead_tup FRO
+1777016959,31323,active,NULL,NULL,SELECT '1777016959,' || queen.debug_lock_attribution('queen-long-running')::text
+1777016964,28388,active,NULL,NULL,SELECT queen.pop_unified_batch($1::jsonb)
+1777016964,28391,active,NULL,NULL,SELECT queen.pop_unified_batch($1::jsonb)
+1777016968,28388,active,NULL,NULL,SELECT queen.pop_unified_batch($1::jsonb)
+1777016968,28391,active,NULL,NULL,SELECT queen.pop_unified_batch($1::jsonb)
+1777016968,31512,active,NULL,NULL,SELECT '1777016967,' || queen.debug_lock_attribution('queen-long-running')::text
+1777016973,28388,active,NULL,NULL,SELECT queen.pop_unified_batch($1::jsonb)
+1777016977,28388,active,NULL,NULL,SELECT queen.pop_unified_batch($1::jsonb)
+1777016977,28391,active,NULL,NULL,SELECT queen.pop_unified_batch($1::jsonb)
+1777016977,31697,active,NULL,NULL,SELECT '1777016977,' || queen.debug_lock_attribution('queen-long-running')::text
+1777016982,28375,active,NULL,NULL, WITH messages_to_evict AS ( SELECT DISTINCT m.id, p.id as partition_id FROM queen.messages m JOIN queen.partitions p ON
+1777016982,28388,active,NULL,NULL,SELECT queen.pop_unified_batch($1::jsonb)
+1777016982,28391,active,NULL,NULL,SELECT queen.pop_unified_batch($1::jsonb)
+1777016982,28373,active,NULL,NULL,SELECT queen.refresh_all_stats_v1(false)
+1777016982,31771,active,NULL,NULL,SELECT '1777016982,' || queen.debug_lock_attribution('queen-long-running')::text
+1777016982,28386,active,NULL,NULL,SELECT queen.pop_unified_batch($1::jsonb)
+1777016982,28382,active,IO,WALSync,SELECT queen.pop_unified_batch($1::jsonb)
+1777016982,28381,active,NULL,NULL,SELECT queen.pop_unified_batch($1::jsonb)
+1777016982,28390,active,NULL,NULL,SELECT queen.pop_unified_batch($1::jsonb)
+1777016987,28375,active,NULL,NULL, WITH messages_to_evict AS ( SELECT DISTINCT m.id, p.id as partition_id FROM queen.messages m JOIN queen.partitions p ON
+1777016987,28373,active,NULL,NULL,SELECT queen.refresh_all_stats_v1(false)
+1777016987,28391,active,NULL,NULL,SELECT queen.pop_unified_batch($1::jsonb)
+1777016987,28388,active,NULL,NULL,SELECT queen.pop_unified_batch($1::jsonb)
+1777016987,28381,active,NULL,NULL,SELECT queen.pop_unified_batch($1::jsonb)
+1777016987,28382,active,NULL,NULL,SELECT queen.pop_unified_batch($1::jsonb)
+1777016987,28392,active,NULL,NULL,SELECT queen.pop_unified_batch($1::jsonb)
+1777016987,28386,active,NULL,NULL,SELECT queen.pop_unified_batch($1::jsonb)
+1777016996,32097,active,NULL,NULL, SELECT '1777016996,'||relname||','||n_tup_ins||','||n_tup_upd||','||n_tup_hot_upd||','||n_live_tup||','||n_dead_tup FRO
+1777017009,32430,active,NULL,NULL,SELECT '1777017009,' || queen.debug_lock_attribution('queen-long-running')::text
+1777017013,32549,active,NULL,NULL,SELECT '1777017013,' || queen.debug_lock_attribution('queen-long-running')::text
+1777017026,32870,active,NULL,NULL,SELECT '1777017026,' || queen.debug_lock_attribution('queen-long-running')::text
+1777017031,32988,active,NULL,NULL,SELECT '1777017031,' || queen.debug_lock_attribution('queen-long-running')::text
+1777017035,33106,active,NULL,NULL,SELECT '1777017035,' || queen.debug_lock_attribution('queen-long-running')::text
+1777017039,33211,active,NULL,NULL,SELECT '1777017039,' || queen.debug_lock_attribution('queen-long-running')::text
