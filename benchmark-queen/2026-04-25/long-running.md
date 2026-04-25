@@ -1,6 +1,6 @@
 # Queen long-running benchmark — 2026-04-25
 
-long-running
+<img src="long-running.png" alt="long-running" />
 
 Host: (`queen-bench-01`, Ubuntu, kernel 6.8.0-71, x86_64, 32 vCPU, 62 GiB RAM, no swap)
 Queen image: `smartnessai/queen-mq:0.14.0.alpha.3`
