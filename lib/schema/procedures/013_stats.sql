@@ -17,9 +17,41 @@
 -- ============================================================================
 
 -- Lightweight incremental message count (for fast aggregation)
--- Uses a fixed 30-second window for index efficiency (~37ms vs 8s)
--- Does NOT recalculate pending counts (that's expensive, done in full reconciliation)
--- Uses transaction-level advisory lock to prevent concurrent execution across replicas
+--
+-- Uses partition_lookup.updated_at as the "dirty" signal to identify which
+-- partitions had push activity since our last scan. For only those active
+-- partitions, we do a per-partition range scan on idx_messages_partition_created
+-- (which has partition_id as the leading column -> O(log n) lookup, NOT a
+-- full index scan).
+--
+-- Compared to the previous body, this version:
+--   * No longer scans queen.messages with WHERE created_at > NOW() - 30s
+--     (which forced a full Index Only Scan over idx_messages_partition_created
+--     because partition_id, the leading column, was unbound). The cost of
+--     that scan grew with the SIZE of the messages table, not the workload.
+--   * No longer issues the trailing blanket UPDATE that rewrote
+--     last_scanned_at on every partition stats row (~partition_count writes
+--     per call -> dominant WAL and dead-tuple source on systems with many
+--     partitions). Idle partitions now keep their (stale) last_scanned_at;
+--     correctness is preserved because the next time the partition becomes
+--     active (partition_lookup.updated_at advances), we count messages
+--     strictly newer than the stale lsa -- no double counting, no missed
+--     messages.
+--
+-- The advisory lock and return shape are unchanged for backward compat with
+-- StatsService (server/src/services/stats_service.cpp).
+--
+-- Correctness contract (must match the previous body for total_messages and
+-- pending_messages on every partition):
+--   * Both versions use `m.created_at > s.last_scanned_at` as the threshold,
+--     so no message is counted twice and no message is permanently lost.
+--   * Both versions only compute deltas for total_messages /
+--     pending_messages / newest_message_at; processing_messages,
+--     completed_messages, dead_letter_messages are owned by
+--     compute_partition_stats_v* and untouched here.
+--
+-- See test-perf/scripts/increment-bench/ for the deterministic benchmark
+-- and correctness diff harness used to validate this change.
 CREATE OR REPLACE FUNCTION queen.increment_message_counts_v1()
 RETURNS JSONB
 LANGUAGE plpgsql
@@ -29,54 +61,65 @@ DECLARE
     v_now TIMESTAMPTZ := NOW();
     v_lock_key BIGINT := 7868669789; -- hash of 'queen_stats_increment'
 BEGIN
-    -- Try to acquire transaction-level advisory lock
-    -- If another instance is running, skip this execution (stats are eventually consistent)
+    -- Try to acquire transaction-level advisory lock.
+    -- If another instance is running, skip this execution (stats are
+    -- eventually consistent: the next call will catch up).
     IF NOT pg_try_advisory_xact_lock(v_lock_key) THEN
         RETURN jsonb_build_object(
-            'skipped', true, 
+            'skipped', true,
             'reason', 'another_instance_computing'
         );
     END IF;
 
-    -- Use fixed 30-second window for index efficiency
-    -- The index on messages(created_at) can be used because NOW() - INTERVAL is a constant
-    -- The per-partition last_scanned_at is still used as secondary filter to avoid double-counting
-    WITH recent_messages AS (
-        SELECT partition_id, id, created_at
-        FROM queen.messages
-        WHERE created_at > v_now - INTERVAL '30 seconds'
-    ),
-    new_message_counts AS (
-        SELECT 
-            s.stat_key,
-            s.partition_id,
-            COUNT(rm.id) as new_messages,
-            MAX(rm.created_at) as newest_at
+    WITH active_partitions AS (
+        -- Partitions that have had push activity since our last scan.
+        -- partition_lookup.updated_at is bumped by update_partition_lookup_v1
+        -- after every push commit, so this filter is the dirty-set we want.
+        -- Indexed lookup via the (queue_name, partition_id) UNIQUE on
+        -- queen.partition_lookup; result set is small in steady state.
+        SELECT s.stat_key, s.partition_id, s.last_scanned_at
         FROM queen.stats s
-        JOIN recent_messages rm 
-            ON rm.partition_id = s.partition_id 
-           AND rm.created_at > s.last_scanned_at
+        JOIN queen.partition_lookup pl ON pl.partition_id = s.partition_id
         WHERE s.stat_type = 'partition'
           AND s.last_scanned_at IS NOT NULL
-        GROUP BY s.stat_key, s.partition_id
+          AND pl.updated_at > s.last_scanned_at
+    ),
+    new_message_counts AS (
+        -- Per-partition range scan on idx_messages_partition_created
+        -- (partition_id is its leading column -> a real index range scan,
+        -- not the full-index scan the old body did).
+        SELECT
+            ap.stat_key,
+            ap.partition_id,
+            COUNT(m.id)         AS new_messages,
+            MAX(m.created_at)   AS newest_at
+        FROM active_partitions ap
+        JOIN queen.messages m
+          ON m.partition_id = ap.partition_id
+         AND m.created_at  > ap.last_scanned_at
+        GROUP BY ap.stat_key, ap.partition_id
     )
     UPDATE queen.stats s SET
-        total_messages = s.total_messages + nmc.new_messages,
-        pending_messages = s.pending_messages + nmc.new_messages,
+        total_messages    = s.total_messages    + nmc.new_messages,
+        pending_messages  = s.pending_messages  + nmc.new_messages,
         newest_message_at = GREATEST(s.newest_message_at, nmc.newest_at),
-        last_scanned_at = v_now
+        last_scanned_at   = v_now
     FROM new_message_counts nmc
     WHERE s.stat_type = 'partition' AND s.stat_key = nmc.stat_key;
-    
+
     GET DIAGNOSTICS v_updated = ROW_COUNT;
-    
-    -- Also update last_scanned_at for partitions with no new messages
-    -- This prevents the scan window from drifting too far back
-    UPDATE queen.stats
-    SET last_scanned_at = v_now
-    WHERE stat_type = 'partition'
-      AND last_scanned_at < v_now - INTERVAL '30 seconds';
-    
+
+    -- Trailing blanket UPDATE on last_scanned_at deliberately removed:
+    --   * It used to cost ~partition_count row writes on every call,
+    --     dominating the function's WAL and dead-tuple footprint.
+    --   * The optimisation already shipped in compute_partition_stats_v3
+    --     step 5 takes the same approach for the same reason.
+    --
+    -- Idle partitions retain their old last_scanned_at. When they next
+    -- become active (a push bumps partition_lookup.updated_at), the
+    -- `m.created_at > ap.last_scanned_at` filter above is the EXACT same
+    -- threshold the old body used, so the count is identical.
+
     RETURN jsonb_build_object('partitionsUpdated', v_updated);
 END;
 $$;

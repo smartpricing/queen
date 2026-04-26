@@ -12,6 +12,7 @@ CONS_CONN="${8:-50}"
 CONS_BATCH="${9:-100}"
 QUEUE_COUNT="${10:-1}"
 QUEEN_IMAGE_TAG="${11:-0.14.0.alpha.3}"
+CG_COUNT="${12:-0}"  # number of consumer groups (0 = single default consumer, no group)
 
 OUTDIR="/root/bench-runs/results/$TEST_NAME"
 mkdir -p "$OUTDIR"
@@ -33,7 +34,7 @@ else
   done
 fi
 
-log "=== START test=$TEST_NAME image=$QUEEN_IMAGE_TAG maxPart=$MAX_PARTITION batch=$MSGS_PER_PUSH dur=${DURATION}s prod=${PROD_WORKERS}x${PROD_CONN} cons=${CONS_WORKERS}x${CONS_CONN} consBatch=$CONS_BATCH queues=$QUEUE_COUNT ==="
+log "=== START test=$TEST_NAME image=$QUEEN_IMAGE_TAG maxPart=$MAX_PARTITION batch=$MSGS_PER_PUSH dur=${DURATION}s prod=${PROD_WORKERS}x${PROD_CONN} cons=${CONS_WORKERS}x${CONS_CONN} consBatch=$CONS_BATCH queues=$QUEUE_COUNT cgCount=$CG_COUNT ==="
 
 log "cleanup: stopping containers"
 docker stop queen postgres >/dev/null 2>&1 || true
@@ -98,12 +99,25 @@ QUEUE_NAMES="$QUEUE_NAMES" NUM_WORKERS="$PROD_WORKERS" CONNECTIONS_PER_WORKER="$
   node /home/queen/examples/bench-producer.js > "$OUTDIR/producer.log" 2>&1 &
 PROD_PID=$!
 
-QUEUE_NAMES="$QUEUE_NAMES" NUM_WORKERS="$CONS_WORKERS" CONNECTIONS_PER_WORKER="$CONS_CONN" \
-  CONSUMER_BATCH="$CONS_BATCH" DURATION="$DURATION" \
-  node /home/queen/examples/bench-consumer.js > "$OUTDIR/consumer.log" 2>&1 &
-CONS_PID=$!
+CONS_PIDS=()
+if [ "$CG_COUNT" -le 0 ]; then
+  # Single consumer, no group (default __QUEUE_MODE__)
+  QUEUE_NAMES="$QUEUE_NAMES" NUM_WORKERS="$CONS_WORKERS" CONNECTIONS_PER_WORKER="$CONS_CONN" \
+    CONSUMER_BATCH="$CONS_BATCH" DURATION="$DURATION" \
+    node /home/queen/examples/bench-consumer.js > "$OUTDIR/consumer.log" 2>&1 &
+  CONS_PIDS+=($!)
+else
+  # CG_COUNT consumer processes, one per consumer group
+  for cg_idx in $(seq 1 "$CG_COUNT"); do
+    QUEUE_NAMES="$QUEUE_NAMES" NUM_WORKERS="$CONS_WORKERS" CONNECTIONS_PER_WORKER="$CONS_CONN" \
+      CONSUMER_BATCH="$CONS_BATCH" DURATION="$DURATION" \
+      CONSUMER_GROUP="cg-${cg_idx}" \
+      node /home/queen/examples/bench-consumer.js > "$OUTDIR/consumer-cg${cg_idx}.log" 2>&1 &
+    CONS_PIDS+=($!)
+  done
+fi
 
-log "producer pid=$PROD_PID consumer pid=$CONS_PID, waiting ${DURATION}s"
+log "producer pid=$PROD_PID consumer pids=${CONS_PIDS[*]} (n=${#CONS_PIDS[@]}), waiting ${DURATION}s"
 
 MINUTES=$((DURATION / 60))
 for i in $(seq 1 $MINUTES); do
@@ -120,10 +134,10 @@ sleep 30
 END_TIME=$(date -u +%FT%T.000Z)
 echo "$END_TIME" > "$OUTDIR/end_time.txt"
 
-kill -INT $PROD_PID $CONS_PID 2>/dev/null || true
+kill -INT "$PROD_PID" "${CONS_PIDS[@]}" 2>/dev/null || true
 sleep 5
-kill -9 $PROD_PID $CONS_PID 2>/dev/null || true
-wait $PROD_PID $CONS_PID 2>/dev/null || true
+kill -9 "$PROD_PID" "${CONS_PIDS[@]}" 2>/dev/null || true
+wait "$PROD_PID" "${CONS_PIDS[@]}" 2>/dev/null || true
 
 log "collecting metrics"
 curl -s "http://localhost:6632/api/v1/status?from=${START_TIME}&to=${END_TIME}" > "$OUTDIR/status.json"
@@ -139,6 +153,8 @@ docker logs queen > "$OUTDIR/queen.log" 2>&1
 docker stats --no-stream postgres queen > "$OUTDIR/docker-stats-final.txt" 2>&1
 
 PARTITION_COUNT=$((MAX_PARTITION + 1))
+EFFECTIVE_CG_COUNT=$([ "$CG_COUNT" -le 0 ] && echo 0 || echo "$CG_COUNT")
+TOTAL_CONS_CONN=$([ "$EFFECTIVE_CG_COUNT" -le 0 ] && echo $((CONS_WORKERS * CONS_CONN)) || echo $((EFFECTIVE_CG_COUNT * CONS_WORKERS * CONS_CONN)))
 cat > "$OUTDIR/metadata.json" <<JSON
 {
   "testName": "$TEST_NAME",
@@ -149,7 +165,7 @@ cat > "$OUTDIR/metadata.json" <<JSON
   "partitionCount": $PARTITION_COUNT,
   "msgsPerPush": $MSGS_PER_PUSH,
   "producer": {"workers": $PROD_WORKERS, "connectionsPerWorker": $PROD_CONN, "totalConnections": $((PROD_WORKERS * PROD_CONN))},
-  "consumer": {"workers": $CONS_WORKERS, "connectionsPerWorker": $CONS_CONN, "totalConnections": $((CONS_WORKERS * CONS_CONN)), "batch": $CONS_BATCH},
+  "consumer": {"processes": ${#CONS_PIDS[@]}, "workersPerProcess": $CONS_WORKERS, "connectionsPerWorker": $CONS_CONN, "totalConnections": $TOTAL_CONS_CONN, "batch": $CONS_BATCH, "consumerGroupCount": $EFFECTIVE_CG_COUNT},
   "durationSec": $DURATION,
   "startTime": "$START_TIME",
   "endTime": "$END_TIME"

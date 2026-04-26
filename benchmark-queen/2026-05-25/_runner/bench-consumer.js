@@ -7,19 +7,24 @@ const NUM_WORKERS = parseInt(process.env.NUM_WORKERS || '1', 10);
 const CONNECTIONS_PER_WORKER = parseInt(process.env.CONNECTIONS_PER_WORKER || '50', 10);
 const DURATION = parseInt(process.env.DURATION || '900', 10);
 const BATCH_SIZE = parseInt(process.env.CONSUMER_BATCH || '100', 10);
+const CONSUMER_GROUP = process.env.CONSUMER_GROUP || '';
 
 function generateRequests() {
-  return QUEUE_NAMES.map(q => ({
-    method: 'GET',
-    path: `/api/v1/pop/queue/${q}?batch=${BATCH_SIZE}&wait=true&autoAck=true`,
-    headers: { 'Content-Type': 'application/json' }
-  }));
+  return QUEUE_NAMES.map(q => {
+    const cgParam = CONSUMER_GROUP ? `&consumerGroup=${encodeURIComponent(CONSUMER_GROUP)}` : '';
+    return {
+      method: 'GET',
+      path: `/api/v1/pop/queue/${q}?batch=${BATCH_SIZE}&wait=true&autoAck=true${cgParam}`,
+      headers: { 'Content-Type': 'application/json' }
+    };
+  });
 }
 
 if (cluster.isPrimary) {
   console.log(JSON.stringify({
     role: 'consumer', event: 'start',
     queues: QUEUE_NAMES, queueCount: QUEUE_NAMES.length,
+    consumerGroup: CONSUMER_GROUP || null,
     numWorkers: NUM_WORKERS, conns: CONNECTIONS_PER_WORKER,
     duration: DURATION, batchSize: BATCH_SIZE,
     timestamp: new Date().toISOString()
@@ -67,6 +72,7 @@ if (cluster.isPrimary) {
     const reqPerSec = Math.round(agg.throughputs.reduce((s, t) => s + t, 0));
     console.log(JSON.stringify({
       role: 'consumer', event: 'result',
+      consumerGroup: CONSUMER_GROUP || null,
       totalRequests: agg.totalRequests,
       reqPerSec,
       maxMsgPerSecCeiling: reqPerSec * BATCH_SIZE,
