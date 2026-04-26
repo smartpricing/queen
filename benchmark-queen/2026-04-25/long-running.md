@@ -1,6 +1,6 @@
 # Queen long-running benchmark — 2026-04-25
 
-<img src="long-running.png" alt="long-running" />
+
 
 Host: (`queen-bench-01`, Ubuntu, kernel 6.8.0-71, x86_64, 32 vCPU, 62 GiB RAM, no swap)
 Queen image: `smartnessai/queen-mq:0.14.0.alpha.3`
@@ -509,3 +509,4 @@ Computed as `drains_last − drains_first` from heartbeat counters:
 - **Queen footprint:** ~~10 vCPU, **~~47 MB RSS**, no event-loop lag (>0 ms only in 1 % of heartbeats, max 5 ms). DB pool peak 5/47 active.
 - **Postgres footprint:** ~6.6 vCPU, ~33.5 GiB RAM, **99.73 %** cache hit ratio; `messages` table 35 GB total (13 GB heap + 22 GB index), `messages_consumed` 11 GB.
 - **Backpressure:** message dwell-time (lag) avg **44 s**, max 2 h 7 m on the slowest message — consistent with the producer running ahead of the consumer (push 29k/s vs pop 28k/s) and ~41 M pending messages currently buffered.
+
