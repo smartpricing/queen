@@ -1,0 +1,332 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Server setup — Queen MQ</title>
+<meta name="description" content="How to run, configure, secure, and scale the Queen MQ server: Docker, Kubernetes, env vars, JWT auth, multi-instance UDP sync.">
+<meta name="theme-color" content="#141415">
+<meta name="color-scheme" content="dark">
+<link rel="icon" type="image/png" href="assets/queen_head.png">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<header class="topnav">
+  <div class="topnav-inner">
+    <a class="brand" href="index.html">
+      <span class="brand-mark"><img src="assets/queen_head.png" alt=""></span>
+      Queen MQ
+    </a>
+    <nav class="topnav-links" aria-label="Primary">
+      <a href="quickstart.html">Quickstart</a>
+      <a href="concepts.html">Concepts</a>
+      <a href="architecture.html">Architecture</a>
+      <a href="clients.html">Clients</a>
+      <a href="server.html" class="current">Server</a>
+      <a href="http-api.html">HTTP API</a>
+      <a href="dashboard.html">Dashboard</a>
+      <a href="benchmarks.html">Benchmarks</a>
+    </nav>
+    <div class="topnav-right">
+      <a class="icon-link" href="https://github.com/smartpricing/queen" aria-label="GitHub">
+        <svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 .5C5.7.5.6 5.6.6 11.9c0 5 3.3 9.3 7.8 10.8.6.1.8-.2.8-.6v-2c-3.2.7-3.8-1.5-3.8-1.5-.5-1.3-1.3-1.6-1.3-1.6-1.1-.7.1-.7.1-.7 1.2.1 1.8 1.2 1.8 1.2 1 1.8 2.8 1.3 3.5 1 .1-.8.4-1.3.8-1.6-2.6-.3-5.3-1.3-5.3-5.7 0-1.3.5-2.3 1.2-3.2-.1-.3-.5-1.5.1-3.1 0 0 1-.3 3.3 1.2 1-.3 2-.4 3-.4s2 .1 3 .4c2.3-1.5 3.3-1.2 3.3-1.2.6 1.6.2 2.8.1 3.1.8.9 1.2 1.9 1.2 3.2 0 4.5-2.7 5.4-5.3 5.7.4.4.8 1.1.8 2.2v3.3c0 .3.2.7.8.6 4.5-1.5 7.8-5.8 7.8-10.8C23.4 5.6 18.3.5 12 .5z"/></svg>
+      </a>
+    </div>
+  </div>
+</header>
+
+<main class="shell-narrow" style="padding-top: 48px;">
+
+<span class="label-xs">Server setup</span>
+<h1 style="font-size: 32px; font-weight: 600; letter-spacing: -0.02em; margin: 6px 0 14px;">
+  One C++ binary. PostgreSQL underneath. Stateless on top.
+</h1>
+<p class="muted">
+  The Queen server is a single statically-linked C++17 binary built on
+  <a href="https://github.com/uNetworking/uWebSockets">uWebSockets</a> and the libpq
+  async API. It serves the HTTP API <em>and</em> the Vue 3 dashboard from the same
+  process, on the same port.
+</p>
+
+<nav class="toc" aria-label="On this page">
+  <a href="#docker">Docker</a>
+  <a href="#postgres">PostgreSQL</a>
+  <a href="#env">Environment variables</a>
+  <a href="#auth">JWT authentication</a>
+  <a href="#cluster">Multi-instance cluster</a>
+  <a href="#k8s">Kubernetes</a>
+  <a href="#tuning">High-throughput tuning</a>
+  <a href="#failover">Failover &amp; durability</a>
+</nav>
+
+<!-- ============== DOCKER ============== -->
+<h2 id="docker">Docker</h2>
+<p class="muted">
+  Multi-arch image (linux/amd64 + linux/arm64), pushed to Docker Hub on every release.
+</p>
+
+<div class="code-meta-wrap with-copy">
+  <div class="code-meta"><span>development</span><button class="copy-btn" type="button">copy</button></div>
+<pre><code class="language-bash">docker network create queen
+
+docker run --name qpg --network queen \
+  -e POSTGRES_PASSWORD=postgres \
+  -p 5433:5432 -d postgres
+
+docker run -p 6632:6632 --network queen \
+  -e PG_HOST=qpg -e PG_PASSWORD=postgres \
+  -e NUM_WORKERS=2 -e DB_POOL_SIZE=5 \
+  -e LOG_LEVEL=info \
+  smartnessai/queen-mq:latest</code></pre>
+</div>
+
+<div class="code-meta-wrap with-copy">
+  <div class="code-meta"><span>production-ish single-node</span><button class="copy-btn" type="button">copy</button></div>
+<pre><code class="language-bash">docker run -d --name queen --restart unless-stopped \
+  -p 6632:6632 \
+  -v /var/lib/queen-buffers:/var/lib/queen/buffers \
+  -e PG_HOST=db.internal \
+  -e PG_USER=queen \
+  -e PG_PASSWORD=$PG_PASSWORD \
+  -e PG_DB=queen \
+  -e PG_USE_SSL=true \
+  -e NUM_WORKERS=10 \
+  -e DB_POOL_SIZE=150 \
+  -e SIDECAR_POOL_SIZE=50 \
+  -e DEFAULT_SUBSCRIPTION_MODE=new \
+  -e LOG_LEVEL=info \
+  smartnessai/queen-mq:latest</code></pre>
+</div>
+
+<!-- ============== POSTGRES ============== -->
+<h2 id="postgres">PostgreSQL requirements</h2>
+<ul>
+  <li>PostgreSQL <strong>14+</strong> (15+ recommended for the JIT/parallel-plan paths).</li>
+  <li>A dedicated database. Queen owns its schema and stored procedures.</li>
+  <li>The schema is applied automatically on first start. No manual migration step.</li>
+  <li>Pool size: keep <code>max_connections</code> ≥ <code>DB_POOL_SIZE + SIDECAR_POOL_SIZE + 20</code>.</li>
+</ul>
+
+<!-- ============== ENV ============== -->
+<h2 id="env">Environment variables (essentials)</h2>
+<p class="muted">
+  Full list lives in <a href="https://github.com/smartpricing/queen/blob/master/server/ENV_VARIABLES.md"><code>server/ENV_VARIABLES.md</code></a>.
+  These are the ones you almost always touch.
+</p>
+
+<table class="env-table">
+  <thead>
+    <tr><th>Variable</th><th>Default</th><th>What it controls</th></tr>
+  </thead>
+  <tbody>
+    <tr><td>PORT</td><td>6632</td><td>HTTP listener port.</td></tr>
+    <tr><td>HOST</td><td>0.0.0.0</td><td>HTTP bind address.</td></tr>
+    <tr><td>NUM_WORKERS</td><td>10</td><td>uWebSockets event-loop threads.</td></tr>
+    <tr><td>PG_HOST</td><td>localhost</td><td>PostgreSQL hostname.</td></tr>
+    <tr><td>PG_USER</td><td>postgres</td><td>PostgreSQL username.</td></tr>
+    <tr><td>PG_PASSWORD</td><td>postgres</td><td>PostgreSQL password.</td></tr>
+    <tr><td>PG_DB</td><td>postgres</td><td>Database name.</td></tr>
+    <tr><td>PG_USE_SSL</td><td>false</td><td>TLS to PostgreSQL.</td></tr>
+    <tr><td>DB_POOL_SIZE</td><td>150</td><td>Async connection pool for the hot path.</td></tr>
+    <tr><td>SIDECAR_POOL_SIZE</td><td>50</td><td>Sidecar pool for batch/transaction work.</td></tr>
+    <tr><td>DEFAULT_SUBSCRIPTION_MODE</td><td>"" (all)</td><td>Default for new consumer groups: <code>""</code> or <code>"new"</code>.</td></tr>
+    <tr><td>LOG_LEVEL</td><td>info</td><td>trace · debug · info · warn · error.</td></tr>
+    <tr><td>FILE_BUFFER_DIR</td><td>/var/lib/queen/buffers (Linux)</td><td>Disk failover buffer location.</td></tr>
+    <tr><td>QUEEN_ENCRYPTION_KEY</td><td>—</td><td>64 hex chars (AES-256-GCM at-rest payload encryption).</td></tr>
+  </tbody>
+</table>
+
+<!-- ============== AUTH ============== -->
+<h2 id="auth">JWT authentication</h2>
+<p class="muted">
+  Queen supports HS256 (shared secret), RS256 (RSA), and EdDSA (Ed25519) — including
+  external IDPs via JWKS auto-discovery. Routes are gated by role:
+</p>
+
+<table>
+  <thead><tr><th>Level</th><th>Routes</th><th>Required role</th></tr></thead>
+  <tbody>
+    <tr><td>PUBLIC</td><td><code>/health</code>, <code>/metrics</code>, <code>/</code> (dashboard)</td><td>none</td></tr>
+    <tr><td>READ_ONLY</td><td>GET <code>/api/v1/status/*</code>, <code>/api/v1/resources/*</code></td><td>any valid token</td></tr>
+    <tr><td>READ_WRITE</td><td>POST <code>/api/v1/push</code>, GET <code>/api/v1/pop/*</code></td><td><code>read-write</code> or <code>admin</code></td></tr>
+    <tr><td>ADMIN</td><td><code>/api/v1/system/*</code>, DELETE operations</td><td><code>admin</code></td></tr>
+  </tbody>
+</table>
+
+<div class="code-meta-wrap with-copy">
+  <div class="code-meta"><span>HS256 — internal services</span><button class="copy-btn" type="button">copy</button></div>
+<pre><code class="language-bash">export JWT_ENABLED=true
+export JWT_ALGORITHM=HS256
+export JWT_SECRET=$(openssl rand -hex 32)</code></pre>
+</div>
+
+<div class="code-meta-wrap with-copy">
+  <div class="code-meta"><span>RS256 / EdDSA — external IDP via JWKS</span><button class="copy-btn" type="button">copy</button></div>
+<pre><code class="language-bash">export JWT_ENABLED=true
+export JWT_ALGORITHM=auto                                  # or RS256 / EdDSA
+export JWT_JWKS_URL=https://your-idp.com/.well-known/jwks.json
+export JWT_ISSUER=https://your-idp.com/
+export JWT_AUDIENCE=queen-api</code></pre>
+</div>
+
+<div class="callout callout-info">
+  <div class="callout-title">producerSub anti-impersonation</div>
+  <p>
+    With JWT enabled the server stamps the validated <code>sub</code> claim onto every
+    pushed message as <code>producerSub</code>. Clients <em>cannot</em> set this field
+    — the server always derives it from the verified JWT. It's exposed on pop responses
+    and admin message APIs for downstream attribution.
+  </p>
+</div>
+
+<!-- ============== CLUSTER ============== -->
+<h2 id="cluster">Multi-instance cluster (UDP sync)</h2>
+<p class="muted">
+  Queen servers are stateless — you can run multiple instances pointing at the same
+  PostgreSQL. Two optional UDP layers make horizontal scaling actually fast:
+</p>
+<ul>
+  <li><strong>Peer notifications</strong> — when one instance receives a push, it UDP-broadcasts a wake-up to peers, so long-polling consumers on other instances return immediately.</li>
+  <li><strong>Distributed cache (UDPSYNC)</strong> — heartbeats + shared state for queue config caching, partition-id LRU, and server-health tracking.</li>
+</ul>
+
+<div class="code-meta-wrap with-copy">
+  <div class="code-meta"><span>three-instance cluster</span><button class="copy-btn" type="button">copy</button></div>
+<pre><code class="language-bash"># Server A
+export QUEEN_UDP_PEERS="queen-b:6633,queen-c:6633"
+export QUEEN_UDP_NOTIFY_PORT=6633
+export QUEEN_SYNC_ENABLED=true
+export QUEEN_SYNC_SECRET=$(openssl rand -hex 32)   # shared by all instances
+
+# Server B
+export QUEEN_UDP_PEERS="queen-a:6633,queen-c:6633"
+export QUEEN_SYNC_SECRET=...same...
+
+# Server C — same pattern
+export QUEEN_UDP_PEERS="queen-a:6633,queen-b:6633"</code></pre>
+</div>
+
+<p class="muted">
+  Self-detection is automatic: each server excludes itself from the peer list. The
+  cluster works fine without UDP — long-poll consumers just fall back to a slightly
+  longer wake-up interval.
+</p>
+
+<!-- ============== K8S ============== -->
+<h2 id="k8s">Kubernetes</h2>
+<p class="muted">
+  A reference Helm chart and a plain manifest live in the repo:
+  <a href="https://github.com/smartpricing/queen/tree/master/helm">helm/</a> ·
+  <a href="https://github.com/smartpricing/queen/blob/master/server/k8s-example.yaml">server/k8s-example.yaml</a>.
+  For the UDP sync layer, run as a <code>StatefulSet</code> with a headless service so
+  pods get stable DNS:
+</p>
+
+<div class="code-meta-wrap with-copy">
+  <div class="code-meta"><span>StatefulSet env (excerpt)</span><button class="copy-btn" type="button">copy</button></div>
+<pre><code class="language-yaml">env:
+  - name: PG_HOST
+    value: postgres-rw.db.svc.cluster.local
+  - name: PG_USER
+    valueFrom: { secretKeyRef: { name: queen-db, key: user } }
+  - name: PG_PASSWORD
+    valueFrom: { secretKeyRef: { name: queen-db, key: password } }
+  - name: NUM_WORKERS
+    value: "10"
+  - name: DB_POOL_SIZE
+    value: "150"
+  - name: QUEEN_UDP_PEERS
+    value: "queen-mq-0.queen-mq-headless.default.svc.cluster.local:6633,queen-mq-1.queen-mq-headless.default.svc.cluster.local:6633"
+  - name: QUEEN_UDP_NOTIFY_PORT
+    value: "6633"
+  - name: QUEEN_SYNC_SECRET
+    valueFrom: { secretKeyRef: { name: queen-sync, key: secret } }</code></pre>
+</div>
+
+<!-- ============== TUNING ============== -->
+<h2 id="tuning">High-throughput tuning</h2>
+<p class="muted">
+  Defaults are tuned for ~1 KB messages on a 4-core node. For a 32-core box pushing ~50k
+  msg/s, raise:
+</p>
+
+<div class="code-meta-wrap with-copy">
+  <div class="code-meta"><span>throughput knobs</span><button class="copy-btn" type="button">copy</button></div>
+<pre><code class="language-bash">export NUM_WORKERS=20
+export DB_POOL_SIZE=300
+export SIDECAR_POOL_SIZE=100
+export SIDECAR_MAX_ITEMS_PER_TX=2000
+export RESPONSE_BATCH_SIZE=200
+export RESPONSE_BATCH_MAX=1000
+
+# v0.13+ adaptive engine — raise per-type concurrency ceilings if needed
+export QUEEN_PUSH_MAX_CONCURRENT=24
+export QUEEN_ACK_MAX_CONCURRENT=16
+export QUEEN_POP_MAX_CONCURRENT=16</code></pre>
+</div>
+
+<p class="muted">
+  See <a href="https://github.com/smartpricing/queen/blob/master/server/README.md">server/README.md</a>
+  for the full tuning guide and the rationale behind these defaults.
+</p>
+
+<!-- ============== FAILOVER ============== -->
+<h2 id="failover">Failover &amp; durability</h2>
+<ul>
+  <li><strong>Disk push buffer</strong> — if PostgreSQL is unreachable, pushes spill to <code>FILE_BUFFER_DIR</code> and replay automatically on recovery.</li>
+  <li><strong>Multi-instance</strong> — run ≥2 servers behind a load balancer; they're stateless. Affinity routing in the clients keeps related operations on the same node when possible.</li>
+  <li><strong>PostgreSQL HA</strong> — point <code>PG_HOST</code> at your HA endpoint (Patroni VIP, Cloud SQL/RDS endpoint, pgbouncer, etc.). Queen reconnects automatically when the upstream changes.</li>
+  <li><strong>Encryption at rest</strong> — set <code>QUEEN_ENCRYPTION_KEY</code> (32 bytes hex) and configure queues with <code>encryptionEnabled: true</code> for AES-256-GCM payload encryption inside the database.</li>
+</ul>
+
+</main>
+
+<footer class="site-foot">
+  <div class="shell site-foot-inner">
+    <div>
+      <div class="brand" style="margin-bottom: 10px;">
+        <span class="brand-mark"><img src="assets/queen_head.png" alt=""></span>
+        Queen MQ
+      </div>
+      <p class="muted" style="font-size: 12.5px; max-width: 320px;">
+        Partitioned message queue backed by PostgreSQL.<br>
+        Built with ❤︎ by <a href="https://www.linkedin.com/company/smartness-com/">Smartness</a>.
+      </p>
+    </div>
+    <div>
+      <h5>Docs</h5>
+      <ul>
+        <li><a href="quickstart.html">Quickstart</a></li>
+        <li><a href="concepts.html">Concepts</a></li>
+        <li><a href="architecture.html">Architecture</a></li>
+        <li><a href="clients.html">Clients</a></li>
+        <li><a href="http-api.html">HTTP API</a></li>
+      </ul>
+    </div>
+    <div>
+      <h5>Operate</h5>
+      <ul>
+        <li><a href="server.html">Server setup</a></li>
+        <li><a href="dashboard.html">Web dashboard</a></li>
+        <li><a href="benchmarks.html">Benchmarks</a></li>
+      </ul>
+    </div>
+    <div>
+      <h5>Project</h5>
+      <ul>
+        <li><a href="https://github.com/smartpricing/queen">GitHub</a></li>
+        <li><a href="https://hub.docker.com/r/smartnessai/queen-mq">Docker Hub</a></li>
+        <li><a href="https://github.com/smartpricing/queen/blob/master/LICENSE.md">License</a></li>
+      </ul>
+    </div>
+  </div>
+  <div class="shell site-foot-bottom">
+    <span>© 2025 Smartness. Released under the Apache 2.0 License.</span>
+  </div>
+</footer>
+
+<script src="prism.min.js" defer></script>
+<script src="site.js" defer></script>
+</body>
+</html>

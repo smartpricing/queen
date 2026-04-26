@@ -1,0 +1,424 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Queen MQ — Partitioned Message Queue on PostgreSQL</title>
+<meta name="description" content="A Postgres-backed message queue for the workloads where one Postgres is enough. Per-key ordering at high partition cardinality, transactional delivery, replay-from-timestamp.">
+<meta name="theme-color" content="#141415">
+<meta name="color-scheme" content="dark">
+<meta property="og:title" content="Queen MQ — Partitioned Message Queue on PostgreSQL">
+<meta property="og:description" content="A Postgres-backed message queue for the &lt;200k msg/s tier with per-key ordering at high partition cardinality.">
+<meta property="og:type" content="website">
+<link rel="icon" type="image/png" href="assets/queen_head.png">
+<link rel="stylesheet" href="style.css">
+<style>
+/* Index-page extras: tight lists inside positioning cards. */
+.card ul.list-tight {
+  margin: 4px 0 0;
+  padding-left: 18px;
+  font-size: 12.5px;
+  color: var(--text-mid);
+  line-height: 1.55;
+}
+.card ul.list-tight li {
+  margin: 6px 0;
+}
+.card ul.list-tight strong {
+  color: var(--text-hi);
+  font-weight: 500;
+}
+</style>
+</head>
+<body>
+
+<!-- ========================== TOP NAV ========================== -->
+<header class="topnav">
+  <div class="topnav-inner">
+    <a class="brand" href="index.html">
+      <span class="brand-mark"><img src="assets/queen_head.png" alt=""></span>
+      Queen MQ
+    </a>
+    <nav class="topnav-links" aria-label="Primary">
+      <a href="quickstart.html">Quickstart</a>
+      <a href="concepts.html">Concepts</a>
+      <a href="architecture.html">Architecture</a>
+      <a href="clients.html">Clients</a>
+      <a href="server.html">Server</a>
+      <a href="http-api.html">HTTP API</a>
+      <a href="dashboard.html">Dashboard</a>
+      <a href="benchmarks.html">Benchmarks</a>
+    </nav>
+    <div class="topnav-right">
+      <a class="icon-link" href="https://github.com/smartpricing/queen" aria-label="GitHub" title="GitHub">
+        <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 .5C5.7.5.6 5.6.6 11.9c0 5 3.3 9.3 7.8 10.8.6.1.8-.2.8-.6v-2c-3.2.7-3.8-1.5-3.8-1.5-.5-1.3-1.3-1.6-1.3-1.6-1.1-.7.1-.7.1-.7 1.2.1 1.8 1.2 1.8 1.2 1 1.8 2.8 1.3 3.5 1 .1-.8.4-1.3.8-1.6-2.6-.3-5.3-1.3-5.3-5.7 0-1.3.5-2.3 1.2-3.2-.1-.3-.5-1.5.1-3.1 0 0 1-.3 3.3 1.2 1-.3 2-.4 3-.4s2 .1 3 .4c2.3-1.5 3.3-1.2 3.3-1.2.6 1.6.2 2.8.1 3.1.8.9 1.2 1.9 1.2 3.2 0 4.5-2.7 5.4-5.3 5.7.4.4.8 1.1.8 2.2v3.3c0 .3.2.7.8.6 4.5-1.5 7.8-5.8 7.8-10.8C23.4 5.6 18.3.5 12 .5z"/></svg>
+      </a>
+    </div>
+  </div>
+</header>
+
+<!-- ============================ HERO ============================ -->
+<section class="hero">
+  <div class="shell hero-inner">
+    <div class="row" style="gap: 8px;">
+      <span class="chip chip-ice"><span class="dot"></span> v0.14 · partitions on PostgreSQL</span>
+      <span class="chip chip-mute"><span class="dot"></span> Apache 2.0</span>
+    </div>
+    <h1>Per-entity ordering<br><em>without preallocating partitions.</em></h1>
+    <p class="lead">
+      Queen MQ is a partitioned message queue backed by PostgreSQL. Tens of thousands of
+      logical FIFO partitions per queue, consumer groups with replay-from-timestamp, ack
+      and re-push atomically across queues, and a stateless HTTP server you can run in
+      one Docker container. Sized for workloads where <strong>one beefy Postgres is
+      enough</strong> — not for the streaming tier above.
+    </p>
+    <div class="hero-actions">
+      <a class="btn btn-primary" href="quickstart.html">
+        Quickstart
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 12h14M13 5l7 7-7 7"/></svg>
+      </a>
+      <a class="btn" href="https://github.com/smartpricing/queen">View on GitHub</a>
+      <a class="btn btn-ghost" href="https://hub.docker.com/r/smartnessai/queen-mq">Docker Hub</a>
+    </div>
+    <div class="hero-meta">
+      <span><strong>~104k msg/s</strong> peak (batch=100)</span>
+      <span class="dot"></span>
+      <span><strong>~39k msg/s</strong> sustained (batch=10)</span>
+      <span class="dot"></span>
+      <span><strong>10 001</strong> active partitions, no degradation</span>
+      <span class="dot"></span>
+      <span><strong>52 MB</strong> server RSS · 1.6B+ events, zero loss</span>
+    </div>
+    <p class="muted" style="font-size: 12px; margin-top: 8px;">
+      Numbers from <a href="benchmarks.html">our benchmark page</a> on a 32 vCPU host. Above ~200k msg/s sustained, you want
+      Kafka.
+    </p>
+  </div>
+</section>
+
+<!-- ============================ PROBLEM ============================ -->
+<section class="section">
+  <div class="shell-narrow">
+    <span class="label-xs">Why Queen exists</span>
+    <h2>One partition per <em>thing</em>, not per shard.</h2>
+    <p class="muted">
+      Kafka partitions are physical shards. They're brilliant for log-shipping, replication,
+      and shovelling huge volumes through a streaming pipeline. They're awkward when you
+      want one ordered lane per business entity — one chat per partition, one user per
+      partition, one workflow per partition. Kafka makes you preallocate a fixed number
+      and hash-mod into them, which means unrelated entities share a partition and
+      one slow consumer can hold up many.
+    </p>
+    <p class="muted">
+      Queen reframes the partition as a <strong>logical ordering scope</strong> in a
+      PostgreSQL-backed queue. You can have tens of thousands per queue, created on first
+      push, with no preallocation. Slow processing on one chat doesn't slow another. It's
+      not a Kafka replacement — it's a different shape, suited to a different range of
+      workloads.
+    </p>
+    <div class="callout callout-info">
+      <div class="callout-title">Born in production</div>
+      <p>
+        Queen was built at <a href="https://www.linkedin.com/company/smartness-com/">Smartness</a>
+        to power <strong>Smartchat</strong>, an AI guest-messaging platform: 100k+ concurrent
+        chat conversations, AI translation steps, agent replies. One ordered partition per
+        chat — one slow translation no longer freezes the others.
+      </p>
+    </div>
+  </div>
+</section>
+
+<!-- ============================ POWER STORY ============================ -->
+<section class="section">
+  <div class="shell">
+    <span class="label-xs">The power of Queen</span>
+    <h2>One example. Five primitives. Production-grade.</h2>
+    <p class="muted" style="max-width: 720px;">
+      The script below is the <a href="https://github.com/smartpricing/queen/blob/master/examples/base.js"><code>examples/base.js</code></a>
+      from the repo. It creates a queue, pushes a message, consumes it with a consumer
+      group, then atomically acknowledges the input and pushes a derived message into a
+      second queue — exactly-once across both operations.
+    </p>
+
+    <div class="code-meta-wrap with-copy">
+      <div class="code-meta">
+        <span>examples/base.js — verified against http://localhost:6632</span>
+        <button class="copy-btn" type="button">copy</button>
+      </div>
+<pre><code class="language-javascript">import { Queen } from 'queen-mq'
+
+const queen = new Queen('http://localhost:6632')
+
+// 1) Configure queue: lease, retries, retention, encryption.
+await queen.queue('test-queue').delete()
+await queen.queue('test-queue')
+  .config({ leaseTime: 10, retryLimit: 3, retentionSeconds: 86400 })
+  .create()
+
+// 2) Push to a partition. All messages on partition 'p1' are FIFO-ordered.
+await queen.queue('test-queue')
+  .partition('p1')
+  .push([{ transactionId: '123', data: { message: 'Hello, world!' } }])
+
+// 3) Consume in a consumer group with manual ack.
+//    Messages stay leased to this consumer; auto-renew every 2s.
+await queen.queue('test-queue')
+  .group('analytics')
+  .renewLease(true, 2000)
+  .autoAck(false)
+  .batch(10)
+  .each()
+  .consume(async (message) => {
+    // your logic here
+    return { nextPartition: 'p2' }
+  })
+  .onSuccess(async (message, result) => {
+    // 4) Atomically ack the input AND push a derived message
+    //    onto another queue. Either both happen, or neither.
+    await queen
+      .transaction()
+      .ack(message, 'completed', { consumerGroup: 'analytics' })
+      .queue('trx-queue').partition(result.nextPartition)
+      .push([{ data: result, transactionId: message.transactionId + '-next' }])
+      .commit()
+  })
+  .onError(async (message, error) => {
+    await queen.ack(message, false, { group: 'analytics' })
+  })</code></pre>
+    </div>
+
+    <div class="card-grid" style="margin-top: 18px;">
+      <div class="card">
+        <div class="card-eyebrow">1 · Queue</div>
+        <h3>Configurable container</h3>
+        <p>Lease time, retry limit, retention, optional encryption, optional DLQ. One <code>POST /api/v1/configure</code> call.</p>
+      </div>
+      <div class="card">
+        <div class="card-eyebrow">2 · Partition</div>
+        <h3>Ordered lane, no quota</h3>
+        <p>Push to <code>partition('p1')</code> and every message in that lane is processed in order. Lanes are cheap — make one per user, tenant, or chat.</p>
+      </div>
+      <div class="card">
+        <div class="card-eyebrow">3 · Consumer group</div>
+        <h3>Kafka-style fan-out</h3>
+        <p>Each group has its own offset. Workers in a group share the load; separate groups all see every message.</p>
+      </div>
+      <div class="card">
+        <div class="card-eyebrow">4 · Lease + retry</div>
+        <h3>No phantom workers</h3>
+        <p>Messages are leased to one consumer at a time. Renew leases for long jobs; failed ones retry, then go to the DLQ.</p>
+      </div>
+      <div class="card">
+        <div class="card-eyebrow">5 · Transaction</div>
+        <h3>Ack + push, atomic</h3>
+        <p><code>ack(input).push([output]).commit()</code>. Wired straight into PostgreSQL's transaction — exactly-once across queues.</p>
+      </div>
+      <div class="card">
+        <div class="card-eyebrow">+ Failover</div>
+        <h3>Disk buffer if PG goes down</h3>
+        <p>Pushes are written to a local file buffer when PostgreSQL is unreachable, then replayed automatically when it recovers. No lost messages.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ============================ FEATURES ============================ -->
+<section class="section">
+  <div class="shell">
+    <span class="label-xs">Feature surface</span>
+    <h2>What you get out of the box.</h2>
+    <div class="card-grid">
+      <a class="card" href="concepts.html#partitions">
+        <div class="card-eyebrow">Ordering</div>
+        <h3>FIFO partitions at high cardinality</h3>
+        <p>Per-user, per-tenant, per-chat — tens of thousands of ordered lanes per queue. Slow processing on one lane doesn't slow another.</p>
+      </a>
+      <a class="card" href="concepts.html#consumer-groups">
+        <div class="card-eyebrow">Fan-out</div>
+        <h3>Consumer groups & subscriptions</h3>
+        <p>Process from beginning, only new messages, or replay from a timestamp. Each group has its own offset.</p>
+      </a>
+      <a class="card" href="concepts.html#transactions">
+        <div class="card-eyebrow">Atomicity</div>
+        <h3>Transactional pipelines</h3>
+        <p>Atomic ack + push across queues, in one PostgreSQL transaction. Exactly-once between Queen operations; downstream effects are still your responsibility.</p>
+      </a>
+      <a class="card" href="concepts.html#long-polling">
+        <div class="card-eyebrow">Latency</div>
+        <h3>Long polling, no busy loops</h3>
+        <p>Server holds the connection until a message arrives. Inter-instance UDP wakeup keeps fan-out fast.</p>
+      </a>
+      <a class="card" href="concepts.html#dlq">
+        <div class="card-eyebrow">Reliability</div>
+        <h3>Dead-letter queue</h3>
+        <p>Configurable retry limit. Failed messages land in the DLQ with the error message and full payload.</p>
+      </a>
+      <a class="card" href="concepts.html#failover">
+        <div class="card-eyebrow">Durability</div>
+        <h3>Disk failover</h3>
+        <p>If PostgreSQL is unreachable, pushes spill to a local file buffer and replay on recovery.</p>
+      </a>
+      <a class="card" href="concepts.html#tracing">
+        <div class="card-eyebrow">Observability</div>
+        <h3>End-to-end tracing</h3>
+        <p>Trace a message across queues, transformations, retries, and consumer groups. Visualize timelines in the dashboard.</p>
+      </a>
+      <a class="card" href="server.html#auth">
+        <div class="card-eyebrow">Security</div>
+        <h3>JWT auth + role gates</h3>
+        <p>HS256, RS256, and EdDSA. Read-only / read-write / admin role tiers. Per-message <code>producerSub</code> stamped from the JWT.</p>
+      </a>
+      <a class="card" href="dashboard.html">
+        <div class="card-eyebrow">Operate</div>
+        <h3>Vue 3 dashboard</h3>
+        <p>Real-time queues, message browser, analytics, trace explorer, DLQ management — all served by the same C++ binary.</p>
+      </a>
+    </div>
+  </div>
+</section>
+
+<!-- ============================ WHERE QUEEN FITS ============================ -->
+<section class="section">
+  <div class="shell">
+    <span class="label-xs">Honest positioning</span>
+    <h2>Where Queen fits — and where it doesn't.</h2>
+    <p class="muted" style="max-width: 720px;">
+      Queen is good at a specific shape of workload, not at every queue use case.
+      Picking infrastructure honestly matters more than picking the &ldquo;winner&rdquo;
+      of every benchmark. Here's the truth, in three columns:
+    </p>
+
+    <div class="card-grid" style="grid-template-columns: 1fr 1fr 1fr;">
+      <div class="card" style="border-color: rgba(34,211,238,0.4);">
+        <div class="card-eyebrow" style="color: var(--ice-400);">Use Queen</div>
+        <h3>~80% of business workloads</h3>
+        <ul class="list-tight">
+          <li>You need <strong>per-key ordering</strong> with parallel consumers — one chat, one user, one workflow per partition.</li>
+          <li>You're <strong>under ~100k msg/s</strong> sustained throughput.</li>
+          <li>You <strong>already run PostgreSQL</strong> and want one less thing to operate.</li>
+          <li>You want <strong>transactional integration</strong>: insert business data and queue a message in the same PG transaction.</li>
+          <li>You need <strong>replay from a timestamp</strong> for new consumer groups.</li>
+          <li>You have <strong>high-cardinality ordering keys</strong> (10k–1M+ entities, each needing its own ordered lane).</li>
+        </ul>
+      </div>
+
+      <div class="card">
+        <div class="card-eyebrow">Use Kafka</div>
+        <h3>The streaming tier</h3>
+        <ul class="list-tight">
+          <li>You need <strong>&gt;200k msg/s</strong> sustained on a single broker, or millions of msg/s across a cluster.</li>
+          <li>You're building a <strong>log-as-source-of-truth</strong> system with multi-day or unbounded retention.</li>
+          <li>You need <strong>multi-region active-active</strong> replication out of the box (MirrorMaker).</li>
+          <li>You want the <strong>streaming ecosystem</strong>: Kafka Streams, ksqlDB, Flink connectors, Schema Registry.</li>
+          <li>Your team already operates Kafka and the operational cost is sunk.</li>
+        </ul>
+      </div>
+
+      <div class="card">
+        <div class="card-eyebrow">Use RabbitMQ</div>
+        <h3>Rich routing &amp; lowest latency</h3>
+        <ul class="list-tight">
+          <li>You need <strong>complex routing rules</strong>: topic exchanges, headers exchanges, alternate exchanges, message priorities.</li>
+          <li>You care about <strong>p99 latency below 10ms</strong> at moderate load — RabbitMQ wins decisively here.</li>
+          <li>Your workload <strong>doesn't need ordering</strong> across parallel consumers.</li>
+          <li>You're already deeply invested in <strong>AMQP tooling</strong> and your team knows it well.</li>
+          <li>You want native <strong>delayed-delivery and dead-letter exchange</strong> patterns with rich retry policies.</li>
+        </ul>
+      </div>
+    </div>
+
+    <div class="callout callout-info" style="margin-top: 18px;">
+      <div class="callout-title">A note on the &ldquo;~80%&rdquo; claim</div>
+      <p>
+        Most production message-queue workloads at most companies are below 100k msg/s and
+        need ordering of some sort. Queen targets that median workload — not Kafka's
+        upper tail and not RabbitMQ's specific routing strengths. Our
+        <a href="benchmarks.html">benchmarks</a> show Queen, Kafka, and RabbitMQ
+        head-to-head on identical hardware so you can decide for yourself, with numbers
+        we measured rather than wishful thinking.
+      </p>
+    </div>
+  </div>
+</section>
+
+<!-- ============================ QUICKSTART CTA ============================ -->
+<section class="section">
+  <div class="shell-narrow">
+    <span class="label-xs">Get started</span>
+    <h2>Two containers. Three commands.</h2>
+    <p class="muted">PostgreSQL + Queen, then push a message and pop it back. No SDK required.</p>
+
+    <div class="code-meta-wrap with-copy">
+      <div class="code-meta"><span>shell</span><button class="copy-btn" type="button">copy</button></div>
+<pre><code class="language-bash">docker network create queen
+docker run --name qpg --network queen \
+  -e POSTGRES_PASSWORD=postgres -p 5433:5432 -d postgres
+docker run -p 6632:6632 --network queen \
+  -e PG_HOST=qpg -e PG_PASSWORD=postgres -e NUM_WORKERS=2 \
+  smartnessai/queen-mq:latest
+
+curl -X POST http://localhost:6632/api/v1/push \
+  -H 'Content-Type: application/json' \
+  -d '{"items":[{"queue":"demo","payload":{"hello":"world"}}]}'
+
+curl 'http://localhost:6632/api/v1/pop/queue/demo?autoAck=true'</code></pre>
+    </div>
+
+    <div class="row" style="margin-top: 18px;">
+      <a class="btn btn-primary" href="quickstart.html">Full quickstart</a>
+      <a class="btn" href="clients.html">Pick a client library</a>
+      <a class="btn btn-ghost" href="http-api.html">Or stay raw HTTP</a>
+    </div>
+  </div>
+</section>
+
+<!-- ============================ FOOTER ============================ -->
+<footer class="site-foot">
+  <div class="shell site-foot-inner">
+    <div>
+      <div class="brand" style="margin-bottom: 10px;">
+        <span class="brand-mark"><img src="assets/queen_head.png" alt=""></span>
+        Queen MQ
+      </div>
+      <p class="muted" style="font-size: 12.5px; max-width: 320px;">
+        Partitioned message queue backed by PostgreSQL.<br>
+        Built with ❤︎ by <a href="https://www.linkedin.com/company/smartness-com/">Smartness</a>.
+      </p>
+    </div>
+    <div>
+      <h5>Docs</h5>
+      <ul>
+        <li><a href="quickstart.html">Quickstart</a></li>
+        <li><a href="concepts.html">Concepts</a></li>
+        <li><a href="architecture.html">Architecture</a></li>
+        <li><a href="clients.html">Clients</a></li>
+        <li><a href="http-api.html">HTTP API</a></li>
+      </ul>
+    </div>
+    <div>
+      <h5>Operate</h5>
+      <ul>
+        <li><a href="server.html">Server setup</a></li>
+        <li><a href="dashboard.html">Web dashboard</a></li>
+        <li><a href="benchmarks.html">Benchmarks</a></li>
+      </ul>
+    </div>
+    <div>
+      <h5>Project</h5>
+      <ul>
+        <li><a href="https://github.com/smartpricing/queen">GitHub</a></li>
+        <li><a href="https://hub.docker.com/r/smartnessai/queen-mq">Docker Hub</a></li>
+        <li><a href="https://github.com/smartpricing/queen/blob/master/LICENSE.md">License (Apache 2.0)</a></li>
+      </ul>
+    </div>
+  </div>
+  <div class="shell site-foot-bottom">
+    <span>© 2025 Smartness. Released under the Apache 2.0 License.</span>
+    <span>Why "Queen"? Because years ago, when I first read "queue", I read it as "queen" in my mind.</span>
+  </div>
+</footer>
+
+<script src="prism.min.js" defer></script>
+<script src="site.js" defer></script>
+</body>
+</html>

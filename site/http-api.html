@@ -1,0 +1,429 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>HTTP API — Queen MQ</title>
+<meta name="description" content="Complete HTTP API reference for Queen MQ: configure, push, pop, ack, transaction, lease, resources, status, DLQ.">
+<meta name="theme-color" content="#141415">
+<meta name="color-scheme" content="dark">
+<link rel="icon" type="image/png" href="assets/queen_head.png">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<header class="topnav">
+  <div class="topnav-inner">
+    <a class="brand" href="index.html">
+      <span class="brand-mark"><img src="assets/queen_head.png" alt=""></span>
+      Queen MQ
+    </a>
+    <nav class="topnav-links" aria-label="Primary">
+      <a href="quickstart.html">Quickstart</a>
+      <a href="concepts.html">Concepts</a>
+      <a href="architecture.html">Architecture</a>
+      <a href="clients.html">Clients</a>
+      <a href="server.html">Server</a>
+      <a href="http-api.html" class="current">HTTP API</a>
+      <a href="dashboard.html">Dashboard</a>
+      <a href="benchmarks.html">Benchmarks</a>
+    </nav>
+    <div class="topnav-right">
+      <a class="icon-link" href="https://github.com/smartpricing/queen" aria-label="GitHub">
+        <svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 .5C5.7.5.6 5.6.6 11.9c0 5 3.3 9.3 7.8 10.8.6.1.8-.2.8-.6v-2c-3.2.7-3.8-1.5-3.8-1.5-.5-1.3-1.3-1.6-1.3-1.6-1.1-.7.1-.7.1-.7 1.2.1 1.8 1.2 1.8 1.2 1 1.8 2.8 1.3 3.5 1 .1-.8.4-1.3.8-1.6-2.6-.3-5.3-1.3-5.3-5.7 0-1.3.5-2.3 1.2-3.2-.1-.3-.5-1.5.1-3.1 0 0 1-.3 3.3 1.2 1-.3 2-.4 3-.4s2 .1 3 .4c2.3-1.5 3.3-1.2 3.3-1.2.6 1.6.2 2.8.1 3.1.8.9 1.2 1.9 1.2 3.2 0 4.5-2.7 5.4-5.3 5.7.4.4.8 1.1.8 2.2v3.3c0 .3.2.7.8.6 4.5-1.5 7.8-5.8 7.8-10.8C23.4 5.6 18.3.5 12 .5z"/></svg>
+      </a>
+    </div>
+  </div>
+</header>
+
+<main class="shell-narrow" style="padding-top: 48px;">
+
+<span class="label-xs">HTTP API</span>
+<h1 style="font-size: 32px; font-weight: 600; letter-spacing: -0.02em; margin: 6px 0 14px;">
+  Plain HTTP. JSON in, JSON out.
+</h1>
+<p class="muted">
+  All requests live under <code>/api/v1</code>. JSON request bodies, JSON responses.
+  Bearer token in the <code>Authorization</code> header when JWT is enabled.
+  Every endpoint below was exercised against a live server while writing this page.
+</p>
+
+<nav class="toc" aria-label="On this page">
+  <a href="#health">Health</a>
+  <a href="#configure">Configure</a>
+  <a href="#push">Push</a>
+  <a href="#pop">Pop</a>
+  <a href="#ack">Ack</a>
+  <a href="#tx">Transaction</a>
+  <a href="#lease">Lease extend</a>
+  <a href="#resources">Resources</a>
+  <a href="#status">Status &amp; analytics</a>
+  <a href="#dlq">DLQ</a>
+  <a href="#cg">Consumer groups</a>
+  <a href="#auth">Auth header</a>
+</nav>
+
+<!-- ============== SUMMARY TABLE ============== -->
+<h2>Endpoint summary</h2>
+<table>
+  <thead><tr><th>Group</th><th>Method · Path</th><th>What it does</th></tr></thead>
+  <tbody>
+    <tr><td>Health</td><td>GET <code>/health</code></td><td>Liveness + DB check</td></tr>
+    <tr><td>Health</td><td>GET <code>/metrics</code></td><td>Performance metrics</td></tr>
+    <tr><td>Config</td><td>POST <code>/api/v1/configure</code></td><td>Create or reconfigure a queue</td></tr>
+    <tr><td>Messages</td><td>POST <code>/api/v1/push</code></td><td>Push 1..N messages</td></tr>
+    <tr><td>Messages</td><td>GET <code>/api/v1/pop/queue/:q</code></td><td>Pop from any partition of <code>:q</code></td></tr>
+    <tr><td>Messages</td><td>GET <code>/api/v1/pop/queue/:q/partition/:p</code></td><td>Pop from a specific partition</td></tr>
+    <tr><td>Messages</td><td>GET <code>/api/v1/pop</code></td><td>Pop by namespace / task filter</td></tr>
+    <tr><td>Messages</td><td>POST <code>/api/v1/ack</code></td><td>Ack a single message</td></tr>
+    <tr><td>Messages</td><td>POST <code>/api/v1/ack/batch</code></td><td>Ack many messages at once</td></tr>
+    <tr><td>Advanced</td><td>POST <code>/api/v1/transaction</code></td><td>Atomic ack + push bundle</td></tr>
+    <tr><td>Advanced</td><td>POST <code>/api/v1/lease/:id/extend</code></td><td>Extend a message lease</td></tr>
+    <tr><td>Resources</td><td>GET <code>/api/v1/resources/overview</code></td><td>Cluster-wide stats</td></tr>
+    <tr><td>Resources</td><td>GET <code>/api/v1/resources/queues</code></td><td>List queues</td></tr>
+    <tr><td>Resources</td><td>GET / DELETE <code>/api/v1/resources/queues/:q</code></td><td>Inspect / delete a queue</td></tr>
+    <tr><td>Resources</td><td>GET <code>/api/v1/resources/namespaces</code> · <code>/tasks</code></td><td>List tags</td></tr>
+    <tr><td>Resources</td><td>GET <code>/api/v1/messages</code> · <code>/messages/:tx</code></td><td>Inspect raw messages</td></tr>
+    <tr><td>Resources</td><td>GET <code>/api/v1/dlq</code></td><td>DLQ messages with filters</td></tr>
+    <tr><td>Status</td><td>GET <code>/api/v1/status</code> · <code>/status/queues</code> · <code>/status/analytics</code></td><td>Dashboard data</td></tr>
+    <tr><td>Status</td><td>GET <code>/api/v1/consumer-groups</code></td><td>Group lag &amp; state</td></tr>
+  </tbody>
+</table>
+
+<!-- ============== HEALTH ============== -->
+<h2 id="health">Health</h2>
+<div class="endpoint"><span class="method get">GET</span><span>/health</span></div>
+<div class="code-meta-wrap with-copy">
+  <div class="code-meta"><span>request</span><button class="copy-btn" type="button">copy</button></div>
+<pre><code class="language-bash">curl http://localhost:6632/health</code></pre>
+</div>
+<p class="muted">Returns <code>{"status":"healthy","database":"connected","version":"…",…}</code>. Always public, never gated by auth.</p>
+
+<!-- ============== CONFIGURE ============== -->
+<h2 id="configure">Configure a queue</h2>
+<div class="endpoint"><span class="method post">POST</span><span>/api/v1/configure</span></div>
+<div class="code-meta-wrap with-copy">
+  <div class="code-meta"><span>request</span><button class="copy-btn" type="button">copy</button></div>
+<pre><code class="language-bash">curl -X POST http://localhost:6632/api/v1/configure \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "queue":"orders",
+    "namespace":"billing",
+    "task":"process-invoice",
+    "options":{
+      "leaseTime":300,
+      "retryLimit":3,
+      "priority":5,
+      "retentionSeconds":3600,
+      "completedRetentionSeconds":86400,
+      "encryptionEnabled":false,
+      "deadLetterQueue":true,
+      "dlqAfterMaxRetries":true
+    }
+  }'</code></pre>
+</div>
+<table>
+  <thead><tr><th>Option</th><th>Default</th><th>Notes</th></tr></thead>
+  <tbody>
+    <tr><td><code>leaseTime</code></td><td>300</td><td>Seconds before a popped message returns to the queue if not acked.</td></tr>
+    <tr><td><code>retryLimit</code></td><td>3</td><td>Retries before DLQ.</td></tr>
+    <tr><td><code>retryDelay</code></td><td>1000</td><td>Milliseconds between retries.</td></tr>
+    <tr><td><code>priority</code></td><td>0</td><td>Higher priority queues drained first by multi-queue consumers.</td></tr>
+    <tr><td><code>maxSize</code></td><td>10000</td><td>Max in-flight messages.</td></tr>
+    <tr><td><code>delayedProcessing</code></td><td>0</td><td>Seconds to delay before a message becomes available.</td></tr>
+    <tr><td><code>windowBuffer</code></td><td>0</td><td>Seconds to coalesce per partition (window aggregation).</td></tr>
+    <tr><td><code>retentionSeconds</code></td><td>0</td><td>Pending message retention. <code>0</code> = forever.</td></tr>
+    <tr><td><code>completedRetentionSeconds</code></td><td>0</td><td>Completed message retention.</td></tr>
+    <tr><td><code>encryptionEnabled</code></td><td>false</td><td>Requires <code>QUEEN_ENCRYPTION_KEY</code> env.</td></tr>
+    <tr><td><code>deadLetterQueue</code> / <code>dlqAfterMaxRetries</code></td><td>false</td><td>Enable + auto-route to DLQ on retry exhaustion.</td></tr>
+  </tbody>
+</table>
+
+<!-- ============== PUSH ============== -->
+<h2 id="push">Push</h2>
+<div class="endpoint"><span class="method post">POST</span><span>/api/v1/push</span></div>
+<div class="code-meta-wrap with-copy">
+  <div class="code-meta"><span>request</span><button class="copy-btn" type="button">copy</button></div>
+<pre><code class="language-bash">curl -X POST http://localhost:6632/api/v1/push \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "items":[
+      {
+        "queue":"orders",
+        "partition":"user-123",
+        "payload":{"orderId":1,"amount":99.99},
+        "transactionId":"order-1-v1",
+        "traceId":"019dc9-..."
+      }
+    ]
+  }'</code></pre>
+</div>
+<p class="muted">
+  <code>partition</code> defaults to <code>"Default"</code>. <code>transactionId</code>
+  is server-generated if omitted; provide your own for idempotent pushes.
+</p>
+
+<h4>Optional: server-side push buffering (QoS 0)</h4>
+<p class="muted">
+  For very high-rate fire-and-forget pushes, ask the server to batch-flush:
+</p>
+<div class="code-meta-wrap with-copy">
+  <div class="code-meta"><span>QoS 0 buffering</span><button class="copy-btn" type="button">copy</button></div>
+<pre><code class="language-bash">curl -X POST http://localhost:6632/api/v1/push \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "items":[{"queue":"events","payload":{"type":"login"}}],
+    "bufferMs":100,
+    "bufferMax":100
+  }'</code></pre>
+</div>
+
+<!-- ============== POP ============== -->
+<h2 id="pop">Pop</h2>
+<div class="endpoint"><span class="method get">GET</span><span>/api/v1/pop/queue/:queue</span></div>
+<div class="endpoint"><span class="method get">GET</span><span>/api/v1/pop/queue/:queue/partition/:partition</span></div>
+<div class="endpoint"><span class="method get">GET</span><span>/api/v1/pop?namespace=&amp;task=</span></div>
+
+<table>
+  <thead><tr><th>Query param</th><th>Default</th><th>Notes</th></tr></thead>
+  <tbody>
+    <tr><td><code>batch</code></td><td>1</td><td>Max messages to return.</td></tr>
+    <tr><td><code>wait</code></td><td>false</td><td>Long-polling: hold connection until a message arrives or <code>timeout</code> elapses.</td></tr>
+    <tr><td><code>timeout</code></td><td>30000</td><td>Long-polling timeout in ms.</td></tr>
+    <tr><td><code>consumerGroup</code></td><td>__QUEUE_MODE__</td><td>Empty group ⇒ shared queue mode.</td></tr>
+    <tr><td><code>autoAck</code></td><td>false</td><td>Mark messages completed on delivery (one round-trip).</td></tr>
+    <tr><td><code>subscriptionMode</code></td><td>(server default)</td><td><code>new</code> to skip historical messages on a brand-new group.</td></tr>
+    <tr><td><code>subscriptionFrom</code></td><td>—</td><td>ISO 8601 timestamp to replay from.</td></tr>
+  </tbody>
+</table>
+
+<div class="code-meta-wrap with-copy">
+  <div class="code-meta"><span>blocking pop with consumer group</span><button class="copy-btn" type="button">copy</button></div>
+<pre><code class="language-bash">curl 'http://localhost:6632/api/v1/pop/queue/orders?consumerGroup=processors&batch=10&wait=true&timeout=30000'</code></pre>
+</div>
+
+<p class="muted">Response shape:</p>
+<div class="code-meta-wrap"><div class="code-meta"><span>response (excerpt)</span></div>
+<pre><code class="language-json">{
+  "messages": [
+    {
+      "transactionId": "019dc9-...",
+      "partitionId":   "c0715-...",
+      "leaseId":       "019dc9-...",
+      "data":          { "orderId": 1, "amount": 99.99 },
+      "createdAt":     "2026-04-26T10:59:28.267966Z",
+      "retryCount":    0,
+      "producerSub":   null
+    }
+  ],
+  "success": true
+}</code></pre>
+</div>
+
+<!-- ============== ACK ============== -->
+<h2 id="ack">Ack</h2>
+<div class="endpoint"><span class="method post">POST</span><span>/api/v1/ack</span></div>
+<div class="callout callout-warn">
+  <div class="callout-title">partitionId is required</div>
+  <p>
+    <code>transactionId</code> is unique <em>within</em> a partition, not globally. You
+    must include the <code>partitionId</code> from the pop response so the right message
+    is acked.
+  </p>
+</div>
+
+<div class="code-meta-wrap with-copy">
+  <div class="code-meta"><span>completed</span><button class="copy-btn" type="button">copy</button></div>
+<pre><code class="language-bash">curl -X POST http://localhost:6632/api/v1/ack \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "transactionId":"&lt;tx&gt;",
+    "partitionId":"&lt;pid&gt;",
+    "status":"completed"
+  }'</code></pre>
+</div>
+<div class="code-meta-wrap with-copy">
+  <div class="code-meta"><span>failed (will retry)</span><button class="copy-btn" type="button">copy</button></div>
+<pre><code class="language-bash">curl -X POST http://localhost:6632/api/v1/ack \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "transactionId":"&lt;tx&gt;",
+    "partitionId":"&lt;pid&gt;",
+    "status":"failed",
+    "error":"timeout calling downstream",
+    "consumerGroup":"processors"
+  }'</code></pre>
+</div>
+
+<div class="endpoint"><span class="method post">POST</span><span>/api/v1/ack/batch</span></div>
+<div class="code-meta-wrap with-copy">
+  <div class="code-meta"><span>batch</span><button class="copy-btn" type="button">copy</button></div>
+<pre><code class="language-bash">curl -X POST http://localhost:6632/api/v1/ack/batch \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "consumerGroup":"processors",
+    "acknowledgments":[
+      {"transactionId":"tx-1","partitionId":"pid-1","status":"completed"},
+      {"transactionId":"tx-2","partitionId":"pid-2","status":"failed","error":"validation"}
+    ]
+  }'</code></pre>
+</div>
+
+<!-- ============== TRANSACTION ============== -->
+<h2 id="tx">Transaction (atomic ack + push)</h2>
+<div class="endpoint"><span class="method post">POST</span><span>/api/v1/transaction</span></div>
+<div class="code-meta-wrap with-copy">
+  <div class="code-meta"><span>two-stage pipeline</span><button class="copy-btn" type="button">copy</button></div>
+<pre><code class="language-bash">curl -X POST http://localhost:6632/api/v1/transaction \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "operations":[
+      {
+        "type":"ack",
+        "transactionId":"&lt;input-tx&gt;",
+        "partitionId":"&lt;input-pid&gt;",
+        "status":"completed",
+        "consumerGroup":"analytics"
+      },
+      {
+        "type":"push",
+        "items":[
+          {"queue":"next-stage","partition":"p2","payload":{"derived":true}}
+        ]
+      }
+    ]
+  }'</code></pre>
+</div>
+
+<p class="muted">
+  All operations execute in a single PostgreSQL transaction. Either everything commits,
+  or nothing does. Use this for exactly-once message handoff between queues.
+</p>
+
+<!-- ============== LEASE ============== -->
+<h2 id="lease">Extend a lease</h2>
+<div class="endpoint"><span class="method post">POST</span><span>/api/v1/lease/:leaseId/extend</span></div>
+<div class="code-meta-wrap with-copy">
+  <div class="code-meta"><span>request</span><button class="copy-btn" type="button">copy</button></div>
+<pre><code class="language-bash">curl -X POST http://localhost:6632/api/v1/lease/&lt;leaseId&gt;/extend \
+  -H 'Content-Type: application/json' \
+  -d '{"seconds":60}'</code></pre>
+</div>
+<p class="muted">
+  Use the <code>leaseId</code> returned by pop. Most clients renew leases for you when
+  you set <code>renewLease(true, intervalMillis)</code> on the consumer.
+</p>
+
+<!-- ============== RESOURCES ============== -->
+<h2 id="resources">Resources</h2>
+<div class="endpoint"><span class="method get">GET</span><span>/api/v1/resources/overview</span></div>
+<div class="endpoint"><span class="method get">GET</span><span>/api/v1/resources/queues</span></div>
+<div class="endpoint"><span class="method get">GET</span><span>/api/v1/resources/queues/:queue</span></div>
+<div class="endpoint"><span class="method delete">DELETE</span><span>/api/v1/resources/queues/:queue</span></div>
+<div class="endpoint"><span class="method get">GET</span><span>/api/v1/resources/namespaces</span></div>
+<div class="endpoint"><span class="method get">GET</span><span>/api/v1/resources/tasks</span></div>
+<div class="endpoint"><span class="method get">GET</span><span>/api/v1/messages?queue=&amp;partition=&amp;status=&amp;limit=</span></div>
+<div class="endpoint"><span class="method get">GET</span><span>/api/v1/messages/:transactionId</span></div>
+
+<!-- ============== STATUS ============== -->
+<h2 id="status">Status &amp; analytics</h2>
+<div class="endpoint"><span class="method get">GET</span><span>/api/v1/status</span></div>
+<div class="endpoint"><span class="method get">GET</span><span>/api/v1/status/queues</span></div>
+<div class="endpoint"><span class="method get">GET</span><span>/api/v1/status/queues/:queue</span></div>
+<div class="endpoint"><span class="method get">GET</span><span>/api/v1/status/queues/:queue/messages</span></div>
+<div class="endpoint"><span class="method get">GET</span><span>/api/v1/status/analytics?interval=hour&amp;from=&amp;to=</span></div>
+
+<p class="muted">
+  These are what the dashboard renders. Useful for embedding Queen metrics into your
+  own ops dashboards.
+</p>
+
+<!-- ============== DLQ ============== -->
+<h2 id="dlq">Dead-letter queue</h2>
+<div class="endpoint"><span class="method get">GET</span><span>/api/v1/dlq?queue=&amp;consumerGroup=&amp;partition=&amp;from=&amp;to=&amp;limit=&amp;offset=</span></div>
+
+<div class="code-meta-wrap with-copy">
+  <div class="code-meta"><span>filter by queue + date range</span><button class="copy-btn" type="button">copy</button></div>
+<pre><code class="language-bash">curl 'http://localhost:6632/api/v1/dlq?queue=orders&from=2025-12-01&to=2025-12-31&limit=100'</code></pre>
+</div>
+
+<p class="muted">
+  Each entry includes the original message data, the <code>errorMessage</code>,
+  <code>retryCount</code>, original timestamps, and the consumer group it failed under.
+</p>
+
+<!-- ============== CG ============== -->
+<h2 id="cg">Consumer groups</h2>
+<div class="endpoint"><span class="method get">GET</span><span>/api/v1/consumer-groups</span></div>
+<p class="muted">
+  Returns all groups (named groups + the implicit <code>__QUEUE_MODE__</code>) with
+  member counts, total offset lag, max time-lag, and per-queue/partition detail. State
+  is one of <code>Stable</code>, <code>Lagging</code>, or <code>Dead</code>.
+</p>
+
+<!-- ============== AUTH ============== -->
+<h2 id="auth">Auth header</h2>
+<p class="muted">
+  When JWT is enabled (<code>JWT_ENABLED=true</code>), every request that isn't on the
+  public list (<code>/health</code>, <code>/metrics</code>, dashboard) needs:
+</p>
+<div class="code-meta-wrap with-copy">
+  <div class="code-meta"><span>JWT bearer</span><button class="copy-btn" type="button">copy</button></div>
+<pre><code class="language-bash">curl http://localhost:6632/api/v1/resources/queues \
+  -H "Authorization: Bearer $QUEEN_TOKEN"</code></pre>
+</div>
+<p class="muted">
+  See <a href="server.html#auth">Server setup → JWT</a> for HS256 / RS256 / EdDSA
+  configuration and the role-based gating model.
+</p>
+
+</main>
+
+<footer class="site-foot">
+  <div class="shell site-foot-inner">
+    <div>
+      <div class="brand" style="margin-bottom: 10px;">
+        <span class="brand-mark"><img src="assets/queen_head.png" alt=""></span>
+        Queen MQ
+      </div>
+      <p class="muted" style="font-size: 12.5px; max-width: 320px;">
+        Partitioned message queue backed by PostgreSQL.<br>
+        Built with ❤︎ by <a href="https://www.linkedin.com/company/smartness-com/">Smartness</a>.
+      </p>
+    </div>
+    <div>
+      <h5>Docs</h5>
+      <ul>
+        <li><a href="quickstart.html">Quickstart</a></li>
+        <li><a href="concepts.html">Concepts</a></li>
+        <li><a href="architecture.html">Architecture</a></li>
+        <li><a href="clients.html">Clients</a></li>
+        <li><a href="http-api.html">HTTP API</a></li>
+      </ul>
+    </div>
+    <div>
+      <h5>Operate</h5>
+      <ul>
+        <li><a href="server.html">Server setup</a></li>
+        <li><a href="dashboard.html">Web dashboard</a></li>
+        <li><a href="benchmarks.html">Benchmarks</a></li>
+      </ul>
+    </div>
+    <div>
+      <h5>Project</h5>
+      <ul>
+        <li><a href="https://github.com/smartpricing/queen">GitHub</a></li>
+        <li><a href="https://hub.docker.com/r/smartnessai/queen-mq">Docker Hub</a></li>
+        <li><a href="https://github.com/smartpricing/queen/blob/master/LICENSE.md">License</a></li>
+      </ul>
+    </div>
+  </div>
+  <div class="shell site-foot-bottom">
+    <span>© 2025 Smartness. Released under the Apache 2.0 License.</span>
+  </div>
+</footer>
+
+<script src="prism.min.js" defer></script>
+<script src="site.js" defer></script>
+</body>
+</html>

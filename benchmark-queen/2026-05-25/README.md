@@ -121,6 +121,35 @@ The 0.13 → 0.14 work is **substantial and worth shipping**:
 
 Recommendation: ship 1.0 with the two `statement_timeout` fixes applied.
 
+## Cross-system comparison: Queen vs Kafka vs RabbitMQ
+
+Single-node, 1000 partitions/queues, persistent durability, 15-min run, same host (32 vCPU / 62 GiB RAM, no swap). All three measured directly.
+
+| Metric | Queen `bp-10` | Kafka `kafka-1000p` | RabbitMQ `rabbitmq-1000q` |
+|---|---:|---:|---:|
+| Topology | 1 queue, 1001 partitions | 1 topic, 1000 partitions | 1000 classic queues |
+| Durability | PG `synchronous_commit=on` (fsync) | `acks=1` (page cache) | `delivery_mode=2 + confirms` |
+| **Push msg/s** | **39 060** | **1 520 538** | **34 750** |
+| Pop msg/s | 38 351 | ~1 500 000 | 34 750 |
+| **Push p99 latency** | **38 ms** | 2 966 ms (saturated) | **9 ms** (confirm p99) |
+| **Server RSS / heap** | **52 MB** | 3.1–7.2 GB | 188 MB |
+| Server CPU avg | 7.4 vCPU | 3.5 vCPU | **1.5 vCPU** |
+| **CPU per Mmsg/s** | 190 vCPU | **2.3 vCPU** | 43 vCPU |
+| Disk written | ~14 GB | ~36 GB (1B msgs) | ~9 GB |
+| **Per-key ordering w/ parallel consumers** | ✅ native (lease-based) | ✅ native (consumer group) | ❌ classic queues lose order under parallel consumers |
+| Replay from timestamp/offset | ✅ (subscribe-from-timestamp) | ✅ (offset seek) | ❌ classic / ✅ streams |
+| Dynamic high-cardinality partitions | ✅ trivial | ⚠️ preallocated, heavy | ⚠️ 1 queue per scope |
+| Transactional with PG business data | ✅ same DB | ❌ outbox pattern needed | ❌ outbox pattern needed |
+| Operational complexity | ✅ 1 binary + your PG | ❌ broker + KRaft + topic admin | ⚠️ broker + Erlang/Mnesia |
+
+**Headline interpretation**:
+
+- **Kafka** does 39× more throughput than Queen but at 80× higher saturation latency, ~80× more memory, 36 vs 14 GB disk for the same hours of work. Right tool above ~200 k msg/s sustained.
+- **RabbitMQ** roughly ties Queen on throughput (34.7 k vs 39 k msg/s), wins decisively on **latency** (9 ms vs 38 ms p99) and **CPU** (1.5 vs 7.4 vCPU). Queen wins on **memory** (52 MB vs 188 MB) and on **architectural features** (per-key ordering with parallel consumers, replay, PG-transaction integration, dynamic partition cardinality).
+- **Queen** is best where the architectural features matter — multi-tenant pub/sub with per-tenant ordering, dynamic per-entity partitioning, transactional outbox-elimination via shared PG. The throughput tier is competitive, not dominant. The CPU-per-msg cost is meaningfully higher than RabbitMQ's because of HTTP/JSON protocol overhead and per-batch PG writes.
+
+Detailed per-system reports: [`vs-kafka.md`](./vs-kafka.md), [`vs-rabbitmq.md`](./vs-rabbitmq.md).
+
 ## Reports in this folder
 
 
@@ -128,6 +157,8 @@ Recommendation: ship 1.0 with the two `statement_timeout` fixes applied.
 | -------------------------------------------------- | --------------------------------------------------------------------------- |
 | `**[README.md](./README.md)`**                     | This file                                                                   |
 | `**[HOW-TO-RUN.md](./HOW-TO-RUN.md)**`             | Reproducing these benchmarks step-by-step                                   |
+| `**[vs-kafka.md](./vs-kafka.md)**`                 | Kafka head-to-head (measured at 1000 partitions)                            |
+| `**[vs-rabbitmq.md](./vs-rabbitmq.md)**`           | RabbitMQ comparison (public benchmark data — see methodology note)          |
 | `[version-comparison.md](./version-comparison.md)` | 0.14.0.alpha.3 vs 0.12.19 side-by-side                                      |
 | `[cg-axis-comparison.md](./cg-axis-comparison.md)` | Consumer-group axis (1 / 5 / 10 cgs) analysis                               |
 | `part-{1,10,100}.md`                               | Low-load partition axis (1×50 client, batch=1)                              |

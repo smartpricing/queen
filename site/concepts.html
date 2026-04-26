@@ -1,0 +1,363 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Concepts — Queen MQ</title>
+<meta name="description" content="The core ideas behind Queen MQ: queues, partitions, consumer groups, leases, transactions, DLQ, and failover.">
+<meta name="theme-color" content="#141415">
+<meta name="color-scheme" content="dark">
+<link rel="icon" type="image/png" href="assets/queen_head.png">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<header class="topnav">
+  <div class="topnav-inner">
+    <a class="brand" href="index.html">
+      <span class="brand-mark"><img src="assets/queen_head.png" alt=""></span>
+      Queen MQ
+    </a>
+    <nav class="topnav-links" aria-label="Primary">
+      <a href="quickstart.html">Quickstart</a>
+      <a href="concepts.html" class="current">Concepts</a>
+      <a href="architecture.html">Architecture</a>
+      <a href="clients.html">Clients</a>
+      <a href="server.html">Server</a>
+      <a href="http-api.html">HTTP API</a>
+      <a href="dashboard.html">Dashboard</a>
+      <a href="benchmarks.html">Benchmarks</a>
+    </nav>
+    <div class="topnav-right">
+      <a class="icon-link" href="https://github.com/smartpricing/queen" aria-label="GitHub">
+        <svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 .5C5.7.5.6 5.6.6 11.9c0 5 3.3 9.3 7.8 10.8.6.1.8-.2.8-.6v-2c-3.2.7-3.8-1.5-3.8-1.5-.5-1.3-1.3-1.6-1.3-1.6-1.1-.7.1-.7.1-.7 1.2.1 1.8 1.2 1.8 1.2 1 1.8 2.8 1.3 3.5 1 .1-.8.4-1.3.8-1.6-2.6-.3-5.3-1.3-5.3-5.7 0-1.3.5-2.3 1.2-3.2-.1-.3-.5-1.5.1-3.1 0 0 1-.3 3.3 1.2 1-.3 2-.4 3-.4s2 .1 3 .4c2.3-1.5 3.3-1.2 3.3-1.2.6 1.6.2 2.8.1 3.1.8.9 1.2 1.9 1.2 3.2 0 4.5-2.7 5.4-5.3 5.7.4.4.8 1.1.8 2.2v3.3c0 .3.2.7.8.6 4.5-1.5 7.8-5.8 7.8-10.8C23.4 5.6 18.3.5 12 .5z"/></svg>
+      </a>
+    </div>
+  </div>
+</header>
+
+<main class="shell-narrow" style="padding-top: 48px;">
+
+<span class="label-xs">Concepts</span>
+<h1 style="font-size: 32px; font-weight: 600; letter-spacing: -0.02em; margin: 6px 0 14px;">
+  The shape of Queen.
+</h1>
+<p class="muted">
+  Queen has six concepts. Once you have them in your head you can predict what every API
+  call will do without looking it up.
+</p>
+
+<nav class="toc" aria-label="On this page">
+  <a href="#queues">Queues</a>
+  <a href="#partitions">Partitions</a>
+  <a href="#consumer-groups">Consumer groups</a>
+  <a href="#leases">Leases &amp; retries</a>
+  <a href="#transactions">Transactions</a>
+  <a href="#long-polling">Long polling</a>
+  <a href="#dlq">Dead-letter queue</a>
+  <a href="#failover">Disk failover</a>
+  <a href="#tracing">Tracing</a>
+</nav>
+
+<!-- ============== QUEUES ============== -->
+<h2 id="queues">Queues</h2>
+<p class="muted">
+  A queue is a logical container of messages. Each queue has its own configuration:
+</p>
+<ul>
+  <li><strong>leaseTime</strong> — seconds before a popped message is re-queued if not acked.</li>
+  <li><strong>retryLimit</strong> — failed attempts before the message goes to the DLQ.</li>
+  <li><strong>retentionSeconds</strong> / <strong>completedRetentionSeconds</strong> — how long pending and completed messages are kept.</li>
+  <li><strong>encryptionEnabled</strong> — at-rest AES-256-GCM encryption of payloads.</li>
+  <li><strong>priority</strong> — higher-priority queues are drained first by multi-queue consumers.</li>
+  <li><strong>delayedProcessing</strong>, <strong>windowBuffer</strong>, <strong>maxSize</strong>, <strong>dlqAfterMaxRetries</strong> — fine-grained controls.</li>
+</ul>
+<p class="muted">
+  Queues are created on first push by default. Call <code>configure</code> first if you
+  want non-default settings:
+</p>
+
+<div class="code-meta-wrap with-copy">
+  <div class="code-meta"><span>configure a queue</span><button class="copy-btn" type="button">copy</button></div>
+<pre><code class="language-javascript">await queen.queue('orders')
+  .config({
+    leaseTime: 300,        // 5 minutes
+    retryLimit: 3,
+    retentionSeconds: 86400,
+    encryptionEnabled: false,
+  })
+  .create()</code></pre>
+</div>
+
+<p class="muted">
+  Optionally, queues can also belong to a <em>namespace</em> and a <em>task</em>. These
+  are tags that let consumers pop from many queues at once
+  (<code>?namespace=billing&amp;task=process-invoice</code>) without naming them
+  individually.
+</p>
+
+<!-- ============== PARTITIONS ============== -->
+<h2 id="partitions">Partitions</h2>
+<p class="muted">
+  A partition is an <strong>ordered lane</strong> inside a queue. Messages pushed to the
+  same partition are guaranteed to be processed in order; messages on different
+  partitions can be processed in parallel.
+</p>
+<p class="muted">
+  Unlike Kafka, partitions in Queen are not physical commit-logs. They're
+  <em>logical</em> — there is no quota, no rebalance, no broker pinning. Make one per
+  user, tenant, chat, video, or device. Tens of thousands per queue is normal.
+</p>
+
+<div class="card-grid-2">
+  <div class="card">
+    <div class="card-eyebrow">Why partitions matter</div>
+    <h3>No head-of-line blocking</h3>
+    <p>If user A's message takes 30 seconds to process, user B's message on a different partition is unaffected. The lane is the unit of ordering, not the bottleneck.</p>
+  </div>
+  <div class="card">
+    <div class="card-eyebrow">Default partition</div>
+    <h3>You can ignore partitions</h3>
+    <p>Pushing without a partition uses the special <code>Default</code> partition. Plenty of workloads (broadcast events, fire-and-forget jobs) don't need ordering at all.</p>
+  </div>
+</div>
+
+<div class="code-meta-wrap with-copy">
+  <div class="code-meta"><span>per-user ordering</span><button class="copy-btn" type="button">copy</button></div>
+<pre><code class="language-javascript">// All events for user-123 are processed in push-order.
+await queen.queue('user-events')
+  .partition('user-123')
+  .push([
+    { data: { event: 'login' } },
+    { data: { event: 'view-page' } },
+    { data: { event: 'logout' } },
+  ])</code></pre>
+</div>
+
+<!-- ============== CONSUMER GROUPS ============== -->
+<h2 id="consumer-groups">Consumer groups</h2>
+<p class="muted">
+  A consumer group is a named offset over a queue. The semantics:
+</p>
+<ul>
+  <li><strong>Same group, multiple workers</strong> — workers <strong>share</strong> messages (load balancing).</li>
+  <li><strong>Different groups</strong> — each group <strong>sees every message</strong> independently (fan-out).</li>
+  <li><strong>No group</strong> — falls back to "queue mode": a single shared offset called <code>__QUEUE_MODE__</code>.</li>
+</ul>
+
+<div class="code-meta-wrap with-copy">
+  <div class="code-meta"><span>fan-out: same events, two pipelines</span><button class="copy-btn" type="button">copy</button></div>
+<pre><code class="language-javascript">// Group 1 — sends emails. Two workers in this group share the load.
+await queen.queue('events').group('emailer').consume(handler1)
+await queen.queue('events').group('emailer').consume(handler2)
+
+// Group 2 — analytics. Sees the same events independently.
+await queen.queue('events').group('analytics').consume(analyticsHandler)</code></pre>
+</div>
+
+<h3>Subscription modes</h3>
+<p class="muted">When a brand-new consumer group connects, it can choose where to start:</p>
+<table>
+  <thead>
+    <tr><th>Mode</th><th>Behavior</th></tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td><code>(default, all)</code></td>
+      <td>Process every message ever pushed, including the entire backlog.</td>
+    </tr>
+    <tr>
+      <td><code>new</code></td>
+      <td>Skip everything older than the moment the group joins; only process messages pushed after.</td>
+    </tr>
+    <tr>
+      <td><code>subscriptionFrom: '2025-12-01T00:00:00Z'</code></td>
+      <td>Replay from a specific timestamp.</td>
+    </tr>
+  </tbody>
+</table>
+
+<!-- ============== LEASES ============== -->
+<h2 id="leases">Leases &amp; retries</h2>
+<p class="muted">
+  A popped message is <em>leased</em> to one consumer for <code>leaseTime</code> seconds.
+  If the consumer doesn't ack within that window the lease expires and the message is
+  re-queued. If the consumer acks with <code>failed</code>, the message goes back to the
+  queue (or the DLQ if it has exceeded <code>retryLimit</code>).
+</p>
+
+<div class="callout callout-warn">
+  <div class="callout-title">Long-running jobs</div>
+  <p>
+    For tasks that may exceed <code>leaseTime</code> (LLM calls, video transcodes), have
+    the client renew the lease in the background:
+  </p>
+<pre style="margin-top:8px;"><code class="language-javascript">await queen.queue('jobs')
+  .renewLease(true, 2000)   // renew every 2s
+  .autoAck(false)
+  .each()
+  .consume(async (m) => { /* long work */ })</code></pre>
+</div>
+
+<!-- ============== TRANSACTIONS ============== -->
+<h2 id="transactions">Transactions</h2>
+<p class="muted">
+  A transaction is an atomic bundle of <strong>ack + push</strong> operations. Either
+  the whole bundle commits, or none of it does. This is what makes multi-stage pipelines
+  exactly-once.
+</p>
+
+<div class="code-meta-wrap with-copy">
+  <div class="code-meta"><span>two-stage pipeline</span><button class="copy-btn" type="button">copy</button></div>
+<pre><code class="language-javascript">await queen.queue('raw')
+  .autoAck(false)
+  .each()
+  .consume(async (m) => {
+    const out = transform(m.data)
+
+    await queen
+      .transaction()
+      .ack(m)                                  // mark input completed
+      .queue('processed').push([{ data: out }]) // emit derived
+      .commit()                                 // single PG transaction
+  })</code></pre>
+</div>
+
+<p class="muted">
+  Under the hood this is a single <code>BEGIN…COMMIT</code> against PostgreSQL. The
+  ack and the insert are in the same WAL record — there's no in-between state where
+  the input is acked but the output never landed.
+</p>
+
+<!-- ============== LONG POLLING ============== -->
+<h2 id="long-polling">Long polling</h2>
+<p class="muted">
+  Pop with <code>wait=true</code> and the server holds the connection open until a
+  message arrives, the timeout expires, or you cancel the request. No busy-loop polling
+  on the client.
+</p>
+
+<div class="code-meta-wrap with-copy">
+  <div class="code-meta"><span>blocking pop</span><button class="copy-btn" type="button">copy</button></div>
+<pre><code class="language-bash">curl 'http://localhost:6632/api/v1/pop/queue/jobs?wait=true&timeout=30000&autoAck=true'</code></pre>
+</div>
+
+<p class="muted">
+  In a multi-instance cluster, pushes broadcast a UDP "wake-up" packet to peer servers
+  so a long-poll on instance B can return immediately when instance A pushes — no
+  database polling involved.
+</p>
+
+<!-- ============== DLQ ============== -->
+<h2 id="dlq">Dead-letter queue</h2>
+<p class="muted">
+  Each queue can opt into a DLQ. When a message exceeds <code>retryLimit</code> (or the
+  per-queue <code>maxWaitTimeSeconds</code>) Queen moves it to the DLQ along with the
+  last error message, retry count, and original timestamps. You can browse, filter, and
+  replay DLQ messages from the dashboard or the HTTP API.
+</p>
+
+<div class="code-meta-wrap with-copy">
+  <div class="code-meta"><span>list DLQ messages</span><button class="copy-btn" type="button">copy</button></div>
+<pre><code class="language-bash">curl 'http://localhost:6632/api/v1/dlq?queue=orders&limit=50'</code></pre>
+</div>
+
+<!-- ============== FAILOVER ============== -->
+<h2 id="failover">Disk failover</h2>
+<p class="muted">
+  If PostgreSQL becomes unreachable, pushes do not fail. The server writes them to a
+  local file buffer (<code>FILE_BUFFER_DIR</code>) and acknowledges to the client.
+  When PostgreSQL recovers, a background scanner streams the buffered events back into
+  the database in order. Result: <strong>zero message loss</strong> even through
+  failovers, restarts, and short network partitions.
+</p>
+
+<div class="callout callout-info">
+  <div class="callout-title">Push-only path</div>
+  <p>
+    The disk buffer covers the push path. Pop and ack require the database to be live.
+    For full HA, run the server behind multiple replicas and configure PostgreSQL with
+    a streaming replica + automatic failover.
+  </p>
+</div>
+
+<!-- ============== TRACING ============== -->
+<h2 id="tracing">Tracing</h2>
+<p class="muted">
+  Every message can carry a <code>traceId</code>. Push the same trace ID across multiple
+  queue stages and Queen stitches them together into a timeline you can visualize in the
+  dashboard. Useful for debugging multi-stage pipelines (translate → agent → notify),
+  showing per-stage latencies, error correlations, and consumer-group ownership.
+</p>
+
+<hr class="divider-thin">
+
+<h2>Where next?</h2>
+<div class="card-grid">
+  <a class="card" href="clients.html">
+    <div class="card-eyebrow">Code</div>
+    <h3>Client patterns</h3>
+    <p>Side-by-side recipes in JavaScript, Python, Go, PHP, and C++.</p>
+  </a>
+  <a class="card" href="http-api.html">
+    <div class="card-eyebrow">Reference</div>
+    <h3>HTTP API</h3>
+    <p>Every endpoint, parameter, and response shape.</p>
+  </a>
+  <a class="card" href="server.html">
+    <div class="card-eyebrow">Operate</div>
+    <h3>Server setup</h3>
+    <p>Env vars, JWT auth, K8s, multi-instance cluster.</p>
+  </a>
+</div>
+
+</main>
+
+<footer class="site-foot">
+  <div class="shell site-foot-inner">
+    <div>
+      <div class="brand" style="margin-bottom: 10px;">
+        <span class="brand-mark"><img src="assets/queen_head.png" alt=""></span>
+        Queen MQ
+      </div>
+      <p class="muted" style="font-size: 12.5px; max-width: 320px;">
+        Partitioned message queue backed by PostgreSQL.<br>
+        Built with ❤︎ by <a href="https://www.linkedin.com/company/smartness-com/">Smartness</a>.
+      </p>
+    </div>
+    <div>
+      <h5>Docs</h5>
+      <ul>
+        <li><a href="quickstart.html">Quickstart</a></li>
+        <li><a href="concepts.html">Concepts</a></li>
+        <li><a href="architecture.html">Architecture</a></li>
+        <li><a href="clients.html">Clients</a></li>
+        <li><a href="http-api.html">HTTP API</a></li>
+      </ul>
+    </div>
+    <div>
+      <h5>Operate</h5>
+      <ul>
+        <li><a href="server.html">Server setup</a></li>
+        <li><a href="dashboard.html">Web dashboard</a></li>
+        <li><a href="benchmarks.html">Benchmarks</a></li>
+      </ul>
+    </div>
+    <div>
+      <h5>Project</h5>
+      <ul>
+        <li><a href="https://github.com/smartpricing/queen">GitHub</a></li>
+        <li><a href="https://hub.docker.com/r/smartnessai/queen-mq">Docker Hub</a></li>
+        <li><a href="https://github.com/smartpricing/queen/blob/master/LICENSE.md">License</a></li>
+      </ul>
+    </div>
+  </div>
+  <div class="shell site-foot-bottom">
+    <span>© 2025 Smartness. Released under the Apache 2.0 License.</span>
+  </div>
+</footer>
+
+<script src="prism.min.js" defer></script>
+<script src="site.js" defer></script>
+</body>
+</html>
