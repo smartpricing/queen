@@ -1,38 +1,50 @@
 // Chart theme — single source of truth for all Chart.js colors.
 //
-// Philosophy: monochrome by default. Only these semantic slots are colored:
-//   - HEALTHY / COMPLETED / SUCCESS  → green
-//   - DLQ / FAILED / ERROR           → pink (logo)
-// Everything else (primary/secondary/tertiary series, row-index differentiation,
-// "ingested vs processed") uses shades of grey so the eye isn't pulled toward
-// anything that isn't a problem.
+// Philosophy: monochrome by default. Red / green / yellow are reserved for
+// status: error / failure / DLQ → red, healthy / success / completed →
+// green, warning / threshold-breach → yellow. They are NEVER assigned by
+// series index, only by data semantics. Charts that just need to tell N
+// series apart use the grey ramp below; the legend / tooltip carries the
+// rest of the meaning.
 
-// Series colors — ordered by use priority.
-// Index 0–2 are the three greys (use these for generic N-series charts).
-// 3, 4 are reserved for semantic slots (healthy, danger) — use directly by meaning.
+// Cycling series palette — all greys, no semantic colors. Use chartColor(i)
+// or chartColors[i] for generic N-series charts where index has no health
+// meaning (per-replica, per-queue, push/pop/ack split, etc).
 export const chartPalette = [
-  { line: '#e6e6e6', fill: 'rgba(230,230,230,0.10)' }, // 0: primary series   (was cyan)
-  { line: '#8a8a92', fill: 'rgba(138,138,146,0.10)' }, // 1: secondary series (was amber)
-  { line: '#6a6a6a', fill: 'rgba(106,106,106,0.10)' }, // 2: tertiary series  (was violet)
-  { line: '#4ade80', fill: 'rgba(74,222,128,0.12)'  }, // 3: healthy / ok    (semantic)
-  { line: '#fb7185', fill: 'rgba(251,113,133,0.12)' }, // 4: danger / error  (semantic)
+  { line: '#e6e6e6', fill: 'rgba(230,230,230,0.10)' }, // 0: primary
+  { line: '#8a8a92', fill: 'rgba(138,138,146,0.10)' }, // 1: secondary
+  { line: '#6a6a6a', fill: 'rgba(106,106,106,0.10)' }, // 2: tertiary
+  { line: '#b8b8b8', fill: 'rgba(184,184,184,0.10)' }, // 3: lighter
+  { line: '#4a4a4f', fill: 'rgba(74,74,79,0.18)'    }, // 4: darker
 ]
+
+// Semantic colors — call by name when the data itself carries a meaning.
+// Do not cycle through these; pick the one that matches what the series
+// represents (see stateColor() for label-driven lookup).
+export const semanticColors = {
+  ok:    { line: '#4ade80', fill: 'rgba(74,222,128,0.12)'  }, // healthy / success
+  warn:  { line: '#e6b450', fill: 'rgba(230,180,80,0.12)'  }, // warning / lag
+  bad:   { line: '#fb7185', fill: 'rgba(251,113,133,0.12)' }, // error / DLQ
+  badStrong: { line: '#f43f5e', fill: 'rgba(244,63,94,0.18)' }, // hard error (db errors)
+}
 
 // Distribution / state color lookup by semantic label.
 // Use for doughnut/pie charts where each slice has a named meaning.
-// Everything that isn't a clear win/loss gets a grey.
+// Only labels that genuinely encode status get a colored slot; neutral
+// operations (push, pop, ack, ingested, processed, retention, …) all get
+// greys so the eye is only drawn to actual problems.
 export const stateColor = (label) => {
   const key = String(label || '').toLowerCase()
   if (key.includes('complet') || key === 'ok' || key === 'healthy' || key === 'success' || key === 'stable')
     return { line: '#4ade80', fill: 'rgba(74,222,128,0.75)' }
   if (key.includes('dlq') || key.includes('dead') || key.includes('fail') || key === 'error' || key === 'bad' || key === 'stuck')
     return { line: '#fb7185', fill: 'rgba(251,113,133,0.75)' }
+  if (key === 'warn' || key === 'warning' || key === 'lag' || key === 'lagging' || key === 'evicted' || key === 'eviction')
+    return { line: '#e6b450', fill: 'rgba(230,180,80,0.75)' }
   if (key === 'pending' || key.includes('queue') || key === 'ingested' || key === 'push' || key.includes('produc'))
     return { line: '#e6e6e6', fill: 'rgba(230,230,230,0.80)' }  // primary grey
   if (key === 'processing' || key === 'processed' || key === 'pop' || key.includes('consum'))
     return { line: '#8a8a92', fill: 'rgba(138,138,146,0.80)' }  // secondary grey
-  if (key.includes('ack') || key === 'retrying' || key === 'warn' || key === 'lag' || key === 'lagging')
-    return { line: '#e6b450', fill: 'rgba(230,180,80,0.75)' }   // muted warn amber
   return { line: '#6a6a6a', fill: 'rgba(106,106,106,0.75)' }    // fallback tertiary grey
 }
 

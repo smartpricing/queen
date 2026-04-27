@@ -3,14 +3,14 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Architecture — Queen MQ</title>
+<title>Architecture: Queen MQ</title>
 <meta name="description" content="How Queen works under the hood: the three-layer mental model, PostgreSQL data model, libqueen request-fusion engine, and the HTTP shell.">
 <meta name="theme-color" content="#141415">
 <meta name="color-scheme" content="dark">
 <link rel="icon" type="image/png" href="assets/queen_head.png">
 <link rel="stylesheet" href="style.css">
 <style>
-/* Architecture page — local extras for the layered diagram. */
+/* Architecture page, local extras for the layered diagram. */
 .arch-diagram {
   background: var(--ink-3); border: 1px solid var(--bd);
   border-radius: 8px; padding: 18px 20px; margin: 14px 0;
@@ -30,7 +30,7 @@
 .arch-diagram .hl-warn { color: var(--warn-400); }
 .arch-diagram .hl-ok   { color: var(--ok-500); }
 
-/* Procedure list — denser than a card grid */
+/* Procedure list, denser than a card grid */
 .proc-table { width: 100%; border-collapse: collapse; font-size: 13px; }
 .proc-table td:first-child { width: 32%; }
 .proc-table code { font-size: 12px; }
@@ -72,7 +72,7 @@
   Queen is three layers stacked end-to-end. PostgreSQL stores everything. A C++ engine
   called <strong>libqueen</strong> fuses many HTTP requests into batched stored-procedure
   calls. A uWebSockets HTTP server distributes work across worker threads and routes
-  responses back to the right connection. This page is the mental model — enough to
+  responses back to the right connection. This page is the mental model, enough to
   predict how the system behaves under any workload, without reading the source.
 </p>
 
@@ -97,7 +97,7 @@
 
 <div class="arch-diagram">
 ┌────────────────────────────────────────────────────────────┐
-│  <strong>HTTP shell</strong> — uWebSockets, C++17                            │
+│  <strong>HTTP shell</strong>, uWebSockets, C++17                            │
 │                                                            │
 │  Acceptor on <em>:6632</em>  →  adopts sockets to N workers       │
 │  Each worker:                                              │
@@ -109,7 +109,7 @@
                        │  <span class="hl-warn">submit(JobRequest, callback)</span>
                        ▼
 ┌────────────────────────────────────────────────────────────┐
-│  <strong>libqueen</strong> — request-fusion engine, one per worker          │
+│  <strong>libqueen</strong>, request-fusion engine, one per worker          │
 │                                                            │
 │  PerTypeQueue × 6   (PUSH / POP / ACK / TRANSACTION /      │
 │                      RENEW_LEASE / CUSTOM)                 │
@@ -121,7 +121,7 @@
                        │  <span class="hl-pink">SELECT queen.push_messages_v3($1::jsonb)</span>
                        ▼
 ┌────────────────────────────────────────────────────────────┐
-│  <strong>PostgreSQL</strong> — schema "queen"                                │
+│  <strong>PostgreSQL</strong>, schema "queen"                                │
 │                                                            │
 │  Tables:    queues, partitions, messages,                  │
 │             partition_consumers, partition_lookup,         │
@@ -141,11 +141,11 @@
 </p>
 
 <!-- ============================ DATA MODEL ============================ -->
-<h2 id="data-model">Data model — PostgreSQL is the source of truth</h2>
+<h2 id="data-model">Data model, PostgreSQL is the source of truth</h2>
 
 <p class="muted">
-  Everything the system knows about — every queue, every message, every consumer offset
-  — lives in PostgreSQL rows. There is no in-memory queue state on the server that
+  Everything the system knows about, every queue, every message, every consumer offset
+ , lives in PostgreSQL rows. There is no in-memory queue state on the server that
   survives a restart. The schema is intentionally small:
 </p>
 
@@ -160,11 +160,11 @@
     </tr>
     <tr>
       <td><code>partitions</code></td>
-      <td>Named lane inside a queue. Logical only — Queen does not use PostgreSQL native table partitioning.</td>
+      <td>Named lane inside a queue. Logical only, Queen does not use PostgreSQL native table partitioning.</td>
     </tr>
     <tr>
       <td><code>messages</code></td>
-      <td>The payload. Dedupe key is <strong><code>(partition_id, transaction_id)</code></strong>, not just <code>transaction_id</code> — idempotency is partition-scoped.</td>
+      <td>The payload. Dedupe key is <strong><code>(partition_id, transaction_id)</code></strong>, not just <code>transaction_id</code>, idempotency is partition-scoped.</td>
     </tr>
     <tr>
       <td><code>partition_consumers</code></td>
@@ -195,8 +195,8 @@
 
 <h3>Two indexes carry the hot path</h3>
 <ul>
-  <li><strong><code>messages (partition_id, created_at, id)</code></strong> — the cursor scan that pop walks to find the next batch of unconsumed messages on a claimed partition.</li>
-  <li><strong>UNIQUE <code>(partition_id, transaction_id)</code></strong> on <code>messages</code> — enforces dedupe via <code>ON CONFLICT DO NOTHING</code> in push.</li>
+  <li><strong><code>messages (partition_id, created_at, id)</code></strong>, the cursor scan that pop walks to find the next batch of unconsumed messages on a claimed partition.</li>
+  <li><strong>UNIQUE <code>(partition_id, transaction_id)</code></strong> on <code>messages</code>, enforces dedupe via <code>ON CONFLICT DO NOTHING</code> in push.</li>
 </ul>
 <p class="muted">
   Update-heavy tables (<code>partition_lookup</code>, <code>partition_consumers</code>,
@@ -209,8 +209,8 @@
   Both live inside the procedures, not the schema:
 </p>
 <ul>
-  <li><strong>POP wildcard claim</strong> — <code>pg_try_advisory_xact_lock(hashtextextended(partition_id::text, …))</code>. Non-blocking try; the first request to claim a partition wins it for the duration of its transaction.</li>
-  <li><strong>ACK serialization</strong> — <code>pg_advisory_xact_lock(...md5(partition_id || consumer_group)...)</code>. Blocking lock; prevents two concurrent acks from racing on the same cursor row.</li>
+  <li><strong>POP wildcard claim</strong>, <code>pg_try_advisory_xact_lock(hashtextextended(partition_id::text, …))</code>. Non-blocking try; the first request to claim a partition wins it for the duration of its transaction.</li>
+  <li><strong>ACK serialization</strong>, <code>pg_advisory_xact_lock(...md5(partition_id || consumer_group)...)</code>. Blocking lock; prevents two concurrent acks from racing on the same cursor row.</li>
 </ul>
 <p class="muted">
   These are the entire concurrency story. There are no application-level mutexes, no
@@ -222,12 +222,12 @@
   When a consumer pops without specifying a group, every code path internally uses the
   literal string <code>'__QUEUE_MODE__'</code> as the consumer-group value. Same
   <code>partition_consumers</code> row mechanism, same offset-tracking, same procedures
-  — just a special name. This is why the behavioral difference between "queue mode" and
+ , just a special name. This is why the behavioral difference between "queue mode" and
   "consumer-group mode" is small enough to coexist in one stored procedure.
 </p>
 
 <!-- ============================ PROCEDURES ============================ -->
-<h2 id="procedures">Stored procedures — the hot-path API</h2>
+<h2 id="procedures">Stored procedures, the hot-path API</h2>
 
 <p class="muted">
   Every hot-path operation is a named, versioned PostgreSQL procedure. They all take a
@@ -244,8 +244,8 @@
       <td>Upserts queue + partition rows, deduplicates within the batch and against existing rows via <code>ON CONFLICT</code>, inserts messages, returns inserted ids and per-partition <code>partition_updates</code> the server then writes to <code>partition_lookup</code>.</td>
     </tr>
     <tr>
-      <td><code>queen.pop_unified_batch_v3</code></td>
-      <td>One procedure for both queue mode and consumer-group mode, both fixed-partition and wildcard. Scans <code>partition_lookup</code> + <code>consumer_watermarks</code>, claims a partition with an advisory try-lock, takes the lease in <code>partition_consumers</code>, fetches messages by cursor.</td>
+      <td><code>queen.pop_unified_batch_v4</code></td>
+      <td>One procedure for both queue mode and consumer-group mode, both fixed-partition and wildcard. Scans <code>partition_lookup</code> + <code>consumer_watermarks</code>, claims partitions with an advisory try-lock, takes the lease in <code>partition_consumers</code>, fetches messages by cursor. v4 supports a per-call <code>max_partitions</code> field: the wildcard branch can drain up to <em>N</em> partitions in a single call (one shared lease across all of them, <code>batch_size</code> as the global message cap). v3 is preserved for emergency revert by flipping the dispatched SQL string in <code>lib/queen/pending_job.hpp</code>.</td>
     </tr>
     <tr>
       <td><code>queen.ack_messages_v2</code></td>
@@ -272,12 +272,12 @@
 
 <h3>How push actually works</h3>
 <p class="muted">
-  Worth a closer look — push is the highest-throughput hot path. <code>push_messages_v3</code>
+  Worth a closer look, push is the highest-throughput hot path. <code>push_messages_v3</code>
   is three statements with no temp tables:
 </p>
 
 <div class="code-meta-wrap">
-  <div class="code-meta"><span>queen.push_messages_v3 — sketch</span></div>
+  <div class="code-meta"><span>queen.push_messages_v3, sketch</span></div>
 <pre><code class="language-sql">-- 1. Ensure all queues in this batch exist.
 INSERT INTO queen.queues (name, …)
 SELECT DISTINCT … FROM jsonb_array_elements(p_items)
@@ -304,7 +304,7 @@ SELECT jsonb_build_object('items', …, 'partition_updates', …);</code></pre>
 <p class="muted">
   Three SQL statements, one network round trip from libqueen, hundreds of pushed messages
   per call under load. The <code>partition_updates</code> aggregate in the response is
-  what the server replays into <code>update_partition_lookup_v1</code> after commit — so
+  what the server replays into <code>update_partition_lookup_v1</code> after commit, so
   the wildcard pop path always finds the latest writes.
 </p>
 
@@ -328,7 +328,7 @@ SELECT jsonb_build_object('items', …, 'partition_updates', …);</code></pre>
 </p>
 
 <!-- ============================ LIBQUEEN ============================ -->
-<h2 id="libqueen">libqueen — the request-fusion engine</h2>
+<h2 id="libqueen">libqueen, the request-fusion engine</h2>
 
 <p class="muted">
   libqueen is a per-HTTP-worker C++ library that owns its own libuv event loop and a
@@ -344,9 +344,9 @@ SELECT jsonb_build_object('items', …, 'partition_updates', …);</code></pre>
     PUSH = 0,        // batchable
     POP,             // batchable in groups
     ACK,             // batchable
-    TRANSACTION,     // NOT batchable — atomic, serial
+    TRANSACTION,     // NOT batchable, atomic, serial
     RENEW_LEASE,     // batchable
-    CUSTOM,          // NOT batchable — per-job SQL
+    CUSTOM,          // NOT batchable, per-job SQL
 };
 
 // Every batchable type maps to exactly one stored procedure:
@@ -359,17 +359,17 @@ SELECT jsonb_build_object('items', …, 'partition_updates', …);</code></pre>
 
 <p class="muted">
   Each <code>JobType</code> has its own queue, its own batch policy, and its own
-  concurrency controller. They run in parallel — a high-load pop doesn't block push,
+  concurrency controller. They run in parallel, a high-load pop doesn't block push,
   and vice versa.
 </p>
 
-<h3>BatchPolicy — when to fire</h3>
+<h3>BatchPolicy, when to fire</h3>
 <p class="muted">
   Three knobs per type, settable via <code>QUEEN_&lt;TYPE&gt;_*</code> env vars:
 </p>
 
 <div class="code-meta-wrap">
-  <div class="code-meta"><span>lib/queen/batch_policy.hpp — should_fire</span></div>
+  <div class="code-meta"><span>lib/queen/batch_policy.hpp, should_fire</span></div>
 <pre><code class="language-cpp">FireDecision should_fire(size_t queue_size,
                          milliseconds oldest_age) const {
     if (queue_size == 0)                            return HOLD;
@@ -386,7 +386,7 @@ SELECT jsonb_build_object('items', …, 'partition_updates', …);</code></pre>
   POP 20/5ms (latency-sensitive), ACK 50/20ms, TRANSACTION 1/0 (never fuse).
 </p>
 
-<h3>ConcurrencyController — adaptive in-flight cap</h3>
+<h3>ConcurrencyController, adaptive in-flight cap</h3>
 <p class="muted">
   Two implementations, switched by <code>QUEEN_CONCURRENCY_MODE</code>:
 </p>
@@ -399,11 +399,11 @@ SELECT jsonb_build_object('items', …, 'partition_updates', …);</code></pre>
 </ul>
 <p class="muted">
   This is why <code>QUEEN_PUSH_MAX_CONCURRENT</code> ships at 24 even though Vegas
-  typically converges to ~17 in steady state — Vegas needs headroom to grow into when
+  typically converges to ~17 in steady state, Vegas needs headroom to grow into when
   load rises. The cap is a safety ceiling, not an operating point.
 </p>
 
-<h3>DrainOrchestrator — the heart</h3>
+<h3>DrainOrchestrator, the heart</h3>
 <p class="muted">
   All scheduling runs on libqueen's dedicated libuv thread. The drain loop wakes on
   four sources:
@@ -438,7 +438,7 @@ SELECT jsonb_build_object('items', …, 'partition_updates', …);</code></pre>
   <li>On writable → <code>PQflush</code> until the query is sent.</li>
   <li>On readable → <code>PQconsumeInput</code> + <code>PQisBusy</code> loop, then <code>PQgetResult</code> reads the JSON response.</li>
   <li>The procedure returns one result row containing one JSONB array; libqueen splits it back into per-job results and invokes each <code>PendingJob::callback(result_str)</code>.</li>
-  <li>Slot returns to the free pool, kicks the orchestrator again — which is why throughput stays high when many slots become free at once.</li>
+  <li>Slot returns to the free pool, kicks the orchestrator again, which is why throughput stays high when many slots become free at once.</li>
 </ol>
 
 <h3>Long polling</h3>
@@ -447,12 +447,12 @@ SELECT jsonb_build_object('items', …, 'partition_updates', …);</code></pre>
   <code>next_check</code> with exponential backoff (initial 100ms, multiplier 2.0, cap
   1000ms) and a <code>wait_deadline</code> from the client's <code>timeout</code>
   parameter. The safety-net timer fires the request again at <code>next_check</code>
-  without holding any DB connection in between — this is what makes "30k idle
+  without holding any DB connection in between, this is what makes "30k idle
   long-pollers" actually fine.
 </p>
 
 <!-- ============================ HTTP SHELL ============================ -->
-<h2 id="http">HTTP shell — uWebSockets, acceptor + workers</h2>
+<h2 id="http">HTTP shell, uWebSockets, acceptor + workers</h2>
 
 <p class="muted">
   The HTTP layer is small and uniform. <code>main_acceptor.cpp</code> is 76 lines;
@@ -470,13 +470,13 @@ SELECT jsonb_build_object('items', …, 'partition_updates', …);</code></pre>
 <p class="muted">
   This is the trickiest part of the C++ code, but the model is simple. When a route
   handler calls <code>queen-&gt;submit(job, callback)</code>, the callback runs on
-  libqueen's libuv thread — <strong>not</strong> the uWS thread that owns the
+  libqueen's libuv thread, <strong>not</strong> the uWS thread that owns the
   <code>HttpResponse*</code>. Touching that pointer from the wrong thread is undefined
   behavior. So:
 </p>
 
 <div class="code-meta-wrap">
-  <div class="code-meta"><span>routes/push.cpp — the cross-thread hop</span></div>
+  <div class="code-meta"><span>routes/push.cpp, the cross-thread hop</span></div>
 <pre><code class="language-cpp">// On uWS thread: register the response, get a request_id back.
 auto request_id = registry-&gt;register_response(res, worker_id, …);
 
@@ -495,7 +495,7 @@ ctx.queen-&gt;submit(std::move(job_req),
 <p class="muted">
   <code>uWS::Loop::defer()</code> queues the lambda on the worker's event loop. If the
   client disconnected in the meantime, <code>res-&gt;onAborted</code> already invalidated
-  the registry entry — late deliveries become no-ops.
+  the registry entry, late deliveries become no-ops.
 </p>
 
 <!-- ============================ WALKTHROUGH ============================ -->
@@ -505,7 +505,7 @@ ctx.queen-&gt;submit(std::move(job_req),
 <ol>
   <li>Client sends <code>POST /api/v1/push</code> with <code>{items: [...]}</code>.</li>
   <li>Acceptor adopts the socket onto worker N.</li>
-  <li>Auth middleware validates the JWT and stamps <code>producerSub</code> from the verified <code>sub</code> claim. <em>Client-supplied <code>producerSub</code> is ignored — this is what closes the impersonation hole.</em></li>
+  <li>Auth middleware validates the JWT and stamps <code>producerSub</code> from the verified <code>sub</code> claim. <em>Client-supplied <code>producerSub</code> is ignored, this is what closes the impersonation hole.</em></li>
   <li>If the queue has encryption enabled, <code>EncryptionService</code> replaces each payload with <code>{encrypted, iv, authTag}</code> (AES-256-GCM).</li>
   <li>The route registers the response in the per-worker <code>ResponseRegistry</code>, gets back a <code>request_id</code>.</li>
   <li>It stashes the items in <code>push_failover_storage[request_id]</code> in case the DB call fails.</li>
@@ -521,7 +521,7 @@ ctx.queen-&gt;submit(std::move(job_req),
   The path is the same up to <code>queen-&gt;submit</code>, but the JobType is
   <code>TRANSACTION</code> with <code>max_concurrent=1, max_batch=1</code>. libqueen
   runs the request alone, calling <code>execute_transaction_v2</code>. Inside the
-  procedure, ack and push are inlined as one PL/pgSQL function — i.e. one PostgreSQL
+  procedure, ack and push are inlined as one PL/pgSQL function, i.e. one PostgreSQL
   transaction. Any RAISE in either operation rolls back the whole bundle: the input
   message stays unacked, the output message never landed. On commit, both are durable
   in the same WAL record. <em>That is exactly-once across queues.</em>
@@ -534,7 +534,7 @@ ctx.queen-&gt;submit(std::move(job_req),
 <p class="muted">
   If PostgreSQL is unreachable mid-push, the route handler's callback parses
   <code>{success: false, error: …}</code> and replays the items from
-  <code>push_failover_storage</code> into the <code>FileBufferManager</code> — a
+  <code>push_failover_storage</code> into the <code>FileBufferManager</code>, a
   rotating JSON-Lines file in <code>FILE_BUFFER_DIR</code>. A background scanner reads
   the file every <code>FILE_BUFFER_FLUSH_MS</code> (default 100ms) and replays buffered
   events into the database once it's reachable again. On startup, worker 0 runs a
@@ -544,12 +544,12 @@ ctx.queen-&gt;submit(std::move(job_req),
   <strong>Pop and ack do not have a file-buffer path.</strong> They require the database
   to be live. The disk buffer is about not losing inbound writes, not about serving
   reads from disk. For full HA the database itself must be HA (Patroni, RDS Multi-AZ,
-  Cloud SQL, etc.) — Queen just reconnects when the upstream reappears.
+  Cloud SQL, etc.), Queen just reconnects when the upstream reappears.
 </p>
 
 <h3>Multi-instance UDP sync</h3>
 <p class="muted">
-  Queen servers are stateless above PostgreSQL — you can run as many as you want
+  Queen servers are stateless above PostgreSQL, you can run as many as you want
   pointed at the same DB. Two optional UDP layers make horizontal scale fast:
 </p>
 <ul>
@@ -557,7 +557,7 @@ ctx.queen-&gt;submit(std::move(job_req),
   <li><strong>Distributed cache (UDPSYNC)</strong>: heartbeats + shared-state cache for queue config, partition-id LRU, and server-health tracking. Heartbeats authenticate via HMAC-SHA256 (<code>QUEEN_SYNC_SECRET</code>).</li>
 </ul>
 <p class="muted">
-  The cluster works fine without UDP — long-poll consumers just fall back to a
+  The cluster works fine without UDP, long-poll consumers just fall back to a
   slightly longer wake-up interval.
 </p>
 
@@ -575,7 +575,7 @@ ctx.queen-&gt;submit(std::move(job_req),
   Optional JWT, supporting HS256, RS256, and EdDSA. Routes are gated by access level
   (read-only / read-write / admin) derived from a configurable role claim. When auth is
   enabled the server stamps the validated <code>sub</code> claim onto every pushed
-  message as <code>producerSub</code> — clients can't set this field, so even a
+  message as <code>producerSub</code>, clients can't set this field, so even a
   compromised JWT cannot impersonate another producer in the message log.
 </p>
 
@@ -591,27 +591,27 @@ ctx.queen-&gt;submit(std::move(job_req),
   <div class="card">
     <div class="card-eyebrow">No coordination service</div>
     <h3>Locks live in Postgres</h3>
-    <p>No ZooKeeper, no Raft cluster, no etcd. Two advisory-lock conventions inside the procedures handle all coordination — one transaction-scoped try-lock for partition claims, one blocking lock per <code>(partition, group)</code> for ack serialization.</p>
+    <p>No ZooKeeper, no Raft cluster, no etcd. Two advisory-lock conventions inside the procedures handle all coordination, one transaction-scoped try-lock for partition claims, one blocking lock per <code>(partition, group)</code> for ack serialization.</p>
   </div>
   <div class="card">
     <div class="card-eyebrow">Fusion over fan-out</div>
     <h3>One JobType, one procedure</h3>
-    <p>Each batchable hot-path operation maps to exactly one named, versioned PostgreSQL procedure. libqueen fuses many concurrent requests into one procedure call — fewer round trips, better commit amortization, simpler operational story.</p>
+    <p>Each batchable hot-path operation maps to exactly one named, versioned PostgreSQL procedure. libqueen fuses many concurrent requests into one procedure call, fewer round trips, better commit amortization, simpler operational story.</p>
   </div>
   <div class="card">
     <div class="card-eyebrow">Adaptive concurrency</div>
     <h3>Vegas instead of fixed pool size</h3>
-    <p>Concurrency caps are ceilings, not operating points. The TCP-Vegas-inspired controller grows under stable RTT and shrinks when PostgreSQL queueing rises — so the system finds its own throughput sweet spot without manual tuning.</p>
+    <p>Concurrency caps are ceilings, not operating points. The TCP-Vegas-inspired controller grows under stable RTT and shrinks when PostgreSQL queueing rises, so the system finds its own throughput sweet spot without manual tuning.</p>
   </div>
   <div class="card">
     <div class="card-eyebrow">Two-event-loop hand-off</div>
     <h3>HTTP threads never block on libpq</h3>
-    <p>Each worker has its own uWS event loop and its own libqueen libuv loop. Submit returns immediately; results hop back via a deferred callback. uWS responses are written from the loop that owns them — no shared mutex on the response path.</p>
+    <p>Each worker has its own uWS event loop and its own libqueen libuv loop. Submit returns immediately; results hop back via a deferred callback. uWS responses are written from the loop that owns them, no shared mutex on the response path.</p>
   </div>
   <div class="card">
     <div class="card-eyebrow">Push-side failover</div>
     <h3>Disk buffer for inbound writes</h3>
-    <p>If PostgreSQL is unreachable, pushes spill to a local file buffer and replay on recovery. Pop and ack require the database to be live — the disk buffer is about not losing inbound writes, not about serving reads from disk.</p>
+    <p>If PostgreSQL is unreachable, pushes spill to a local file buffer and replay on recovery. Pop and ack require the database to be live, the disk buffer is about not losing inbound writes, not about serving reads from disk.</p>
   </div>
 </div>
 
@@ -619,7 +619,7 @@ ctx.queen-&gt;submit(std::move(job_req),
 <h2 id="tradeoffs" style="margin-top: 36px;">What we traded away</h2>
 <p class="muted">
   Every architectural choice has a counter-cost. Queen's choices buy strong durability,
-  ordering at high partition cardinality, and operational simplicity — and they pay for
+  ordering at high partition cardinality, and operational simplicity, and they pay for
   it in four real ways. None of these are bugs; they're consequences of being a
   Postgres-backed message queue speaking HTTP/JSON. Knowing them upfront helps you
   decide whether Queen is the right tool for what you're building.
@@ -632,7 +632,7 @@ ctx.queen-&gt;submit(std::move(job_req),
     <p>
       We measured Queen at <strong>~104k msg/s peak</strong> on a 32-vCPU host with a
       well-tuned PostgreSQL. Past that, you start running into PG's own scaling
-      limits — WAL throughput, autovacuum cycles, checkpoint pressure — not Queen's.
+      limits, WAL throughput, autovacuum cycles, checkpoint pressure, not Queen's.
       <strong>There is no Queen-native multi-broker design.</strong> If your workload
       genuinely needs &gt;200k msg/s sustained, Kafka is the right tool. Sharding Queen
       across multiple Postgres instances would work but you'd be doing it at the
@@ -655,7 +655,7 @@ ctx.queen-&gt;submit(std::move(job_req),
     <h3>PG logical replication is your only path</h3>
     <p>
       Kafka has MirrorMaker, RabbitMQ has federation. Queen has whatever you can build
-      on top of <code>pg_logical</code> — async, eventually consistent, with the usual
+      on top of <code>pg_logical</code>, async, eventually consistent, with the usual
       gotchas (lag during heavy writes, sequence collisions, no automatic failover).
       For multi-region active-active, Queen is the wrong tool unless you can accept the
       complexity of running it on top of a multi-region PG topology yourself.
@@ -666,7 +666,7 @@ ctx.queen-&gt;submit(std::move(job_req),
     <h3><code>messages_consumed</code> needs aggressive retention</h3>
     <p>
       Each consumer-group delivery writes a row in <code>queen.messages_consumed</code>.
-      We measured <strong>~743 MB after 15 minutes at 10 consumer groups</strong> —
+      We measured <strong>~743 MB after 15 minutes at 10 consumer groups</strong> ,
       extrapolated to ~70 GB/day on a sustained workload. Queen has retention controls
       (<code>completedRetentionSeconds</code>) but you have to set them: out of the box,
       a busy multi-tenant deployment will outgrow its disk in a week. This is
@@ -678,7 +678,7 @@ ctx.queen-&gt;submit(std::move(job_req),
     <h3>Default 60s for failed-consumer takeover</h3>
     <p>
       When a consumer dies mid-batch, the partition's lease has to expire before another
-      consumer can take over. Default is <code>leaseTime=60</code> seconds — tunable
+      consumer can take over. Default is <code>leaseTime=60</code> seconds, tunable
       per-queue. Tighter leases mean faster recovery but more overhead from lease
       renewals on long-running jobs. Compare to Kafka's consumer group rebalance
       (typically 1–10s with modern static membership). If sub-second recovery from
@@ -692,7 +692,7 @@ ctx.queen-&gt;submit(std::move(job_req),
       We measured <code>queen.messages</code> at <strong>22 GB indexes vs 13 GB heap</strong>
       after 14 hours of sustained 28k msg/s. The indexes (<code>messages_pkey</code>,
       <code>idx_messages_partition_created</code>, <code>messages_partition_transaction_unique</code>)
-      are what make per-partition pop fast — but they roughly double your storage cost
+      are what make per-partition pop fast, but they roughly double your storage cost
       compared to a single-index heap. Plan capacity accordingly.
     </p>
   </div>
@@ -718,7 +718,7 @@ ctx.queen-&gt;submit(std::move(job_req),
   <a class="card" href="https://github.com/smartpricing/queen/tree/master/lib">
     <div class="card-eyebrow">C++</div>
     <h3>lib/queen.hpp + lib/queen/</h3>
-    <p>libqueen — the request-fusion engine. <code>queen.hpp</code> is the main header; <code>queen/</code> has the per-component pieces.</p>
+    <p>libqueen, the request-fusion engine. <code>queen.hpp</code> is the main header; <code>queen/</code> has the per-component pieces.</p>
   </a>
   <a class="card" href="https://github.com/smartpricing/queen/tree/master/server/src">
     <div class="card-eyebrow">C++</div>
@@ -733,7 +733,7 @@ ctx.queen-&gt;submit(std::move(job_req),
   <a class="card" href="https://github.com/smartpricing/queen/blob/master/cdocs/LIBQUEEN_IMPROVEMENTS.md">
     <div class="card-eyebrow">Design notes</div>
     <h3>cdocs/LIBQUEEN_IMPROVEMENTS.md</h3>
-    <p>The 2026 rewrite of libqueen — adaptive batching, concurrency, scheduling. Has the perf data behind the choices.</p>
+    <p>The 2026 rewrite of libqueen, adaptive batching, concurrency, scheduling. Has the perf data behind the choices.</p>
   </a>
   <a class="card" href="benchmarks.html">
     <div class="card-eyebrow">Numbers</div>

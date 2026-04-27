@@ -97,7 +97,7 @@
         <span v-if="namespaceFilter" class="chip chip-ice">
           Namespace: {{ namespaceFilter }}
         </span>
-        <span v-if="taskFilter" class="chip chip-warn">
+        <span v-if="taskFilter" class="chip chip-ice">
           Task: {{ taskFilter }}
         </span>
       </div>

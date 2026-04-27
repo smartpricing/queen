@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Quickstart — Queen MQ</title>
+<title>Quickstart: Queen MQ</title>
 <meta name="description" content="From zero to a running Queen MQ server with a working push and pop in under five minutes.">
 <meta name="theme-color" content="#141415">
 <meta name="color-scheme" content="dark">
@@ -61,7 +61,7 @@
 <!-- ====================== 1. START ====================== -->
 <h2 id="start">1. Start PostgreSQL and Queen</h2>
 <p class="muted">
-  Queen ships as a single Docker image. It needs a PostgreSQL instance — version 14 or
+  Queen ships as a single Docker image. It needs a PostgreSQL instance, version 14 or
   newer is fine.
 </p>
 <div class="code-meta-wrap with-copy">
@@ -109,7 +109,7 @@ docker run -p 6632:6632 --network queen \
 <!-- ====================== 3. FIRST PUSH/POP ====================== -->
 <h2 id="first-push">3. Your first push and pop</h2>
 <p class="muted">
-  No SDK yet — let's prove the server works with raw HTTP. <code>autoAck=true</code>
+  No SDK yet, let's prove the server works with raw HTTP. <code>autoAck=true</code>
   marks the message consumed on delivery, so this is a single round-trip.
 </p>
 
@@ -127,7 +127,7 @@ docker run -p 6632:6632 --network queen \
 </div>
 
 <p class="muted">
-  Note we never created the <code>demo</code> queue explicitly — Queen creates queues
+  Note we never created the <code>demo</code> queue explicitly, Queen creates queues
   on first push. To configure things like lease time, retry limit, or encryption you
   call <code>POST /api/v1/configure</code> first; see <a href="http-api.html">HTTP API</a>.
 </p>
@@ -378,7 +378,7 @@ _, _ = client.Transaction().
   <a class="card" href="concepts.html">
     <div class="card-eyebrow">Read</div>
     <h3>Concepts</h3>
-    <p>Partitions, consumer groups, leases, retries, DLQ, failover — one paragraph each.</p>
+    <p>Partitions, consumer groups, leases, retries, DLQ, failover, one paragraph each.</p>
   </a>
   <a class="card" href="clients.html">
     <div class="card-eyebrow">Build</div>

@@ -50,7 +50,7 @@
           <div style="margin-bottom:12px;">
             <span class="label-xs">
               Minimum Lag Threshold:
-              <span style="color:var(--warn-400); font-weight:600;">{{ getLagLabel(lagThreshold) }}</span>
+              <span style="color:var(--text-hi); font-weight:600;">{{ getLagLabel(lagThreshold) }}</span>
             </span>
           </div>
 
@@ -269,7 +269,7 @@
                 </span>
               </td>
               <td>
-                <span style="font-size:13px; color:var(--warn-400);">
+                <span style="font-size:13px; color:var(--text-mid);">
                   {{ consumer.queueName || '-' }}
                 </span>
               </td>

@@ -149,9 +149,9 @@
         <div class="sm-head">
           <span class="sm-title">Partitions · events</span>
           <span v-if="(partitionCreatedTotal + partitionDeletedTotal) > 0" class="sm-chip">
-            <span style="color:#4ade80;">+{{ formatNumber(partitionCreatedTotal) }}</span>
+            <span style="color:var(--text-hi);">+{{ formatNumber(partitionCreatedTotal) }}</span>
             <span style="color:var(--text-faint); margin:0 4px;">/</span>
-            <span style="color:#fb7185;">-{{ formatNumber(partitionDeletedTotal) }}</span>
+            <span style="color:var(--text-mid);">-{{ formatNumber(partitionDeletedTotal) }}</span>
           </span>
         </div>
         <BaseChart v-if="partitionChartData.labels.length > 0" type="bar" :data="partitionChartData" :options="miniOpts('count')" height="140px" />
@@ -469,7 +469,7 @@ const pendingDeltaChartData = computed(() => {
     labels: chartLabels.value,
     datasets: [
       { label: 'Pending Δ', data: series, fill: true,
-        borderColor: '#e6b450', backgroundColor: 'rgba(230,180,80,0.12)' }
+        borderColor: '#e6e6e6', backgroundColor: 'rgba(230,230,230,0.10)' }
     ]
   }
 })
@@ -497,7 +497,7 @@ const cpuChartData = computed(() => {
     const multi = ts.length >= 2 &&
       new Date(ts[0].timestamp).toDateString() !== new Date(ts[ts.length - 1].timestamp).toDateString()
     const labels = ts.map(t => formatChartLabel(new Date(t.timestamp), multi))
-    const palette = ['#e6e6e6', '#8a8a92', '#6a6a6a', '#4ade80', '#fb7185', '#e6b450']
+    const palette = ['#e6e6e6', '#8a8a92', '#6a6a6a', '#b8b8b8', '#4a4a4f', '#9a9a9a']
     const datasets = replicas.map((r, i) => {
       const color = palette[i % palette.length]
       return {
@@ -548,7 +548,7 @@ const lagChartData = computed(() => {
     labels: chartLabels.value,
     datasets: [
       { label: 'Avg (ms)', data: h.map(x => Number(x.avgLagMs) || 0), fill: true },
-      { label: 'Max (ms)', data: h.map(x => Number(x.maxLagMs) || 0), fill: false, borderColor: '#fb7185' },
+      { label: 'Max (ms)', data: h.map(x => Number(x.maxLagMs) || 0), fill: false, borderColor: '#8a8a92' },
     ]
   }
 })
@@ -566,7 +566,7 @@ const elChartData = computed(() => {
     labels: chartLabels.value,
     datasets: [
       { label: 'Avg (ms)', data: h.map(x => Number(x.avgEventLoopLagMs) || 0), fill: true },
-      { label: 'Max (ms)', data: h.map(x => Number(x.maxEventLoopLagMs) || 0), fill: false, borderColor: '#fb7185' },
+      { label: 'Max (ms)', data: h.map(x => Number(x.maxEventLoopLagMs) || 0), fill: false, borderColor: '#8a8a92' },
     ]
   }
 })
@@ -618,9 +618,9 @@ const partitionChartData = computed(() => {
     labels,
     datasets: [
       { label: 'Created', data: rows.map(r => Number(r.partitionsCreated) || 0),
-        backgroundColor: 'rgba(74,222,128,0.5)', borderColor: '#4ade80', borderWidth: 1 },
+        backgroundColor: 'rgba(230,230,230,0.5)', borderColor: '#e6e6e6', borderWidth: 1 },
       { label: 'Deleted', data: rows.map(r => Number(r.partitionsDeleted) || 0),
-        backgroundColor: 'rgba(251,113,133,0.5)', borderColor: '#fb7185', borderWidth: 1 },
+        backgroundColor: 'rgba(138,138,146,0.5)', borderColor: '#8a8a92', borderWidth: 1 },
     ]
   }
 })
@@ -638,7 +638,7 @@ const poolChartData = computed(() => {
     datasets: [
       { label: 'Active', data: h.map(x => Number(x.dbPoolActive) || 0), fill: true },
       { label: 'Idle', data: h.map(x => Number(x.dbPoolIdle) || 0), fill: false },
-      { label: 'Free slots', data: h.map(x => Number(x.minFreeSlots) || 0), fill: false, borderColor: '#4ade80' },
+      { label: 'Free slots', data: h.map(x => Number(x.minFreeSlots) || 0), fill: false, borderColor: '#6a6a6a' },
     ]
   }
 })

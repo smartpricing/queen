@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Benchmarks — Queen MQ vs Kafka vs RabbitMQ on real hardware</title>
+<title>Benchmarks: Queen MQ vs Kafka vs RabbitMQ on real hardware</title>
 <meta name="description" content="18 Queen tests, 1.6 billion message events, zero loss. Plus measured head-to-head against Kafka 3.7 and RabbitMQ 3.12 at 1000 partitions/queues. Push throughput, latency profile, partition scaling, consumer-group fan-out, memory and PG efficiency.">
 <meta name="theme-color" content="#141415">
 <meta name="color-scheme" content="dark">
@@ -145,8 +145,8 @@
   <strong>2026-04-25</strong> and <strong>2026-04-26</strong> on a fresh 32 vCPU / 62 GiB host with
   PostgreSQL upstream <code>postgres:latest</code>, Queen <code>0.14.0.alpha.3</code>,
   Apache Kafka 3.7 (KRaft single-node), and RabbitMQ 3.12. Each test ran for 15 minutes
-  against a fresh server state. The full raw data — per-minute time series, Postgres
-  stats, system metrics, autocannon and perf-test output — lives in
+  against a fresh server state. The full raw data, per-minute time series, Postgres
+  stats, system metrics, autocannon and perf-test output, lives in
   <a href="https://github.com/smartpricing/queen/tree/master/benchmark-queen/2026-05-25"><code>benchmark-queen/2026-05-25</code></a>.
 </p>
 
@@ -158,6 +158,7 @@
   <a href="#stability">Time-series stability</a>
   <a href="#fanout">Consumer-group fan-out</a>
   <a href="#multitenancy">Multi-tenancy</a>
+  <a href="#pipeline">Realistic pipeline</a>
   <a href="#kafka">Queen vs Kafka vs RabbitMQ</a>
   <a href="#workers">Workers vs brokers</a>
   <a href="#efficiency">Resource efficiency</a>
@@ -260,18 +261,18 @@
 <div class="takeaway takeaway-ok">
   <strong>The latency story is the surprising one.</strong> Going from <code>bp-1</code>
   to <code>bp-10</code>, push throughput jumps <strong>6.7×</strong> while p99 only
-  goes from 13 ms to 38 ms — a <strong>2.2× efficiency gain per request</strong>. At
+  goes from 13 ms to 38 ms, a <strong>2.2× efficiency gain per request</strong>. At
   100k msg/s peak, p99 is still 131 ms. Compare to Kafka under sustained unbounded
-  load: 1.5M msg/s but p99 of <strong>2 966 ms</strong> — Queen at 100k msg/s has
+  load: 1.5M msg/s but p99 of <strong>2 966 ms</strong>, Queen at 100k msg/s has
   ~22× lower tail latency than Kafka at peak.
 </div>
 
 <!-- ============================ PARTITIONS ============================ -->
-<h2 id="partitions">Partition scaling — the Queen claim, validated</h2>
+<h2 id="partitions">Partition scaling, the Queen claim, validated</h2>
 <p class="muted">
   Same producer concurrency (5×100 connections), increasing partition count from 2 to
   10 001. If partitions were physical commit-logs, this would degrade catastrophically.
-  In Queen they're logical lanes, so the cost is index size — not state machine size.
+  In Queen they're logical lanes, so the cost is index size, not state machine size.
 </p>
 
 <div class="bar-chart">
@@ -307,11 +308,11 @@
 </p>
 
 <!-- ============================ STABILITY ============================ -->
-<h2 id="stability">Time-series stability — what 15 minutes of <code>bp-10</code> looks like</h2>
+<h2 id="stability">Time-series stability, what 15 minutes of <code>bp-10</code> looks like</h2>
 <p class="muted">
   Throughput averages don't tell you whether a system is stable or oscillating. Below
   is the per-minute pop rate from <code>bp-10</code>'s own <code>queue-ops.json</code>
-  output — a rendering of the actual time series.
+  output, a rendering of the actual time series.
 </p>
 
 <div class="time-series">
@@ -351,7 +352,7 @@
       <rect x="496" y="29"  width="34" height="91"/>
       <rect x="534" y="32"  width="34" height="88"/>
     </g>
-    <!-- Last bar (minute 15, partial — producer wound down) -->
+    <!-- Last bar (minute 15, partial, producer wound down) -->
     <g fill="#6a6a6a" fill-opacity="0.6">
       <rect x="572" y="108" width="14" height="12"/>
     </g>
@@ -393,15 +394,15 @@
 <div class="takeaway takeaway-ok">
   <strong>Fairness across groups holds at any scale tested.</strong> At 10 consumer
   groups, all 10 deliver 360 ± 1 req/s with p99 within 5 ms of each other. The dispatch
-  is fair — no group gets favored, none gets starved. <strong>Per-group CPU cost is
+  is fair, no group gets favored, none gets starved. <strong>Per-group CPU cost is
   sub-linear:</strong> Queen needs 7.4 vCPU for 1 group, but only 18 vCPU for 10 groups
-  — about 25% the per-group cost of running them alone, thanks to libqueen's
+ , about 25% the per-group cost of running them alone, thanks to libqueen's
   per-JobType batching amortizing across requests.
 </div>
 
 <div class="takeaway takeaway-warn">
   <strong>The cost.</strong> Adding consumer groups slows the producer 31% at 5 groups,
-  54% at 10. They're competing for Queen worker slots and PG resources — by design.
+  54% at 10. They're competing for Queen worker slots and PG resources, by design.
   The system isn't oversubscribed. If you need higher push throughput while consuming,
   add hardware.
 </div>
@@ -424,12 +425,166 @@
 
 <p class="muted">
   Routing to ten different queues instead of one was <em>slightly faster</em> (less
-  contention on the single partition's advisory lock) — well within noise. Multi-tenant
+  contention on the single partition's advisory lock), well within noise. Multi-tenant
   deployments don't pay a partitioning tax.
 </p>
 
+<!-- ============================ REALISTIC PIPELINE ============================ -->
+<h2 id="pipeline">Realistic pipeline, producer → worker → q2 fan-out</h2>
+<p class="muted">
+  The throughput numbers above are pure broker-side push/pop micro-benchmarks. Most
+  real workloads look different: multiple stages, real client SDK with batching and
+  long-poll, work simulation between stages, multiple downstream consumer groups.
+  This benchmark exercises that shape end-to-end with the official
+  <code>queen-mq</code> JS client and <code>pm2</code>:
+</p>
+
+<pre style="background: var(--ink-2); border: 1px solid var(--bd); border-radius: 8px; padding: 14px 18px; font-size: 12.5px; line-height: 1.5; overflow-x: auto;"><code>[producer ×2] ──push──▶  pipe-q1  ──pop──▶  [worker ×7] ──push──▶  pipe-q2 ─┬─pop──▶ [analytics ×7]
+                                                                              │
+                                                                              └─pop──▶ [log ×7]</code></pre>
+
+<p class="muted">
+  Producer pushes <strong>single messages per HTTP call</strong>. Each worker
+  pops a batch from q1, simulates 5–20 ms of long-tail per-message work in
+  parallel via <code>Promise.all</code>, forwards the batch to q2 preserving
+  per-partition ordering, then acks q1 (at-least-once: separate push then
+  ack, no transactional commit). Both <code>analytics</code> and
+  <code>log</code> consumer groups drain q2 with the same shape, fan-out,
+  simulated work, batch ack. The whole thing runs on a 16 vCPU / 64 GB
+  DigitalOcean VM with PG <code>synchronous_commit=on</code>.
+</p>
+
+<p class="muted" style="margin-top: 14px;">
+  <strong>Same engine, same client, same pipeline shape, two configurations of the
+  partition knob:</strong>
+</p>
+
+<div class="card-grid" style="margin-top: 10px;">
+  <div class="card" style="cursor: default;">
+    <div class="card-eyebrow">High-cardinality config</div>
+    <h3>1 000 partitions · per-entity ordering</h3>
+    <ul class="list-tight" style="margin-top: 8px; font-size: 13px;">
+      <li>1 000 partitions, batch = 100, partitions/pop = 10</li>
+      <li>Producer = worker drain = <strong>3 688 msg/s</strong></li>
+      <li>End-to-end p50 / p99 = <strong>359 ms / 1 024 ms</strong></li>
+      <li>Per-entity FIFO ordering preserved (Kafka-like)</li>
+      <li>For: chat rooms, per-tenant streams, per-user state</li>
+    </ul>
+  </div>
+  <div class="card" style="cursor: default;">
+    <div class="card-eyebrow">Throughput-tuned config</div>
+    <h3>10 partitions · weak ordering, max throughput</h3>
+    <ul class="list-tight" style="margin-top: 8px; font-size: 13px;">
+      <li>10 partitions, batch = 1 000, partitions/pop = 1</li>
+      <li>Producer = worker drain = <strong>6 673 msg/s (+81 %)</strong></li>
+      <li>End-to-end p50 / p99 = <strong>755 ms / 1 103 ms</strong></li>
+      <li>Per-shard FIFO (RabbitMQ-like, but ordering still per-lane)</li>
+      <li>For: task queues, work distribution, log shipping</li>
+    </ul>
+  </div>
+</div>
+
+<div class="headline-row" style="margin-top: 14px;">
+  <div class="stat">
+    <span class="stat-label">Best end-to-end throughput</span>
+    <span class="stat-value">6 673 <small>msg/s</small></span>
+    <span class="stat-foot">producer = worker drain · q1 stays drained</span>
+  </div>
+  <div class="stat">
+    <span class="stat-label">End-to-end p99 (both configs)</span>
+    <span class="stat-value">~1 100 <small>ms</small></span>
+    <span class="stat-foot">producer push → analytics ack</span>
+  </div>
+  <div class="stat">
+    <span class="stat-label">Delivery completeness</span>
+    <span class="stat-value">99.9 <small>%</small></span>
+    <span class="stat-foot">~few-thousand in-flight at cutoff</span>
+  </div>
+  <div class="stat">
+    <span class="stat-label">Duplicate processing</span>
+    <span class="stat-value color-ok">0</span>
+    <span class="stat-foot">at-least-once held end-to-end · both configs</span>
+  </div>
+</div>
+
+<table style="margin-top: 14px;">
+  <thead>
+    <tr>
+      <th>Stage / Config</th><th>1 000-part p50 / p99 / max</th><th>10-part p50 / p99 / max</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td><strong>End-to-end (producer → analytics)</strong></td>
+      <td>359 / <strong>1 024</strong> / 15 464 ms</td>
+      <td>755 / <strong>1 103</strong> / <strong>1 747</strong> ms</td>
+    </tr>
+    <tr>
+      <td>q1 → worker</td>
+      <td>213 / 705 / 15 387 ms</td>
+      <td>440 / 745 / 1 010 ms</td>
+    </tr>
+    <tr>
+      <td>q2 → analytics</td>
+      <td>114 / 514 / 3 198 ms</td>
+      <td>312 / 601 / 999 ms</td>
+    </tr>
+  </tbody>
+</table>
+
+<div class="takeaway takeaway-ok">
+  <strong>Partition count is a continuous knob, not a binary choice.</strong>
+  Slide it toward many partitions for per-entity ordering at lower throughput;
+  slide it toward few partitions for higher throughput with weak (per-shard)
+  ordering. Both modes share the same SDK, same C++ engine, same Postgres,
+  same durability tier. <strong>0 duplicates and 0 lost messages in both runs.</strong>
+  The 10-partition config also gives <strong>9× tighter max latency</strong>
+  (1.75 s vs 15.5 s) because every lane is always being drained.
+</div>
+
+<table style="margin-top: 14px;">
+  <thead>
+    <tr><th>Resource (steady state)</th><th>1 000-part config</th><th>10-part config</th></tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>queen container CPU</td>
+      <td>~390 % (3.9 vCPU)</td>
+      <td>~340 % (3.4 vCPU)</td>
+    </tr>
+    <tr>
+      <td>queen container RSS</td>
+      <td><strong>~70 MB</strong></td>
+      <td>~175 MB (bigger in-flight batches)</td>
+    </tr>
+    <tr>
+      <td>postgres CPU</td>
+      <td>~1 500 % (15 vCPU)</td>
+      <td><strong>~470 %</strong> (4.7 vCPU, <strong>3.2× cheaper</strong>)</td>
+    </tr>
+    <tr>
+      <td>postgres RSS at end</td>
+      <td>16.7 GB</td>
+      <td>12.3 GB</td>
+    </tr>
+  </tbody>
+</table>
+
+<p class="muted">
+  In the throughput-tuned config <strong>Postgres CPU is 3.2× lower at nearly
+  double the throughput</strong>, bigger batches amortise the per-call SQL
+  overhead so much that the per-message PG cost collapses. The system is then
+  <strong>producer-bound, not PG-bound</strong>: adding more producer
+  processes would push the rate well into the 30–50 k/s range without
+  changing anything broker-side. Full writeups with reproduction recipes:
+  <a href="https://github.com/smartpricing/queen/blob/master/benchmark-queen/2026-05-25/pipeline-queen.md"><code>pipeline-queen.md</code></a>
+  (high-cardinality) and
+  <a href="https://github.com/smartpricing/queen/blob/master/benchmark-queen/2026-05-25/pipeline-queen-throughput.md"><code>pipeline-queen-throughput.md</code></a>
+  (throughput-tuned).
+</p>
+
 <!-- ============================ KAFKA / RABBIT ============================ -->
-<h2 id="kafka">Queen vs Kafka vs RabbitMQ — same hardware, same payload</h2>
+<h2 id="kafka">Queen vs Kafka vs RabbitMQ, same hardware, same payload</h2>
 <p class="muted">
   Single-node, 1 000 partitions/queues, persistent durability, 15-min run, ~28-byte
   message payload, same 32 vCPU / 62 GiB host. All three measured directly: Kafka with
@@ -440,7 +595,7 @@
 
 <details style="margin: 14px 0; background: var(--ink-2); border: 1px solid var(--bd); border-radius: 8px; padding: 14px 18px;">
   <summary style="cursor: pointer; color: var(--text-mid); font-size: 13px; margin: -2px -4px;">
-    Test methodology — important asymmetries you should know about
+    Test methodology, important asymmetries you should know about
   </summary>
   <div style="margin-top: 12px; font-size: 13.5px; line-height: 1.55;">
     <p style="margin: 0 0 10px;">
@@ -474,9 +629,9 @@
       <strong>Durability tiers are also not identical:</strong>
     </p>
     <ul style="font-size: 12.5px; margin: 4px 0 10px; padding-left: 20px;">
-      <li><strong>Queen</strong>: <code>synchronous_commit=on</code> — fsync of WAL before HTTP 201. Strictest.</li>
-      <li><strong>Kafka</strong>: <code>acks=1</code> — broker writes to OS page cache, no fsync. If broker crashes before OS flushes (~1 s), messages can be lost. Single broker means no replication backup either.</li>
-      <li><strong>RabbitMQ</strong>: <code>delivery_mode=2 + --confirm 200</code> — written to queue index on disk before confirm, but flushes are batched at the index level.</li>
+      <li><strong>Queen</strong>: <code>synchronous_commit=on</code>, fsync of WAL before HTTP 201. Strictest.</li>
+      <li><strong>Kafka</strong>: <code>acks=1</code>, broker writes to OS page cache, no fsync. If broker crashes before OS flushes (~1 s), messages can be lost. Single broker means no replication backup either.</li>
+      <li><strong>RabbitMQ</strong>: <code>delivery_mode=2 + --confirm 200</code>, written to queue index on disk before confirm, but flushes are batched at the index level.</li>
     </ul>
     <p style="margin: 10px 0 0;">
       <strong>What this means for the comparison:</strong> Re-running with matched client
@@ -529,19 +684,18 @@
 
 <div class="takeaway">
   <strong>Honest summary.</strong> <strong>Kafka</strong> does <strong>39× more
-  throughput</strong> at 1.5M msg/s — but at a <em>weaker</em> durability tier
+  throughput</strong> at 1.5M msg/s, but at a <em>weaker</em> durability tier
   (<code>acks=1</code>, no fsync) and <strong>78× higher saturation latency</strong>
-  and ~80× more memory. Kafka with matched durability would drop to ~100-300k msg/s;
-  it's the right tool above ~200k msg/s sustained, less so below.
+  and ~80× more memory.
   <strong>RabbitMQ ties Queen on throughput</strong> (35k vs 39k msg/s) and decisively
   wins on <strong>latency</strong> (9 ms vs 38 ms p99 confirm) and <strong>CPU</strong>
-  (1.5 vs 7.4 vCPU) — AMQP binary + Mnesia is cheaper per message than HTTP/JSON +
+  (1.5 vs 7.4 vCPU), AMQP binary + Mnesia is cheaper per message than HTTP/JSON +
   Postgres INSERTs. <strong>Queen wins on memory</strong> (52 MB vs 188 MB, ~3.6×
   lighter), the <strong>strictest default durability</strong>, and on
   <strong>architectural features no benchmark can show</strong>: per-key ordering with
   parallel consumers, replay-from-timestamp, transactional integration with PG, dynamic
   high-cardinality partitions. <strong>None of the three dominates on raw numbers at
-  this tier</strong> — pick based on the architectural fit and the operational story.
+  this tier</strong>, pick based on the architectural fit and the operational story.
 </div>
 
 <p class="muted" style="font-size: 12.5px;">
@@ -551,12 +705,12 @@
 </p>
 
 <!-- ============================ WORKERS ============================ -->
-<h2 id="workers">What broker benchmarks miss — your workers are usually the bottleneck</h2>
+<h2 id="workers">What broker benchmarks miss, your workers are usually the bottleneck</h2>
 
 <p class="muted">
   Every benchmark on this page measures <em>broker capacity</em>. But most production
-  workloads aren't broker-bound. If your messages do real work — a database write,
-  an API call, an LLM inference, a webhook delivery — your <strong>consumer fleet</strong>
+  workloads aren't broker-bound. If your messages do real work, a database write,
+  an API call, an LLM inference, a webhook delivery, your <strong>consumer fleet</strong>
   becomes the bottleneck long before the broker does. That changes which system
   matters, and by how much.
 </p>
@@ -584,7 +738,7 @@
 
 <div class="takeaway">
   <strong>Kafka's 1.5 M msg/s is mostly unreachable headroom for real workloads.</strong>
-  Saturating it requires ~30 000 worker processes — a fleet most companies will never
+  Saturating it requires ~30 000 worker processes, a fleet most companies will never
   have. Real-world business workloads typically run on 100–2 000 workers, which means
   ~5 k–100 k msg/s of actual demand. <strong>That's well within Queen's envelope</strong>,
   with Kafka's broker idle at ~5 % and Queen's at 25–80 %.
@@ -611,18 +765,18 @@
 </p>
 
 <ul>
-  <li><strong>Latency at low load</strong> — Queen ~5–10 ms p99 (unsaturated), Kafka ~5–10 ms, RabbitMQ ~3–5 ms. Roughly tied. The &ldquo;Kafka 39× faster than Queen&rdquo; comparison was for <em>saturated</em> brokers; nobody runs production workloads saturated.</li>
-  <li><strong>Operational cost</strong> — Queen is 1 binary + your existing PG. Kafka is broker cluster + KRaft + topic admin + monitoring stack. The annual operational difference dwarfs the broker license/hardware cost.</li>
-  <li><strong>Durability semantics</strong> — Queen's <code>synchronous_commit=on</code> default is the strictest of the three. Kafka with <code>acks=1</code> isn't equivalent; matched durability (<code>acks=all + flush.messages=1</code>) cuts Kafka throughput by 5–10×.</li>
-  <li><strong>Integration with your stack</strong> — Queen lets you do <code>BEGIN; INSERT order; queen.push(...); COMMIT;</code> in one PG transaction. The transactional-outbox pattern (a real cost in Kafka deployments) goes away.</li>
+  <li><strong>Latency at low load</strong>, Queen ~5–10 ms p99 (unsaturated), Kafka ~5–10 ms, RabbitMQ ~3–5 ms. Roughly tied. The &ldquo;Kafka 39× faster than Queen&rdquo; comparison was for <em>saturated</em> brokers; nobody runs production workloads saturated.</li>
+  <li><strong>Operational cost</strong>, Queen is 1 binary + your existing PG. Kafka is broker cluster + KRaft + topic admin + monitoring stack. The annual operational difference dwarfs the broker license/hardware cost.</li>
+  <li><strong>Durability semantics</strong>, Queen's <code>synchronous_commit=on</code> default is the strictest of the three. Kafka with <code>acks=1</code> isn't equivalent; matched durability (<code>acks=all + flush.messages=1</code>) cuts Kafka throughput by 5–10×.</li>
+  <li><strong>Integration with your stack</strong>, Queen lets you do <code>BEGIN; INSERT order; queen.push(...); COMMIT;</code> in one PG transaction. The transactional-outbox pattern (a real cost in Kafka deployments) goes away.</li>
 </ul>
 
 <p class="muted">
   <strong>The broker comparison only matters when work per message is sub-millisecond</strong>:
   true streaming pipelines (Kafka Streams, Flink, ksqlDB), log shipping, click-stream
   analytics. For those, Kafka is the right tool and nothing else competes. For
-  everything else — order processing, notifications, webhooks, ML inference jobs,
-  chat handling, workflow steps — the broker sits idle, the worker fleet sets your
+  everything else, order processing, notifications, webhooks, ML inference jobs,
+  chat handling, workflow steps, the broker sits idle, the worker fleet sets your
   cost, and the differentiator is what's easy to operate and integrate.
 </p>
 
@@ -631,7 +785,7 @@
   you can actually use&rdquo; for most production workloads. Kafka's 1.5 M is mostly
   headroom you'll never reach. RabbitMQ is in Queen's territory but with a different
   feature set. <strong>If your messages do real work, pick the system that's easiest
-  to operate and integrate — not the one with the biggest headline number.</strong>
+  to operate and integrate, not the one with the biggest headline number.</strong>
 </div>
 
 <!-- ============================ EFFICIENCY ============================ -->
@@ -649,13 +803,13 @@
     <tr><td>Queen CPU avg</td><td>5.2 vCPU</td><td>7.4 vCPU</td><td>19 vCPU</td><td>18 vCPU</td></tr>
     <tr><td>DB pool active avg</td><td>2.4</td><td>2.4</td><td>2.7</td><td>2.7</td></tr>
     <tr><td>PG cache hit rate</td><td>100%</td><td>100%</td><td>99.99%</td><td>100%</td></tr>
-    <tr><td><code>messages_consumed</code> table</td><td>—</td><td>84 MB</td><td>—</td><td><strong>743 MB</strong></td></tr>
+    <tr><td><code>messages_consumed</code> table</td><td>,</td><td>84 MB</td><td>,</td><td><strong>743 MB</strong></td></tr>
   </tbody>
 </table>
 
 <div class="takeaway takeaway-warn">
   <strong>The one operational caveat:</strong> the <code>messages_consumed</code> table
-  grows fast under fan-out — 743 MB after 15 minutes at 10 consumer groups (~70 GB/day
+  grows fast under fan-out, 743 MB after 15 minutes at 10 consumer groups (~70 GB/day
   sustained). <strong>TTL retention is critical</strong> for any deployment running
   more than a few days. Configure <code>completedRetentionSeconds</code> on hot queues.
 </div>
@@ -664,7 +818,7 @@
 <h2 id="vegas">Adaptive concurrency in action</h2>
 <p class="muted">
   Queen ships with <code>DB_POOL_SIZE=50</code> by default. Across the entire benchmark
-  suite — including the 100k msg/s peak test — the libqueen Vegas controller kept the
+  suite, including the 100k msg/s peak test, the libqueen Vegas controller kept the
   active connection count at <strong>~2.5</strong>. The other 47 connections sit idle
   in the pool, available as overflow for transient spikes.
 </p>
@@ -684,12 +838,12 @@
   This is exactly what the TCP-Vegas-style controller is supposed to do: when adding
   in-flight work doesn't reduce RTT, the controller knows the pipe isn't congested and
   stays put. <strong>You can't manually tune your way to a better number for this
-  workload</strong> — the controller already found it. See the
+  workload</strong>, the controller already found it. See the
   <a href="architecture.html#libqueen">architecture page</a> for the math.
 </p>
 
 <!-- ============================ VERSION ============================ -->
-<h2 id="version">0.14 vs 0.12 — adaptive engine impact</h2>
+<h2 id="version">0.14 vs 0.12, adaptive engine impact</h2>
 <p class="muted">
   Same five tests, run once on each version, fresh DB:
 </p>
@@ -708,13 +862,13 @@
 </table>
 
 <p class="muted">
-  Pop throughput improved <strong>80–90%</strong> under partition contention — the
+  Pop throughput improved <strong>80–90%</strong> under partition contention, the
   single biggest win from the libqueen rewrite. PG memory usage 30–70% lower for the
   same workload. PG deadlock mode under heavy fan-out eliminated.
 </p>
 
 <!-- ============================ INTEGRITY ============================ -->
-<h2 id="integrity">Data integrity — the headline number</h2>
+<h2 id="integrity">Data integrity, the headline number</h2>
 
 <div class="compare-grid">
   <div class="compare-card">
@@ -747,7 +901,7 @@
 <h2 id="bugs">Bugs we found</h2>
 <p class="muted">
   Honest accounting. Four issues surfaced during the run; <strong>all four are
-  cosmetic — none caused data loss</strong>. Listed here because a benchmark page that
+  cosmetic, none caused data loss</strong>. Listed here because a benchmark page that
   doesn't tell you what broke isn't useful.
 </p>
 
@@ -759,7 +913,7 @@
     <tr>
       <td><code>StatsService.refresh_all_stats_v1</code> 30 s timeout</td>
       <td>Sustained ≥30k msg/s with many partitions, or multi-cg load</td>
-      <td>Cosmetic — advisory lock prevents pile-up</td>
+      <td>Cosmetic, advisory lock prevents pile-up</td>
       <td>One line: <code>SET LOCAL statement_timeout = 0;</code></td>
     </tr>
     <tr>
@@ -771,7 +925,7 @@
     <tr>
       <td>PG <code>deadlock detected</code> during high-concurrency push</td>
       <td>10 001 partitions on 0.12 (mostly fixed in 0.14)</td>
-      <td>None — file-buffer failover catches everything</td>
+      <td>None, file-buffer failover catches everything</td>
       <td>0.14's v3 push procedure eliminates most cases</td>
     </tr>
     <tr>
@@ -800,6 +954,16 @@
     <div class="card-eyebrow">Summary</div>
     <h3>Full README</h3>
     <p>Compacted result table for all 18 tests, key conclusions, version comparison verdict.</p>
+  </a>
+  <a class="card" href="https://github.com/smartpricing/queen/blob/master/benchmark-queen/2026-05-25/pipeline-queen.md">
+    <div class="card-eyebrow">Pipeline · ordered</div>
+    <h3>pipeline-queen.md</h3>
+    <p>4-stage pipeline at 1 000 partitions for per-entity ordering: 3 688 msg/s end-to-end, p99 = 1.02 s, 99.96 % completeness.</p>
+  </a>
+  <a class="card" href="https://github.com/smartpricing/queen/blob/master/benchmark-queen/2026-05-25/pipeline-queen-throughput.md">
+    <div class="card-eyebrow">Pipeline · throughput</div>
+    <h3>pipeline-queen-throughput.md</h3>
+    <p>Same pipeline at 10 partitions for max throughput: 6 673 msg/s end-to-end, p99 = 1.10 s, 3.2× lower PG CPU.</p>
   </a>
   <a class="card" href="https://github.com/smartpricing/queen/blob/master/benchmark-queen/2026-05-25/HOW-TO-RUN.md">
     <div class="card-eyebrow">Recipe</div>

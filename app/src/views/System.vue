@@ -535,7 +535,7 @@
             </div>
             <div class="stat">
               <div class="stat-label">Latest CPU</div>
-              <div class="stat-value font-mono" style="color:var(--ember-500);">{{ formatCPU(lastMetrics?.cpu?.user_us?.last) }}</div>
+              <div class="stat-value font-mono">{{ formatCPU(lastMetrics?.cpu?.user_us?.last) }}</div>
             </div>
             <div class="stat">
               <div class="stat-label">Latest Memory</div>
@@ -1199,16 +1199,17 @@ const perQueueLagOptions = {
   }
 }
 
-// Per-queue chart palette — 5 distinct shades, cycled. Starts with the
-// three greys (primary / secondary / tertiary), then green (healthy) and
-// pink (danger) as the last two differentiators. For >5 queues the palette
-// cycles; distinction remains via the chart legend / tooltip.
+// Per-queue chart palette — 5 distinct grey shades, cycled. We deliberately
+// avoid green / red here because queue index has no health semantics: queue
+// #4 happening to be green and #5 happening to be red would be misleading.
+// Red / green / yellow are reserved for status (chips, threshold-based num
+// classes, error / validation banners). Distinction stays via legend.
 const queueColors = [
   { border: '#e6e6e6', bg: 'rgba(230, 230, 230, 0.10)' }, // chart-1 (primary grey)
   { border: '#8a8a92', bg: 'rgba(138, 138, 146, 0.10)' }, // chart-2 (secondary grey)
   { border: '#6a6a6a', bg: 'rgba(106, 106, 106, 0.10)' }, // chart-3 (tertiary grey)
-  { border: '#4ade80', bg: 'rgba(74, 222, 128, 0.12)'  }, // healthy
-  { border: '#fb7185', bg: 'rgba(251, 113, 133, 0.12)' }, // danger
+  { border: '#b8b8b8', bg: 'rgba(184, 184, 184, 0.10)' }, // chart-4 (lighter)
+  { border: '#4a4a4f', bg: 'rgba(74, 74, 79, 0.18)'    }, // chart-5 (darker)
 ]
 
 // Toggle functions
@@ -1315,8 +1316,8 @@ const throughputChartData = computed(() => {
     datasets.push({
       label: 'Ack/s',
       data: ts.map(t => t.ackPerSecond || 0),
-      borderColor: '#4ade80',
-      backgroundColor: 'rgba(74, 222, 128, 0.12)',
+      borderColor: '#6a6a6a',
+      backgroundColor: 'rgba(106, 106, 106, 0.12)',
       fill: true,
       tension: 0
     })
@@ -1346,7 +1347,7 @@ const latencyChartData = computed(() => {
       { 
         label: 'Max Lag (ms)', 
         data: ts.map(t => t.maxLagMs || 0), 
-        borderColor: '#fb7185',
+        borderColor: '#8a8a92',
         fill: false,
         tension: 0
       }
@@ -1378,8 +1379,8 @@ const eventLoopChartData = computed(() => {
     datasets.push({
       label: 'Max Event Loop (ms)',
       data: ts.map(t => t.maxEventLoopLagMs || 0),
-      borderColor: '#fb7185',
-      backgroundColor: 'rgba(244, 63, 94, 0.06)',
+      borderColor: '#8a8a92',
+      backgroundColor: 'rgba(138, 138, 146, 0.10)',
       fill: true,
       tension: 0
     })
@@ -1549,9 +1550,9 @@ const partitionRateChartData = computed(() => {
     labels,
     datasets: [
       { label: 'Created', data: buckets.map(b => created[b]),
-        backgroundColor: 'rgba(74,222,128,0.5)', borderColor: '#4ade80', borderWidth: 1 },
+        backgroundColor: 'rgba(230,230,230,0.5)', borderColor: '#e6e6e6', borderWidth: 1 },
       { label: 'Deleted', data: buckets.map(b => -deleted[b]),
-        backgroundColor: 'rgba(251,113,133,0.5)', borderColor: '#fb7185', borderWidth: 1 },
+        backgroundColor: 'rgba(138,138,146,0.5)', borderColor: '#8a8a92', borderWidth: 1 },
     ]
   }
 })
@@ -1631,7 +1632,7 @@ const cpuChartData = computed(() => {
     const multiDay = isMultiDay(ts)
     const labels = ts.map(t => formatChartLabel(new Date(t.timestamp), multiDay))
     
-    const colors = ['#e6e6e6', '#8a8a92', '#6a6a6a', '#4ade80', '#fb7185']
+    const colors = ['#e6e6e6', '#8a8a92', '#6a6a6a', '#b8b8b8', '#4a4a4f']
     
     systemData.value.replicas.forEach((replica, i) => {
       const color = colors[i % colors.length]
@@ -1687,7 +1688,7 @@ const memoryChartData = computed(() => {
     const multiDay = isMultiDay(ts)
     const labels = ts.map(t => formatChartLabel(new Date(t.timestamp), multiDay))
     
-    const colors = ['#e6e6e6', '#8a8a92', '#4ade80', '#fb7185', '#6a6a6a']
+    const colors = ['#e6e6e6', '#8a8a92', '#6a6a6a', '#b8b8b8', '#4a4a4f']
     
     systemData.value.replicas.forEach((replica, i) => {
       const color = colors[i % colors.length]
@@ -1744,8 +1745,8 @@ const databaseChartData = computed(() => {
       { 
         label: 'Idle', 
         data: ts.map(t => t.metrics?.database?.pool_idle?.[agg] || 0), 
-        borderColor: '#4ade80',
-        backgroundColor: 'rgba(74, 222, 128, 0.12)',
+        borderColor: '#8a8a92',
+        backgroundColor: 'rgba(138, 138, 146, 0.12)',
         fill: true,
         tension: 0
       }

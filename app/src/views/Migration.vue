@@ -129,7 +129,7 @@
                 <input
                   v-model="targetConfig.ssl"
                   type="checkbox"
-                  style="accent-color:var(--warn-400);"
+                  style="accent-color:var(--accent);"
                   :disabled="isMigrating"
                 />
                 <span style="font-size:13px; color:var(--text-mid);">SSL</span>
@@ -196,7 +196,7 @@
               <input
                 v-model="group.include"
                 type="checkbox"
-                style="margin-top:2px; accent-color:var(--warn-400);"
+                style="margin-top:2px; accent-color:var(--accent);"
               />
               <div style="flex:1; min-width:0;">
                 <div style="display:flex; align-items:center; gap:8px;">
@@ -210,9 +210,9 @@
           </div>
 
           <div style="padding-top:8px; display:flex; justify-content:flex-end; gap:12px; align-items:center;">
-            <button @click="selectAllGroups" :disabled="isMigrating" style="font-size:12px; color:var(--warn-400); cursor:pointer; border:none; background:none;" :style="isMigrating ? 'opacity:0.4;' : ''">Select all</button>
+            <button @click="selectAllGroups" :disabled="isMigrating" style="font-size:12px; color:var(--text-mid); cursor:pointer; border:none; background:none;" :style="isMigrating ? 'opacity:0.4;' : ''">Select all</button>
             <span style="font-size:12px; color:var(--text-faint);">|</span>
-            <button @click="selectNoneGroups" :disabled="isMigrating" style="font-size:12px; color:var(--warn-400); cursor:pointer; border:none; background:none;" :style="isMigrating ? 'opacity:0.4;' : ''">Schema only</button>
+            <button @click="selectNoneGroups" :disabled="isMigrating" style="font-size:12px; color:var(--text-mid); cursor:pointer; border:none; background:none;" :style="isMigrating ? 'opacity:0.4;' : ''">Schema only</button>
           </div>
         </div>
       </div>

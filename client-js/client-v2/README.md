@@ -1605,6 +1605,11 @@ const msgs = await queen.queue('q').batch(10).wait(true).pop()
 
 // Pop from partition
 const msgs = await queen.queue('q').partition('p1').pop()
+
+// Multi-partition pop: drain up to 50 partitions in one round-trip,
+// capped at 200 total messages. All partitions share one leaseId.
+// Each returned message carries its own partitionId / partition / leaseId.
+const msgs = await queen.queue('q').batch(200).partitions(50).pop()
 ```
 
 ### Consume
@@ -1624,6 +1629,12 @@ await queen.queue('q').concurrency(5).consume(async (msg) => { /* 5 parallel wor
 
 // Consume from partition
 await queen.queue('q').partition('p1').consume(async (msg) => { /* process */ })
+
+// Multi-partition consume: drain up to 8 partitions per poll.
+// batch(100) is a global cap on total messages across all claimed partitions.
+await queen.queue('q').batch(100).partitions(8).consume(async (msgs) => {
+  for (const m of msgs) await process(m.data)  // m.partitionId / m.partition baked in
+})
 
 // Consume with consumer group
 await queen.queue('q').group('my-group').consume(async (msg) => { /* process */ })

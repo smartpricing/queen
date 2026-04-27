@@ -1,11 +1,11 @@
 /* ==========================================================================
-   Queen MQ — static docs site
+   Queen MQ, static docs site
    Design tokens lifted from app/src/style.css to keep parity with dashboard.
    No build step. No JS framework. Pure HTML + this file + Prism.
    ========================================================================== */
 
 :root {
-  /* Surfaces — Cursor greys */
+  /* Surfaces, Cursor greys */
   --ink-0: #141415;  /* page bg */
   --ink-1: #1a1a1b;  /* nav / header */
   --ink-2: #1d1d1f;  /* card */
@@ -478,7 +478,7 @@ pre code {
   font-size: 11.5px; color: var(--text-low);
 }
 .tabs-panes > .tab-pane > .pane-foot code { font-size: 11.5px; }
-/* checked state — selectors need to match the input ids/order */
+/* checked state, selectors need to match the input ids/order */
 .tabs input.t-js:checked       ~ .tabs-bar label[for$="-js"],
 .tabs input.t-py:checked       ~ .tabs-bar label[for$="-py"],
 .tabs input.t-go:checked       ~ .tabs-bar label[for$="-go"],

@@ -250,6 +250,47 @@ for (const message of messages) {
 }
 ```
 
+### Multi-Partition Pop (Drain Many Partitions Per Call)
+
+```javascript
+// One round-trip drains up to 200 messages spread across up to 50 partitions.
+// batch(200) is the GLOBAL cap on total messages; partitions(50) is the
+// hard cap on partitions claimed. All claimed partitions share one leaseId
+// — a single renew() call extends every partition's lease atomically.
+const messages = await queen.queue('events')
+  .batch(200)
+  .partitions(50)
+  .wait(true)
+  .pop()
+
+// Each message carries its own partition info (per-message partitionId,
+// partition name, leaseId, consumerGroup) — ACK and renew always work
+// message-by-message regardless of how many partitions the batch spans.
+for (const m of messages) {
+  console.log(`from ${m.partition}:`, m.data)
+}
+
+// Same builder works on .consume() for long-running workers
+await queen.queue('events')
+  .batch(100)
+  .partitions(8)
+  .consume(async (msgs) => {
+    for (const m of msgs) await process(m.data)
+  })
+```
+
+**When to use:** queues with many partitions where each partition only has
+a handful of new messages per polling interval (per-customer event streams,
+per-tenant work queues, per-device telemetry). Reduces network round-trips
+from O(P) to O(P / N) while preserving per-partition FIFO ordering.
+
+**When not to use:** few partitions, or each one busy enough to fill
+`batch(B)` on its own. Default is `partitions(1)` which preserves the
+legacy single-partition behaviour.
+
+`.partitions(N)` only applies to **wildcard** pops; specifying
+`.partition('name')` ignores the cap.
+
 ### Transactions (Atomic Operations)
 
 ```javascript
@@ -451,6 +492,7 @@ await queen.queue('q').buffer({ messageCount: 100, timeMillis: 1000 }).push([...
 const msgs = await queen.queue('q').pop()
 const msgs = await queen.queue('q').batch(10).pop()
 const msgs = await queen.queue('q').batch(10).wait(true).pop()
+const msgs = await queen.queue('q').batch(200).partitions(50).pop()  // multi-partition pop
 ```
 
 ### Consume

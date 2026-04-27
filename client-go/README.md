@@ -200,6 +200,52 @@ client.Queue("my-queue").
     Execute(ctx)
 ```
 
+### Multi-Partition Pop (Drain Many Partitions Per Call)
+
+```go
+// One round-trip drains up to 200 messages spread across up to 50 partitions.
+// Batch(200) is the GLOBAL cap on total messages; Partitions(50) is the
+// hard cap on partitions claimed. All claimed partitions share one LeaseID
+// — a single Renew() call extends every partition's lease atomically.
+messages, err := client.Queue("events").
+    Batch(200).
+    Partitions(50).
+    Wait(true).
+    Pop(ctx)
+
+// Each message carries its own partition info (per-message PartitionID,
+// Partition name, LeaseID) — ACK and renew always work message-by-message
+// regardless of how many partitions the batch spans.
+for _, m := range messages {
+    fmt.Printf("from %s: %v\n", m.Partition, m.Data)
+}
+
+// Same builder works on .Consume() for long-running workers.
+// Batch(B) becomes a global cap on total messages across all claimed partitions.
+client.Queue("events").
+    Batch(100).
+    Partitions(8).
+    ConsumeBatch(ctx, func(ctx context.Context, msgs []*queen.Message) error {
+        for _, m := range msgs {
+            // m.PartitionID / m.Partition baked in by the server
+            if err := process(m.Data); err != nil { return err }
+        }
+        return nil
+    }).Execute(ctx)
+```
+
+**When to use:** queues with many partitions where each partition only has
+a handful of new messages per polling interval (per-customer event streams,
+per-tenant work queues, per-device telemetry). Reduces network round-trips
+from O(P) to O(P / N) while preserving per-partition FIFO ordering.
+
+**When not to use:** few partitions, or each one busy enough to fill
+`Batch(B)` on its own. Default is `Partitions(1)` which preserves the
+legacy single-partition behaviour.
+
+`.Partitions(N)` only applies to **wildcard** pops; specifying
+`.Partition("name")` ignores the cap.
+
 ### Acknowledge Messages
 
 ```go

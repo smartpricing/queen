@@ -3,8 +3,8 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Clients — Queen MQ</title>
-<meta name="description" content="JavaScript, Python, Go, PHP/Laravel, and C++ clients — install, connect, and use side-by-side. All examples verified against a live server.">
+<title>Clients: Queen MQ</title>
+<meta name="description" content="JavaScript, Python, Go, PHP/Laravel, and C++ clients: install, connect, and use side-by-side. All examples verified against a live server.">
 <meta name="theme-color" content="#141415">
 <meta name="color-scheme" content="dark">
 <link rel="icon" type="image/png" href="assets/queen_head.png">
@@ -56,6 +56,7 @@
   <a href="#push">Push</a>
   <a href="#pop">Pop &amp; ack</a>
   <a href="#consume">Consume</a>
+  <a href="#multi-partition">Multi-partition pop</a>
   <a href="#consumer-groups">Consumer groups</a>
   <a href="#transactions">Transactions</a>
   <a href="#long-polling">Long polling</a>
@@ -130,7 +131,7 @@
     <div class="tab-pane pane-go"><pre><code class="language-bash">go get github.com/smartpricing/queen/client-go</code></pre><div class="pane-foot">Single module. No CGO.</div></div>
     <div class="tab-pane pane-laravel"><pre><code class="language-bash">composer require smartpricing/queen-mq
 
-# Laravel only — publish config and set env:
+# Laravel only, publish config and set env:
 php artisan vendor:publish --tag=queen-config</code></pre><div class="pane-foot">Standalone PHP works on any 8.1+ project. Laravel service provider, facade, and artisan command are auto-discovered.</div></div>
     <div class="tab-pane pane-cpp"><pre><code class="language-bash"># Header-only client.
 curl -O https://raw.githubusercontent.com/smartpricing/queen/master/client-cpp/queen_client.hpp
@@ -162,7 +163,7 @@ brew install cpp-httplib   # macOS
 // 1) Single server
 const queen = new Queen('http://localhost:6632')
 
-// 2) Multiple servers — automatic failover + load balancing
+// 2) Multiple servers, automatic failover + load balancing
 const queenHA = new Queen([
   'http://queen-a:6632',
   'http://queen-b:6632',
@@ -179,7 +180,7 @@ const queenFull = new Queen({
 
     <div class="tab-pane pane-py"><pre><code class="language-python">from queen import Queen
 
-# Use as async context manager — closes the HTTP pool cleanly.
+# Use as async context manager, closes the HTTP pool cleanly.
 async with Queen('http://localhost:6632') as queen:
     ...
 
@@ -223,7 +224,7 @@ $queen = new Queen([
     'bearerToken' => env('QUEEN_TOKEN'),
 ]);
 
-// Laravel — auto-resolves the singleton from config/queen.php
+// Laravel, auto-resolves the singleton from config/queen.php
 use Queen\Laravel\QueenFacade as Queen;
 Queen::queue('orders')->push([['data' => ['ok' => true]]])->execute();</code></pre></div>
 
@@ -567,6 +568,182 @@ while (!$consumer->isClosed()) {
   </div>
 </div>
 
+<!-- ============================ MULTI-PARTITION POP ============================ -->
+<h2 id="multi-partition">Multi-partition pop</h2>
+<p class="muted">
+  Drain up to <em>N</em> partitions in a single network round-trip with
+  <code>.partitions(N)</code>. Designed for queues with many partitions where each
+  partition only has a handful of new messages per polling interval, claiming one
+  partition per call wastes bandwidth. With <code>.partitions(N)</code>,
+  <code>.batch(B)</code> becomes a <strong>global cap</strong> on total messages
+  returned across all claimed partitions, and every claimed partition shares a single
+  lease (one <code>renew()</code> call extends them all).
+</p>
+<p class="muted">
+  Default is <code>.partitions(1)</code>, single-partition behaviour, byte-equivalent
+  to a normal wildcard pop. Each returned message carries its own
+  <code>partitionId</code>, <code>partition</code>, <code>leaseId</code>, and
+  <code>consumerGroup</code>, so ACK and renew always work message-by-message
+  regardless of how many partitions the batch spans.
+</p>
+<div class="tabs">
+  <input type="radio" class="t-js"      id="mp-js"      name="mp" checked>
+  <input type="radio" class="t-py"      id="mp-py"      name="mp">
+  <input type="radio" class="t-go"      id="mp-go"      name="mp">
+  <input type="radio" class="t-laravel" id="mp-laravel" name="mp">
+  <input type="radio" class="t-cpp"     id="mp-cpp"     name="mp">
+  <input type="radio" class="t-curl"    id="mp-curl"    name="mp">
+  <div class="tabs-bar">
+    <label for="mp-js"><span class="lang-dot"></span>JavaScript</label>
+    <label for="mp-py"><span class="lang-dot"></span>Python</label>
+    <label for="mp-go"><span class="lang-dot"></span>Go</label>
+    <label for="mp-laravel"><span class="lang-dot"></span>PHP</label>
+    <label for="mp-cpp"><span class="lang-dot"></span>C++</label>
+    <label for="mp-curl"><span class="lang-dot"></span>HTTP</label>
+  </div>
+  <div class="tabs-panes">
+    <div class="tab-pane pane-js"><pre><code class="language-javascript">// One round-trip drains up to 200 messages spread across up to 50 partitions.
+// batch(200) is the GLOBAL cap; partitions(50) is the partition fan-out cap.
+const messages = await queen.queue('events')
+  .batch(200)
+  .partitions(50)
+  .wait(true)
+  .pop()
+
+for (const m of messages) {
+  console.log(`from ${m.partition}:`, m.data)   // m.partitionId / m.leaseId baked in
+}
+
+await queen.renew(messages)   // one renew extends every claimed partition's lease
+
+// Same builder works for long-running consumers:
+await queen.queue('events')
+  .batch(100)
+  .partitions(8)
+  .consume(async (msgs) => {
+    // msgs may span multiple partitions; FIFO is preserved within each partition
+    for (const m of msgs) await process(m.data)
+  })</code></pre></div>
+
+    <div class="tab-pane pane-py"><pre><code class="language-python"># One round-trip drains up to 200 messages from up to 50 partitions.
+messages = await (queen.queue('events')
+                  .batch(200)
+                  .partitions(50)
+                  .wait(True)
+                  .pop())
+
+for m in messages:
+    print(f"from {m['partition']}:", m['data'])  # partitionId / leaseId baked in
+
+await queen.renew(messages)   # one renew extends every claimed partition's lease
+
+# Same builder works for long-running consumers:
+async def handler(msgs):
+    for m in msgs:
+        await process(m['data'])
+
+await (queen.queue('events')
+       .batch(100)
+       .partitions(8)
+       .consume(handler))</code></pre></div>
+
+    <div class="tab-pane pane-go"><pre><code class="language-go">// One round-trip drains up to 200 messages from up to 50 partitions.
+messages, _ := client.Queue("events").
+    Batch(200).
+    Partitions(50).
+    Wait(true).
+    Pop(ctx)
+
+for _, m := range messages {
+    fmt.Printf("from %s: %v\n", m.Partition, m.Data)
+}
+
+client.Renew(ctx, messages)  // one renew extends every claimed partition's lease
+
+// Same builder works for long-running consumers:
+client.Queue("events").
+    Batch(100).
+    Partitions(8).
+    Consume(ctx, func(c context.Context, m *queen.Message) error {
+        return process(m.Data)
+    }).Execute(ctx)</code></pre></div>
+
+    <div class="tab-pane pane-laravel"><pre><code class="language-php">// One round-trip drains up to 200 messages from up to 50 partitions.
+$messages = $queen->queue('events')
+    ->batch(200)
+    ->partitions(50)
+    ->wait(true)
+    ->pop();
+
+foreach ($messages as $m) {
+    echo "from {$m['partition']}: " . json_encode($m['data']) . "\n";
+}
+
+$queen->renew($messages);  // one renew extends every claimed partition's lease
+
+// Same builder works for the high-level consumer:
+$consumer = $queen->queue('events')
+    ->batch(100)
+    ->partitions(8)
+    ->getConsumer();</code></pre></div>
+
+    <div class="tab-pane pane-cpp"><pre><code class="language-cpp">// One round-trip drains up to 200 messages from up to 50 partitions.
+auto messages = client.queue("events")
+    .batch(200)
+    .partitions(50)
+    .wait(true)
+    .pop();
+
+for (const auto&amp; m : messages) {
+    std::cout &lt;&lt; "from " &lt;&lt; m["partition"] &lt;&lt; ": " &lt;&lt; m["data"].dump() &lt;&lt; "\n";
+}
+
+client.renew(messages);  // one renew extends every claimed partition's lease
+
+// Same builder works for long-running consumers:
+client.queue("events")
+    .batch(100)
+    .partitions(8)
+    .consume([](const json&amp; msgs) {
+        for (const auto&amp; m : msgs) process(m["data"]);
+    });</code></pre></div>
+
+    <div class="tab-pane pane-curl"><pre><code class="language-bash"># Wildcard pop with multi-partition fan-out: drain up to 200 messages from up
+# to 50 partitions in a single call. partitions=1 (default) preserves legacy
+# single-partition behaviour.
+curl 'http://localhost:6632/api/v1/pop/queue/events?batch=200&amp;partitions=50&amp;wait=true'
+
+# Response shape (note partitionsClaimed and per-message partitionId):
+# {
+#   "success": true,
+#   "queue": "events",
+#   "partition": "p7",                    # first claimed partition (back-compat)
+#   "partitionId": "...",                 # first claimed partitionId (back-compat)
+#   "leaseId": "worker-uuid",             # shared across all claimed partitions
+#   "messages": [
+#     {"transactionId":"...","partitionId":"...","partition":"p7","leaseId":"...", ...},
+#     {"transactionId":"...","partitionId":"...","partition":"p12","leaseId":"...", ...},
+#     ...
+#   ],
+#   "partitionsClaimed": 8                # how many partitions actually contributed
+# }</code></pre></div>
+  </div>
+</div>
+
+<p class="muted" style="margin-top: 14px;">
+  <strong>When to use it.</strong> Many partitions, each with few messages per polling
+  interval (per-customer event streams, per-tenant work queues, per-device telemetry).
+  For a queue with <em>P</em> active partitions and <em>k</em> messages per partition
+  per cycle, <code>.partitions(N)</code> reduces round-trips from <em>P</em> to
+  <em>P / N</em> while preserving per-partition FIFO ordering.
+</p>
+<p class="muted">
+  <strong>When not to use it.</strong> Few partitions, or each one busy enough to fill
+  <code>.batch(B)</code> on its own, default <code>.partitions(1)</code> is already
+  optimal there. <code>.partitions(N)</code> only affects <strong>wildcard</strong>
+  pops; specifying <code>.partition('name')</code> ignores the cap.
+</p>
+
 <!-- ============================ CONSUMER GROUPS ============================ -->
 <h2 id="consumer-groups">Consumer groups</h2>
 <p class="muted">
@@ -589,10 +766,10 @@ while (!$consumer->isClosed()) {
 queen.queue('events').group('emailer').consume(emailHandler1)
 queen.queue('events').group('emailer').consume(emailHandler2)
 
-// Group B: analytics — sees the same messages independently
+// Group B: analytics, sees the same messages independently
 queen.queue('events').group('analytics').consume(analyticsHandler)
 
-// Skip backlog — only process messages pushed after this group joins
+// Skip backlog, only process messages pushed after this group joins
 queen.queue('events').group('realtime')
   .subscriptionMode('new')
   .consume(rtHandler)
@@ -632,7 +809,7 @@ curl -X POST http://localhost:6632/api/v1/ack \
 </div>
 
 <!-- ============================ TRANSACTIONS ============================ -->
-<h2 id="transactions">Transactions — atomic ack + push</h2>
+<h2 id="transactions">Transactions, atomic ack + push</h2>
 <div class="tabs">
   <input type="radio" class="t-js"      id="tx-js"      name="tx" checked>
   <input type="radio" class="t-py"      id="tx-py"      name="tx">
@@ -873,7 +1050,7 @@ fmt.Println("failed:", dlq.Total)</code></pre></div>
   </a>
   <a class="card" href="https://github.com/smartpricing/queen/tree/master/examples">
     <div class="card-eyebrow">Examples</div>
-    <h3>examples/ — 30+ runnable scripts</h3>
+    <h3>examples/, 30+ runnable scripts</h3>
     <p>Chat pipeline, transactional pipeline, consumer groups, window buffers, DLQ monitoring, load tests.</p>
   </a>
 </div>

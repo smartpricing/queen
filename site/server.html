@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Server setup — Queen MQ</title>
+<title>Server setup: Queen MQ</title>
 <meta name="description" content="How to run, configure, secure, and scale the Queen MQ server: Docker, Kubernetes, env vars, JWT auth, multi-instance UDP sync.">
 <meta name="theme-color" content="#141415">
 <meta name="color-scheme" content="dark">
@@ -133,14 +133,14 @@ docker run -p 6632:6632 --network queen \
     <tr><td>DEFAULT_SUBSCRIPTION_MODE</td><td>"" (all)</td><td>Default for new consumer groups: <code>""</code> or <code>"new"</code>.</td></tr>
     <tr><td>LOG_LEVEL</td><td>info</td><td>trace · debug · info · warn · error.</td></tr>
     <tr><td>FILE_BUFFER_DIR</td><td>/var/lib/queen/buffers (Linux)</td><td>Disk failover buffer location.</td></tr>
-    <tr><td>QUEEN_ENCRYPTION_KEY</td><td>—</td><td>64 hex chars (AES-256-GCM at-rest payload encryption).</td></tr>
+    <tr><td>QUEEN_ENCRYPTION_KEY</td><td>,</td><td>64 hex chars (AES-256-GCM at-rest payload encryption).</td></tr>
   </tbody>
 </table>
 
 <!-- ============== AUTH ============== -->
 <h2 id="auth">JWT authentication</h2>
 <p class="muted">
-  Queen supports HS256 (shared secret), RS256 (RSA), and EdDSA (Ed25519) — including
+  Queen supports HS256 (shared secret), RS256 (RSA), and EdDSA (Ed25519), including
   external IDPs via JWKS auto-discovery. Routes are gated by role:
 </p>
 
@@ -155,14 +155,14 @@ docker run -p 6632:6632 --network queen \
 </table>
 
 <div class="code-meta-wrap with-copy">
-  <div class="code-meta"><span>HS256 — internal services</span><button class="copy-btn" type="button">copy</button></div>
+  <div class="code-meta"><span>HS256, internal services</span><button class="copy-btn" type="button">copy</button></div>
 <pre><code class="language-bash">export JWT_ENABLED=true
 export JWT_ALGORITHM=HS256
 export JWT_SECRET=$(openssl rand -hex 32)</code></pre>
 </div>
 
 <div class="code-meta-wrap with-copy">
-  <div class="code-meta"><span>RS256 / EdDSA — external IDP via JWKS</span><button class="copy-btn" type="button">copy</button></div>
+  <div class="code-meta"><span>RS256 / EdDSA, external IDP via JWKS</span><button class="copy-btn" type="button">copy</button></div>
 <pre><code class="language-bash">export JWT_ENABLED=true
 export JWT_ALGORITHM=auto                                  # or RS256 / EdDSA
 export JWT_JWKS_URL=https://your-idp.com/.well-known/jwks.json
@@ -175,7 +175,7 @@ export JWT_AUDIENCE=queen-api</code></pre>
   <p>
     With JWT enabled the server stamps the validated <code>sub</code> claim onto every
     pushed message as <code>producerSub</code>. Clients <em>cannot</em> set this field
-    — the server always derives it from the verified JWT. It's exposed on pop responses
+   , the server always derives it from the verified JWT. It's exposed on pop responses
     and admin message APIs for downstream attribution.
   </p>
 </div>
@@ -183,12 +183,12 @@ export JWT_AUDIENCE=queen-api</code></pre>
 <!-- ============== CLUSTER ============== -->
 <h2 id="cluster">Multi-instance cluster (UDP sync)</h2>
 <p class="muted">
-  Queen servers are stateless — you can run multiple instances pointing at the same
+  Queen servers are stateless, you can run multiple instances pointing at the same
   PostgreSQL. Two optional UDP layers make horizontal scaling actually fast:
 </p>
 <ul>
-  <li><strong>Peer notifications</strong> — when one instance receives a push, it UDP-broadcasts a wake-up to peers, so long-polling consumers on other instances return immediately.</li>
-  <li><strong>Distributed cache (UDPSYNC)</strong> — heartbeats + shared state for queue config caching, partition-id LRU, and server-health tracking.</li>
+  <li><strong>Peer notifications</strong>, when one instance receives a push, it UDP-broadcasts a wake-up to peers, so long-polling consumers on other instances return immediately.</li>
+  <li><strong>Distributed cache (UDPSYNC)</strong>, heartbeats + shared state for queue config caching, partition-id LRU, and server-health tracking.</li>
 </ul>
 
 <div class="code-meta-wrap with-copy">
@@ -203,13 +203,13 @@ export QUEEN_SYNC_SECRET=$(openssl rand -hex 32)   # shared by all instances
 export QUEEN_UDP_PEERS="queen-a:6633,queen-c:6633"
 export QUEEN_SYNC_SECRET=...same...
 
-# Server C — same pattern
+# Server C, same pattern
 export QUEEN_UDP_PEERS="queen-a:6633,queen-b:6633"</code></pre>
 </div>
 
 <p class="muted">
   Self-detection is automatic: each server excludes itself from the peer list. The
-  cluster works fine without UDP — long-poll consumers just fall back to a slightly
+  cluster works fine without UDP, long-poll consumers just fall back to a slightly
   longer wake-up interval.
 </p>
 
@@ -260,7 +260,7 @@ export SIDECAR_MAX_ITEMS_PER_TX=2000
 export RESPONSE_BATCH_SIZE=200
 export RESPONSE_BATCH_MAX=1000
 
-# v0.13+ adaptive engine — raise per-type concurrency ceilings if needed
+# v0.13+ adaptive engine, raise per-type concurrency ceilings if needed
 export QUEEN_PUSH_MAX_CONCURRENT=24
 export QUEEN_ACK_MAX_CONCURRENT=16
 export QUEEN_POP_MAX_CONCURRENT=16</code></pre>
@@ -274,10 +274,10 @@ export QUEEN_POP_MAX_CONCURRENT=16</code></pre>
 <!-- ============== FAILOVER ============== -->
 <h2 id="failover">Failover &amp; durability</h2>
 <ul>
-  <li><strong>Disk push buffer</strong> — if PostgreSQL is unreachable, pushes spill to <code>FILE_BUFFER_DIR</code> and replay automatically on recovery.</li>
-  <li><strong>Multi-instance</strong> — run ≥2 servers behind a load balancer; they're stateless. Affinity routing in the clients keeps related operations on the same node when possible.</li>
-  <li><strong>PostgreSQL HA</strong> — point <code>PG_HOST</code> at your HA endpoint (Patroni VIP, Cloud SQL/RDS endpoint, pgbouncer, etc.). Queen reconnects automatically when the upstream changes.</li>
-  <li><strong>Encryption at rest</strong> — set <code>QUEEN_ENCRYPTION_KEY</code> (32 bytes hex) and configure queues with <code>encryptionEnabled: true</code> for AES-256-GCM payload encryption inside the database.</li>
+  <li><strong>Disk push buffer</strong>, if PostgreSQL is unreachable, pushes spill to <code>FILE_BUFFER_DIR</code> and replay automatically on recovery.</li>
+  <li><strong>Multi-instance</strong>, run ≥2 servers behind a load balancer; they're stateless. Affinity routing in the clients keeps related operations on the same node when possible.</li>
+  <li><strong>PostgreSQL HA</strong>, point <code>PG_HOST</code> at your HA endpoint (Patroni VIP, Cloud SQL/RDS endpoint, pgbouncer, etc.). Queen reconnects automatically when the upstream changes.</li>
+  <li><strong>Encryption at rest</strong>, set <code>QUEEN_ENCRYPTION_KEY</code> (32 bytes hex) and configure queues with <code>encryptionEnabled: true</code> for AES-256-GCM payload encryption inside the database.</li>
 </ul>
 
 </main>

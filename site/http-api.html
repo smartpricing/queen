@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>HTTP API — Queen MQ</title>
+<title>HTTP API: Queen MQ</title>
 <meta name="description" content="Complete HTTP API reference for Queen MQ: configure, push, pop, ack, transaction, lease, resources, status, DLQ.">
 <meta name="theme-color" content="#141415">
 <meta name="color-scheme" content="dark">
@@ -187,13 +187,14 @@
 <table>
   <thead><tr><th>Query param</th><th>Default</th><th>Notes</th></tr></thead>
   <tbody>
-    <tr><td><code>batch</code></td><td>1</td><td>Max messages to return.</td></tr>
+    <tr><td><code>batch</code></td><td>1</td><td>Max messages to return. With <code>partitions&gt;1</code> this is a <strong>global cap</strong> across all claimed partitions, not per-partition.</td></tr>
+    <tr><td><code>partitions</code></td><td>1</td><td>Wildcard pop only: claim up to <em>N</em> partitions in a single call. <code>1</code> = legacy single-partition behaviour. Ignored on the <code>/partition/:p</code> route.</td></tr>
     <tr><td><code>wait</code></td><td>false</td><td>Long-polling: hold connection until a message arrives or <code>timeout</code> elapses.</td></tr>
     <tr><td><code>timeout</code></td><td>30000</td><td>Long-polling timeout in ms.</td></tr>
     <tr><td><code>consumerGroup</code></td><td>__QUEUE_MODE__</td><td>Empty group ⇒ shared queue mode.</td></tr>
     <tr><td><code>autoAck</code></td><td>false</td><td>Mark messages completed on delivery (one round-trip).</td></tr>
     <tr><td><code>subscriptionMode</code></td><td>(server default)</td><td><code>new</code> to skip historical messages on a brand-new group.</td></tr>
-    <tr><td><code>subscriptionFrom</code></td><td>—</td><td>ISO 8601 timestamp to replay from.</td></tr>
+    <tr><td><code>subscriptionFrom</code></td><td>,</td><td>ISO 8601 timestamp to replay from.</td></tr>
   </tbody>
 </table>
 
@@ -205,18 +206,75 @@
 <p class="muted">Response shape:</p>
 <div class="code-meta-wrap"><div class="code-meta"><span>response (excerpt)</span></div>
 <pre><code class="language-json">{
+  "success": true,
+  "queue":         "orders",
+  "partition":     "Default",
+  "partitionId":   "c0715-...",
+  "leaseId":       "019dc9-...",
+  "consumerGroup": "__QUEUE_MODE__",
   "messages": [
     {
       "transactionId": "019dc9-...",
       "partitionId":   "c0715-...",
+      "partition":     "Default",
       "leaseId":       "019dc9-...",
+      "consumerGroup": "__QUEUE_MODE__",
       "data":          { "orderId": 1, "amount": 99.99 },
       "createdAt":     "2026-04-26T10:59:28.267966Z",
       "retryCount":    0,
       "producerSub":   null
     }
   ],
-  "success": true
+  "partitionsClaimed": 1
+}</code></pre>
+</div>
+<p class="muted" style="margin-top: 6px;">
+  Each message carries its own <code>partitionId</code>, <code>partition</code>,
+  <code>leaseId</code>, and <code>consumerGroup</code>, these per-message fields are
+  authoritative for ACK and lease-renew calls. The top-level <code>partitionId</code>
+  / <code>partition</code> reflect the <strong>first</strong> claimed partition (kept
+  for back-compat with single-partition pops). <code>partitionsClaimed</code> is the
+  number of distinct partitions the response actually drained.
+</p>
+
+<h3 style="margin-top: 22px;">Multi-partition pop (<code>partitions=N</code>)</h3>
+<p class="muted">
+  Drain up to <em>N</em> partitions in a single round-trip. Designed for queues with
+  many partitions where each partition only has a handful of new messages per polling
+  interval, claiming one partition per call wastes bandwidth. The server walks
+  eligible partitions in scan order, claims each one via a non-blocking advisory
+  lock, and accumulates messages until either:
+</p>
+<ul class="muted" style="margin: 4px 0 12px 22px;">
+  <li>the combined message count reaches <code>batch</code>, or</li>
+  <li><code>partitions</code> partitions have been claimed, or</li>
+  <li>no more eligible partitions remain.</li>
+</ul>
+<p class="muted">
+  All claimed partitions share a <strong>single <code>leaseId</code></strong>, so a
+  single <code>POST /api/v1/lease/:leaseId/extend</code> call extends every claimed
+  partition's lease atomically. Only valid on the wildcard route
+  (<code>/api/v1/pop/queue/:queue</code>); the per-partition route silently treats
+  <code>partitions&gt;1</code> as 1.
+</p>
+<div class="code-meta-wrap with-copy">
+  <div class="code-meta"><span>multi-partition pop: 200 messages from up to 50 partitions</span><button class="copy-btn" type="button">copy</button></div>
+<pre><code class="language-bash">curl 'http://localhost:6632/api/v1/pop/queue/events?batch=200&partitions=50&wait=true'</code></pre>
+</div>
+<div class="code-meta-wrap"><div class="code-meta"><span>response (multi-partition, excerpt)</span></div>
+<pre><code class="language-json">{
+  "success": true,
+  "queue":         "events",
+  "partition":     "p7",                    // first claimed partition (back-compat)
+  "partitionId":   "8f...",                 // first claimed partitionId (back-compat)
+  "leaseId":       "worker-abc",            // shared across all claimed partitions
+  "consumerGroup": "__QUEUE_MODE__",
+  "messages": [
+    {"transactionId": "...", "partitionId": "8f...", "partition": "p7",  "leaseId": "worker-abc", "data": {...}, ...},
+    {"transactionId": "...", "partitionId": "12...", "partition": "p12", "leaseId": "worker-abc", "data": {...}, ...},
+    {"transactionId": "...", "partitionId": "5e...", "partition": "p3",  "leaseId": "worker-abc", "data": {...}, ...}
+  ],
+  "partitionsClaimed": 8
 }</code></pre>
 </div>
 
@@ -312,6 +370,11 @@
 <p class="muted">
   Use the <code>leaseId</code> returned by pop. Most clients renew leases for you when
   you set <code>renewLease(true, intervalMillis)</code> on the consumer.
+</p>
+<p class="muted">
+  For multi-partition pops (<code>partitions=N</code>), all claimed partitions share
+  one <code>leaseId</code>, a single extend call updates every partition's lease in
+  one shot. No need to call extend per partition.
 </p>
 
 <!-- ============== RESOURCES ============== -->

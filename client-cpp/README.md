@@ -112,6 +112,51 @@ client.queue("user-events")
     });
 ```
 
+### Multi-Partition Pop (Drain Many Partitions Per Call)
+
+```cpp
+// One round-trip drains up to 200 messages spread across up to 50 partitions.
+// batch(200) is the GLOBAL cap on total messages; partitions(50) is the
+// hard cap on partitions claimed. All claimed partitions share one leaseId
+// — a single renew() call extends every partition's lease atomically.
+auto messages = client.queue("events")
+    .batch(200)
+    .partitions(50)
+    .wait(true)
+    .pop();
+
+// Each message carries its own partition info (per-message partitionId,
+// partition name, leaseId, consumerGroup) — ack and renew always work
+// message-by-message regardless of how many partitions the batch spans.
+for (const auto& m : messages) {
+    std::cout << "from " << m["partition"] << ": " << m["data"].dump() << "\n";
+}
+
+// Same builder works on .consume() for long-running workers.
+// batch(B) becomes a global cap on total messages across all claimed partitions.
+client.queue("events")
+    .batch(100)
+    .partitions(8)
+    .consume([](const json& msgs) {
+        for (const auto& m : msgs) {
+            // m["partitionId"] / m["partition"] baked in by the server
+            process(m["data"]);
+        }
+    });
+```
+
+**When to use:** queues with many partitions where each partition only has
+a handful of new messages per polling interval (per-customer event streams,
+per-tenant work queues, per-device telemetry). Reduces network round-trips
+from O(P) to O(P / N) while preserving per-partition FIFO ordering.
+
+**When not to use:** few partitions, or each one busy enough to fill
+`batch(B)` on its own. Default is `partitions(1)` which preserves the
+legacy single-partition behaviour.
+
+`.partitions(N)` only applies to **wildcard** pops; specifying
+`.partition("name")` ignores the cap.
+
 ### Consumer Groups
 
 ```cpp

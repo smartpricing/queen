@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Concepts — Queen MQ</title>
+<title>Concepts: Queen MQ</title>
 <meta name="description" content="The core ideas behind Queen MQ: queues, partitions, consumer groups, leases, transactions, DLQ, and failover.">
 <meta name="theme-color" content="#141415">
 <meta name="color-scheme" content="dark">
@@ -65,12 +65,12 @@
   A queue is a logical container of messages. Each queue has its own configuration:
 </p>
 <ul>
-  <li><strong>leaseTime</strong> — seconds before a popped message is re-queued if not acked.</li>
-  <li><strong>retryLimit</strong> — failed attempts before the message goes to the DLQ.</li>
-  <li><strong>retentionSeconds</strong> / <strong>completedRetentionSeconds</strong> — how long pending and completed messages are kept.</li>
-  <li><strong>encryptionEnabled</strong> — at-rest AES-256-GCM encryption of payloads.</li>
-  <li><strong>priority</strong> — higher-priority queues are drained first by multi-queue consumers.</li>
-  <li><strong>delayedProcessing</strong>, <strong>windowBuffer</strong>, <strong>maxSize</strong>, <strong>dlqAfterMaxRetries</strong> — fine-grained controls.</li>
+  <li><strong>leaseTime</strong>, seconds before a popped message is re-queued if not acked.</li>
+  <li><strong>retryLimit</strong>, failed attempts before the message goes to the DLQ.</li>
+  <li><strong>retentionSeconds</strong> / <strong>completedRetentionSeconds</strong>, how long pending and completed messages are kept.</li>
+  <li><strong>encryptionEnabled</strong>, at-rest AES-256-GCM encryption of payloads.</li>
+  <li><strong>priority</strong>, higher-priority queues are drained first by multi-queue consumers.</li>
+  <li><strong>delayedProcessing</strong>, <strong>windowBuffer</strong>, <strong>maxSize</strong>, <strong>dlqAfterMaxRetries</strong>, fine-grained controls.</li>
 </ul>
 <p class="muted">
   Queues are created on first push by default. Call <code>configure</code> first if you
@@ -105,7 +105,7 @@
 </p>
 <p class="muted">
   Unlike Kafka, partitions in Queen are not physical commit-logs. They're
-  <em>logical</em> — there is no quota, no rebalance, no broker pinning. Make one per
+  <em>logical</em>, there is no quota, no rebalance, no broker pinning. Make one per
   user, tenant, chat, video, or device. Tens of thousands per queue is normal.
 </p>
 
@@ -140,18 +140,18 @@ await queen.queue('user-events')
   A consumer group is a named offset over a queue. The semantics:
 </p>
 <ul>
-  <li><strong>Same group, multiple workers</strong> — workers <strong>share</strong> messages (load balancing).</li>
-  <li><strong>Different groups</strong> — each group <strong>sees every message</strong> independently (fan-out).</li>
-  <li><strong>No group</strong> — falls back to "queue mode": a single shared offset called <code>__QUEUE_MODE__</code>.</li>
+  <li><strong>Same group, multiple workers</strong>, workers <strong>share</strong> messages (load balancing).</li>
+  <li><strong>Different groups</strong>, each group <strong>sees every message</strong> independently (fan-out).</li>
+  <li><strong>No group</strong>, falls back to "queue mode": a single shared offset called <code>__QUEUE_MODE__</code>.</li>
 </ul>
 
 <div class="code-meta-wrap with-copy">
   <div class="code-meta"><span>fan-out: same events, two pipelines</span><button class="copy-btn" type="button">copy</button></div>
-<pre><code class="language-javascript">// Group 1 — sends emails. Two workers in this group share the load.
+<pre><code class="language-javascript">// Group 1, sends emails. Two workers in this group share the load.
 await queen.queue('events').group('emailer').consume(handler1)
 await queen.queue('events').group('emailer').consume(handler2)
 
-// Group 2 — analytics. Sees the same events independently.
+// Group 2, analytics. Sees the same events independently.
 await queen.queue('events').group('analytics').consume(analyticsHandler)</code></pre>
 </div>
 
@@ -225,7 +225,7 @@ await queen.queue('events').group('analytics').consume(analyticsHandler)</code><
 
 <p class="muted">
   Under the hood this is a single <code>BEGIN…COMMIT</code> against PostgreSQL. The
-  ack and the insert are in the same WAL record — there's no in-between state where
+  ack and the insert are in the same WAL record, there's no in-between state where
   the input is acked but the output never landed.
 </p>
 
@@ -244,7 +244,7 @@ await queen.queue('events').group('analytics').consume(analyticsHandler)</code><
 
 <p class="muted">
   In a multi-instance cluster, pushes broadcast a UDP "wake-up" packet to peer servers
-  so a long-poll on instance B can return immediately when instance A pushes — no
+  so a long-poll on instance B can return immediately when instance A pushes, no
   database polling involved.
 </p>
 

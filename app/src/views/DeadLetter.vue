@@ -170,7 +170,7 @@
             </div>
             <div class="dlq-kv-row">
               <label class="label-xs">Failed at</label>
-              <span style="font-size:13px; color:var(--ember-400);">{{ formatDateTime(selectedMsg.failedAt) }}</span>
+              <span style="font-size:13px; color:var(--text-mid);">{{ formatDateTime(selectedMsg.failedAt) }}</span>
             </div>
             <div v-if="selectedMsg.errorMessage" class="dlq-kv-row">
               <label class="label-xs">Error</label>

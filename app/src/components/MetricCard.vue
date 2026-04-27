@@ -11,8 +11,8 @@
     </div>
 
     <div class="stat-foot" v-if="subtext || trend !== null">
-      <span v-if="trend !== null" class="trend" :class="trend >= 0 ? 'trend-up' : (trend < 0 ? 'trend-down' : 'trend-flat')">
-        {{ trend >= 0 ? '▲' : '▼' }} {{ Math.abs(trend) }}%
+      <span v-if="trend !== null" class="trend" :class="trendClass">
+        {{ trend > 0 ? '▲' : (trend < 0 ? '▼' : '▬') }} {{ Math.abs(trend) }}%
       </span>
       <span v-if="subtext">{{ subtext }}</span>
     </div>
@@ -37,6 +37,16 @@ const props = defineProps({
   icon: { type: [Object, Function], default: null },
   iconColor: { type: String, default: 'ice' },
   trend: { type: Number, default: null },
+  // Which direction is "good" for this metric. Drives whether the trend
+  // chip is green (good) or red (bad). Use 'up' for metrics where higher
+  // is better (throughput, ack rate), 'down' for metrics where lower is
+  // better (errors, pending, lag), or 'neutral' to suppress semantic
+  // coloring entirely (always render flat).
+  trendIsGoodWhen: {
+    type: String,
+    default: 'up',
+    validator: (v) => ['up', 'down', 'neutral'].includes(v),
+  },
   loading: { type: Boolean, default: false },
   clickable: { type: Boolean, default: false },
 })
@@ -56,6 +66,14 @@ const iconColorClass = computed(() => {
     ember: 'badge-ember',
   }
   return map[props.iconColor] || 'badge-ice'
+})
+
+const trendClass = computed(() => {
+  if (props.trend === null || props.trend === 0) return 'trend-flat'
+  if (props.trendIsGoodWhen === 'neutral') return 'trend-flat'
+  const upIsGood = props.trendIsGoodWhen === 'up'
+  const isGood = props.trend > 0 ? upIsGood : !upIsGood
+  return isGood ? 'trend-up' : 'trend-down'
 })
 </script>
 

@@ -219,6 +219,48 @@ for message in messages:
         await queen.ack(message, False)  # Retry
 ```
 
+### Multi-Partition Pop (Drain Many Partitions Per Call)
+
+```python
+# One round-trip drains up to 200 messages spread across up to 50 partitions.
+# batch(200) is the GLOBAL cap on total messages; partitions(50) is the
+# hard cap on partitions claimed. All claimed partitions share one leaseId
+# — a single renew() call extends every partition's lease atomically.
+messages = await (queen.queue('events')
+                  .batch(200)
+                  .partitions(50)
+                  .wait(True)
+                  .pop())
+
+# Each message carries its own partition info (per-message partitionId,
+# partition name, leaseId, consumerGroup) — ACK and renew always work
+# message-by-message regardless of how many partitions the batch spans.
+for m in messages:
+    print(f"from {m['partition']}:", m['data'])
+
+# Same builder works on .consume() for long-running workers
+async def handler(msgs):
+    for m in msgs:
+        await process(m['data'])
+
+await (queen.queue('events')
+       .batch(100)
+       .partitions(8)
+       .consume(handler))
+```
+
+**When to use:** queues with many partitions where each partition only has
+a handful of new messages per polling interval (per-customer event streams,
+per-tenant work queues, per-device telemetry). Reduces network round-trips
+from O(P) to O(P / N) while preserving per-partition FIFO ordering.
+
+**When not to use:** few partitions, or each one busy enough to fill
+`batch(B)` on its own. Default is `partitions(1)` which preserves the
+legacy single-partition behaviour.
+
+`.partitions(N)` only applies to **wildcard** pops; specifying
+`.partition('name')` ignores the cap.
+
 ### Transactions (Atomic Operations)
 
 ```python
@@ -316,6 +358,7 @@ await queen.queue('q').buffer({'message_count': 100, 'time_millis': 1000}).push(
 msgs = await queen.queue('q').pop()
 msgs = await queen.queue('q').batch(10).pop()
 msgs = await queen.queue('q').batch(10).wait(True).pop()
+msgs = await queen.queue('q').batch(200).partitions(50).pop()  # multi-partition pop
 ```
 
 ### Consume

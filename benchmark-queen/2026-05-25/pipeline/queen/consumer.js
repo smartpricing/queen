@@ -14,14 +14,16 @@
 import { Queen } from 'queen-mq'
 import { JsonlLogger, CounterLogger, longTailDelayMs, sleep } from './lib/common.js'
 
-const SERVER_URL    = process.env.SERVER_URL    || 'http://localhost:6632'
-const QUEUE_NAME    = process.env.QUEUE_NAME    || 'pipe-q2'
-const GROUP         = process.env.GROUP         || 'analytics'   // 'analytics' or 'log'
-const CONCURRENCY   = parseInt(process.env.CONCURRENCY  || '10', 10)
-const BATCH_SIZE    = parseInt(process.env.BATCH_SIZE   || '100', 10)
-const DURATION_SEC  = parseInt(process.env.DURATION_SEC || '900', 10)
-const INSTANCE      = process.env.INSTANCE      || '0'
-const RESULTS_DIR   = process.env.RESULTS_DIR   || '/tmp/queen-pipeline'
+const SERVER_URL          = process.env.SERVER_URL    || 'http://localhost:6632'
+const QUEUE_NAME          = process.env.QUEUE_NAME    || 'pipe-q2'
+const GROUP               = process.env.GROUP         || 'analytics'   // 'analytics' or 'log'
+const CONCURRENCY         = parseInt(process.env.CONCURRENCY  || '10', 10)
+const BATCH_SIZE          = parseInt(process.env.BATCH_SIZE   || '100', 10)
+// v4 multi-partition pop: claim up to N partitions per call.
+const MAX_PARTITIONS_PER_POP = parseInt(process.env.MAX_PARTITIONS_PER_POP || '1', 10)
+const DURATION_SEC        = parseInt(process.env.DURATION_SEC || '900', 10)
+const INSTANCE            = process.env.INSTANCE      || '0'
+const RESULTS_DIR         = process.env.RESULTS_DIR   || '/tmp/queen-pipeline'
 
 const queen = new Queen(SERVER_URL)
 const logger = new JsonlLogger(`${RESULTS_DIR}/${GROUP}-${INSTANCE}.jsonl`)
@@ -83,7 +85,8 @@ async function ackFailure(messages, err) {
 async function main() {
   process.stderr.write(
     `[${GROUP}-${INSTANCE}] starting · queue=${QUEUE_NAME} group=${GROUP} ` +
-    `concurrency=${CONCURRENCY} batch=${BATCH_SIZE} dur=${DURATION_SEC}s\n`,
+    `concurrency=${CONCURRENCY} batch=${BATCH_SIZE} ` +
+    `partitions/pop=${MAX_PARTITIONS_PER_POP} dur=${DURATION_SEC}s\n`,
   )
 
   process.on('SIGTERM', () => { stopping = true; abortController.abort() })
@@ -96,6 +99,7 @@ async function main() {
       .group(GROUP)
       .concurrency(CONCURRENCY)
       .batch(BATCH_SIZE)
+      .partitions(MAX_PARTITIONS_PER_POP)
       .renewLease(true, 5000)
       .autoAck(false)
       .consume(processBatch, { signal: abortController.signal })

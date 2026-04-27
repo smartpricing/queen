@@ -1,4 +1,4 @@
-// site.js — tiny enhancement script, ~30 lines.
+// site.js, tiny enhancement script, ~30 lines.
 // Copy buttons + (optional) Prism syntax highlighting (loaded from CDN).
 // Site is fully usable with JS disabled; this only adds polish.
 (function () {

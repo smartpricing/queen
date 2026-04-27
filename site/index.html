@@ -3,11 +3,11 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Queen MQ — Partitioned Message Queue on PostgreSQL</title>
+<title>Queen MQ: Partitioned Message Queue on PostgreSQL</title>
 <meta name="description" content="A Postgres-backed message queue for the workloads where one Postgres is enough. Per-key ordering at high partition cardinality, transactional delivery, replay-from-timestamp.">
 <meta name="theme-color" content="#141415">
 <meta name="color-scheme" content="dark">
-<meta property="og:title" content="Queen MQ — Partitioned Message Queue on PostgreSQL">
+<meta property="og:title" content="Queen MQ: Partitioned Message Queue on PostgreSQL">
 <meta property="og:description" content="A Postgres-backed message queue for the &lt;200k msg/s tier with per-key ordering at high partition cardinality.">
 <meta property="og:type" content="website">
 <link rel="icon" type="image/png" href="assets/queen_head.png">
@@ -66,11 +66,16 @@
     </div>
     <h1>Per-entity ordering<br><em>without preallocating partitions.</em></h1>
     <p class="lead">
-      Queen MQ is a partitioned message queue backed by PostgreSQL. Tens of thousands of
-      logical FIFO partitions per queue, consumer groups with replay-from-timestamp, ack
-      and re-push atomically across queues, and a stateless HTTP server you can run in
-      one Docker container. Sized for workloads where <strong>one beefy Postgres is
-      enough</strong> — not for the streaming tier above.
+      Queen MQ is a message queue backed by PostgreSQL with the partition count as a
+      continuous knob. Slide it toward thousands and you have
+      <strong>Kafka-shaped per-entity FIFO ordering</strong> without preallocating
+      anything, one chat per partition, one user per partition, one workflow
+      per partition. Slide it toward ten and you have
+      <strong>RabbitMQ-shaped competing consumers</strong> at higher throughput,
+      with per-shard ordering as a free bonus. Same engine, same SDK, same
+      durability tier (<code>synchronous_commit=on</code>). One Docker container
+      plus the Postgres you already run. Sized for workloads where
+      <strong>one beefy Postgres is enough</strong>.
     </p>
     <div class="hero-actions">
       <a class="btn btn-primary" href="quickstart.html">
@@ -81,17 +86,17 @@
       <a class="btn btn-ghost" href="https://hub.docker.com/r/smartnessai/queen-mq">Docker Hub</a>
     </div>
     <div class="hero-meta">
-      <span><strong>~104k msg/s</strong> peak (batch=100)</span>
+      <span><strong>6.7k msg/s</strong> end-to-end pipeline · p99 ≈ 1 s · 0 duplicates</span>
       <span class="dot"></span>
-      <span><strong>~39k msg/s</strong> sustained (batch=10)</span>
+      <span><strong>104k msg/s</strong> peak push (batch=100)</span>
       <span class="dot"></span>
-      <span><strong>10 001</strong> active partitions, no degradation</span>
+      <span><strong>100 000</strong> active partitions, no degradation</span>
       <span class="dot"></span>
-      <span><strong>52 MB</strong> server RSS · 1.6B+ events, zero loss</span>
+      <span><strong>~70 MB</strong> broker RAM · single container</span>
     </div>
     <p class="muted" style="font-size: 12px; margin-top: 8px;">
-      Numbers from <a href="benchmarks.html">our benchmark page</a> on a 32 vCPU host. Above ~200k msg/s sustained, you want
-      Kafka.
+      Numbers from <a href="benchmarks.html">our benchmark page</a>, including a
+      4-stage real-client pipeline (producer → worker → fan-out × 2).
     </p>
   </div>
 </section>
@@ -104,7 +109,7 @@
     <p class="muted">
       Kafka partitions are physical shards. They're brilliant for log-shipping, replication,
       and shovelling huge volumes through a streaming pipeline. They're awkward when you
-      want one ordered lane per business entity — one chat per partition, one user per
+      want one ordered lane per business entity, one chat per partition, one user per
       partition, one workflow per partition. Kafka makes you preallocate a fixed number
       and hash-mod into them, which means unrelated entities share a partition and
       one slow consumer can hold up many.
@@ -113,7 +118,7 @@
       Queen reframes the partition as a <strong>logical ordering scope</strong> in a
       PostgreSQL-backed queue. You can have tens of thousands per queue, created on first
       push, with no preallocation. Slow processing on one chat doesn't slow another. It's
-      not a Kafka replacement — it's a different shape, suited to a different range of
+      not a Kafka replacement, it's a different shape, suited to a different range of
       workloads.
     </p>
     <div class="callout callout-info">
@@ -122,7 +127,7 @@
         Queen was built at <a href="https://www.linkedin.com/company/smartness-com/">Smartness</a>
         to power <strong>Smartchat</strong>, an AI guest-messaging platform: 100k+ concurrent
         chat conversations, AI translation steps, agent replies. One ordered partition per
-        chat — one slow translation no longer freezes the others.
+        chat, one slow translation no longer freezes the others.
       </p>
     </div>
   </div>
@@ -137,12 +142,12 @@
       The script below is the <a href="https://github.com/smartpricing/queen/blob/master/examples/base.js"><code>examples/base.js</code></a>
       from the repo. It creates a queue, pushes a message, consumes it with a consumer
       group, then atomically acknowledges the input and pushes a derived message into a
-      second queue — exactly-once across both operations.
+      second queue, exactly-once across both operations.
     </p>
 
     <div class="code-meta-wrap with-copy">
       <div class="code-meta">
-        <span>examples/base.js — verified against http://localhost:6632</span>
+        <span>examples/base.js, verified against http://localhost:6632</span>
         <button class="copy-btn" type="button">copy</button>
       </div>
 <pre><code class="language-javascript">import { Queen } from 'queen-mq'
@@ -196,7 +201,7 @@ await queen.queue('test-queue')
       <div class="card">
         <div class="card-eyebrow">2 · Partition</div>
         <h3>Ordered lane, no quota</h3>
-        <p>Push to <code>partition('p1')</code> and every message in that lane is processed in order. Lanes are cheap — make one per user, tenant, or chat.</p>
+        <p>Push to <code>partition('p1')</code> and every message in that lane is processed in order. Lanes are cheap, make one per user, tenant, or chat.</p>
       </div>
       <div class="card">
         <div class="card-eyebrow">3 · Consumer group</div>
@@ -211,7 +216,7 @@ await queen.queue('test-queue')
       <div class="card">
         <div class="card-eyebrow">5 · Transaction</div>
         <h3>Ack + push, atomic</h3>
-        <p><code>ack(input).push([output]).commit()</code>. Wired straight into PostgreSQL's transaction — exactly-once across queues.</p>
+        <p><code>ack(input).push([output]).commit()</code>. Wired straight into PostgreSQL's transaction, exactly-once across queues.</p>
       </div>
       <div class="card">
         <div class="card-eyebrow">+ Failover</div>
@@ -231,7 +236,7 @@ await queen.queue('test-queue')
       <a class="card" href="concepts.html#partitions">
         <div class="card-eyebrow">Ordering</div>
         <h3>FIFO partitions at high cardinality</h3>
-        <p>Per-user, per-tenant, per-chat — tens of thousands of ordered lanes per queue. Slow processing on one lane doesn't slow another.</p>
+        <p>Per-user, per-tenant, per-chat, tens of thousands of ordered lanes per queue. Slow processing on one lane doesn't slow another.</p>
       </a>
       <a class="card" href="concepts.html#consumer-groups">
         <div class="card-eyebrow">Fan-out</div>
@@ -271,7 +276,7 @@ await queen.queue('test-queue')
       <a class="card" href="dashboard.html">
         <div class="card-eyebrow">Operate</div>
         <h3>Vue 3 dashboard</h3>
-        <p>Real-time queues, message browser, analytics, trace explorer, DLQ management — all served by the same C++ binary.</p>
+        <p>Real-time queues, message browser, analytics, trace explorer, DLQ management, all served by the same C++ binary.</p>
       </a>
     </div>
   </div>
@@ -281,7 +286,7 @@ await queen.queue('test-queue')
 <section class="section">
   <div class="shell">
     <span class="label-xs">Honest positioning</span>
-    <h2>Where Queen fits — and where it doesn't.</h2>
+    <h2>Where Queen fits, and where it doesn't.</h2>
     <p class="muted" style="max-width: 720px;">
       Queen is good at a specific shape of workload, not at every queue use case.
       Picking infrastructure honestly matters more than picking the &ldquo;winner&rdquo;
@@ -293,7 +298,7 @@ await queen.queue('test-queue')
         <div class="card-eyebrow" style="color: var(--ice-400);">Use Queen</div>
         <h3>~80% of business workloads</h3>
         <ul class="list-tight">
-          <li>You need <strong>per-key ordering</strong> with parallel consumers — one chat, one user, one workflow per partition.</li>
+          <li>You need <strong>per-key ordering</strong> with parallel consumers, one chat, one user, one workflow per partition.</li>
           <li>You're <strong>under ~100k msg/s</strong> sustained throughput.</li>
           <li>You <strong>already run PostgreSQL</strong> and want one less thing to operate.</li>
           <li>You want <strong>transactional integration</strong>: insert business data and queue a message in the same PG transaction.</li>
@@ -316,14 +321,20 @@ await queen.queue('test-queue')
 
       <div class="card">
         <div class="card-eyebrow">Use RabbitMQ</div>
-        <h3>Rich routing &amp; lowest latency</h3>
+        <h3>AMQP-required &amp; rich routing</h3>
         <ul class="list-tight">
-          <li>You need <strong>complex routing rules</strong>: topic exchanges, headers exchanges, alternate exchanges, message priorities.</li>
-          <li>You care about <strong>p99 latency below 10ms</strong> at moderate load — RabbitMQ wins decisively here.</li>
-          <li>Your workload <strong>doesn't need ordering</strong> across parallel consumers.</li>
-          <li>You're already deeply invested in <strong>AMQP tooling</strong> and your team knows it well.</li>
-          <li>You want native <strong>delayed-delivery and dead-letter exchange</strong> patterns with rich retry policies.</li>
+          <li>You need a <strong>specific wire protocol</strong> Queen doesn't speak, AMQP 0.9.1, MQTT, STOMP, because of compliance, existing tooling, or IoT clients.</li>
+          <li>You need <strong>complex routing rules</strong>: topic exchanges with wildcard patterns (<code>orders.*.created</code>), headers exchanges, message priorities, alternate exchanges on unroutable.</li>
+          <li>You're already operating RabbitMQ in production and migrating is more expensive than the operational savings.</li>
+          <li>You want <strong>federation / shovel</strong> tooling for cross-cluster forwarding with translation rules.</li>
         </ul>
+        <p class="muted" style="margin-top: 8px; font-size: 12.5px;">
+          Note: for the <em>typical</em> RabbitMQ workload, competing consumers
+          with persistent messages and acks, Queen at low partition count gets
+          you the same shape at higher throughput, lower RAM (~70 MB vs 2–5 GB),
+          and a simpler protocol. The reasons left to pick RabbitMQ are mostly
+          protocol / ecosystem, not raw queue mechanics.
+        </p>
       </div>
     </div>
 
@@ -331,7 +342,7 @@ await queen.queue('test-queue')
       <div class="callout-title">A note on the &ldquo;~80%&rdquo; claim</div>
       <p>
         Most production message-queue workloads at most companies are below 100k msg/s and
-        need ordering of some sort. Queen targets that median workload — not Kafka's
+        need ordering of some sort. Queen targets that median workload, not Kafka's
         upper tail and not RabbitMQ's specific routing strengths. Our
         <a href="benchmarks.html">benchmarks</a> show Queen, Kafka, and RabbitMQ
         head-to-head on identical hardware so you can decide for yourself, with numbers
@@ -342,11 +353,11 @@ await queen.queue('test-queue')
     <div class="callout callout-info" style="margin-top: 12px;">
       <div class="callout-title">Why broker throughput numbers can mislead</div>
       <p>
-        If your messages do real work — a DB write, an API call, an LLM inference — then
+        If your messages do real work, a DB write, an API call, an LLM inference, then
         your <strong>worker fleet is the bottleneck, not the broker</strong>. At 20 ms of
         work per message, one worker handles 50 msg/s. Saturating Kafka's 1.5M msg/s
         requires <strong>30 000 worker processes</strong> (~$150k/month of consumer fleet).
-        Most companies have 100–2 000 workers and run at 5 k–100 k msg/s of actual demand —
+        Most companies have 100–2 000 workers and run at 5 k–100 k msg/s of actual demand ,
         well within Queen's broker envelope. In that regime, the broker comparison stops
         mattering, and Queen wins on operational cost, durability semantics, and
         Postgres-transactional integration. The

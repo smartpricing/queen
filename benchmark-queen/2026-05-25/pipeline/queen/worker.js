@@ -26,15 +26,19 @@
 import { Queen } from 'queen-mq'
 import { JsonlLogger, CounterLogger, longTailDelayMs, sleep, makePayload } from './lib/common.js'
 
-const SERVER_URL    = process.env.SERVER_URL    || 'http://localhost:6632'
-const SOURCE_QUEUE  = process.env.SOURCE_QUEUE  || 'pipe-q1'
-const TARGET_QUEUE  = process.env.TARGET_QUEUE  || 'pipe-q2'
-const GROUP         = process.env.GROUP         || 'workers'
-const CONCURRENCY   = parseInt(process.env.CONCURRENCY  || '10', 10)
-const BATCH_SIZE    = parseInt(process.env.BATCH_SIZE   || '100', 10)
-const DURATION_SEC  = parseInt(process.env.DURATION_SEC || '900', 10)
-const INSTANCE      = process.env.INSTANCE      || '0'
-const RESULTS_DIR   = process.env.RESULTS_DIR   || '/tmp/queen-pipeline'
+const SERVER_URL          = process.env.SERVER_URL    || 'http://localhost:6632'
+const SOURCE_QUEUE        = process.env.SOURCE_QUEUE  || 'pipe-q1'
+const TARGET_QUEUE        = process.env.TARGET_QUEUE  || 'pipe-q2'
+const GROUP               = process.env.GROUP         || 'workers'
+const CONCURRENCY         = parseInt(process.env.CONCURRENCY  || '10', 10)
+const BATCH_SIZE          = parseInt(process.env.BATCH_SIZE   || '100', 10)
+// v4 multi-partition pop: each pop call drains up to MAX_PARTITIONS_PER_POP
+// partitions in a single round-trip, sharing one global BATCH_SIZE budget.
+// 1 = legacy v3 single-partition behaviour.
+const MAX_PARTITIONS_PER_POP = parseInt(process.env.MAX_PARTITIONS_PER_POP || '1', 10)
+const DURATION_SEC        = parseInt(process.env.DURATION_SEC || '900', 10)
+const INSTANCE            = process.env.INSTANCE      || '0'
+const RESULTS_DIR         = process.env.RESULTS_DIR   || '/tmp/queen-pipeline'
 
 const queen = new Queen(SERVER_URL)
 const logger = new JsonlLogger(`${RESULTS_DIR}/worker-${INSTANCE}.jsonl`)
@@ -67,6 +71,16 @@ let stopping = false
 
 // Process an entire batch of messages popped from q1.
 // Returns metadata that onSuccess uses to write per-message log rows.
+//
+// With v4 multi-partition pop (`.partitions(N>1)`), a single batch may span
+// up to N q1 partitions. We group results by partition before forwarding to
+// q2 so that:
+//   1. Per-partition ordering is preserved end-to-end (same partition → same
+//      q2 partition).
+//   2. Each push call is single-partition (queen-mq's QueueBuilder stamps
+//      one partition onto every item it sends).
+//   3. The push calls run in parallel via Promise.all so the wallclock cost
+//      is one push round-trip, not N.
 async function processBatch(messages) {
   const tWork0 = process.hrtime.bigint()
   // Run all per-message work simulations in parallel (sleep is non-blocking)
@@ -88,14 +102,20 @@ async function processBatch(messages) {
   }))
   const tWork1 = process.hrtime.bigint()
 
-  // All popped messages share the same q1 partition (advisory-lock pop),
-  // so we forward to the same q2 partition with ONE push call.
-  const partition = enriched[0].partition
+  // Group by q1 partition so we can issue one push call per partition.
+  const byPartition = new Map()
+  for (const e of enriched) {
+    let bucket = byPartition.get(e.partition)
+    if (!bucket) { bucket = []; byPartition.set(e.partition, bucket) }
+    bucket.push({ transactionId: e.transactionId, data: e.data })
+  }
+
   const tPush0 = process.hrtime.bigint()
-  await queen
-    .queue(TARGET_QUEUE)
-    .partition(partition)
-    .push(enriched.map(e => ({ transactionId: e.transactionId, data: e.data })))
+  await Promise.all(
+    [...byPartition.entries()].map(([partition, items]) =>
+      queen.queue(TARGET_QUEUE).partition(partition).push(items),
+    ),
+  )
   const tPush1 = process.hrtime.bigint()
 
   if (PROFILE) {
@@ -149,7 +169,8 @@ async function ackFailure(messages, err) {
 async function main() {
   process.stderr.write(
     `[worker-${INSTANCE}] starting · ${SOURCE_QUEUE} → ${TARGET_QUEUE} · ` +
-    `group=${GROUP} concurrency=${CONCURRENCY} batch=${BATCH_SIZE} dur=${DURATION_SEC}s\n`,
+    `group=${GROUP} concurrency=${CONCURRENCY} batch=${BATCH_SIZE} ` +
+    `partitions/pop=${MAX_PARTITIONS_PER_POP} dur=${DURATION_SEC}s\n`,
   )
 
   process.on('SIGTERM', () => { stopping = true; abortController.abort() })
@@ -162,6 +183,7 @@ async function main() {
       .group(GROUP)
       .concurrency(CONCURRENCY)
       .batch(BATCH_SIZE)
+      .partitions(MAX_PARTITIONS_PER_POP)
       .renewLease(true, 5000)
       .autoAck(false)
       .consume(processBatch, { signal: abortController.signal })

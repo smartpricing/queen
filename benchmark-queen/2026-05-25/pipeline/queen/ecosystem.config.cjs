@@ -34,6 +34,9 @@ const TARGET_RATE   = process.env.TARGET_RATE || '5000'  // per-producer rate
 const IN_FLIGHT     = process.env.IN_FLIGHT   || '40'
 const CONCURRENCY   = process.env.CONCURRENCY || '10'    // per-consumer concurrency
 const BATCH_SIZE    = process.env.BATCH_SIZE  || '100'
+// v4 multi-partition pop: each pop drains up to N partitions in one call.
+// 1 = legacy v3 behaviour (one partition per pop).
+const MAX_PARTITIONS_PER_POP = process.env.MAX_PARTITIONS_PER_POP || '1'
 
 const baseEnv = {
   SERVER_URL,
@@ -69,6 +72,7 @@ const workers = Array.from({ length: NUM_WORKERS }, (_, i) => ({
     GROUP: 'workers',
     CONCURRENCY,
     BATCH_SIZE,
+    MAX_PARTITIONS_PER_POP,
   },
 }))
 
@@ -84,6 +88,7 @@ const analytics = Array.from({ length: NUM_ANALYTICS }, (_, i) => ({
     GROUP: 'analytics',
     CONCURRENCY,
     BATCH_SIZE,
+    MAX_PARTITIONS_PER_POP,
   },
 }))
 
@@ -99,6 +104,7 @@ const log = Array.from({ length: NUM_LOG }, (_, i) => ({
     GROUP: 'log',
     CONCURRENCY,
     BATCH_SIZE,
+    MAX_PARTITIONS_PER_POP,
   },
 }))
 

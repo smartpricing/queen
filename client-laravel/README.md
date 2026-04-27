@@ -127,6 +127,46 @@ $messages = $queen->queue('orders')
     ->pop();
 ```
 
+### Multi-Partition Pop (Drain Many Partitions Per Call)
+
+```php
+// One round-trip drains up to 200 messages spread across up to 50 partitions.
+// batch(200) is the GLOBAL cap on total messages; partitions(50) is the
+// hard cap on partitions claimed. All claimed partitions share one leaseId
+// — a single renew() call extends every partition's lease atomically.
+$messages = $queen->queue('events')
+    ->batch(200)
+    ->partitions(50)
+    ->wait(true)
+    ->pop();
+
+// Each message carries its own partition info (per-message partitionId,
+// partition name, leaseId, consumerGroup) — ACK and renew always work
+// message-by-message regardless of how many partitions the batch spans.
+foreach ($messages as $m) {
+    echo "from {$m['partition']}: " . json_encode($m['data']) . "\n";
+}
+
+// Same builder works on the high-level consumer:
+$consumer = $queen->queue('events')
+    ->batch(100)
+    ->partitions(8)
+    ->getConsumer();
+$consumer->subscribe();
+```
+
+**When to use:** queues with many partitions where each partition only has
+a handful of new messages per polling interval (per-customer event streams,
+per-tenant work queues, per-device telemetry). Reduces network round-trips
+from O(P) to O(P / N) while preserving per-partition FIFO ordering.
+
+**When not to use:** few partitions, or each one busy enough to fill
+`batch(B)` on its own. Default is `partitions(1)` which preserves the
+legacy single-partition behaviour.
+
+`->partitions(N)` only applies to **wildcard** pops; specifying
+`->partition('name')` ignores the cap.
+
 ## Consuming Messages
 
 ### High-Level Consumer (recommended)

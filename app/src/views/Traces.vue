@@ -53,7 +53,7 @@
     </div>
 
     <!-- Results Summary -->
-    <div v-if="currentTraceName && traces.length > 0" class="card card-accent" style="margin-bottom:16px; border-color:rgba(230,180,80,.2);">
+    <div v-if="currentTraceName && traces.length > 0" class="card card-accent" style="margin-bottom:16px;">
       <div class="card-body" style="padding:12px 16px;">
         <div style="display:flex; align-items:center; gap:12px;">
           <svg style="width:20px; height:20px; color:var(--text-mid); flex-shrink:0;" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -159,7 +159,7 @@
                     v-for="name in trace.trace_names"
                     :key="name"
                     class="chip"
-                    :class="name === currentTraceName ? 'chip-warn' : 'chip-mute'"
+                    :class="name === currentTraceName ? 'chip-ice' : 'chip-mute'"
                   >
                     {{ name }}
                   </span>
@@ -315,7 +315,7 @@
                   v-for="name in selectedTrace.trace_names"
                   :key="name"
                   class="chip"
-                  :class="name === currentTraceName ? 'chip-warn' : 'chip-mute'"
+                  :class="name === currentTraceName ? 'chip-ice' : 'chip-mute'"
                 >
                   {{ name }}
                 </span>
@@ -481,7 +481,7 @@ function viewTrace(trace) {
 function getEventColor(eventType) {
   const colors = {
     info: 'bg-blue-500',
-    processing: 'bg-emerald-500',
+    processing: 'bg-blue-500',
     step: 'bg-violet-500',
     error: 'bg-rose-500',
     warning: 'bg-amber-500',
