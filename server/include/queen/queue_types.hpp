@@ -51,6 +51,7 @@ struct PopOptions {
     bool wait = false;
     int timeout = 30000; // milliseconds
     int batch = 1;
+    int max_partitions = 1; // v4: claim up to N partitions per call (1 = legacy single-partition behavior)
     std::optional<std::string> subscription_mode;
     std::optional<std::string> subscription_from;
     bool auto_ack = false;  // Auto-acknowledge messages on delivery (QoS 0)

@@ -63,8 +63,22 @@ export async function test_maintenance_mode(client = null) {
     const consumePromise = (async () => {
       while (consumerActive) {
         try {
-          const messages = await queen.queue(QUEUE_NAME).batch(10).wait(false).limit(1).each().pop();
-          
+          // wait(true) long-polls on the server. This is important: pushes
+          // commit before partition_lookup is refreshed (PUSHPOPLOOKUPSOL
+          // is async), so a wait(false) pop can race past freshly-pushed
+          // messages and return empty. Long-poll re-runs the candidate
+          // scan internally and picks up messages once the lookup row
+          // commits — typically within milliseconds.
+          // Use a short timeout (1s) so the consumer notices
+          // consumerActive=false promptly when the test winds down.
+          const messages = await queen.queue(QUEUE_NAME)
+            .batch(10)
+            .wait(true)
+            .timeoutMillis(1000)
+            .limit(1)
+            .each()
+            .pop();
+
           if (messages && messages.length > 0) {
             receivedCount += messages.length;
             console.log(`  📨 Received ${messages.length} messages (total: ${receivedCount})`);

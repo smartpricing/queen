@@ -31,6 +31,7 @@ type QueueBuilder struct {
 	subscriptionMode string
 	subscriptionFrom string
 	each             bool
+	maxPartitions    int
 }
 
 // NewQueueBuilder creates a new QueueBuilder.
@@ -91,6 +92,21 @@ func (qb *QueueBuilder) Concurrency(count int) *QueueBuilder {
 // Batch sets the batch size for consume/pop operations.
 func (qb *QueueBuilder) Batch(size int) *QueueBuilder {
 	qb.batch = size
+	return qb
+}
+
+// Partitions enables v4 multi-partition pop: claim up to N partitions in a
+// single call. With Partitions(N), the global Batch(B) budget is shared
+// across all claimed partitions — at most B total messages, drawn from up
+// to N partitions, in one network round-trip. All N share a single leaseId,
+// so a single Renew call extends them all atomically.
+//
+// Default 1 = legacy single-partition behavior.
+func (qb *QueueBuilder) Partitions(n int) *QueueBuilder {
+	if n < 1 {
+		n = 1
+	}
+	qb.maxPartitions = n
 	return qb
 }
 
@@ -268,6 +284,11 @@ func (qb *QueueBuilder) buildPopParams() string {
 		params.Set("subscriptionFrom", qb.subscriptionFrom)
 	}
 
+	// v4 multi-partition pop: drain up to N sparse partitions per call.
+	if qb.maxPartitions > 1 {
+		params.Set("partitions", strconv.Itoa(qb.maxPartitions))
+	}
+
 	// Namespace and task (for namespace/task mode)
 	if qb.namespace != "" {
 		params.Set("namespace", qb.namespace)
@@ -327,6 +348,7 @@ func (qb *QueueBuilder) getConsumeOptions() ConsumeOptions {
 		SubscriptionMode: qb.subscriptionMode,
 		SubscriptionFrom: qb.subscriptionFrom,
 		Each:             qb.each,
+		MaxPartitions:    qb.maxPartitions,
 	}
 
 	// Apply defaults
@@ -338,6 +360,9 @@ func (qb *QueueBuilder) getConsumeOptions() ConsumeOptions {
 	}
 	if opts.TimeoutMillis == 0 {
 		opts.TimeoutMillis = ConsumeDefaults.TimeoutMillis
+	}
+	if opts.MaxPartitions < 1 {
+		opts.MaxPartitions = 1
 	}
 
 	// Auto ack

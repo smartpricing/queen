@@ -41,6 +41,7 @@ var ConsumeDefaults = ConsumeOptions{
 	IdleMillis:    0,     // No idle timeout - 0 means no timeout
 	RenewLease:    false, // No auto-renewal
 	Each:          false, // Process as batch by default
+	MaxPartitions: 1,     // v4 multi-partition pop cap (1 = legacy single-partition)
 }
 
 // PopDefaults contains default values for pop operations.
@@ -49,6 +50,7 @@ var PopDefaults = PopOptions{
 	Wait:          false, // No long polling (immediate return)
 	TimeoutMillis: 30000, // 30 seconds if wait=true
 	AutoAck:       false, // Server-side auto-ack (false = manual ack required)
+	MaxPartitions: 1,     // v4 multi-partition pop cap
 }
 
 // BufferDefaults contains default values for buffer configuration.

@@ -40,6 +40,7 @@
 #include <vector>
 #include <map>
 #include <unordered_map>
+#include <unordered_set>
 #include <memory>
 #include <functional>
 #include <chrono>
@@ -143,6 +144,7 @@ struct ConsumeOptions {
     std::string subscription_mode;
     std::string subscription_from;
     bool each = false;
+    int max_partitions = 1;                  // v4 multi-partition pop cap
     std::atomic<bool>* stop_signal = nullptr;
 };
 
@@ -1106,7 +1108,8 @@ private:
     std::string subscription_mode_;
     std::string subscription_from_;
     bool each_ = false;
-    
+    int max_partitions_ = 1;
+
     // Buffer options
     std::optional<BufferOptions> buffer_options_;
     
@@ -1232,6 +1235,16 @@ public:
         batch_ = std::max(1, size);
         return *this;
     }
+
+    // v4 multi-partition pop: claim up to N partitions per call. With
+    // partitions(N), batch(B) becomes a global cap on total messages
+    // returned across all claimed partitions. All N share one leaseId,
+    // so a single renew() call extends them all atomically.
+    // Default 1 = legacy single-partition behavior.
+    QueueBuilder& partitions(int n) {
+        max_partitions_ = std::max(1, n);
+        return *this;
+    }
     
     QueueBuilder& limit(int count) {
         limit_ = count;
@@ -1317,7 +1330,11 @@ public:
         if (!subscription_from_.empty()) {
             params << "&subscriptionFrom=" << util::url_encode(subscription_from_);
         }
-        
+        // v4 multi-partition pop: drain up to N sparse partitions per call.
+        if (max_partitions_ > 1) {
+            params << "&partitions=" << max_partitions_;
+        }
+
         try {
             int client_timeout = wait_ ? timeout_millis_ + 5000 : timeout_millis_;
             json result = http_client_->get(path.str() + params.str(), client_timeout);
@@ -1538,7 +1555,24 @@ public:
         if (lease_ids.empty()) {
             return {{"success", false}, {"error", "No valid lease IDs found for renewal"}};
         }
-        
+
+        // Dedupe: with v4 multi-partition pop, all messages in one batch
+        // share the same leaseId (one renew_lease_v2 call extends every
+        // claimed partition_consumers row). Without this dedupe, callers
+        // passing the full message vector would issue N redundant identical
+        // HTTP calls. Preserve insertion order for deterministic output.
+        {
+            std::unordered_set<std::string> seen;
+            std::vector<std::string> deduped;
+            deduped.reserve(lease_ids.size());
+            for (const auto& id : lease_ids) {
+                if (seen.insert(id).second) {
+                    deduped.push_back(id);
+                }
+            }
+            lease_ids.swap(deduped);
+        }
+
         json results = json::array();
         for (const auto& lease_id : lease_ids) {
             try {
@@ -1635,7 +1669,11 @@ inline void ConsumerManager::start(std::function<void(const json&)> handler,
     if (!options.subscription_from.empty()) {
         params << "&subscriptionFrom=" << util::url_encode(options.subscription_from);
     }
-    
+    // v4 multi-partition pop: drain up to N sparse partitions per call.
+    if (options.max_partitions > 1) {
+        params << "&partitions=" << options.max_partitions;
+    }
+
     std::string full_url = path + params.str();
     
     // Worker function
@@ -1792,6 +1830,7 @@ inline void QueueBuilder::consume(std::function<void(const json&)> handler,
     options.subscription_mode = subscription_mode_;
     options.subscription_from = subscription_from_;
     options.each = each_;
+    options.max_partitions = max_partitions_;
     options.stop_signal = stop_signal;
     
     ConsumerManager consumer_manager(http_client_, queen_);

@@ -468,6 +468,11 @@ class Queen:
             if lease_id:
                 lease_ids = [lease_id]
 
+        # Dedupe: with v4 multi-partition pop, all messages in one batch share
+        # the same leaseId (one renew_lease_v2 call extends every claimed
+        # partition_consumers row). dict.fromkeys preserves insertion order.
+        lease_ids = list(dict.fromkeys(lease_ids))
+
         if not lease_ids:
             logger.warn("Queen.renew", "No valid lease IDs found for renewal")
             return {"success": False, "error": "No valid lease IDs found for renewal"}

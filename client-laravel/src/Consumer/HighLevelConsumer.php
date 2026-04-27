@@ -56,9 +56,10 @@ class HighLevelConsumer
         $timeoutMillis = $this->options['timeoutMillis'] ?? 30000;
         $subscriptionMode = $this->options['subscriptionMode'] ?? null;
         $subscriptionFrom = $this->options['subscriptionFrom'] ?? null;
+        $maxPartitions = $this->options['maxPartitions'] ?? 1;
 
         $this->popPath = $this->buildPath($queue, $partition, $namespace, $task);
-        $this->baseParams = $this->buildParams($batch, $wait, $timeoutMillis, $group, $subscriptionMode, $subscriptionFrom, $namespace, $task);
+        $this->baseParams = $this->buildParams($batch, $wait, $timeoutMillis, $group, $subscriptionMode, $subscriptionFrom, $namespace, $task, $maxPartitions);
         $this->affinityKey = $this->getAffinityKey($queue, $partition, $namespace, $task, $group);
         $this->subscribed = true;
 
@@ -332,6 +333,7 @@ class HighLevelConsumer
         ?string $subscriptionFrom,
         ?string $namespace,
         ?string $task,
+        int $maxPartitions = 1,
     ): string {
         $params = [
             'batch' => (string) $batch,
@@ -353,6 +355,10 @@ class HighLevelConsumer
         }
         if ($task !== null) {
             $params['task'] = $task;
+        }
+        // v4 multi-partition pop: drain up to N sparse partitions per call.
+        if ($maxPartitions > 1) {
+            $params['partitions'] = (string) $maxPartitions;
         }
 
         return http_build_query($params);

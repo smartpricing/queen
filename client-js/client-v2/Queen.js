@@ -350,6 +350,12 @@ export class Queen {
       }
     }
 
+    // Dedupe: with v4 multi-partition pop, all messages in one batch share
+    // the same leaseId (one renew_lease_v2 call extends every claimed
+    // partition_consumers row). Without this, callers passing the full
+    // messages array would issue N redundant identical HTTP calls.
+    leaseIds = [...new Set(leaseIds)]
+
     if (leaseIds.length === 0) {
       logger.warn('Queen.renew', 'No valid lease IDs found for renewal')
       return { success: false, error: 'No valid lease IDs found for renewal' }

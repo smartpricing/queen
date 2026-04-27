@@ -49,6 +49,7 @@ class ConsumerManager:
         subscription_mode = options.get("subscription_mode")
         subscription_from = options.get("subscription_from")
         each = options.get("each", False)
+        max_partitions = options.get("max_partitions", 1)
         signal = options.get("signal")
 
         logger.log(
@@ -71,7 +72,7 @@ class ConsumerManager:
         # Build the path and params for pop requests
         path = self._build_path(queue, partition, namespace, task)
         base_params = self._build_params(
-            batch, wait, timeout_millis, group, subscription_mode, subscription_from, namespace, task
+            batch, wait, timeout_millis, group, subscription_mode, subscription_from, namespace, task, max_partitions
         )
 
         # Generate affinity key for consistent routing to same backend
@@ -495,6 +496,7 @@ class ConsumerManager:
         subscription_from: Optional[str],
         namespace: Optional[str],
         task: Optional[str],
+        max_partitions: int = 1,
     ) -> str:
         """Build query parameters"""
         params: Dict[str, str] = {
@@ -513,6 +515,9 @@ class ConsumerManager:
             params["namespace"] = namespace
         if task:
             params["task"] = task
+        # v4 multi-partition pop: drain up to N sparse partitions per call.
+        if max_partitions and max_partitions > 1:
+            params["partitions"] = str(max_partitions)
         # NEVER send autoAck for consume - client always manages acking
         # autoAck is only for pop() where server auto-acks immediately
 

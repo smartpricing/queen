@@ -34,6 +34,7 @@ class QueueBuilder
     private ?string $consumeSubscriptionMode;
     private ?string $consumeSubscriptionFrom;
     private bool $consumeEach = false;
+    private int $consumeMaxPartitions = 1;
 
     // Buffer options
     private ?array $bufferOptions = null;
@@ -208,6 +209,23 @@ class QueueBuilder
         return $this;
     }
 
+    /**
+     * Pop messages from up to N partitions in a single call (v4 multi-partition pop).
+     *
+     * Use this to drain many sparsely-loaded partitions efficiently. With
+     * partitions(N), the global batch(B) budget is shared across all
+     * claimed partitions: at most B total messages, drawn from up to N
+     * partitions, in a single network round-trip. All N share one leaseId
+     * (renewing once extends them all).
+     *
+     * Default 1 = legacy single-partition behavior.
+     */
+    public function partitions(int $n): static
+    {
+        $this->consumeMaxPartitions = max(1, $n);
+        return $this;
+    }
+
     public function limit(int $count): static
     {
         $this->consumeLimit = $count;
@@ -320,6 +338,9 @@ class QueueBuilder
         if ($this->consumeSubscriptionFrom !== null) {
             $params['subscriptionFrom'] = $this->consumeSubscriptionFrom;
         }
+        if ($this->consumeMaxPartitions > 1) {
+            $params['partitions'] = (string) $this->consumeMaxPartitions;
+        }
 
         $query = http_build_query($params);
         $affinityKey = $this->getAffinityKey();
@@ -381,6 +402,7 @@ class QueueBuilder
             'subscriptionMode' => $this->consumeSubscriptionMode,
             'subscriptionFrom' => $this->consumeSubscriptionFrom,
             'each' => $this->consumeEach,
+            'maxPartitions' => $this->consumeMaxPartitions,
         ];
     }
 

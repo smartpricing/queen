@@ -43,7 +43,8 @@ export const CONSUME_DEFAULTS = {
   renewLease: false,                   // No auto-renewal
   renewLeaseIntervalMillis: null,      // Auto-renewal interval when enabled
   subscriptionMode: null,              // No subscription mode (standard queue mode)
-  subscriptionFrom: null               // No subscription start point
+  subscriptionFrom: null,              // No subscription start point
+  maxPartitions: 1                     // v4 multi-partition pop cap (1 = legacy single-partition)
 }
 
 export const POP_DEFAULTS = {

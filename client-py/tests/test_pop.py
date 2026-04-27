@@ -23,8 +23,13 @@ async def test_pop_non_empty_queue(client):
     assert queue.get("configured") is True
     
     await client.queue("test-queue-v2-pop-non-empty").push([{"data": {"message": "Hello, world!"}}])
-    
-    res = await client.queue("test-queue-v2-pop-non-empty").batch(1).wait(False).pop()
+
+    # wait(True) to ride out the PUSHPOPLOOKUPSOL race: partition_lookup
+    # is updated asynchronously after push commits, so a wait(False) pop
+    # immediately after push can race past the not-yet-committed lookup
+    # row and return empty. Long-poll re-runs the candidate scan and
+    # picks up the row once it commits (typically within ms).
+    res = await client.queue("test-queue-v2-pop-non-empty").batch(1).wait(True).pop()
     assert len(res) == 1
 
 

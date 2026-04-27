@@ -1187,14 +1187,29 @@ class Queen {
                                 queue_map.erase(job->job.request_id);
                                 if (queue_map.empty()) _pop_backoff_tracker.erase(backoff_key);
 
+                                // pop_unified_batch_v4 bakes per-message
+                                // partitionId / leaseId into each message
+                                // (so multi-partition pops are
+                                // self-describing). For the single-partition
+                                // case the procedure still emits the same
+                                // values, so this loop is a no-op there.
+                                // We only stamp absent fields, never
+                                // overwrite — that's how a v4 multi-partition
+                                // batch (different partitionId per msg)
+                                // survives this loop without being collapsed
+                                // to the top-level "first claimed partition".
                                 if (result_item.contains("result") &&
                                     result_item["result"].contains("partitionId") &&
                                     result_item["result"].contains("messages")) {
                                     auto partition_id = result_item["result"]["partitionId"];
                                     auto lease_id = result_item["result"].value("leaseId", nlohmann::json(nullptr));
                                     for (auto& msg : result_item["result"]["messages"]) {
-                                        msg["partitionId"] = partition_id;
-                                        if (!lease_id.is_null()) msg["leaseId"] = lease_id;
+                                        if (!msg.contains("partitionId") && !partition_id.is_null()) {
+                                            msg["partitionId"] = partition_id;
+                                        }
+                                        if (!msg.contains("leaseId") && !lease_id.is_null()) {
+                                            msg["leaseId"] = lease_id;
+                                        }
                                     }
                                 }
 

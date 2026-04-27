@@ -36,9 +36,10 @@ class ConsumerManager
         $each = $options['each'] ?? false;
         $subscriptionMode = $options['subscriptionMode'] ?? null;
         $subscriptionFrom = $options['subscriptionFrom'] ?? null;
+        $maxPartitions = $options['maxPartitions'] ?? 1;
 
         $path = $this->buildPath($queue, $partition, $namespace, $task);
-        $baseParams = $this->buildParams($batch, $wait, $timeoutMillis, $group, $subscriptionMode, $subscriptionFrom, $namespace, $task);
+        $baseParams = $this->buildParams($batch, $wait, $timeoutMillis, $group, $subscriptionMode, $subscriptionFrom, $namespace, $task, $maxPartitions);
         $affinityKey = $this->getAffinityKey($queue, $partition, $namespace, $task, $group);
 
         // Install signal handlers, saving previous handlers for restoration
@@ -468,6 +469,7 @@ class ConsumerManager
         ?string $subscriptionFrom,
         ?string $namespace,
         ?string $task,
+        int $maxPartitions = 1,
     ): string {
         $params = [
             'batch' => (string) $batch,
@@ -489,6 +491,10 @@ class ConsumerManager
         }
         if ($task !== null) {
             $params['task'] = $task;
+        }
+        // v4 multi-partition pop: drain up to N sparse partitions per call.
+        if ($maxPartitions > 1) {
+            $params['partitions'] = (string) $maxPartitions;
         }
 
         return http_build_query($params);

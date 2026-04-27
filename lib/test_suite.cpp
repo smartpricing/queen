@@ -19,6 +19,7 @@
 #include <random>
 #include <iomanip>
 #include <sstream>
+#include <set>
 
 // ============================================================================
 // Simple Test Framework
@@ -264,6 +265,35 @@ std::string build_renew_params_batch(const std::vector<std::string>& lease_ids, 
         item["extendSeconds"] = extend_seconds;
         arr.push_back(item);
     }
+    return arr.dump();
+}
+
+// Build POP parameters for v4 multi-partition / wildcard support.
+// `partition_name` is sent as the empty string (wildcard) when empty, NOT
+// coerced to "Default" the way build_pop_params does it. `max_partitions`
+// is the v4 cap; defaults to 1 (legacy single-partition behaviour).
+std::string build_pop_params_v4(const std::string& queue,
+                                const std::string& partition,  // "" = wildcard
+                                const std::string& consumer_group,
+                                int batch_size,
+                                int max_partitions,
+                                const std::string& worker_id = "",
+                                bool auto_ack = false) {
+    nlohmann::json item;
+    item["idx"] = 0;
+    item["queue_name"] = queue;
+    item["partition_name"] = partition;  // empty = wildcard (no coercion!)
+    item["consumer_group"] = consumer_group;
+    item["batch_size"] = batch_size;
+    item["lease_seconds"] = 60;
+    item["worker_id"] = worker_id.empty() ? generate_uuid() : worker_id;
+    item["sub_mode"] = "all";
+    item["sub_from"] = "";
+    item["auto_ack"] = auto_ack;
+    item["max_partitions"] = max_partitions;
+
+    nlohmann::json arr = nlohmann::json::array();
+    arr.push_back(item);
     return arr.dump();
 }
 
@@ -2163,6 +2193,344 @@ TEST(test_validation_valid_push) {
 }
 
 // ============================================================================
+// MULTI-PARTITION POP V4 TESTS
+// ============================================================================
+//
+// Each test seeds N partitions, then issues a wildcard pop with
+// max_partitions and asserts the multi-claim invariants:
+//   * partitionsClaimed reflects the actual count of claimed partitions
+//   * each message carries its own partitionId / leaseId / partition
+//   * all messages share a single leaseId (= worker_id)
+//   * batch_size acts as a GLOBAL cap on total messages returned
+//
+// The seed step pushes through libqueen so that partition_lookup rows
+// (which the wildcard candidate scan reads) are populated by the
+// post-commit PUSHPOPLOOKUPSOL bookkeeping.
+
+// Helper: synchronously seed N partitions with M messages each.
+static void seed_partitions(queen::Queen& q, const std::string& queue_name,
+                            int num_partitions, int msgs_per_partition) {
+    for (int p = 0; p < num_partitions; p++) {
+        std::string partition_name = "p" + std::to_string(p);
+        std::vector<nlohmann::json> payloads;
+        for (int m = 0; m < msgs_per_partition; m++) {
+            payloads.push_back({{"p", p}, {"m", m}});
+        }
+        AsyncWaiter waiter;
+        q.submit(queen::JobRequest{
+            .op_type = queen::JobType::PUSH,
+            .queue_name = queue_name,
+            .partition_name = partition_name,
+            .params = { build_push_params_batch(queue_name, partition_name, payloads) },
+        }, [&](std::string) { waiter.signal(); });
+        waiter.wait();
+    }
+    // Allow the async PUSHPOPLOOKUPSOL update_partition_lookup_v1 follow-up
+    // to commit before the wildcard scan probes partition_lookup.
+    std::this_thread::sleep_for(std::chrono::milliseconds(500));
+}
+
+TEST(test_pop_v4_multi_partition_basic) {
+    std::string queue = generate_queue_name("test-v4-basic");
+    std::string worker_id = generate_uuid();
+    seed_partitions(queen, queue, 3, 2);  // 3 partitions x 2 msgs = 6 msgs
+
+    AsyncWaiter waiter;
+    int msg_count = 0;
+    int partitions_claimed = 0;
+    std::set<std::string> distinct_partition_ids;
+    std::set<std::string> distinct_lease_ids;
+    std::string error_msg;
+
+    queen.submit(queen::JobRequest{
+        .op_type = queen::JobType::POP,
+        .queue_name = queue,
+        .partition_name = "",  // wildcard
+        .params = { build_pop_params_v4(queue, "", "__QUEUE_MODE__",
+                                        /*batch_size=*/100,
+                                        /*max_partitions=*/3,
+                                        worker_id) },
+    }, [&](std::string result) {
+        try {
+            auto json = nlohmann::json::parse(result);
+            if (!json.empty() && json[0].contains("result")) {
+                auto& r = json[0]["result"];
+                if (r["success"] == true) {
+                    msg_count = r["messages"].size();
+                    partitions_claimed = r.value("partitionsClaimed", 0);
+                    for (const auto& msg : r["messages"]) {
+                        if (msg.contains("partitionId")) {
+                            distinct_partition_ids.insert(msg["partitionId"].get<std::string>());
+                        }
+                        if (msg.contains("leaseId")) {
+                            distinct_lease_ids.insert(msg["leaseId"].get<std::string>());
+                        }
+                    }
+                } else {
+                    error_msg = r.value("error", "unknown");
+                }
+            }
+        } catch (const std::exception& e) {
+            error_msg = e.what();
+        }
+        waiter.signal();
+    });
+
+    waiter.wait();
+    ASSERT(error_msg.empty(), "Pop failed: " + error_msg);
+    ASSERT_EQ(msg_count, 6, "Expected 6 messages across 3 partitions");
+    ASSERT_EQ(partitions_claimed, 3, "Expected partitionsClaimed=3");
+    ASSERT_EQ(distinct_partition_ids.size(), 3u, "Each partition should appear in per-message partitionId");
+    ASSERT_EQ(distinct_lease_ids.size(), 1u, "All messages should share a single leaseId");
+    // The shared leaseId should be the worker_id we passed in.
+    ASSERT(distinct_lease_ids.count(worker_id) == 1, "Shared leaseId should equal worker_id");
+}
+
+TEST(test_pop_v4_global_cap) {
+    std::string queue = generate_queue_name("test-v4-cap");
+    std::string worker_id = generate_uuid();
+    seed_partitions(queen, queue, 5, 100);  // 5 partitions x 100 msgs = 500 msgs
+
+    AsyncWaiter waiter;
+    int msg_count = 0;
+    int partitions_claimed = 0;
+    std::string error_msg;
+
+    // Request batch_size=10 (global cap), max_partitions=5. Should return
+    // exactly 10 messages, drained from <=5 partitions, leaving plenty of
+    // unconsumed messages behind.
+    queen.submit(queen::JobRequest{
+        .op_type = queen::JobType::POP,
+        .queue_name = queue,
+        .partition_name = "",
+        .params = { build_pop_params_v4(queue, "", "__QUEUE_MODE__",
+                                        /*batch_size=*/10,
+                                        /*max_partitions=*/5,
+                                        worker_id,
+                                        /*auto_ack=*/true) },
+    }, [&](std::string result) {
+        try {
+            auto json = nlohmann::json::parse(result);
+            auto& r = json[0]["result"];
+            if (r["success"] == true) {
+                msg_count = r["messages"].size();
+                partitions_claimed = r.value("partitionsClaimed", 0);
+            } else {
+                error_msg = r.value("error", "unknown");
+            }
+        } catch (const std::exception& e) {
+            error_msg = e.what();
+        }
+        waiter.signal();
+    });
+
+    waiter.wait();
+    ASSERT(error_msg.empty(), "Pop failed: " + error_msg);
+    ASSERT_EQ(msg_count, 10, "batch_size=10 must be a hard global cap");
+    // We may claim fewer than 5 partitions if the first one drained the
+    // entire 10-message budget. The invariant is "<= max_partitions".
+    ASSERT(partitions_claimed >= 1 && partitions_claimed <= 5,
+           "partitionsClaimed must be in [1, max_partitions]");
+}
+
+TEST(test_pop_v4_lease_renew) {
+    std::string queue = generate_queue_name("test-v4-renew");
+    std::string worker_id = generate_uuid();
+    seed_partitions(queen, queue, 3, 1);
+
+    // Pop across 3 partitions with a shared lease.
+    AsyncWaiter pop_waiter;
+    std::string lease_id;
+    queen.submit(queen::JobRequest{
+        .op_type = queen::JobType::POP,
+        .queue_name = queue,
+        .partition_name = "",
+        .params = { build_pop_params_v4(queue, "", "__QUEUE_MODE__",
+                                        /*batch_size=*/100,
+                                        /*max_partitions=*/3,
+                                        worker_id) },
+    }, [&](std::string result) {
+        auto json = nlohmann::json::parse(result);
+        auto& r = json[0]["result"];
+        if (r["success"] == true && !r["messages"].empty()) {
+            lease_id = r["messages"][0]["leaseId"].get<std::string>();
+        }
+        pop_waiter.signal();
+    });
+    pop_waiter.wait();
+    ASSERT(!lease_id.empty(), "Pop should produce a leaseId");
+    ASSERT_EQ(lease_id, worker_id, "leaseId equals worker_id");
+
+    std::this_thread::sleep_for(std::chrono::seconds(1));
+
+    // A single renew_lease_v2 call should extend ALL three partition
+    // partition_consumers rows (worker_id is shared).
+    AsyncWaiter renew_waiter;
+    bool renew_success = false;
+    queen.submit(queen::JobRequest{
+        .op_type = queen::JobType::RENEW_LEASE,
+        .params = { build_renew_params(lease_id, 120) },
+    }, [&](std::string result) {
+        auto json = nlohmann::json::parse(result);
+        renew_success = !json.empty() && json[0]["success"] == true;
+        renew_waiter.signal();
+    });
+    renew_waiter.wait();
+    ASSERT(renew_success, "Single renew should extend all multi-partition leases");
+}
+
+TEST(test_pop_v4_ack) {
+    std::string queue = generate_queue_name("test-v4-ack");
+    std::string worker_id = generate_uuid();
+    seed_partitions(queen, queue, 2, 3);  // 2 partitions x 3 msgs = 6 total
+
+    AsyncWaiter pop_waiter;
+    nlohmann::json messages;
+    std::string error_msg;
+    queen.submit(queen::JobRequest{
+        .op_type = queen::JobType::POP,
+        .queue_name = queue,
+        .partition_name = "",
+        .params = { build_pop_params_v4(queue, "", "__QUEUE_MODE__",
+                                        /*batch_size=*/100,
+                                        /*max_partitions=*/2,
+                                        worker_id) },
+    }, [&](std::string result) {
+        try {
+            auto json = nlohmann::json::parse(result);
+            messages = json[0]["result"]["messages"];
+        } catch (const std::exception& e) {
+            error_msg = e.what();
+        }
+        pop_waiter.signal();
+    });
+    pop_waiter.wait();
+    ASSERT(error_msg.empty(), "Pop failed: " + error_msg);
+    ASSERT_EQ(messages.size(), 6u, "Expected 6 messages across 2 partitions");
+
+    // ACK each message individually using its OWN per-message partitionId
+    // and the shared leaseId. The v4 procedure has set each partition's
+    // batch_size to its actual contribution (3), so once 3 ACKs land for
+    // a given partition_id, that partition's lease auto-releases.
+    int acked = 0;
+    int failed = 0;
+    for (size_t i = 0; i < messages.size(); i++) {
+        const auto& msg = messages[i];
+        AsyncWaiter ack_waiter;
+        queen.submit(queen::JobRequest{
+            .op_type = queen::JobType::ACK,
+            .params = { build_ack_params(
+                msg["transactionId"].get<std::string>(),
+                msg["partitionId"].get<std::string>(),
+                msg["leaseId"].get<std::string>(),
+                "__QUEUE_MODE__", "completed", static_cast<int>(i)) },
+        }, [&](std::string result) {
+            auto json = nlohmann::json::parse(result);
+            if (!json.empty() && json[0].value("success", false)) acked++;
+            else failed++;
+            ack_waiter.signal();
+        });
+        ack_waiter.wait();
+    }
+
+    ASSERT_EQ(acked, 6, "All 6 ACKs across 2 partitions should succeed");
+    ASSERT_EQ(failed, 0, "No ACK should fail");
+}
+
+TEST(test_pop_v4_default_one) {
+    std::string queue = generate_queue_name("test-v4-default");
+    std::string worker_id = generate_uuid();
+    seed_partitions(queen, queue, 4, 5);  // 4 partitions x 5 msgs
+
+    // Without max_partitions (defaults to 1), wildcard pop must still
+    // claim exactly one partition — byte-equivalent to v3.
+    AsyncWaiter waiter;
+    int msg_count = 0;
+    int partitions_claimed = 0;
+    std::set<std::string> distinct_partition_ids;
+    std::string error_msg;
+
+    queen.submit(queen::JobRequest{
+        .op_type = queen::JobType::POP,
+        .queue_name = queue,
+        .partition_name = "",
+        .params = { build_pop_params_v4(queue, "", "__QUEUE_MODE__",
+                                        /*batch_size=*/100,
+                                        /*max_partitions=*/1,
+                                        worker_id) },
+    }, [&](std::string result) {
+        try {
+            auto json = nlohmann::json::parse(result);
+            auto& r = json[0]["result"];
+            if (r["success"] == true) {
+                msg_count = r["messages"].size();
+                partitions_claimed = r.value("partitionsClaimed", 0);
+                for (const auto& msg : r["messages"]) {
+                    distinct_partition_ids.insert(msg["partitionId"].get<std::string>());
+                }
+            } else {
+                error_msg = r.value("error", "unknown");
+            }
+        } catch (const std::exception& e) {
+            error_msg = e.what();
+        }
+        waiter.signal();
+    });
+    waiter.wait();
+
+    ASSERT(error_msg.empty(), "Pop failed: " + error_msg);
+    ASSERT_EQ(msg_count, 5, "Default max_partitions=1 should only drain one partition (5 msgs)");
+    ASSERT_EQ(partitions_claimed, 1, "partitionsClaimed=1 with default");
+    ASSERT_EQ(distinct_partition_ids.size(), 1u, "All messages must come from a single partition");
+}
+
+TEST(test_pop_v4_specific_partition_ignores_max) {
+    std::string queue = generate_queue_name("test-v4-specific");
+    std::string worker_id = generate_uuid();
+    seed_partitions(queen, queue, 4, 5);
+
+    // Specific partition + max_partitions=8 must still behave as
+    // single-partition (the SQL ignores max_partitions outside the
+    // wildcard branch).
+    AsyncWaiter waiter;
+    int msg_count = 0;
+    int partitions_claimed = 0;
+    std::string returned_partition;
+    std::string error_msg;
+
+    queen.submit(queen::JobRequest{
+        .op_type = queen::JobType::POP,
+        .queue_name = queue,
+        .partition_name = "p1",
+        .params = { build_pop_params_v4(queue, "p1", "__QUEUE_MODE__",
+                                        /*batch_size=*/100,
+                                        /*max_partitions=*/8,
+                                        worker_id) },
+    }, [&](std::string result) {
+        try {
+            auto json = nlohmann::json::parse(result);
+            auto& r = json[0]["result"];
+            if (r["success"] == true) {
+                msg_count = r["messages"].size();
+                partitions_claimed = r.value("partitionsClaimed", 0);
+                returned_partition = r.value("partition", "");
+            } else {
+                error_msg = r.value("error", "unknown");
+            }
+        } catch (const std::exception& e) {
+            error_msg = e.what();
+        }
+        waiter.signal();
+    });
+    waiter.wait();
+
+    ASSERT(error_msg.empty(), "Pop failed: " + error_msg);
+    ASSERT_EQ(msg_count, 5, "Specific partition pop must drain only partition p1 (5 msgs)");
+    ASSERT_EQ(partitions_claimed, 1, "partitionsClaimed must be 1 on specific-partition path");
+    ASSERT_EQ(returned_partition, std::string("p1"), "Returned partition must match request");
+}
+
+// ============================================================================
 // MAIN
 // ============================================================================
 
@@ -2238,6 +2606,14 @@ int main(int argc, char* argv[]) {
         RUN_TEST(test_validation_transaction_missing_params);
         RUN_TEST(test_validation_custom_missing_sql);
         RUN_TEST(test_validation_valid_push);
+
+        std::cout << std::endl << "=== MULTI-PARTITION POP V4 Tests ===" << std::endl;
+        RUN_TEST(test_pop_v4_multi_partition_basic);
+        RUN_TEST(test_pop_v4_global_cap);
+        RUN_TEST(test_pop_v4_lease_renew);
+        RUN_TEST(test_pop_v4_ack);
+        RUN_TEST(test_pop_v4_default_one);
+        RUN_TEST(test_pop_v4_specific_partition_ignores_max);
         
         std::cout << std::endl;
         std::cout << "============================================" << std::endl;

@@ -437,3 +437,12 @@ DROP TRIGGER IF EXISTS trg_update_partition_lookup ON queen.messages;
 -- re-apply. Safe to remove this line once all deployments have
 -- re-applied the schema at least once.
 DROP FUNCTION IF EXISTS queen.pop_unified_batch_v2_noorder(JSONB);
+
+-- pop_unified_batch_v4 (lib/schema/procedures/002d_pop_unified_v4.sql) is
+-- the multi-partition successor to v3. With max_partitions=1 (default) the
+-- response shape is byte-equivalent to v3 plus per-message partition info.
+-- v3 is intentionally kept around as an emergency-revert target — flipping
+-- the dispatched SQL string in lib/queen/pending_job.hpp back to
+-- pop_unified_batch_v3 fully reverts the multi-partition feature.
+-- Procedure files are auto-discovered by libqueen (alphabetical order), so
+-- no explicit include is required here.

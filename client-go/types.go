@@ -135,6 +135,11 @@ type ConsumeOptions struct {
 	SubscriptionMode        string
 	SubscriptionFrom        string
 	Each                    bool
+	// MaxPartitions is the v4 multi-partition pop cap: claim up to N
+	// partitions in a single call (default 1 = legacy behavior). The
+	// Batch field becomes a global cap on total messages returned across
+	// all claimed partitions.
+	MaxPartitions           int
 }
 
 // PopOptions contains options for popping messages.
@@ -146,6 +151,8 @@ type PopOptions struct {
 	ConsumerGroup    string
 	SubscriptionMode string
 	SubscriptionFrom string
+	// MaxPartitions is the v4 multi-partition cap (default 1).
+	MaxPartitions    int
 }
 
 // AckOptions contains options for acknowledging messages.

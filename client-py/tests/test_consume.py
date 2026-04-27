@@ -440,3 +440,148 @@ async def test_auto_renew_lease(client):
     # Test passes - renewal API works without errors
     print("✅ Auto-renewal test completed")
 
+
+# ============================================================================
+# v4 Multi-Partition Pop Tests
+# ============================================================================
+#
+# Exercises the .partitions(N) builder method end-to-end:
+#   * Server SQL drains up to N partitions per call
+#   * Each message carries its own partitionId / leaseId / partition
+#   * batch(B) is a global cap on TOTAL messages across all partitions
+#   * Default (no .partitions() call) preserves single-partition behaviour
+
+
+@pytest.mark.asyncio
+async def test_consumer_multi_partition_basic(client):
+    """v4: .partitions(N) drains messages from N partitions in a single batch."""
+    queue_name = "test-queue-v2-v4-multi-partition-basic"
+    queue = await client.queue(queue_name).create()
+    assert queue.get("configured") is True
+
+    # Seed 3 partitions with 2 messages each.
+    for p in range(3):
+        await client.queue(queue_name).partition(f"p{p}").push([
+            {"data": {"p": p, "m": 0}},
+            {"data": {"p": p, "m": 1}},
+        ])
+
+    # Allow the post-push partition_lookup follow-up (PUSHPOPLOOKUPSOL)
+    # to settle before the wildcard scan.
+    await asyncio.sleep(0.5)
+
+    received = []
+
+    async def handler(msgs):
+        if isinstance(msgs, list):
+            received.extend(msgs)
+        else:
+            received.append(msgs)
+
+    await (
+        client.queue(queue_name)
+        .batch(100)
+        .partitions(3)
+        .wait(False)
+        .limit(1)
+        .auto_ack(True)
+        .consume(handler)
+    )
+
+    assert len(received) == 6, f"Expected 6 messages across 3 partitions, got {len(received)}"
+
+    # Every message must carry its own partition info; partitionIds must
+    # span all 3 partitions; leaseIds must collapse to a single value.
+    distinct_partition_ids = {m["partitionId"] for m in received}
+    distinct_lease_ids = {m.get("leaseId") for m in received if m.get("leaseId")}
+
+    assert len(distinct_partition_ids) == 3, (
+        f"Expected 3 distinct partitionIds, got {len(distinct_partition_ids)}"
+    )
+    # auto_ack=True empties the leaseId on the wire (server doesn't issue a lease),
+    # so we only assert distinct count <= 1 rather than == 1.
+    assert len(distinct_lease_ids) <= 1, (
+        f"All messages must share at most one leaseId, got {len(distinct_lease_ids)}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_consumer_multi_partition_global_cap(client):
+    """v4: batch(B) is a GLOBAL cap on total messages, not per-partition."""
+    queue_name = "test-queue-v2-v4-global-cap"
+    queue = await client.queue(queue_name).create()
+    assert queue.get("configured") is True
+
+    # Seed 5 partitions with 100 messages each → 500 total available.
+    for p in range(5):
+        await client.queue(queue_name).partition(f"p{p}").push([
+            {"data": {"p": p, "m": m}} for m in range(100)
+        ])
+
+    await asyncio.sleep(0.5)
+
+    received_count = 0
+
+    async def handler(msgs):
+        nonlocal received_count
+        received_count = len(msgs) if isinstance(msgs, list) else 1
+
+    # batch=10 is the global cap; partitions=5 lets us span partitions.
+    # We must receive EXACTLY 10 messages, not 5*10 or 5*100.
+    await (
+        client.queue(queue_name)
+        .batch(10)
+        .partitions(5)
+        .wait(False)
+        .limit(1)
+        .auto_ack(True)
+        .consume(handler)
+    )
+
+    assert received_count == 10, (
+        f"batch(10) must be a hard global cap, got {received_count}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_consumer_multi_partition_default_one(client):
+    """v4: omitting .partitions() preserves legacy single-partition behaviour."""
+    queue_name = "test-queue-v2-v4-default-one"
+    queue = await client.queue(queue_name).create()
+    assert queue.get("configured") is True
+
+    # Seed 4 partitions with 5 messages each.
+    for p in range(4):
+        await client.queue(queue_name).partition(f"p{p}").push([
+            {"data": {"p": p, "m": m}} for m in range(5)
+        ])
+
+    await asyncio.sleep(0.5)
+
+    received = []
+
+    async def handler(msgs):
+        if isinstance(msgs, list):
+            received.extend(msgs)
+        else:
+            received.append(msgs)
+
+    # No .partitions() call → max_partitions defaults to 1 → single partition.
+    await (
+        client.queue(queue_name)
+        .batch(100)
+        .wait(False)
+        .limit(1)
+        .auto_ack(True)
+        .consume(handler)
+    )
+
+    assert len(received) == 5, (
+        f"Default max_partitions=1 must drain only one partition (5 msgs), got {len(received)}"
+    )
+
+    distinct_partition_ids = {m["partitionId"] for m in received}
+    assert len(distinct_partition_ids) == 1, (
+        "All messages must come from a single partition when partitions() is not used"
+    )
+

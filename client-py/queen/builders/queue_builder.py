@@ -58,6 +58,7 @@ class QueueBuilder:
         self._subscription_mode = CONSUME_DEFAULTS["subscription_mode"]
         self._subscription_from = CONSUME_DEFAULTS["subscription_from"]
         self._each = False
+        self._max_partitions = 1
 
         # Buffer options
         self._buffer_options: Optional[Dict[str, Any]] = None
@@ -210,6 +211,21 @@ class QueueBuilder:
         self._batch = max(1, size)
         return self
 
+    def partitions(self, n: int) -> "QueueBuilder":
+        """
+        Pop messages from up to N partitions in a single call (v4 multi-partition pop).
+
+        Use this to drain many sparsely-loaded partitions efficiently. With
+        partitions(N), the global batch(B) budget is shared across all
+        claimed partitions: at most B total messages, drawn from up to N
+        partitions, in a single network round-trip. All N partitions share
+        a single leaseId — renewing once extends them all.
+
+        Default 1 = legacy single-partition behavior.
+        """
+        self._max_partitions = max(1, n)
+        return self
+
     def limit(self, count: int) -> "QueueBuilder":
         """Set message limit"""
         self._limit = count
@@ -285,6 +301,7 @@ class QueueBuilder:
             "subscription_mode": self._subscription_mode,
             "subscription_from": self._subscription_from,
             "each": self._each,
+            "max_partitions": self._max_partitions,
             "signal": signal,
         }
 
@@ -344,6 +361,8 @@ class QueueBuilder:
                 params["subscriptionMode"] = self._subscription_mode
             if self._subscription_from:
                 params["subscriptionFrom"] = self._subscription_from
+            if self._max_partitions > 1:
+                params["partitions"] = str(self._max_partitions)
 
             # Generate affinity key for consistent routing to same backend
             affinity_key = self._get_affinity_key()

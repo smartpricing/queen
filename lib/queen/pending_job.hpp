@@ -63,7 +63,7 @@ inline const std::map<JobType, std::string>&
 JobTypeToSqlTable() {
     static const std::map<JobType, std::string> table = {
         {JobType::PUSH,        "SELECT queen.push_messages_v3($1::jsonb)"},
-        {JobType::POP,         "SELECT queen.pop_unified_batch_v3($1::jsonb)"},
+        {JobType::POP,         "SELECT queen.pop_unified_batch_v4($1::jsonb)"},
         {JobType::ACK,         "SELECT queen.ack_messages_v2($1::jsonb)"},
         {JobType::TRANSACTION, "SELECT queen.execute_transaction_v2($1::jsonb)"},
         {JobType::RENEW_LEASE, "SELECT queen.renew_lease_v2($1::jsonb)"},
@@ -94,8 +94,9 @@ struct JobRequest {
     std::chrono::steady_clock::time_point next_check;    // POP earliest-retry time.
     uint16_t backoff_count = 0;
 
-    int  batch_size = 1;
-    bool auto_ack   = false;
+    int  batch_size     = 1;
+    int  max_partitions = 1;            // POP: claim up to N partitions per call (v4).
+    bool auto_ack       = false;
 };
 
 struct PendingJob {

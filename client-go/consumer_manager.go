@@ -532,6 +532,10 @@ func (cm *ConsumerManager) buildParams(opts ConsumeOptions) string {
 	if opts.Task != "" {
 		params.Set("task", opts.Task)
 	}
+	// v4 multi-partition pop: drain up to N sparse partitions per call.
+	if opts.MaxPartitions > 1 {
+		params.Set("partitions", strconv.Itoa(opts.MaxPartitions))
+	}
 	// NEVER send autoAck for consume - client always manages acking
 
 	return params.Encode()

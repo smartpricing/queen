@@ -235,6 +235,23 @@ func (q *Queen) Renew(ctx context.Context, messages interface{}) ([]RenewRespons
 		return nil, fmt.Errorf("no lease IDs to renew")
 	}
 
+	// Dedupe: with v4 multi-partition pop, all messages in one batch share
+	// the same leaseId (one renew_lease_v2 call extends every claimed
+	// partition_consumers row). Without this dedupe, callers passing the
+	// full message slice would issue N redundant identical HTTP calls.
+	{
+		seen := make(map[string]struct{}, len(leaseIDs))
+		deduped := leaseIDs[:0:0]
+		for _, id := range leaseIDs {
+			if _, ok := seen[id]; ok {
+				continue
+			}
+			seen[id] = struct{}{}
+			deduped = append(deduped, id)
+		}
+		leaseIDs = deduped
+	}
+
 	// Renew each lease
 	var responses []RenewResponse
 	for _, leaseID := range leaseIDs {

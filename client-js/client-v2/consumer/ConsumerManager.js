@@ -48,6 +48,7 @@ export class ConsumerManager {
       subscriptionMode,
       subscriptionFrom,
       each,
+      maxPartitions,
       signal
     } = options
 
@@ -67,7 +68,7 @@ export class ConsumerManager {
 
     // Build the path and params for pop requests
     const path = this.#buildPath(queue, partition, namespace, task)
-    const baseParams = this.#buildParams(batch, wait, timeoutMillis, group, subscriptionMode, subscriptionFrom, namespace, task, autoAck)
+    const baseParams = this.#buildParams(batch, wait, timeoutMillis, group, subscriptionMode, subscriptionFrom, namespace, task, autoAck, maxPartitions)
     
     // Generate affinity key for consistent routing to same backend
     const affinityKey = this.#getAffinityKey(queue, partition, namespace, task, group)
@@ -389,7 +390,7 @@ export class ConsumerManager {
     throw new Error('Must specify queue, namespace, or task')
   }
 
-  #buildParams(batch, wait, timeoutMillis, group, subscriptionMode, subscriptionFrom, namespace, task, autoAck) {
+  #buildParams(batch, wait, timeoutMillis, group, subscriptionMode, subscriptionFrom, namespace, task, autoAck, maxPartitions) {
     const params = new URLSearchParams({
       batch: batch.toString(),
       wait: wait.toString(),
@@ -401,6 +402,8 @@ export class ConsumerManager {
     if (subscriptionFrom) params.append('subscriptionFrom', subscriptionFrom)
     if (namespace) params.append('namespace', namespace)
     if (task) params.append('task', task)
+    // v4 multi-partition pop: drain up to N sparse partitions per call.
+    if (maxPartitions && maxPartitions > 1) params.append('partitions', maxPartitions.toString())
     // NEVER send autoAck for consume - client always manages acking
     // autoAck is only for pop() where server auto-acks immediately
 

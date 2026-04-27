@@ -613,3 +613,99 @@ export async function autoRenewLease(client) {
 
     return { success: shouldFailHasFailed === false && shouldPassHasPass === true, message: 'Auto renew lease test completed successfully' }
 }
+
+
+// ============================================================================
+// v4 Multi-Partition Consume Tests
+// ============================================================================
+//
+// Exercises the .partitions(N) builder method against the high-level
+// consume() API (which calls pop_unified_batch_v4 under the hood).
+
+export async function testConsumerMultiPartition(client) {
+    const queueName = 'test-queue-v2-v4-consume-multi'
+    const queue = await client.queue(queueName).create()
+    if (!queue.configured) {
+        return { success: false, message: 'Queue not created' }
+    }
+
+    // Seed 3 partitions × 4 messages each = 12 total.
+    for (let p = 0; p < 3; p++) {
+        const payloads = []
+        for (let m = 0; m < 4; m++) payloads.push({ data: { p, m } })
+        await client.queue(queueName).partition(`p${p}`).push(payloads)
+    }
+
+    // Allow the post-push partition_lookup follow-up to settle.
+    await new Promise(r => setTimeout(r, 500))
+
+    let received = []
+
+    // .partitions(3).batch(100) → up to 100 msgs from up to 3 partitions
+    // in a single pop. .limit(1) ends the consume after one batch.
+    await client
+    .queue(queueName)
+    .batch(100)
+    .partitions(3)
+    .wait(false)
+    .limit(1)
+    .consume(async msgs => {
+        received = msgs
+    })
+
+    if (received.length !== 12) {
+        return { success: false, message: `Expected 12 messages across 3 partitions, got ${received.length}` }
+    }
+
+    const distinctPartitionIds = new Set(received.map(m => m.partitionId))
+    const distinctLeaseIds = new Set(received.map(m => m.leaseId).filter(Boolean))
+
+    if (distinctPartitionIds.size !== 3) {
+        return { success: false, message: `Expected 3 distinct partitionIds, got ${distinctPartitionIds.size}` }
+    }
+    // consume() uses client-side auto-ack which means leaseId may be
+    // empty if server-side autoAck is used. Accept either: shared lease
+    // id (1 distinct value) or all-empty (0).
+    if (distinctLeaseIds.size > 1) {
+        return { success: false, message: `All messages must share at most one leaseId, got ${distinctLeaseIds.size}` }
+    }
+
+    return { success: true, message: 'Consumer with .partitions(3) drained 3 partitions in one batch' }
+}
+
+export async function testConsumerMultiPartitionGlobalCap(client) {
+    const queueName = 'test-queue-v2-v4-consume-cap'
+    const queue = await client.queue(queueName).create()
+    if (!queue.configured) {
+        return { success: false, message: 'Queue not created' }
+    }
+
+    // Seed 5 partitions × 50 messages each = 250 total available.
+    for (let p = 0; p < 5; p++) {
+        const payloads = []
+        for (let m = 0; m < 50; m++) payloads.push({ data: { p, m } })
+        await client.queue(queueName).partition(`p${p}`).push(payloads)
+    }
+
+    await new Promise(r => setTimeout(r, 500))
+
+    let received = []
+
+    // batch(20) is the GLOBAL cap. With partitions(5) we can claim up to
+    // 5 partitions, but the total returned is bounded at 20 messages.
+    await client
+    .queue(queueName)
+    .batch(20)
+    .partitions(5)
+    .wait(false)
+    .limit(1)
+    .consume(async msgs => {
+        received = msgs
+    })
+
+    if (received.length !== 20) {
+        return { success: false, message: `batch(20) must be a hard global cap, got ${received.length}` }
+    }
+
+    return { success: true, message: 'Global batch cap respected across multi-partition consume' }
+}

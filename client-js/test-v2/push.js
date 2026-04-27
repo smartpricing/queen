@@ -221,10 +221,15 @@ export async function pushLargePayload(client) {
     .queue('test-queue-large-payload')
     .push([{ data: largePayload }])
 
+    // wait(true) rides out the PUSHPOPLOOKUPSOL race: partition_lookup is
+    // updated asynchronously after push commits, so an immediate
+    // wait(false) wildcard pop can race past the not-yet-committed lookup
+    // row. Long-poll re-runs the candidate scan and picks up the row
+    // once it commits (typically within ms).
     const received = await client
     .queue('test-queue-large-payload')
     .batch(1)
-    .wait(false)
+    .wait(true)
     .pop()
     
     if (!received || !received[0].data || !received[0].data.array || received[0].data.array.length !== 10000) {
@@ -243,10 +248,11 @@ export async function pushNullPayload(client) {
     .queue('test-queue-null-payload')
     .push([{ data: null }])
 
+    // wait(true): ride out the PUSHPOPLOOKUPSOL race (see pushLargePayload).
     const received = await client
     .queue('test-queue-null-payload')
     .batch(1)
-    .wait(false)
+    .wait(true)
     .pop()
 
     if (!received || received[0].data !== null) {
@@ -265,10 +271,11 @@ export async function pushEmptyPayload(client) {
     .queue('test-queue-empty-payload')
     .push([{ data: {} }])
 
+    // wait(true): ride out the PUSHPOPLOOKUPSOL race (see pushLargePayload).
     const received = await client
     .queue('test-queue-empty-payload')
     .batch(1)
-    .wait(false)
+    .wait(true)
     .pop()
     
     if (!received || Object.keys(received[0].data).length !== 0) {
@@ -300,7 +307,8 @@ export async function testSimplePushRoundTrip(client) {
     if (!res[0] || res[0].status !== 'queued') {
         return { success: false, message: `Expected queued, got ${JSON.stringify(res[0])}` }
     }
-    const popped = await client.queue(queueName).batch(1).wait(false).pop()
+    // wait(true): ride out the PUSHPOPLOOKUPSOL race (see pushLargePayload).
+    const popped = await client.queue(queueName).batch(1).wait(true).pop()
     if (!popped || popped.length !== 1 || popped[0].data.n !== 1) {
         return { success: false, message: 'Round-trip pop failed' }
     }
@@ -316,8 +324,9 @@ export async function testPushAutoCreatesQueueAndPartition(client) {
     if (!res[0] || res[0].status !== 'queued') {
         return { success: false, message: `Expected queued, got ${JSON.stringify(res[0])}` }
     }
+    // wait(true): ride out the PUSHPOPLOOKUPSOL race (see pushLargePayload).
     const popped = await client.queue(queueName).partition(partitionName)
-        .batch(1).wait(false).pop()
+        .batch(1).wait(true).pop()
     if (!popped || popped.length !== 1) {
         return { success: false, message: 'Auto-created partition did not receive the message' }
     }

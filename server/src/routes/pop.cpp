@@ -44,13 +44,19 @@ void setup_pop_routes(uWS::App* app, const RouteContext& ctx) {
             bool wait = get_query_param_bool(req, "wait", false);
             int timeout_ms = get_query_param_int(req, "timeout", ctx.config.queue.default_timeout);
             int batch = get_query_param_int(req, "batch", ctx.config.queue.default_batch_size);
-            
+            // v4: ?partitions=N requests up to N partitions in a single pop.
+            // On the specific-partition route this is silently capped at 1
+            // by the SQL procedure (the wildcard branch is the only place
+            // that honours max_partitions > 1).
+            int max_partitions = std::max(1, get_query_param_int(req, "partitions", 1));
+
             // Pool stats available via ctx.async_queue_manager->get_pool_stats() if needed for debugging
             
             PopOptions options;
             options.wait = false;  // Always false - registry handles waiting
             options.timeout = timeout_ms;
             options.batch = batch;
+            options.max_partitions = max_partitions;
             options.auto_ack = get_query_param_bool(req, "autoAck", false);
             
             // Parse subscription mode
@@ -89,7 +95,8 @@ void setup_pop_routes(uWS::App* app, const RouteContext& ctx) {
                 {"worker_id", worker_id_str},
                 {"sub_mode", effective_sub_mode},
                 {"sub_from", effective_sub_from},
-                {"auto_ack", options.auto_ack}
+                {"auto_ack", options.auto_ack},
+                {"max_partitions", options.max_partitions}
             });
             
             // Build Queen job request
@@ -100,6 +107,7 @@ void setup_pop_routes(uWS::App* app, const RouteContext& ctx) {
             job_req.partition_name = partition_name;
             job_req.consumer_group = consumer_group;
             job_req.batch_size = options.batch;
+            job_req.max_partitions = options.max_partitions;
             job_req.auto_ack = options.auto_ack;
             job_req.params = {pop_params.dump()};
             
@@ -202,11 +210,15 @@ void setup_pop_routes(uWS::App* app, const RouteContext& ctx) {
             bool wait = get_query_param_bool(req, "wait", false);
             int timeout_ms = get_query_param_int(req, "timeout", ctx.config.queue.default_timeout);
             int batch = get_query_param_int(req, "batch", ctx.config.queue.default_batch_size);
-            
+            // v4: ?partitions=N drains up to N sparsely-loaded partitions in
+            // a single round-trip (wildcard pop only).
+            int max_partitions = std::max(1, get_query_param_int(req, "partitions", 1));
+
             PopOptions options;
             options.wait = false;  // Always false - registry handles waiting
             options.timeout = timeout_ms;
             options.batch = batch;
+            options.max_partitions = max_partitions;
             options.auto_ack = get_query_param_bool(req, "autoAck", false);
             
             // Parse subscription mode
@@ -245,7 +257,8 @@ void setup_pop_routes(uWS::App* app, const RouteContext& ctx) {
                 {"worker_id", worker_id_str},
                 {"sub_mode", effective_sub_mode},
                 {"sub_from", effective_sub_from},
-                {"auto_ack", options.auto_ack}
+                {"auto_ack", options.auto_ack},
+                {"max_partitions", options.max_partitions}
             });
             
             // Build Queen job request
@@ -256,6 +269,7 @@ void setup_pop_routes(uWS::App* app, const RouteContext& ctx) {
             job_req.partition_name = "";  // Any partition
             job_req.consumer_group = consumer_group;
             job_req.batch_size = options.batch;
+            job_req.max_partitions = options.max_partitions;
             job_req.auto_ack = options.auto_ack;
             job_req.params = {pop_params.dump()};
             

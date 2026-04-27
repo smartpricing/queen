@@ -40,6 +40,7 @@ class Defaults
         'renewLeaseIntervalMillis' => null,
         'subscriptionMode' => null,
         'subscriptionFrom' => null,
+        'maxPartitions' => 1, // v4 multi-partition pop cap (1 = legacy single-partition)
     ];
 
     public const POP_DEFAULTS = [

@@ -170,6 +170,11 @@ class Queen
             $leaseIds = [$messageOrLeaseId['leaseId']];
         }
 
+        // Dedupe: with v4 multi-partition pop, all messages in one batch share
+        // the same leaseId (one renew_lease_v2 call extends every claimed
+        // partition_consumers row).
+        $leaseIds = array_values(array_unique($leaseIds));
+
         if (empty($leaseIds)) {
             return ['success' => false, 'error' => 'No valid lease IDs found for renewal'];
         }

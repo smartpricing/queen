@@ -104,9 +104,10 @@ async def test_push_buffered_message(client):
     
     # Wait for buffer to flush
     await asyncio.sleep(2)
-    
-    # Now message should be available
-    pop2 = await client.queue("test-queue-buffered").batch(1).wait(False).pop()
+
+    # Now message should be available. wait(True) rides out the
+    # PUSHPOPLOOKUPSOL race (see test_pop.py).
+    pop2 = await client.queue("test-queue-buffered").batch(1).wait(True).pop()
     assert len(pop2) == 1, "Message should be available after buffer flush"
 
 
@@ -219,8 +220,10 @@ async def test_push_large_payload(client):
     }
     
     res = await client.queue("test-queue-large-payload").push([{"data": large_payload}])
-    
-    received = await client.queue("test-queue-large-payload").batch(1).wait(False).pop()
+
+    # wait(True): see comment in test_pop.py:test_pop_non_empty_queue —
+    # partition_lookup is updated asynchronously after push commits.
+    received = await client.queue("test-queue-large-payload").batch(1).wait(True).pop()
     
     assert received, "Should receive message"
     assert received[0]["data"]["array"], "Should have array"
@@ -234,8 +237,9 @@ async def test_push_null_payload(client):
     assert queue.get("configured") is True
     
     res = await client.queue("test-queue-null-payload").push([{"data": None}])
-    
-    received = await client.queue("test-queue-null-payload").batch(1).wait(False).pop()
+
+    # wait(True): ride out the PUSHPOPLOOKUPSOL race (see test_pop.py).
+    received = await client.queue("test-queue-null-payload").batch(1).wait(True).pop()
     
     assert received, "Should receive message"
     assert received[0]["data"] is None, "Null data should be preserved"
@@ -248,8 +252,9 @@ async def test_push_empty_payload(client):
     assert queue.get("configured") is True
     
     res = await client.queue("test-queue-empty-payload").push([{"data": {}}])
-    
-    received = await client.queue("test-queue-empty-payload").batch(1).wait(False).pop()
+
+    # wait(True): ride out the PUSHPOPLOOKUPSOL race (see test_pop.py).
+    received = await client.queue("test-queue-empty-payload").batch(1).wait(True).pop()
     
     assert received, "Should receive message"
     assert len(received[0]["data"]) == 0, "Empty object should be preserved"
@@ -266,8 +271,9 @@ async def test_push_encrypted_payload(client):
     res = await client.queue("test-queue-encrypted-payload").push([
         {"data": {"message": "Hello, world!"}}
     ])
-    
-    received = await client.queue("test-queue-encrypted-payload").batch(1).wait(False).pop()
+
+    # wait(True): ride out the PUSHPOPLOOKUPSOL race (see test_pop.py).
+    received = await client.queue("test-queue-encrypted-payload").batch(1).wait(True).pop()
     
     assert received, "Should receive message"
     assert received[0]["data"]["message"] == "Hello, world!", "Encrypted payload should be decrypted correctly"

@@ -37,6 +37,7 @@ export class QueueBuilder {
   #subscriptionMode = CONSUME_DEFAULTS.subscriptionMode
   #subscriptionFrom = CONSUME_DEFAULTS.subscriptionFrom
   #each = false
+  #maxPartitions = 1
 
   // Buffer options
   #bufferOptions = null
@@ -190,6 +191,22 @@ export class QueueBuilder {
     return this
   }
 
+  /**
+   * Pop messages from up to N partitions in a single call (v4 multi-partition pop).
+   *
+   * Use this to drain many sparsely-loaded partitions efficiently. With
+   * `partitions(N)`, the global `batch(B)` budget is shared across all
+   * claimed partitions: at most B total messages, drawn from up to N
+   * partitions, in a single network round-trip. All N share one leaseId
+   * (renewing once extends them all).
+   *
+   * Default 1 = legacy single-partition behavior.
+   */
+  partitions(n) {
+    this.#maxPartitions = Math.max(1, n)
+    return this
+  }
+
   limit(count) {
     this.#limit = count
     return this
@@ -251,6 +268,7 @@ export class QueueBuilder {
       subscriptionMode: this.#subscriptionMode,
       subscriptionFrom: this.#subscriptionFrom,
       each: this.#each,
+      maxPartitions: this.#maxPartitions,
       signal: options.signal
     }
 
@@ -263,6 +281,20 @@ export class QueueBuilder {
 
   wait(enabled) {
     this.#wait = enabled
+    return this
+  }
+
+  /**
+   * Set the long-poll timeout in milliseconds. Only meaningful when wait(true)
+   * is also set. Default is CONSUME_DEFAULTS.timeoutMillis (30000ms).
+   *
+   * Use a short timeout in tight consumer loops where you want the long-poll
+   * to release the request frequently (e.g. so a shutdown flag is observed
+   * promptly). The HTTP layer adds 5s of slack so the server-side timeout
+   * always fires first.
+   */
+  timeoutMillis(millis) {
+    this.#timeoutMillis = Math.max(1, millis)
     return this
   }
 
@@ -289,6 +321,7 @@ export class QueueBuilder {
       if (effectiveAutoAck) params.append('autoAck', 'true')
       if (this.#subscriptionMode) params.append('subscriptionMode', this.#subscriptionMode)
       if (this.#subscriptionFrom) params.append('subscriptionFrom', this.#subscriptionFrom)
+      if (this.#maxPartitions > 1) params.append('partitions', this.#maxPartitions.toString())
 
       // Generate affinity key for consistent routing to same backend
       const affinityKey = this.#getAffinityKey()
