@@ -48,6 +48,7 @@
       <a href="http-api.html">HTTP API</a>
       <a href="dashboard.html">Dashboard</a>
       <a href="benchmarks.html">Benchmarks</a>
+      <a href="sizing.html">Sizing</a>
     </nav>
     <div class="topnav-right">
       <a class="icon-link" href="https://github.com/smartpricing/queen" aria-label="GitHub" title="GitHub">
@@ -96,7 +97,10 @@
     </div>
     <p class="muted" style="font-size: 12px; margin-top: 8px;">
       Numbers from <a href="benchmarks.html">our benchmark page</a>, including a
-      4-stage real-client pipeline (producer → worker → fan-out × 2).
+      4-stage real-client pipeline (producer → worker → fan-out × 2). Use the
+      <a href="sizing.html">sizing calculator</a> to convert your target msg/s
+      into a Postgres vCPU budget. Above ~200k msg/s sustained, or for
+      multi-region replication, you want Kafka.
     </p>
   </div>
 </section>

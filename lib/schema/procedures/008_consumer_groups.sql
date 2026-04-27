@@ -326,9 +326,30 @@ BEGIN
     UPDATE queen.consumer_groups_metadata
     SET subscription_timestamp = p_new_timestamp::timestamptz
     WHERE consumer_group = p_consumer_group;
-    
+
     GET DIAGNOSTICS v_updated_count = ROW_COUNT;
-    
+
+    -- Invalidate watermarks for this consumer group so a backward move of the
+    -- subscription timestamp re-exposes historical partitions to the wildcard
+    -- POP scan filter (pl.updated_at >= watermark - 2m). Without this, a stale
+    -- watermark from a previously caught-up run would block the replay
+    -- silently. Symmetric with the watermark cleanup already done in
+    -- queen.seek_consumer_group_v1 (backward seek) and
+    -- queen.delete_consumer_group_v1.
+    --
+    -- Deleted unconditionally (forward moves too) because:
+    --   - Forward moves: the watermark is automatically re-established on
+    --     the next empty scan within 30s; transient extra work is negligible.
+    --   - Backward moves: deletion is REQUIRED for correctness.
+    --   - Unconditional deletion removes a foot-gun and matches the
+    --     idempotent always-safe pattern of sibling procedures.
+    --
+    -- Scope mirrors the UPDATE above (no queue_name filter): all
+    -- (queue_name, consumer_group) entries for this CG. See
+    -- cdocs/WATERMARK_AND_TRANSACTION_FIXES.md §2 (Fix B).
+    DELETE FROM queen.consumer_watermarks
+    WHERE consumer_group = p_consumer_group;
+
     RETURN jsonb_build_object(
         'success', true,
         'consumerGroup', p_consumer_group,

@@ -70,14 +70,35 @@ BEGIN
                 RETURNING id INTO v_partition_id;
                 
                 INSERT INTO queen.messages (id, transaction_id, partition_id, payload, trace_id, is_encrypted)
-                VALUES (v_message_id, v_txn_id, v_partition_id, v_payload, v_trace_id, 
-                        COALESCE((v_op->>'is_encrypted')::boolean, false));
-                
-                INSERT INTO queen.partition_lookup (partition_id, queue_name, last_message_id, last_message_created_at)
-                VALUES (v_partition_id, v_queue_name, v_message_id, NOW())
+                VALUES (v_message_id, v_txn_id, v_partition_id, v_payload, v_trace_id,
+                        COALESCE((v_op->>'is_encrypted')::boolean, false))
+                RETURNING created_at INTO v_message_created_at;
+
+                -- Maintain partition_lookup with the SAME semantics as
+                -- queen.update_partition_lookup_v1 (the canonical writer used
+                -- by the non-transactional push path). Two invariants matter:
+                --   1. updated_at MUST be refreshed to NOW() on every successful
+                --      write, otherwise the wildcard POP filter
+                --      (pl.updated_at >= watermark - 2m) skips this partition
+                --      forever once the watermark advances past the stale
+                --      timestamp. See cdocs/WATERMARK_AND_TRANSACTION_FIXES.md
+                --      §3 (Fix C). The reconciler cannot rescue this state
+                --      because it only writes when last_message_id changes.
+                --   2. The (last_message_created_at, last_message_id) tuple
+                --      must advance monotonically; concurrent pushes with
+                --      slightly older NOW() must not clobber newer data.
+                INSERT INTO queen.partition_lookup (
+                    partition_id, queue_name, last_message_id, last_message_created_at, updated_at
+                )
+                VALUES (v_partition_id, v_queue_name, v_message_id, v_message_created_at, NOW())
                 ON CONFLICT (queue_name, partition_id) DO UPDATE SET
-                    last_message_id = EXCLUDED.last_message_id,
-                    last_message_created_at = EXCLUDED.last_message_created_at;
+                    last_message_id         = EXCLUDED.last_message_id,
+                    last_message_created_at = EXCLUDED.last_message_created_at,
+                    updated_at              = NOW()
+                WHERE
+                    EXCLUDED.last_message_created_at >  queen.partition_lookup.last_message_created_at
+                 OR (EXCLUDED.last_message_created_at = queen.partition_lookup.last_message_created_at
+                     AND EXCLUDED.last_message_id    >  queen.partition_lookup.last_message_id);
                 
                 v_op_success := true;
                 
