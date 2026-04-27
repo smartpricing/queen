@@ -27,15 +27,15 @@
 set -u
 
 DURATION_SEC="${DURATION_SEC:-1200}"
-NUM_PRODUCERS="${NUM_PRODUCERS:-10}"
+NUM_PRODUCERS="${NUM_PRODUCERS:-2}"
 NUM_WORKERS="${NUM_WORKERS:-7}"
 NUM_ANALYTICS="${NUM_ANALYTICS:-7}"
 NUM_LOG="${NUM_LOG:-7}"
-NUM_PARTITIONS="${NUM_PARTITIONS:-10000}"
-TARGET_RATE="${TARGET_RATE:-1000}"
-IN_FLIGHT="${IN_FLIGHT:-30}"
-CONCURRENCY="${CONCURRENCY:-20}"
-BATCH_SIZE="${BATCH_SIZE:-10}"
+NUM_PARTITIONS="${NUM_PARTITIONS:-1000}"
+TARGET_RATE="${TARGET_RATE:-5000}"
+IN_FLIGHT="${IN_FLIGHT:-40}"
+CONCURRENCY="${CONCURRENCY:-10}"
+BATCH_SIZE="${BATCH_SIZE:-100}"
 QUEEN_IMAGE_TAG="${QUEEN_IMAGE_TAG:-0.14.0.alpha.3}"
 RESULTS_DIR="${RESULTS_DIR:-/tmp/queen-pipeline}"
 TS=$(date -u +%Y%m%dT%H%M%SZ)
@@ -109,6 +109,15 @@ docker exec queen sh -c 'rm -rf /var/lib/queen/buffers/* 2>/dev/null; ls /var/li
 # ---------- pre-configure queues ----------
 log "configuring queues"
 node configure.js || { log "FATAL configure failed"; exit 1; }
+
+# ---------- pre-create partitions to avoid creation-burst deadlocks ----------
+# Sequentially push 1 message to every (queue, partition) pair so that when
+# the real load hits, all partitions already exist. Without this we see a
+# burst of ~200-1800 deadlocks on the `queue_lag_metrics` ON CONFLICT row
+# in the first 30 seconds (absorbed by file-buffer failover but noisy).
+log "pre-creating partitions (warmup)"
+NUM_PARTITIONS="$NUM_PARTITIONS" QUEUES="pipe-q1,pipe-q2" \
+  node warmup-partitions.js || { log "FATAL warmup failed"; exit 1; }
 
 # ---------- start the pipeline ----------
 log "starting pm2 ecosystem (${NUM_PRODUCERS} prod + ${NUM_WORKERS} worker + ${NUM_ANALYTICS} analytics + ${NUM_LOG} log)"

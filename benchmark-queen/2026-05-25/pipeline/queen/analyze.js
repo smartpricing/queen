@@ -37,43 +37,49 @@ function pickStats(arr) {
   }
 }
 
-async function readJsonl(file) {
-  const out = []
-  if (!fs.existsSync(file)) return out
+async function* iterJsonl(file) {
+  if (!fs.existsSync(file)) return
   const rl = readline.createInterface({ input: fs.createReadStream(file), crlfDelay: Infinity })
   for await (const line of rl) {
     if (!line.trim()) continue
-    try {
-      out.push(JSON.parse(line))
-    } catch {
-      // skip bad line
-    }
+    try { yield JSON.parse(line) } catch { /* skip bad line */ }
   }
-  return out
 }
 
 async function main() {
   const files = fs.readdirSync(RESULTS_DIR).filter((f) => f.endsWith('.jsonl'))
   process.stderr.write(`[analyze] found ${files.length} JSONL files in ${RESULTS_DIR}\n`)
 
-  // role -> array of records
+  // Stream-append to per-role arrays one record at a time so we don't
+  // blow the stack on multi-million-record spreads.
   const records = { producer: [], worker: [], analytics: [], log: [] }
   for (const file of files) {
     const role = file.split('-')[0]
     if (!records[role]) records[role] = []
-    const recs = await readJsonl(path.join(RESULTS_DIR, file))
-    records[role].push(...recs)
-    process.stderr.write(`[analyze]   ${file} → ${recs.length} records (role=${role})\n`)
+    let n = 0
+    for await (const rec of iterJsonl(path.join(RESULTS_DIR, file))) {
+      records[role].push(rec)
+      n++
+    }
+    process.stderr.write(`[analyze]   ${file} → ${n} records (role=${role})\n`)
   }
 
   // Producer push timestamps — define the run window from the producers.
-  const producerTimes = records.producer.map((r) => r.push_t).filter(Boolean)
-  if (producerTimes.length === 0) {
+  // NB: with millions of records `Math.min(...arr)` blows the stack;
+  //     use a loop to scan once for both extrema.
+  let nProducer = 0
+  let t0 = Infinity
+  let tEnd = -Infinity
+  for (const r of records.producer) {
+    if (typeof r.push_t !== 'number') continue
+    nProducer++
+    if (r.push_t < t0)   t0 = r.push_t
+    if (r.push_t > tEnd) tEnd = r.push_t
+  }
+  if (nProducer === 0) {
     process.stderr.write('[analyze] FATAL: no producer records\n')
     process.exit(1)
   }
-  const t0 = Math.min(...producerTimes)
-  const tEnd = Math.max(...producerTimes)
   const tWarmupEnd = t0 + WARMUP_SEC * 1000
   process.stderr.write(
     `[analyze] producer window: ${new Date(t0).toISOString()} .. ${new Date(tEnd).toISOString()}\n`,
