@@ -1,0 +1,14 @@
+{
+  "name": "queen-pipeline-bench",
+  "version": "0.1.0",
+  "type": "module",
+  "private": true,
+  "scripts": {
+    "smoke": "node ./smoke.js"
+  },
+  "dependencies": {
+    "queen-mq": "^0.13.0",
+    "uuid": "^11.0.0",
+    "yargs": "^17.7.2"
+  }
+}

@@ -338,6 +338,21 @@ await queen.queue('test-queue')
         we measured rather than wishful thinking.
       </p>
     </div>
+
+    <div class="callout callout-info" style="margin-top: 12px;">
+      <div class="callout-title">Why broker throughput numbers can mislead</div>
+      <p>
+        If your messages do real work — a DB write, an API call, an LLM inference — then
+        your <strong>worker fleet is the bottleneck, not the broker</strong>. At 20 ms of
+        work per message, one worker handles 50 msg/s. Saturating Kafka's 1.5M msg/s
+        requires <strong>30 000 worker processes</strong> (~$150k/month of consumer fleet).
+        Most companies have 100–2 000 workers and run at 5 k–100 k msg/s of actual demand —
+        well within Queen's broker envelope. In that regime, the broker comparison stops
+        mattering, and Queen wins on operational cost, durability semantics, and
+        Postgres-transactional integration. The
+        <a href="benchmarks.html#workers">benchmarks page has the full math</a>.
+      </p>
+    </div>
   </div>
 </section>
 

@@ -8,14 +8,16 @@ Same host as Queen `bp-10` and Kafka `kafka-1000p` (32 vCPU, 62 GiB RAM, no swap
 
 ## Setup
 
-| Parameter | Value |
-|---|---|
-| Queues | **1000 classic queues** (`bench-q-1` … `bench-q-1000`) |
-| Producer | `pivotalrabbitmq/perf-test`, 1 producer, `--rate -1` (max), `--confirm 200` (publisher confirms with 200 outstanding) |
-| Consumer | 1 consumer, `--qos 100`, `--multi-ack-every 100` (manual ack every 100 msgs) |
-| Persistence | `--flag persistent` (delivery_mode=2, message persisted to disk) |
-| Message size | 28 bytes (matching Queen's payload) |
-| Connection | Single AMQP connection from perf-test container, multi-channel |
+
+| Parameter    | Value                                                                                                                 |
+| ------------ | --------------------------------------------------------------------------------------------------------------------- |
+| Queues       | **1000 classic queues** (`bench-q-1` … `bench-q-1000`)                                                                |
+| Producer     | `pivotalrabbitmq/perf-test`, 1 producer, `--rate -1` (max), `--confirm 200` (publisher confirms with 200 outstanding) |
+| Consumer     | 1 consumer, `--qos 100`, `--multi-ack-every 100` (manual ack every 100 msgs)                                          |
+| Persistence  | `--flag persistent` (delivery_mode=2, message persisted to disk)                                                      |
+| Message size | 28 bytes (matching Queen's payload)                                                                                   |
+| Connection   | Single AMQP connection from perf-test container, multi-channel                                                        |
+
 
 ## Producer/consumer — final perf-test result
 
@@ -31,42 +33,48 @@ confirm latency min/median/75th/95th/99th/max:    1121 / 4866 / 5814 / 7460 / 92
 
 ## Resource consumption
 
-| Metric | Value |
-|---|---|
-| RabbitMQ CPU avg | **~145 %** (~1.5 vCPU), peaks to ~150 % |
-| RabbitMQ RSS at end | **187.8 MB** |
-| RabbitMQ block I/O | ~9 GB written |
-| RabbitMQ network I/O | 5.3 GB / 5.3 GB (in/out) |
-| Mnesia data dir | 624 KB at end (queue metadata only; messages in WAL) |
-| perf-test CPU | ~50 % (~0.5 vCPU client) |
-| perf-test RSS | ~770 MB JVM heap |
+
+| Metric               | Value                                                |
+| -------------------- | ---------------------------------------------------- |
+| RabbitMQ CPU avg     | **~145 %** (~1.5 vCPU), peaks to ~150 %              |
+| RabbitMQ RSS at end  | **187.8 MB**                                         |
+| RabbitMQ block I/O   | ~9 GB written                                        |
+| RabbitMQ network I/O | 5.3 GB / 5.3 GB (in/out)                             |
+| Mnesia data dir      | 624 KB at end (queue metadata only; messages in WAL) |
+| perf-test CPU        | ~~50 % (~~0.5 vCPU client)                           |
+| perf-test RSS        | ~770 MB JVM heap                                     |
+
 
 ## Direct comparison: Queen `bp-10` vs Kafka `kafka-1000p` vs RabbitMQ `rabbitmq-1000q` (all measured)
 
-| Metric | Queen `bp-10` | Kafka `kafka-1000p` | RabbitMQ `rabbitmq-1000q` |
-|---|---:|---:|---:|
-| Topology | 1 queue, 1001 partitions | 1 topic, 1000 partitions | 1000 queues |
-| Persistence | PG fsync on commit | acks=1 (page cache) | delivery_mode=2 + confirms |
-| **Push msg/s** | **39 060** | **1 520 538** | **34 750** |
-| Push p50 latency | 11 ms | 1 117 ms | 1.8 ms (consumer p50, similar) |
-| **Push p99 latency** | **38 ms** | **2 966 ms** (saturated) | **9.3 ms** (confirm p99) |
-| Pop msg/s | 38 351 | ~1 500 000 | 34 750 |
-| **Server RSS / heap** | **52 MB** | 3.1–7.2 GB | **188 MB** |
-| **Server CPU avg** | **7.4 vCPU** | 3.5 vCPU | **~1.5 vCPU** |
-| **CPU per Mmsg/s** | 190 vCPU | **2.3 vCPU** | **43 vCPU** |
-| Disk written | ~14 GB (msgs table) | ~36 GB (1B msgs) | ~9 GB |
+
+| Metric                | Queen `bp-10`            | Kafka `kafka-1000p`      | RabbitMQ `rabbitmq-1000q`      |
+| --------------------- | ------------------------ | ------------------------ | ------------------------------ |
+| Topology              | 1 queue, 1001 partitions | 1 topic, 1000 partitions | 1000 queues                    |
+| Persistence           | PG fsync on commit       | acks=1 (page cache)      | delivery_mode=2 + confirms     |
+| **Push msg/s**        | **39 060**               | **1 520 538**            | **34 750**                     |
+| Push p50 latency      | 11 ms                    | 1 117 ms                 | 1.8 ms (consumer p50, similar) |
+| **Push p99 latency**  | **38 ms**                | **2 966 ms** (saturated) | **9.3 ms** (confirm p99)       |
+| Pop msg/s             | 38 351                   | ~1 500 000               | 34 750                         |
+| **Server RSS / heap** | **52 MB**                | 3.1–7.2 GB               | **188 MB**                     |
+| **Server CPU avg**    | **7.4 vCPU**             | 3.5 vCPU                 | **~1.5 vCPU**                  |
+| **CPU per Mmsg/s**    | 190 vCPU                 | **2.3 vCPU**             | **43 vCPU**                    |
+| Disk written          | ~14 GB (msgs table)      | ~36 GB (1B msgs)         | ~9 GB                          |
+
 
 ## What this comparison actually shows
 
 ### Throughput
 
 At single-node with persistent durability:
+
 - **RabbitMQ ≈ Queen** at this workload shape (34.7 k vs 39 k msg/s — 12 % spread, within tuning noise).
 - Kafka is in a different league (~40× faster), but also runs unsaturated here.
 
 ### Latency
 
 RabbitMQ is the **clear winner on latency**:
+
 - RabbitMQ confirm p99: **9.3 ms**
 - Queen push p99: 38 ms (~4× higher)
 - Kafka push p99: 2 966 ms under saturation (Kafka would match the others if rate-limited; the unbounded run produced this back-pressure)
@@ -75,11 +83,13 @@ For **request/response or near-real-time pipelines under modest load**, RabbitMQ
 
 ### Memory
 
-| | RSS | per-Mmsg/s |
-|---|---:|---:|
-| Queen | 52 MB | 1.3 KB |
-| RabbitMQ | 188 MB | 5.4 KB |
-| Kafka | ~5 GB (avg) | 3.3 KB |
+
+|          | RSS         | per-Mmsg/s |
+| -------- | ----------- | ---------- |
+| Queen    | 52 MB       | 1.3 KB     |
+| RabbitMQ | 188 MB      | 5.4 KB     |
+| Kafka    | ~5 GB (avg) | 3.3 KB     |
+
 
 Queen has the smallest absolute footprint by ~3.6×, but **RabbitMQ is much smaller than I expected** (and much smaller than Kafka). All three are reasonable on a modern host. **Queen's "70 MB RSS" advantage over RabbitMQ is real but only matters on very small VMs (< 2 GiB)**.
 
@@ -121,7 +131,8 @@ The "Queen vs RabbitMQ on the same workload" comparison is more nuanced than I i
 
 ## Caveats on this run
 
-1. **`acks=1` was Kafka's setting; RabbitMQ used `delivery_mode=2 + confirm`; Queen used `synchronous_commit=on`**. These are not exactly the same durability tier — Queen is strictly stronger (PG WAL fsync), Kafka is weakest (page cache write only on single broker), RabbitMQ is in between (writes to disk before confirm).
+1. `**acks=1` was Kafka's setting; RabbitMQ used `delivery_mode=2 + confirm`; Queen used `synchronous_commit=on`**. These are not exactly the same durability tier — Queen is strictly stronger (PG WAL fsync), Kafka is weakest (page cache write only on single broker), RabbitMQ is in between (writes to disk before confirm).
 2. **Single-broker comparison**. All three would behave differently with replication. Kafka especially benefits from multi-broker. Queen has no native multi-broker. RabbitMQ classic mirrored queues exist but are deprecated; quorum queues (Raft) are the path forward.
 3. **Single-producer, single-consumer comparison**. RabbitMQ scales poorly under N parallel consumers on a single queue (HOL/ordering loss); Queen scales well across partitions. The 34.7 k figure here is RabbitMQ's "best case" with 1 consumer; under the workloads where Queen's lease-based-partition design shines, RabbitMQ classic queues either lose ordering or need 1-queue-per-scope.
-4. **Persistent classic queues only**. RabbitMQ has streams (~1 M msg/s, log-style) and quorum queues (~30 k msg/s, Raft-replicated) as alternative queue types. Each has its place; classic was the closest analog to Queen's queue-with-ack model.
+4. **Persistent classic queues only**. RabbitMQ has streams (~~1 M msg/s, log-style) and quorum queues (~~30 k msg/s, Raft-replicated) as alternative queue types. Each has its place; classic was the closest analog to Queen's queue-with-ack model.
+
