@@ -3,7 +3,7 @@ import axios from 'axios';
 
 const SERVER_URL = process.env.SERVER_URL || 'http://localhost:6632';
 const QUEUE_NAME = 'queen-long-running';
-const connections = 5;
+const connections = 200;
 const batchSize = 1000;
 const maxPartition = 500;
 const workers = 5;
@@ -14,7 +14,7 @@ const requests = [];
 for (let i = 0; i <= maxPartition; i++) {
   requests.push({
     method: 'GET',
-    path: `/api/v1/pop/queue/${QUEUE_NAME}/partition/${i}?batch=${batchSize}&wait=false&autoAck=true`,
+    path: `/api/v1/pop/queue/${QUEUE_NAME}?batch=${batchSize}&wait=true&autoAck=true`,
     headers: {
       'Content-Type': 'application/json'
     }
