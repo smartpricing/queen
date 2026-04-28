@@ -126,11 +126,11 @@ The repository is structured as follows:
 - `lib`: C++ core queen library (libqueen), implementing libuv loops, sql schema and procedures
 - `server`: Queen MQ server, implementing the HTTP API that talks to the libqueen library
 - `pg_qpubsub`: PostgreSQL extension for using queen-mq semantics as a PostgreSQL extension
-- `client-js`: JavaScript client library (browser and node.js)
-- `client-py`: Python client library (python 3.8+)
-- `client-go`: Go client library (go 1.21+)
-- `client-laravel`: PHP / Laravel client library (php 8.1+)
-- `client-cpp`: C++ client library (cpp 17)
+- `clients/client-js`: JavaScript client library (browser and node.js)
+- `clients/client-py`: Python client library (python 3.8+)
+- `clients/client-go`: Go client library (go 1.21+)
+- `clients/client-laravel`: PHP / Laravel client library (php 8.1+)
+- `clients/client-cpp`: C++ client library (cpp 17)
 - `proxy`: Proxy server (authentication)
 - `app`: Vue.js dashboard (vue 3)
 - `website`: Documentation website (vitepress)

@@ -9,7 +9,7 @@ Successfully implemented a **complete Python 3 client** with 100% feature parity
 ### ✅ Complete Project Structure
 
 ```
-client-py/
+clients/client-py/
 ├── queen/
 │   ├── __init__.py           # Public API exports
 │   ├── client.py             # Queen main class (500+ lines)
@@ -229,7 +229,7 @@ Ready for testing:
 ## Installation
 
 ```bash
-cd client-py
+cd clients/client-py
 pip install -e .
 ```
 

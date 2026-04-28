@@ -25,7 +25,7 @@ chmod 600 ~/.pypirc
 ### 2. Publish (Every Release)
 
 ```bash
-cd /Users/alice/Work/queen/client-py
+cd /Users/alice/Work/queen/clients/client-py
 
 # Run automated script
 ./publish.sh

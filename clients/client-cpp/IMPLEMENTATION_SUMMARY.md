@@ -203,7 +203,7 @@ curl -o httplib.h https://raw.githubusercontent.com/yhirose/cpp-httplib/master/h
 ### 2. Build Tests
 
 ```bash
-cd client-cpp
+cd clients/client-cpp
 make test
 ```
 
@@ -215,7 +215,7 @@ cd ../server
 ./queen-server
 
 # In another terminal, run tests
-cd client-cpp
+cd clients/client-cpp
 ./test_client
 ```
 
@@ -233,7 +233,7 @@ g++ -std=c++17 -I. -I../server/vendor -I../server/include \
 ### 5. Use in Your Project
 
 ```cpp
-#include "client-cpp/queen_client.hpp"
+#include "clients/client-cpp/queen_client.hpp"
 
 using namespace queen;
 
@@ -322,7 +322,7 @@ The test suite covers:
 ## Files Summary
 
 ```
-client-cpp/
+clients/client-cpp/
 ├── queen_client.hpp              # Single-header library (~2,300 lines)
 ├── test_client.cpp               # Comprehensive test suite
 ├── example_basic.cpp             # Basic usage example

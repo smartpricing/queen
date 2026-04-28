@@ -48,7 +48,7 @@ typing-extensions      # Backport typing features for 3.8-3.10
 ## Module Structure
 
 ```
-client-py/
+clients/client-py/
 ├── queen/
 │   ├── __init__.py                  # Public API exports
 │   ├── client.py                    # Queen main class
@@ -1351,7 +1351,7 @@ async def test_push_and_pop():
 
 ### Parity Tests
 
-Port all Node.js tests from `client-js/test-v2/` to ensure 100% behavioral parity.
+Port all Node.js tests from `clients/client-js/test-v2/` to ensure 100% behavioral parity.
 
 ---
 

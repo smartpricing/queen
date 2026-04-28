@@ -1,4 +1,4 @@
-import { Queen } from '../client-js/client-v2/index.js';
+import { Queen } from '../clients/client-js/client-v2/index.js';
 
 // Run the server with: NUM_WORKERS=2 JWT_ENABLED=true JWT_ALGORITHM=HS256 JWT_SECRET=your-secret-key bin/queen-server 
 const queen = new Queen({

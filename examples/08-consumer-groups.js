@@ -7,7 +7,7 @@
  * - Fan-out pattern (each group gets all messages)
  */
 
-import { Queen } from '../client-js/client-v2/index.js'
+import { Queen } from '../clients/client-js/client-v2/index.js'
 
 const queen = new Queen('http://localhost:6632')
 

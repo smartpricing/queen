@@ -401,7 +401,7 @@ export PG_USER=postgres
 export PG_PASSWORD=postgres
 
 # Run tests
-cd client-go
+cd clients/client-go
 go test ./tests/... -v
 ```
 

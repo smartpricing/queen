@@ -8,7 +8,7 @@
  * - TRANSACTIONS: push+ack atomic, multiple pushes, multiple acks, rollback
  * - RENEW_LEASE: manual, batch, expired lease
  * 
- * Based on client-js/test-v2 test suite.
+ * Based on clients/client-js/test-v2 test suite.
  */
 
 #include "queen.hpp"

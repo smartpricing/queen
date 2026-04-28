@@ -9,7 +9,7 @@
  * 5. Client-side filtering and transformations
  */
 
-import { Queen } from '../client-js/client-v2/Queen.js';
+import { Queen } from '../clients/client-js/client-v2/Queen.js';
 
 const queen = new Queen({
   url: 'http://localhost:6632'

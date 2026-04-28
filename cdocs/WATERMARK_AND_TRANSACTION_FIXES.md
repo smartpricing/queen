@@ -87,7 +87,7 @@ So the scan behavior is unchanged; only the throttle engages.
 
 ### 1.6 Test plan
 
-Add to `client-js/test-v2/watermark.js`:
+Add to `clients/client-js/test-v2/watermark.js`:
 
 ```
 test bootstrapExistsThrottleForNewConsumerGroup:
@@ -197,7 +197,7 @@ If a per-queue variant of this function is ever added, its deletion should be co
 
 ### 2.6 Test plan
 
-Add to `client-js/test-v2/watermark.js`:
+Add to `clients/client-js/test-v2/watermark.js`:
 
 ```
 test updateSubscriptionBackwardAllowsReconsume:
@@ -317,7 +317,7 @@ The invariants the watermark optimization relies on stay satisfied:
 
 ### 3.6 Test plan
 
-Add to `client-js/test-v2/transaction.js`:
+Add to `clients/client-js/test-v2/transaction.js`:
 
 ```
 test transactionalPushUpdatesPartitionLookup:
@@ -409,7 +409,7 @@ After deploying Fix C, verify:
 
 ### 4.6 Tests required before merge
 
-- All three tests in their respective `client-js/test-v2/*.js` files passing.
+- All three tests in their respective `clients/client-js/test-v2/*.js` files passing.
 - Existing test suites passing unchanged.
 - `pg_stat_statements` sanity check showing no unexpected new queries.
 
@@ -420,8 +420,8 @@ After deploying Fix C, verify:
 | `lib/schema/procedures/002_pop_unified.sql` | A | Replace the `UPDATE consumer_watermarks SET updated_at = v_now ...` block with the `INSERT ... ON CONFLICT DO UPDATE` variant. |
 | `lib/schema/procedures/008_consumer_groups.sql` | B | Append a `DELETE FROM queen.consumer_watermarks WHERE consumer_group = p_consumer_group;` to `update_consumer_group_subscription_v1`. |
 | `lib/schema/procedures/004_transaction.sql` | C | Remove the `INSERT INTO queen.partition_lookup ...` block from the `'push'` branch of `execute_transaction_v2`. |
-| `client-js/test-v2/watermark.js` | A, B | Add tests listed in §1.6 and §2.6. |
-| `client-js/test-v2/transaction.js` | C | Add tests listed in §3.6. |
+| `clients/client-js/test-v2/watermark.js` | A, B | Add tests listed in §1.6 and §2.6. |
+| `clients/client-js/test-v2/transaction.js` | C | Add tests listed in §3.6. |
 | `lib/schema/schema.sql` | C (optional) | Add comment above `trg_update_partition_lookup` noting that the transactional push path depends on this trigger. |
 
 ## 6. Out of scope

@@ -8,15 +8,15 @@
 # macOS
 brew install cpp-httplib
 
-# Or download manually to client-cpp directory
-cd client-cpp
+# Or download manually to clients/client-cpp directory
+cd clients/client-cpp
 curl -o httplib.h https://raw.githubusercontent.com/yhirose/cpp-httplib/master/httplib.h
 ```
 
 ### Step 2: Build Test Suite
 
 ```bash
-cd /Users/alice/Work/queen/client-cpp
+cd /Users/alice/Work/queen/clients/client-cpp
 make test
 ```
 

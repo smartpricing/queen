@@ -3,7 +3,7 @@
 ## TL;DR
 
 ```bash
-cd client-py
+cd clients/client-py
 pip install -e ".[dev]"
 ./run_tests.sh
 ```

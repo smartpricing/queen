@@ -25,7 +25,7 @@ Or use docker-compose (see main README).
 ### 2. Install Dependencies
 
 ```bash
-cd client-py
+cd clients/client-py
 
 # Create virtual environment (recommended)
 python3 -m venv venv

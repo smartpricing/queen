@@ -6,7 +6,7 @@
  * to the same backend server for optimal poll intention consolidation
  */
 
-import { Queen } from '../client-js/client-v2/index.js'
+import { Queen } from '../clients/client-js/client-v2/index.js'
 
 // Configure Queen with affinity-based load balancing
 const queen = new Queen({

@@ -307,7 +307,7 @@ QueenClient client(urls, config);
 ### Compile Test Suite
 
 ```bash
-cd client-cpp
+cd clients/client-cpp
 make test
 ```
 
@@ -332,7 +332,7 @@ make test
 #### Option 2: Add to Your Makefile
 
 ```makefile
-INCLUDES = -I/path/to/queen/client-cpp \
+INCLUDES = -I/path/to/queen/clients/client-cpp \
            -I/path/to/queen/server/vendor \
            -I/path/to/queen/server/include
 

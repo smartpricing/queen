@@ -11,7 +11,7 @@ Same semantics as client-js/test-v2/auth.js:
 Tests gate themselves on the ``JWT_SECRET`` env var so this suite can run
 against a server in either configuration. Run with a JWT-enabled server as:
 
-    JWT_SECRET=<server-secret> python -m pytest client-py/tests/test_auth.py
+    JWT_SECRET=<server-secret> python -m pytest clients/client-py/tests/test_auth.py
 """
 
 import asyncio

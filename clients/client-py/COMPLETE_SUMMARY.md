@@ -282,7 +282,7 @@ Total: 2 new pages, 7 updates
 
 ```bash
 # From source
-cd client-py
+cd clients/client-py
 pip install -e .
 
 # With dev dependencies (for testing)
@@ -357,7 +357,7 @@ npm run dev
 
 ```bash
 # Python client README
-cd client-py
+cd clients/client-py
 cat README.md
 
 # Test documentation
@@ -437,7 +437,7 @@ cat tests/GETTING_STARTED.md
 ### ✅ Client Works
 
 ```bash
-$ cd client-py
+$ cd clients/client-py
 $ python example.py
 
 Connected to Queen MQ
@@ -454,7 +454,7 @@ Popped 5 messages
 ### ✅ Tests Pass
 
 ```bash
-$ cd client-py
+$ cd clients/client-py
 $ pytest tests/
 
 ===================== 57 passed in 45s =====================
@@ -476,11 +476,12 @@ $ npm run dev
 
 ```
 queen/
-├── client-js/                    # Node.js client (original)
-│   ├── client-v2/               # ~1,500 lines
-│   └── test-v2/                 # 23 test files
-│
-├── client-py/                    # Python client (NEW)
+├── clients/
+│   ├── client-js/                    # Node.js client (original)
+│   │   ├── client-v2/               # ~1,500 lines
+│   │   └── test-v2/                 # 23 test files
+│   │
+│   ├── client-py/                    # Python client (NEW)
 │   ├── queen/                   # 21 modules, ~3,500 lines
 │   ├── tests/                   # 12 files, 57 tests
 │   ├── pyproject.toml           # Modern packaging
@@ -717,7 +718,7 @@ async with Queen('http://localhost:6632') as queen:
 
 ```bash
 # Install client
-cd client-py
+cd clients/client-py
 pip install -e .
 
 # Install with dev tools
@@ -727,7 +728,7 @@ pip install -e ".[dev]"
 ### Run Example
 
 ```bash
-cd client-py
+cd clients/client-py
 python example.py
 ```
 

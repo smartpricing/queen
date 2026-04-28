@@ -859,10 +859,10 @@ server {
 
 ### Built-in Benchmarks
 
-Located in `client-js/benchmark/`:
+Located in `clients/client-js/benchmark/`:
 
 ```bash
-cd client-js
+cd clients/client-js
 
 # Producer benchmark
 node benchmark/producer.js

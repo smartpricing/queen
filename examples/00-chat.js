@@ -8,7 +8,7 @@
  * - Transaction-based pipeline for reliability
  */
 
-import { Queen } from '../client-js/client-v2/index.js'
+import { Queen } from '../clients/client-js/client-v2/index.js'
 import { v4 as uuid } from 'uuid'
 
 const queen = new Queen('http://localhost:6632')

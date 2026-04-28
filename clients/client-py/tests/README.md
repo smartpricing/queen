@@ -311,12 +311,12 @@ jobs:
       
       - name: Install dependencies
         run: |
-          cd client-py
+          cd clients/client-py
           pip install -e ".[dev]"
       
       - name: Run tests
         run: |
-          cd client-py
+          cd clients/client-py
           pytest tests/ -v
 ```
 

@@ -1,4 +1,4 @@
-import { Queen } from '../client-js/client-v2/index.js'
+import { Queen } from '../clients/client-js/client-v2/index.js'
 import fs from 'fs'
 const queenUrl = process.env.QUEEN_URL || 'http://localhost:6638'
 

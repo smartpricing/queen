@@ -1,4 +1,4 @@
-import { Queen } from '../client-js/client-v2/index.js'
+import { Queen } from '../clients/client-js/client-v2/index.js'
 
 const QUEUE_NAME = 'test-c-load';
 const PARTITIONS = 10;

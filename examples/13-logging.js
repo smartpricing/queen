@@ -8,7 +8,7 @@
  * - Log levels and verbosity
  */
 
-import { Queen } from '../client-js/client-v2/index.js'
+import { Queen } from '../clients/client-js/client-v2/index.js'
 
 console.log('='.repeat(70))
 console.log('Example 13: Client Logging')

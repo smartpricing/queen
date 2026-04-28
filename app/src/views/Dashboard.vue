@@ -42,41 +42,66 @@
 
     <!--
       ========================================================================
-      Counts strip — replaces the four hero MetricCards. One scannable line
-      of "what we're observing", with the clickable counts linking to their
-      list view. The pending count is the only number with a threshold tone.
+      Counts strip — cluster scope counts on the left, point-in-time perf
+      stats on the right. Both are snapshot values (not time series), so
+      they don't belong in the metric table below; this strip is the
+      designated home for "what's happening right now, no chart needed".
+      The pending count is the only number with a threshold tone.
       ========================================================================
     -->
     <div class="counts-strip">
-      <button class="count-item" @click="$router.push('/messages')" :disabled="loadingOverview">
-        <strong>{{ formatNumber(overview?.messages?.total || 0) }}</strong>
-        <span>messages</span>
-      </button>
-      <span class="count-sep">·</span>
-      <button class="count-item" @click="$router.push('/queues')" :disabled="loadingQueues">
-        <strong>{{ formatNumber(overview?.queues || 0) }}</strong>
-        <span>queues</span>
-      </button>
-      <span class="count-sep">·</span>
-      <span class="count-item count-static">
-        <strong>{{ formatNumber(totalPartitions) }}</strong>
-        <span>partitions</span>
-      </span>
-      <span class="count-sep">·</span>
-      <button class="count-item" @click="$router.push('/consumers')" :disabled="loadingConsumers">
-        <strong>{{ formatNumber(consumers?.length || 0) }}</strong>
-        <span>consumer groups</span>
-      </button>
-      <span class="count-sep">·</span>
-      <span class="count-item count-static">
-        <strong class="num" :class="pendingNumClass(overview?.messages?.pending)">{{ formatNumber(Math.max(0, overview?.messages?.pending || 0)) }}</strong>
-        <span>pending</span>
-      </span>
-      <span class="count-sep">·</span>
-      <span class="count-item count-static count-muted">
-        <strong>{{ formatNumber(overview?.messages?.completed || 0) }}</strong>
-        <span>completed</span>
-      </span>
+      <div class="counts-group">
+        <button class="count-item" @click="$router.push('/messages')" :disabled="loadingOverview">
+          <strong>{{ formatNumber(overview?.messages?.total || 0) }}</strong>
+          <span>messages</span>
+        </button>
+        <span class="count-sep">·</span>
+        <button class="count-item" @click="$router.push('/queues')" :disabled="loadingQueues">
+          <strong>{{ formatNumber(overview?.queues || 0) }}</strong>
+          <span>queues</span>
+        </button>
+        <span class="count-sep">·</span>
+        <span class="count-item count-static">
+          <strong>{{ formatNumber(totalPartitions) }}</strong>
+          <span>partitions</span>
+        </span>
+        <span class="count-sep">·</span>
+        <button class="count-item" @click="$router.push('/consumers')" :disabled="loadingConsumers">
+          <strong>{{ formatNumber(consumers?.length || 0) }}</strong>
+          <span>consumer groups</span>
+        </button>
+        <span class="count-sep">·</span>
+        <span class="count-item count-static">
+          <strong class="num" :class="pendingNumClass(overview?.messages?.pending)">{{ formatNumber(Math.max(0, overview?.messages?.pending || 0)) }}</strong>
+          <span>pending</span>
+        </span>
+        <span class="count-sep">·</span>
+        <span class="count-item count-static count-muted">
+          <strong>{{ formatNumber(overview?.messages?.completed || 0) }}</strong>
+          <span>completed</span>
+        </span>
+      </div>
+
+      <!-- Right group — current engine efficiency. Avg rows per batch is a
+           snapshot (no time-series), so it lives here rather than in the
+           metric table below. Higher = healthier (less per-commit overhead). -->
+      <div class="counts-group counts-group-right" :title="'Average rows per batch — push / pop / ack. Higher = healthier engine, less per-commit overhead.'">
+        <span class="count-item-label">batch eff</span>
+        <span class="count-item count-static count-tight">
+          <strong>{{ batchEfficiency.push }}</strong>
+          <span class="count-suffix">push</span>
+        </span>
+        <span class="count-sep">·</span>
+        <span class="count-item count-static count-tight">
+          <strong>{{ batchEfficiency.pop }}</strong>
+          <span class="count-suffix">pop</span>
+        </span>
+        <span class="count-sep">·</span>
+        <span class="count-item count-static count-tight">
+          <strong>{{ batchEfficiency.ack }}</strong>
+          <span class="count-suffix">ack</span>
+        </span>
+      </div>
     </div>
 
     <!--
@@ -186,7 +211,7 @@
         unit="%"
         :context="cpuContext"
         :series="cpuSeriesData"
-        :labels="chartLabels"
+        :labels="cpuLabels"
         :value-format="(v) => v.toFixed(1) + '%'"
         expand-unit="%"
         :loading="loadingStatus"
@@ -242,21 +267,6 @@
         :expanded="isExpanded('retention')"
         @toggle-expand="toggleRow('retention')"
       />
-      <MetricRow
-        label="Batch efficiency"
-        :context="'push · pop · ack — average rows per batch (higher = healthier)'"
-        :sparkline="[]"
-        :expanded="isExpanded('batchEff')"
-        @toggle-expand="toggleRow('batchEff')"
-      >
-        <template #value>
-          <span class="num">{{ batchEfficiency.push }}</span>
-          <span class="mr-sep">·</span>
-          <span class="num">{{ batchEfficiency.pop }}</span>
-          <span class="mr-sep">·</span>
-          <span class="num">{{ batchEfficiency.ack }}</span>
-        </template>
-      </MetricRow>
     </div>
 
     <!--
@@ -401,7 +411,7 @@ const timeRanges = [
 const ALL_ROW_KEYS = [
   'throughput', 'pendingDelta', 'timeLag',
   'errors', 'eventLoop', 'cpu', 'dbPool',
-  'partitions', 'retention', 'batchEff',
+  'partitions', 'retention',
 ]
 const expandedRows = ref(new Set())
 const isExpanded = (key) => expandedRows.value.has(key)
@@ -638,6 +648,20 @@ const cpuSeriesData = computed(() => {
     { label: 'User',   data: h.map(x => Number(x.queenCpuUserPct) || 0) },
     { label: 'System', data: h.map(x => Number(x.queenCpuSysPct)  || 0) },
   ]
+})
+
+// CPU labels need their own computed in multi-replica mode, since the
+// per-replica time-series buckets aren't necessarily aligned with the
+// throughput-history buckets that drive the rest of the rows. Fall back
+// to chartLabels when single-replica (data IS history-aligned there).
+const cpuLabels = computed(() => {
+  if (!hasMultipleReplicas.value) return chartLabels.value
+  const replicas = systemMetricsData.value?.replicas || []
+  const ts = replicas[0]?.timeSeries || []
+  if (!ts.length) return []
+  const multi = ts.length >= 2 &&
+    new Date(ts[0].timestamp).toDateString() !== new Date(ts[ts.length - 1].timestamp).toDateString()
+  return ts.map(t => formatChartLabel(new Date(t.timestamp), multi))
 })
 const cpuLatest = computed(() => {
   if (hasMultipleReplicas.value) {
@@ -1029,18 +1053,42 @@ onUnmounted(() => {
 }
 
 /* ---------------------------------------------------------------------------
-   Counts strip — replaces the four MetricCards. One scannable line.
+   Counts strip — cluster scope (left) + point-in-time perf stats (right).
+   Splits into two visual groups so the eye reads "what we have" separately
+   from "how the engine is performing right now". Both are snapshot stats,
+   no time series — they live here so the metric table below can be
+   exclusively about charts.
    --------------------------------------------------------------------------- */
 .counts-strip {
   display: flex;
   align-items: baseline;
-  gap: 10px;
+  justify-content: space-between;
   flex-wrap: wrap;
+  gap: 14px 24px;
   padding: 12px 16px;
   margin-bottom: 14px;
   border: 1px solid var(--bd);
   background: var(--ink-2);
   border-radius: 8px;
+}
+.counts-group {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+.counts-group-right {
+  /* Slightly muted so the eye reads cluster counts first; perf stats
+     are still important but secondary. */
+  color: var(--text-low);
+}
+.count-item-label {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 10.5px;
+  letter-spacing: .08em;
+  text-transform: uppercase;
+  color: var(--text-low);
+  margin-right: 2px;
 }
 .count-item {
   display: inline-flex;
@@ -1055,6 +1103,7 @@ onUnmounted(() => {
   transition: color .12s var(--ease);
 }
 .count-item.count-static { cursor: default; }
+.count-item.count-tight { gap: 4px; }
 .count-item:not(:disabled):not(.count-static):hover { color: var(--text-hi); }
 .count-item:not(:disabled):not(.count-static):hover strong { color: var(--accent); }
 .count-item:disabled { opacity: .5; cursor: default; }
@@ -1065,6 +1114,20 @@ onUnmounted(() => {
   font-weight: 600;
   color: var(--text-hi);
   letter-spacing: -.005em;
+}
+.counts-group-right .count-item strong {
+  /* Perf stats are secondary, so use medium contrast instead of high.
+     The numbers still read clearly but don't compete with the cluster
+     scope on the left. */
+  color: var(--text-mid);
+  font-size: 13px;
+}
+.count-suffix {
+  font-size: 10.5px;
+  font-family: 'JetBrains Mono', monospace;
+  color: var(--text-low);
+  letter-spacing: .04em;
+  text-transform: uppercase;
 }
 .count-muted strong { color: var(--text-mid); }
 .count-sep {

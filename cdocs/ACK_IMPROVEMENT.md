@@ -624,7 +624,7 @@ Decision: v3 fixes this behavior. Document in release notes. Add a specific test
 
 ### 7.1 Unit / functional
 
-Create `client-js/test-v2/ack.js` (or extend existing tests):
+Create `clients/client-js/test-v2/ack.js` (or extend existing tests):
 
 1. `testAckSingleCompleted` — single ack, verify cursor advances and counters update.
 2. `testAckBatchAllCompleted` — 100 acks for same (P, CG), verify final state as if processed one-by-one.
@@ -726,7 +726,7 @@ V3 sets `batch_size = 0` on final release. V2 does not do this for the completed
 | `lib/schema/procedures/003_ack.sql` | Add `ack_messages_v3` function. Keep `v2`. |
 | `lib/queen.hpp` | `JobTypeToSql[JobType::ACK]` switch via env var in ctor; OR keep pointing to v2 until phase 3. |
 | `server/src/acceptor_server.cpp` | Read `QUEEN_ACK_PROC` env var, pass to Queen ctor. |
-| `client-js/test-v2/ack.js` | New/extended tests. |
+| `clients/client-js/test-v2/ack.js` | New/extended tests. |
 | `lib/test_contention.cpp` or similar | Add concurrency test for 9.1 and 7.2. |
 | Release notes | Document semantic change in §6.1. |
 

@@ -364,7 +364,7 @@ Expected headline: sustained push throughput per worker should improve measurabl
 
 ### 8.1 Unit / functional
 
-Extend `client-js/test-v2/push.js`:
+Extend `clients/client-js/test-v2/push.js`:
 
 1. `testSimplePushRoundTrip` — push one message, verify `status=queued`, retrievable via pop.
 2. `testPushAutoCreatesQueueAndPartition` — push to never-seen queue/partition, verify rows exist.
@@ -473,7 +473,7 @@ Statements A and B upsert concurrently across many parallel calls. `ON CONFLICT 
 | ------------------------------------ | ---------------------------------------------------------------------------------------- |
 | `lib/schema/procedures/001_push.sql` | Replace body of `push_messages_v2` (or add `push_messages_v3` side-by-side for Phase 1). |
 | `lib/queen.hpp`                      | `JobTypeToSql[JobType::PUSH]` updated if function is renamed; otherwise unchanged.       |
-| `client-js/test-v2/push.js`          | Add tests listed in §8.1.                                                                |
+| `clients/client-js/test-v2/push.js`          | Add tests listed in §8.1.                                                                |
 | `server/ENV_VARIABLES.md`            | Document `QUEEN_PUSH_PROC` during Phase 2.                                               |
 
 

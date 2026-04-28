@@ -82,31 +82,31 @@
       <td><strong>JavaScript</strong> · Node and browser</td>
       <td>Node.js 22+</td>
       <td><code>npm install queen-mq</code></td>
-      <td><a href="https://github.com/smartpricing/queen/tree/master/client-js">client-js/</a></td>
+      <td><a href="https://github.com/smartpricing/queen/tree/master/clients/client-js">client-js/</a></td>
     </tr>
     <tr>
       <td><strong>Python</strong></td>
       <td>Python 3.8+</td>
       <td><code>pip install queen-mq</code></td>
-      <td><a href="https://github.com/smartpricing/queen/tree/master/client-py">client-py/</a></td>
+      <td><a href="https://github.com/smartpricing/queen/tree/master/clients/client-py">client-py/</a></td>
     </tr>
     <tr>
       <td><strong>Go</strong></td>
       <td>Go 1.24+</td>
       <td><code>go get github.com/smartpricing/queen/client-go</code></td>
-      <td><a href="https://github.com/smartpricing/queen/tree/master/client-go">client-go/</a></td>
+      <td><a href="https://github.com/smartpricing/queen/tree/master/clients/client-go">client-go/</a></td>
     </tr>
     <tr>
       <td><strong>PHP / Laravel</strong></td>
       <td>PHP 8.1+</td>
       <td><code>composer require smartpricing/queen-mq</code></td>
-      <td><a href="https://github.com/smartpricing/queen/tree/master/client-laravel">client-laravel/</a></td>
+      <td><a href="https://github.com/smartpricing/queen/tree/master/clients/client-laravel">client-laravel/</a></td>
     </tr>
     <tr>
       <td><strong>C++</strong> · header-only</td>
       <td>C++17</td>
       <td>copy <code>queen_client.hpp</code></td>
-      <td><a href="https://github.com/smartpricing/queen/tree/master/client-cpp">client-cpp/</a></td>
+      <td><a href="https://github.com/smartpricing/queen/tree/master/clients/client-cpp">client-cpp/</a></td>
     </tr>
   </tbody>
 </table>
@@ -135,7 +135,7 @@
 # Laravel only, publish config and set env:
 php artisan vendor:publish --tag=queen-config</code></pre><div class="pane-foot">Standalone PHP works on any 8.1+ project. Laravel service provider, facade, and artisan command are auto-discovered.</div></div>
     <div class="tab-pane pane-cpp"><pre><code class="language-bash"># Header-only client.
-curl -O https://raw.githubusercontent.com/smartpricing/queen/master/client-cpp/queen_client.hpp
+curl -O https://raw.githubusercontent.com/smartpricing/queen/master/clients/client-cpp/queen_client.hpp
 
 # Plus cpp-httplib + nlohmann/json (header-only deps).
 brew install cpp-httplib   # macOS
@@ -1024,27 +1024,27 @@ fmt.Println("failed:", dlq.Total)</code></pre></div>
   reference for type signatures, edge cases, and language-specific idioms.
 </p>
 <div class="card-grid">
-  <a class="card" href="https://github.com/smartpricing/queen/tree/master/client-js#readme">
+  <a class="card" href="https://github.com/smartpricing/queen/tree/master/clients/client-js#readme">
     <div class="card-eyebrow">JavaScript</div>
     <h3>client-js / README</h3>
     <p>Browser support, SSE streaming, admin API, full type definitions. <code>npm install queen-mq</code>.</p>
   </a>
-  <a class="card" href="https://github.com/smartpricing/queen/tree/master/client-py#readme">
+  <a class="card" href="https://github.com/smartpricing/queen/tree/master/clients/client-py#readme">
     <div class="card-eyebrow">Python</div>
     <h3>client-py / README</h3>
     <p>Async-first API, sync helpers, asyncio context-manager lifecycle. <code>pip install queen-mq</code>.</p>
   </a>
-  <a class="card" href="https://github.com/smartpricing/queen/tree/master/client-go#readme">
+  <a class="card" href="https://github.com/smartpricing/queen/tree/master/clients/client-go#readme">
     <div class="card-eyebrow">Go</div>
     <h3>client-go / README</h3>
     <p>Idiomatic <code>context.Context</code>, builder-style API, batch consumers. <code>go get github.com/smartpricing/queen/client-go</code>.</p>
   </a>
-  <a class="card" href="https://github.com/smartpricing/queen/tree/master/client-laravel#readme">
+  <a class="card" href="https://github.com/smartpricing/queen/tree/master/clients/client-laravel#readme">
     <div class="card-eyebrow">PHP / Laravel</div>
     <h3>client-laravel / README</h3>
     <p>Standalone PHP and Laravel facade, KafkaConsumer-style high-level consumer. <code>composer require smartpricing/queen-mq</code>.</p>
   </a>
-  <a class="card" href="https://github.com/smartpricing/queen/tree/master/client-cpp#readme">
+  <a class="card" href="https://github.com/smartpricing/queen/tree/master/clients/client-cpp#readme">
     <div class="card-eyebrow">C++</div>
     <h3>client-cpp / README</h3>
     <p>Header-only, thread-pool based consumer, manual buffer/lease/transaction control.</p>

@@ -10,7 +10,7 @@ Successfully implemented a **production-ready Python 3 client** with 100% featur
 
 ### Files Created: 25+
 
-#### Core Implementation (client-py/)
+#### Core Implementation (clients/client-py/)
 ```
 queen/
 ├── __init__.py                    # Public API exports
@@ -370,7 +370,7 @@ Examples
 ### Install Python Client
 
 ```bash
-cd client-py
+cd clients/client-py
 pip install -e .
 ```
 
@@ -458,7 +458,7 @@ Outputs to `.vitepress/dist/`
 ### PyPI Publishing (When Ready)
 
 ```bash
-cd client-py
+cd clients/client-py
 python -m build
 twine upload dist/*
 ```
