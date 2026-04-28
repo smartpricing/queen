@@ -273,6 +273,26 @@ void setup_status_routes(uWS::App* app, const RouteContext& ctx) {
         }
     });
 
+    // GET /api/v1/analytics/queue-parked-replicas - Parked gauge per (queue,
+    // replica) time series. Powers the System view's "individual replicas"
+    // toggle on the Parked tab. Source: queen.queue_parked_replica.
+    app->get("/api/v1/analytics/queue-parked-replicas", [ctx](auto* res, auto* req) {
+        REQUIRE_AUTH(res, req, ctx, auth::AccessLevel::READ_ONLY);
+
+        try {
+            std::string filters_json = build_filters_json(
+                get_query_param(req, "from"),
+                get_query_param(req, "to"),
+                get_query_param(req, "queue")
+            );
+            submit_sp_call(ctx, res,
+                "SELECT queen.get_queue_parked_per_replica_v1($1::jsonb)",
+                {filters_json});
+        } catch (const std::exception& e) {
+            send_error_response(res, e.what(), 500);
+        }
+    });
+
     // GET /api/v1/analytics/retention - Retention / eviction time series (async via stored procedure)
     // Aggregates queen.retention_history by bucket; split by retention_type.
     app->get("/api/v1/analytics/retention", [ctx](auto* res, auto* req) {

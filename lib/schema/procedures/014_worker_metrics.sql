@@ -101,9 +101,50 @@ ALTER TABLE queen.queue_lag_metrics ADD COLUMN IF NOT EXISTS transaction_count  
 ALTER TABLE queen.queue_lag_metrics ADD COLUMN IF NOT EXISTS partitions_created INTEGER DEFAULT 0;
 ALTER TABLE queen.queue_lag_metrics ADD COLUMN IF NOT EXISTS partitions_deleted INTEGER DEFAULT 0;
 ALTER TABLE queen.queue_lag_metrics ADD COLUMN IF NOT EXISTS partition_count    INTEGER;
+-- Currently-parked long-poll POP requests per queue. Sampled ~1Hz by
+-- libqueen's stats timer; what's persisted at each minute-boundary flush is
+-- the AVERAGE across the ~60 within-minute samples (not the last value).
+-- This is a GAUGE, so:
+--   - Across workers in the same minute we SUM (cluster-wide total parked).
+--   - Across time buckets we AVG (typical gauge value over the window).
+-- See get_queue_ops_v1 below.
+ALTER TABLE queen.queue_lag_metrics ADD COLUMN IF NOT EXISTS parked_count       INTEGER DEFAULT 0;
 
 CREATE INDEX IF NOT EXISTS idx_queue_lag_bucket ON queen.queue_lag_metrics(bucket_time DESC);
 CREATE INDEX IF NOT EXISTS idx_queue_lag_queue ON queen.queue_lag_metrics(queue_name);
+
+-- ============================================================================
+-- Per-replica parked-count breakdown
+-- ============================================================================
+--
+-- queen.queue_lag_metrics already stores parked_count *cluster-aggregated*
+-- (SUMmed across workers via the upsert), which is what the default Parked
+-- chart on the System view consumes. A parked long-poll, however, lives on
+-- exactly ONE worker (the one that owns the HTTP connection), so it's
+-- operationally useful to break the gauge down per replica — e.g. to detect
+-- load-balancer skew that pins all consumers to one host.
+--
+-- This table holds the per-replica view. Each worker writes its own
+-- minute-averaged parked_count into its own row. The aggregate value in
+-- queue_lag_metrics.parked_count remains authoritative for the cluster-wide
+-- chart (one INSERT per worker per minute either way; tiny extra cost).
+--
+-- We deliberately keep the breakdown narrow (parked only) instead of
+-- promoting all queue_lag_metrics columns to per-replica: load skew across
+-- replicas is already visible per-worker in queen.worker_metrics; only
+-- parked needs per-(replica × queue) attribution.
+CREATE TABLE IF NOT EXISTS queen.queue_parked_replica (
+    bucket_time TIMESTAMPTZ NOT NULL,
+    queue_name  VARCHAR(512) NOT NULL,
+    hostname    VARCHAR(255) NOT NULL,
+    worker_id   INTEGER      NOT NULL,
+    parked_count INTEGER DEFAULT 0,
+    PRIMARY KEY (bucket_time, queue_name, hostname, worker_id)
+);
+CREATE INDEX IF NOT EXISTS idx_queue_parked_replica_bucket
+    ON queen.queue_parked_replica(bucket_time DESC);
+CREATE INDEX IF NOT EXISTS idx_queue_parked_replica_queue
+    ON queen.queue_parked_replica(queue_name);
 
 -- ============================================================================
 -- Query Procedures
@@ -342,18 +383,24 @@ AS $$
 DECLARE
     v_deleted_metrics INTEGER := 0;
     v_deleted_lag INTEGER := 0;
+    v_deleted_parked_replica INTEGER := 0;
 BEGIN
     DELETE FROM queen.worker_metrics
     WHERE bucket_time < NOW() - (p_retention_days || ' days')::INTERVAL;
     GET DIAGNOSTICS v_deleted_metrics = ROW_COUNT;
-    
+
     DELETE FROM queen.queue_lag_metrics
     WHERE bucket_time < NOW() - (p_retention_days || ' days')::INTERVAL;
     GET DIAGNOSTICS v_deleted_lag = ROW_COUNT;
-    
+
+    DELETE FROM queen.queue_parked_replica
+    WHERE bucket_time < NOW() - (p_retention_days || ' days')::INTERVAL;
+    GET DIAGNOSTICS v_deleted_parked_replica = ROW_COUNT;
+
     RETURN jsonb_build_object(
         'deletedMetrics', v_deleted_metrics,
-        'deletedLagMetrics', v_deleted_lag
+        'deletedLagMetrics', v_deleted_lag,
+        'deletedParkedReplica', v_deleted_parked_replica
     );
 END;
 $$;
@@ -1114,7 +1161,11 @@ BEGIN
             CASE WHEN SUM(pop_count) > 0
                  THEN SUM(avg_lag_ms * pop_count) / SUM(pop_count)
                  ELSE 0 END AS avg_lag_ms,
-            MAX(max_lag_ms) AS max_lag_ms
+            MAX(max_lag_ms) AS max_lag_ms,
+            -- parked_count is a GAUGE (already SUM-aggregated across workers
+            -- at insert time). Across time-buckets we AVG to get the typical
+            -- in-flight long-poll count for the window.
+            AVG(COALESCE(parked_count, 0))::numeric AS parked_avg
         FROM queen.queue_lag_metrics
         WHERE bucket_time >= v_from_ts
           AND bucket_time <= v_to_ts
@@ -1142,7 +1193,12 @@ BEGIN
                 -- Rate-normalized helpers so the UI doesn't have to divide:
                 'pushPerSecond',      ROUND(push_msg::numeric / (v_bucket_minutes * 60), 2),
                 'popPerSecond',       ROUND(pop_msg::numeric  / (v_bucket_minutes * 60), 2),
-                'ackPerSecond',       ROUND((ack_ok + ack_fail)::numeric / (v_bucket_minutes * 60), 2)
+                'ackPerSecond',       ROUND((ack_ok + ack_fail)::numeric / (v_bucket_minutes * 60), 2),
+                'emptyPerSecond',     ROUND(pop_empty::numeric / (v_bucket_minutes * 60), 2),
+                -- Parked is a gauge (typical in-flight long-poll count for
+                -- the window) — no /sec normalization. Rounded to 2 dp so
+                -- multi-minute buckets show fractional values cleanly.
+                'parkedCount',        ROUND(parked_avg, 2)
             ) ORDER BY bucket ASC, queue_name
         ), '[]'::jsonb)
     INTO v_series
@@ -1169,6 +1225,99 @@ BEGIN
 END;
 $$;
 
+-- ============================================================================
+-- queen.get_queue_parked_per_replica_v1: Parked-by-(queue, replica) time series
+-- ============================================================================
+-- Returns the same minute-averaged parked gauge as get_queue_ops_v1, but
+-- broken out by replica (hostname × worker_id) instead of cluster-aggregated.
+-- The chart's "individual replicas" toggle on the Parked tab uses this.
+--
+-- Bucketing rules match get_queue_ops_v1 so the time axis lines up exactly.
+-- Across time-buckets we AVG (gauge); within a bucket we just AVG across the
+-- per-minute rows belonging to (queue, replica).
+-- ============================================================================
+CREATE OR REPLACE FUNCTION queen.get_queue_parked_per_replica_v1(
+    p_filters JSONB DEFAULT '{}'::jsonb
+)
+RETURNS JSONB
+LANGUAGE plpgsql
+AS $$
+DECLARE
+    v_from_ts TIMESTAMPTZ;
+    v_to_ts TIMESTAMPTZ;
+    v_queue TEXT;
+    v_duration_minutes INTEGER;
+    v_bucket_minutes INTEGER;
+    v_series JSONB;
+    v_replicas JSONB;
+BEGIN
+    v_from_ts := COALESCE((p_filters->>'from')::timestamptz, NOW() - INTERVAL '1 hour');
+    v_to_ts   := COALESCE((p_filters->>'to')::timestamptz,   NOW());
+    v_queue   := p_filters->>'queue';
+
+    v_duration_minutes := EXTRACT(EPOCH FROM (v_to_ts - v_from_ts)) / 60;
+    v_bucket_minutes := CASE
+        WHEN v_duration_minutes <= 60 THEN 1
+        WHEN v_duration_minutes <= 360 THEN 5
+        WHEN v_duration_minutes <= 1440 THEN 15
+        WHEN v_duration_minutes <= 10080 THEN 60
+        ELSE 360
+    END;
+
+    WITH rolled AS (
+        SELECT
+            date_trunc('minute', bucket_time) -
+                (EXTRACT(minute FROM bucket_time)::integer % v_bucket_minutes) * INTERVAL '1 minute' AS bucket,
+            queue_name,
+            hostname,
+            worker_id,
+            AVG(COALESCE(parked_count, 0))::numeric AS parked_avg
+        FROM queen.queue_parked_replica
+        WHERE bucket_time >= v_from_ts
+          AND bucket_time <= v_to_ts
+          AND (v_queue IS NULL OR queue_name = v_queue)
+        GROUP BY 1, 2, 3, 4
+    )
+    SELECT
+        COALESCE(jsonb_agg(
+            jsonb_build_object(
+                'bucket',      to_char(bucket, 'YYYY-MM-DD"T"HH24:MI:SS"Z"'),
+                'queueName',   queue_name,
+                'hostname',    hostname,
+                'workerId',    worker_id,
+                'parkedCount', ROUND(parked_avg, 2)
+            ) ORDER BY bucket ASC, queue_name, hostname, worker_id
+        ), '[]'::jsonb)
+    INTO v_series
+    FROM rolled;
+
+    -- Distinct (hostname, worker_id) pairs in the window — useful for the UI
+    -- to know which replicas are represented even before any datapoint.
+    SELECT COALESCE(jsonb_agg(jsonb_build_object(
+        'hostname', hostname,
+        'workerId', worker_id
+    ) ORDER BY hostname, worker_id), '[]'::jsonb)
+    INTO v_replicas
+    FROM (
+        SELECT DISTINCT hostname, worker_id
+        FROM queen.queue_parked_replica
+        WHERE bucket_time >= v_from_ts
+          AND bucket_time <= v_to_ts
+          AND (v_queue IS NULL OR queue_name = v_queue)
+    ) q;
+
+    RETURN jsonb_build_object(
+        'timeRange', jsonb_build_object(
+            'from', to_char(v_from_ts, 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"'),
+            'to',   to_char(v_to_ts,   'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"')
+        ),
+        'bucketMinutes', v_bucket_minutes,
+        'series',   v_series,
+        'replicas', v_replicas
+    );
+END;
+$$;
+
 -- Grant permissions
 GRANT EXECUTE ON FUNCTION queen.get_worker_throughput_v1(TIMESTAMPTZ, TIMESTAMPTZ, INTEGER) TO PUBLIC;
 GRANT EXECUTE ON FUNCTION queen.get_queue_lag_v1(TIMESTAMPTZ, TIMESTAMPTZ, TEXT) TO PUBLIC;
@@ -1179,4 +1328,5 @@ GRANT EXECUTE ON FUNCTION queen.get_status_v3(JSONB) TO PUBLIC;
 GRANT EXECUTE ON FUNCTION queen.get_worker_metrics_timeseries_v1(JSONB) TO PUBLIC;
 GRANT EXECUTE ON FUNCTION queen.cleanup_worker_metrics_v1(INTEGER) TO PUBLIC;
 GRANT EXECUTE ON FUNCTION queen.get_queue_ops_v1(JSONB) TO PUBLIC;
+GRANT EXECUTE ON FUNCTION queen.get_queue_parked_per_replica_v1(JSONB) TO PUBLIC;
 

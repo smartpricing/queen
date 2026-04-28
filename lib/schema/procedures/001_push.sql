@@ -224,6 +224,14 @@ BEGIN
     items AS (
         SELECT
             p.id AS partition_id,
+            -- Per-queue metrics attribution (PR 3c followup): keep queue_name
+            -- alongside partition_id so the response can echo it per item.
+            -- libqueen's PUSH handler aggregates by this field to credit
+            -- queen.queue_lag_metrics.push_message_count per queue. Without
+            -- it the per-queue Push/s chart on the System view stays at 0
+            -- (the route can't put a single queue_name on the JobRequest
+            -- because a push call may target many queues).
+            par.queue_name,
             par.idx,
             par.message_id,
             par.transaction_id,
@@ -256,6 +264,7 @@ BEGIN
     items_json AS (
         SELECT jsonb_agg(jsonb_build_object(
             'idx',            idx,
+            'queue_name',     queue_name,
             'message_id',     message_id::text,
             'transaction_id', transaction_id,
             'partition_id',   partition_id::text,
@@ -327,6 +336,7 @@ BEGIN
     WITH flat AS (
         SELECT
             (i->>'idx')::int          AS idx,
+            i->>'queue_name'          AS queue_name,
             i->>'message_id'          AS message_id,
             i->>'transaction_id'      AS transaction_id,
             (i->>'partition_id')::uuid AS partition_id,
@@ -368,14 +378,18 @@ BEGIN
                     'status',         'queued',
                     'message_id',     v_inserted ->> f.key,
                     'partition_id',   f.partition_id::text,
-                    'trace_id',       f.trace_id
+                    'trace_id',       f.trace_id,
+                    -- queueName: per-item attribution for libqueen's PUSH
+                    -- handler. See the `items` CTE comment above.
+                    'queueName',      f.queue_name
                 )
             ELSE
                 jsonb_build_object(
                     'index',          f.idx,
                     'transaction_id', f.transaction_id,
                     'status',         'duplicate',
-                    'message_id',     w.m ->> f.key
+                    'message_id',     w.m ->> f.key,
+                    'queueName',      f.queue_name
                 )
         END
         ORDER BY f.idx

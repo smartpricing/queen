@@ -5,6 +5,7 @@
 #include <chrono>
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
 #include <functional>
 #include <ctime>
 #include <sstream>
@@ -71,9 +72,29 @@ public:
 
     // Record push requests for a specific queue. Called once per HTTP push
     // regardless of how many messages the call contained.
+    //
+    // NOTE: this method bumps both the global aggregate and the per-queue
+    // map. It is only safe when the caller has the full picture: a single
+    // queue per call. The HTTP /api/v1/push path can target many queues
+    // per call, so it uses record_push_request + record_push_messages
+    // (global) plus record_push_per_queue (per-queue) instead.
     void record_push_with_queue(const std::string& queue_name, size_t n_messages) {
         _push_request_count++;
         _push_message_count += n_messages;
+        if (queue_name.empty()) return;
+        auto& q = _queue_ops[queue_name];
+        q.push_request_count++;
+        q.push_message_count += n_messages;
+    }
+
+    // Per-queue-only push attribution. Used when a single HTTP push spans
+    // multiple queues: the caller bumps the global counters once via
+    // record_push_request / record_push_messages, then calls this once per
+    // distinct queue with that queue's item count. A push of items that
+    // hit N queues counts as 1 global request but N per-queue entries
+    // (each with its own item count) — matching the semantics already in
+    // place for ACK and TRANSACTION.
+    void record_push_per_queue(const std::string& queue_name, size_t n_messages) {
         if (queue_name.empty()) return;
         auto& q = _queue_ops[queue_name];
         q.push_request_count++;
@@ -115,6 +136,20 @@ public:
     void record_transaction_with_queue(const std::string& queue_name) {
         if (queue_name.empty()) return;
         _queue_ops[queue_name].transaction_count++;
+    }
+
+    // Add one per-queue sample of currently-parked POP requests. Called by
+    // the libqueen stats timer (~1Hz). At minute-boundary flush we emit
+    // _parked_sum[q] / _parked_sample_count per queue, so the value
+    // persisted is the average over the minute rather than a single
+    // point-in-time reading. The global sample count also makes
+    // disappear-then-reappear queues average correctly without any
+    // per-queue bookkeeping (missing ticks count as zeros).
+    void add_parked_sample(const std::unordered_map<std::string, uint64_t>& snap) {
+        for (const auto& [q, c] : snap) {
+            _parked_sum[q] += c;
+        }
+        _parked_sample_count++;
     }
 
     // --- Event loop health (called from stats timer) ---
@@ -176,6 +211,11 @@ public:
         
         _aggregates.reset();
         _queue_ops.clear();
+        // Reset the running sum + sample count so the next minute starts
+        // averaging from zero. flush_to_database() (called above) has
+        // already consumed them.
+        _parked_sum.clear();
+        _parked_sample_count = 0;
         
         return true;
     }
@@ -232,6 +272,22 @@ private:
         uint64_t transaction_count = 0;
     };
     std::unordered_map<std::string, QueueOpsStats> _queue_ops;
+
+    // Per-queue running sum of "currently-parked POP requests" samples within
+    // the current minute. libqueen's stats timer fires once a second and
+    // calls add_parked_sample(); we accumulate per queue and divide by
+    // _parked_sample_count at flush time so the value persisted is the
+    // *minute-averaged* gauge, not whichever sample happened to land last
+    // before the boundary crossed.
+    //
+    // Queues that disappear from later snapshots are intentionally NOT
+    // removed from _parked_sum: dividing the historical sum by the global
+    // sample count automatically treats missing ticks as zeros, which is the
+    // correct mean. Conversely, queues that first appear mid-minute also
+    // average correctly because _parked_sum[q] starts at 0 and is only
+    // incremented when q is present in a snapshot.
+    std::unordered_map<std::string, uint64_t> _parked_sum;
+    uint64_t _parked_sample_count = 0;
     
     // --- Running aggregates for current minute (no mutex needed) ---
     struct MinuteAggregates {
@@ -391,21 +447,49 @@ private:
     
     void flush_queue_lag_metrics() {
         // No lock needed - single-threaded event loop
-        if (_queue_ops.empty()) return;
+        if (_queue_ops.empty() && _parked_sum.empty()) return;
 
         std::string bucket_time = format_bucket_time();
+
+        // Helper: round-half-up integer division (avoids systematic floor
+        // bias on small averages like 0.5 → 1 instead of 0). The column is
+        // INTEGER; cluster-wide aggregation across workers happens at the
+        // upsert (SUM), and the SP rounds to 2 dp on read after AVG-ing
+        // across time buckets, so a per-worker rounding error of <0.5 here
+        // is bounded and washes out under N>1 workers.
+        auto avg_round = [&](uint64_t sum) -> uint64_t {
+            if (_parked_sample_count == 0) return 0;
+            return (sum + _parked_sample_count / 2) / _parked_sample_count;
+        };
 
         // Build SINGLE batched INSERT for all queues that saw any activity
         // this minute. One SQL call per worker per minute regardless of the
         // number of queues touched.
+        //
+        // We emit a row for any queue that has either: (a) any counter
+        // movement in _queue_ops, or (b) a non-zero parked sum. The second
+        // case matters for quiet queues: a queue with consumers long-polling
+        // against an empty backlog has parked > 0 but every counter stays
+        // at 0, and we still want to record the gauge.
         nlohmann::json batch = nlohmann::json::array();
+        // Track which queues we've already emitted via the _queue_ops walk
+        // so the second pass (parked-only queues) doesn't double-insert.
+        std::unordered_set<std::string> emitted;
+        emitted.reserve(_queue_ops.size() + _parked_sum.size());
+
         for (const auto& [queue_name, s] : _queue_ops) {
-            // Skip queues with zero total activity to keep the batch lean.
+            uint64_t parked_sum = 0;
+            auto pit = _parked_sum.find(queue_name);
+            if (pit != _parked_sum.end()) parked_sum = pit->second;
+            uint64_t parked_avg = avg_round(parked_sum);
+
+            // Skip queues with zero total activity AND zero parked.
             if (s.pop_count == 0
                 && s.push_request_count == 0
                 && s.pop_empty_count == 0
                 && s.ack_request_count == 0
-                && s.transaction_count == 0) continue;
+                && s.transaction_count == 0
+                && parked_avg == 0) continue;
 
             batch.push_back({
                 {"queue",               queue_name},
@@ -418,7 +502,33 @@ private:
                 {"ack_request_count",   s.ack_request_count},
                 {"ack_success_count",   s.ack_success_count},
                 {"ack_failed_count",    s.ack_failed_count},
-                {"transaction_count",   s.transaction_count}
+                {"transaction_count",   s.transaction_count},
+                {"parked_count",        parked_avg}
+            });
+            emitted.insert(queue_name);
+        }
+
+        // Emit rows for parked-only queues (no counter movement this minute
+        // but consumers were waiting at some point during it). Rounded
+        // average is what we persist; queues whose average rounds to 0
+        // (e.g. a 5-second blip in a 60-sample minute) are skipped.
+        for (const auto& [queue_name, parked_sum] : _parked_sum) {
+            uint64_t parked_avg = avg_round(parked_sum);
+            if (parked_avg == 0) continue;
+            if (emitted.count(queue_name)) continue;
+            batch.push_back({
+                {"queue",               queue_name},
+                {"pop_count",           0},
+                {"avg_lag_ms",          0},
+                {"max_lag_ms",          0},
+                {"push_request_count",  0},
+                {"push_message_count",  0},
+                {"pop_empty_count",     0},
+                {"ack_request_count",   0},
+                {"ack_success_count",   0},
+                {"ack_failed_count",    0},
+                {"transaction_count",   0},
+                {"parked_count",        parked_avg}
             });
         }
 
@@ -429,13 +539,17 @@ private:
         // weighted-average update for avg_lag_ms guards against divide-by-
         // zero when both sides have pop_count=0 (i.e. only non-pop activity
         // this bucket).
+        //
+        // parked_count is a GAUGE; across workers in the same minute we
+        // SUM (cluster-wide total parked at flush time). Time-bucket
+        // aggregation in get_queue_ops_v1 uses AVG instead of SUM.
         std::string sql = R"(
             INSERT INTO queen.queue_lag_metrics (
                 bucket_time, queue_name,
                 pop_count, avg_lag_ms, max_lag_ms,
                 push_request_count, push_message_count, pop_empty_count,
                 ack_request_count, ack_success_count, ack_failed_count,
-                transaction_count
+                transaction_count, parked_count
             )
             SELECT
                 $1::timestamptz,
@@ -449,7 +563,8 @@ private:
                 (item->>'ack_request_count')::bigint,
                 (item->>'ack_success_count')::bigint,
                 (item->>'ack_failed_count')::bigint,
-                (item->>'transaction_count')::bigint
+                (item->>'transaction_count')::bigint,
+                (item->>'parked_count')::integer
             FROM jsonb_array_elements($2::jsonb) AS item
             ON CONFLICT (bucket_time, queue_name) DO UPDATE SET
                 pop_count = queen.queue_lag_metrics.pop_count + EXCLUDED.pop_count,
@@ -467,11 +582,53 @@ private:
                 ack_request_count  = queen.queue_lag_metrics.ack_request_count  + EXCLUDED.ack_request_count,
                 ack_success_count  = queen.queue_lag_metrics.ack_success_count  + EXCLUDED.ack_success_count,
                 ack_failed_count   = queen.queue_lag_metrics.ack_failed_count   + EXCLUDED.ack_failed_count,
-                transaction_count  = queen.queue_lag_metrics.transaction_count  + EXCLUDED.transaction_count
+                transaction_count  = queen.queue_lag_metrics.transaction_count  + EXCLUDED.transaction_count,
+                parked_count       = COALESCE(queen.queue_lag_metrics.parked_count, 0) + EXCLUDED.parked_count
         )";
 
         if (_flush_callback) {
             _flush_callback(sql, {bucket_time, batch.dump()});
+        }
+
+        // ---- Per-replica parked breakdown ----
+        // Same minute-averaged value, but written keyed by (bucket, queue,
+        // hostname, worker_id) instead of cluster-aggregated. Powers the
+        // System view's "individual replicas" toggle on the Parked tab.
+        // We reuse `batch` (already filtered to queues with non-zero
+        // activity OR non-zero parked) and emit only rows whose
+        // parked_count > 0 — no point storing zero-parked rows per replica.
+        nlohmann::json parked_batch = nlohmann::json::array();
+        for (const auto& entry : batch) {
+            uint64_t parked = entry.value("parked_count", static_cast<uint64_t>(0));
+            if (parked == 0) continue;
+            parked_batch.push_back({
+                {"queue",        entry.at("queue")},
+                {"parked_count", parked}
+            });
+        }
+        if (!parked_batch.empty()) {
+            std::string sql_replica = R"(
+                INSERT INTO queen.queue_parked_replica (
+                    bucket_time, queue_name, hostname, worker_id, parked_count
+                )
+                SELECT
+                    $1::timestamptz,
+                    item->>'queue',
+                    $3,
+                    $4::integer,
+                    (item->>'parked_count')::integer
+                FROM jsonb_array_elements($2::jsonb) AS item
+                ON CONFLICT (bucket_time, queue_name, hostname, worker_id)
+                DO UPDATE SET parked_count = EXCLUDED.parked_count
+            )";
+            if (_flush_callback) {
+                _flush_callback(sql_replica, {
+                    bucket_time,
+                    parked_batch.dump(),
+                    _hostname,
+                    std::to_string(_worker_id)
+                });
+            }
         }
     }
 };

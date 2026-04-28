@@ -123,6 +123,8 @@ export const system = {
   getQueueLag: (params) => client.get('/api/v1/analytics/queue-lag', { params }),
   // Per-Queue Ops (push / pop / ack / trx + partition lifecycle)
   getQueueOps: (params) => client.get('/api/v1/analytics/queue-ops', { params }),
+  // Per-replica parked breakdown (Parked tab "individual replicas" toggle)
+  getQueueParkedReplicas: (params) => client.get('/api/v1/analytics/queue-parked-replicas', { params }),
   // Retention / Eviction time series
   getRetention: (params) => client.get('/api/v1/analytics/retention', { params }),
   // PostgreSQL Stats

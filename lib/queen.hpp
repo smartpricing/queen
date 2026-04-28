@@ -625,6 +625,27 @@ class Queen {
                 backoff_size,
                 self->_jobs_done
             );
+
+            // Per-queue sample of currently-parked POP requests. Cheap
+            // O(N) walk of the backoff tracker; the sample is *added* to
+            // a running per-queue sum inside WorkerMetrics, then divided
+            // by the number of samples at minute-boundary flush so the
+            // value persisted is the minute-averaged gauge instead of a
+            // single point-in-time reading.
+            //
+            // backoff_key shape is "queue/partition" or "queue/*" (see
+            // _get_backoff_key). We split on the *last* '/' since queue
+            // names cannot contain '/'. Multiple partitions of the same
+            // queue accumulate into the same map entry.
+            std::unordered_map<std::string, uint64_t> parked_by_queue;
+            parked_by_queue.reserve(self->_pop_backoff_tracker.size());
+            for (const auto& [key, request_map] : self->_pop_backoff_tracker) {
+                auto slash = key.rfind('/');
+                if (slash == std::string::npos) continue;
+                parked_by_queue[key.substr(0, slash)] += request_map.size();
+            }
+            self->_metrics->add_parked_sample(parked_by_queue);
+
             self->_metrics->check_and_flush();
         }
 
@@ -1126,6 +1147,52 @@ class Queen {
                     json_results = std::move(json_results["items"]);
                 }
 
+                // execute_transaction_v2 returns the wrapper object
+                //   { "transactionId": ..., "success": ..., "results": [...] }
+                // We can't unwrap it like PUSH because the route forwards the
+                // wrapper to clients verbatim (TransactionBuilder reads
+                // result.success / result.error). Instead we credit metrics
+                // here from the inner results array, then deliver the original
+                // wrapper to each job's callback and short-circuit the per-job
+                // dispatch — the JobType::TRANSACTION case in the switch below
+                // would never see this object-shaped response otherwise.
+                //
+                // execute_transaction_v2 is documented as NOT batchable so
+                // slot.jobs.size() == 1 in practice; the loop is for safety.
+                if (!slot.jobs.empty()
+                    && slot.jobs[0]->job.op_type == JobType::TRANSACTION
+                    && json_results.is_object()
+                    && json_results.contains("results")
+                    && json_results["results"].is_array()) {
+                    if (_metrics) {
+                        _metrics->record_transaction();
+                        std::unordered_set<std::string> queues_touched;
+                        for (const auto& op_result : json_results["results"]) {
+                            if (op_result.contains("dlq")
+                                && op_result["dlq"].is_boolean()
+                                && op_result["dlq"].get<bool>()) {
+                                _metrics->record_dlq();
+                            }
+                            if (op_result.contains("queueName")
+                                && op_result["queueName"].is_string()) {
+                                queues_touched.insert(
+                                    op_result["queueName"].get<std::string>());
+                            }
+                        }
+                        for (const auto& qn : queues_touched) {
+                            _metrics->record_transaction_with_queue(qn);
+                        }
+                    }
+                    for (auto& job : slot.jobs) {
+                        job->callback(json_results.dump());
+                        _jobs_done++;
+                    }
+                    slot.jobs.clear();
+                    slot.job_idx_ranges.clear();
+                    PQclear(res);
+                    continue;
+                }
+
                 if (!json_results.is_array()) {
                     for (auto& job : slot.jobs) {
                         job->callback(json_results.dump());
@@ -1267,12 +1334,40 @@ class Queen {
                         case JobType::PUSH: {
                             _update_pop_backoff_tracker(job->job.queue_name, job->job.partition_name);
                             if (_metrics) {
-                                // record_push_with_queue also bumps the aggregate
-                                // _push_request_count / _push_message_count, so it
-                                // replaces the previous record_push_request + messages pair.
-                                _metrics->record_push_with_queue(
-                                    job->job.queue_name,
-                                    job->job.item_count > 0 ? job->job.item_count : 0);
+                                // Global counters: one HTTP push = one request,
+                                // total messages across all targeted queues.
+                                size_t total_count = job->job.item_count > 0
+                                    ? job->job.item_count
+                                    : 0;
+                                _metrics->record_push_request();
+                                _metrics->record_push_messages(total_count);
+
+                                // Per-queue attribution. push_messages_v3 echoes
+                                // `queueName` on every item (PR 3c followup); we
+                                // group by it so a multi-queue push credits each
+                                // queue with the right count. This is what feeds
+                                // queue_lag_metrics.push_message_count and the
+                                // System view's per-queue Push/s chart.
+                                //
+                                // Fallback: if the SP is older and items lack
+                                // `queueName`, we fall through to job_req's
+                                // queue_name (test_contention.cpp sets that).
+                                std::unordered_map<std::string, size_t> by_queue;
+                                bool any_queue_name_in_results = false;
+                                for (const auto& result : job_results) {
+                                    if (result.contains("queueName") && result["queueName"].is_string()) {
+                                        any_queue_name_in_results = true;
+                                        by_queue[result["queueName"].get<std::string>()]++;
+                                    }
+                                }
+                                if (any_queue_name_in_results) {
+                                    for (const auto& [qn, count] : by_queue) {
+                                        _metrics->record_push_per_queue(qn, count);
+                                    }
+                                } else if (!job->job.queue_name.empty()) {
+                                    _metrics->record_push_per_queue(
+                                        job->job.queue_name, total_count);
+                                }
                             }
                             _jobs_done++;
                             job->callback(job_results.dump());

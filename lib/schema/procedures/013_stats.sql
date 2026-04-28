@@ -1075,6 +1075,27 @@ $$;
 -- Optimized queue stats aggregation using CTE
 -- Eliminates: correlated subqueries (3N lookups), double fan-out join through partitions table
 -- Aggregates directly from partition stats rows which already have queue_id
+--
+-- Two-stage rollup is required because queen.stats stores ONE ROW PER
+-- (partition × consumer_group): the stat_key is `partition_id::text || ':' ||
+-- consumer_group` (see queen.compute_partition_stats_v3 / v2 / v1). A direct
+-- COUNT(*) / SUM() over partition rows would multiply both the partition count
+-- and the message counters by the number of consumer groups attached to the
+-- queue (e.g. a queue with 1.6k partitions and 12 groups would report 19.2k
+-- partitions and ~12× pending). That mismatched the drill-down view returned
+-- by get_queue_v2, which already groups by partition and uses MAX across
+-- consumer groups.
+--
+-- Stage 1 (per_partition): collapse rows down to one row per partition by
+-- taking MAX across consumer groups. Semantics = "worst-lagging consumer
+-- group's view of this partition" — same as get_queue_v2's drill-down.
+-- total_messages is a property of the partition itself (identical across
+-- consumer groups when stats are consistent), so MAX is effectively a no-op
+-- there but keeps the aggregation symmetric.
+--
+-- Stage 2 (partition_agg): aggregate the per-partition rows up to the queue.
+-- COUNT(*) here gives the real partition count; SUM gives the total work
+-- still owed to the slowest consumer group across the whole queue.
 CREATE OR REPLACE FUNCTION queen.aggregate_queue_stats_v2()
 RETURNS JSONB
 LANGUAGE plpgsql
@@ -1082,25 +1103,39 @@ AS $$
 DECLARE
     v_updated INTEGER := 0;
 BEGIN
-    WITH partition_agg AS (
+    WITH per_partition AS (
         SELECT
             s.queue_id,
-            COUNT(*) AS child_count,
-            SUM(s.total_messages) AS total_messages,
-            SUM(s.pending_messages) AS pending_messages,
-            SUM(s.processing_messages) AS processing_messages,
-            SUM(s.completed_messages) AS completed_messages,
-            SUM(s.dead_letter_messages) AS dead_letter_messages,
-            MIN(s.oldest_pending_at) AS oldest_pending_at,
-            MAX(s.newest_message_at) AS newest_message_at,
-            COALESCE(AVG(EXTRACT(EPOCH FROM (NOW() - s.oldest_pending_at)))::integer, 0) AS avg_lag_seconds,
-            COALESCE(MAX(EXTRACT(EPOCH FROM (NOW() - s.oldest_pending_at)))::integer, 0) AS max_lag_seconds,
-            COALESCE(AVG(s.pending_messages)::integer, 0) AS avg_offset_lag,
-            COALESCE(MAX(s.pending_messages)::integer, 0) AS max_offset_lag
+            s.partition_id,
+            MAX(s.total_messages)        AS total_messages,
+            MAX(s.pending_messages)      AS pending_messages,
+            MAX(s.processing_messages)   AS processing_messages,
+            MAX(s.completed_messages)    AS completed_messages,
+            MAX(s.dead_letter_messages)  AS dead_letter_messages,
+            MIN(s.oldest_pending_at)     AS oldest_pending_at,
+            MAX(s.newest_message_at)     AS newest_message_at
         FROM queen.stats s
         WHERE s.stat_type = 'partition'
           AND s.queue_id IS NOT NULL
-        GROUP BY s.queue_id
+        GROUP BY s.queue_id, s.partition_id
+    ),
+    partition_agg AS (
+        SELECT
+            queue_id,
+            COUNT(*) AS child_count,
+            SUM(total_messages) AS total_messages,
+            SUM(pending_messages) AS pending_messages,
+            SUM(processing_messages) AS processing_messages,
+            SUM(completed_messages) AS completed_messages,
+            SUM(dead_letter_messages) AS dead_letter_messages,
+            MIN(oldest_pending_at) AS oldest_pending_at,
+            MAX(newest_message_at) AS newest_message_at,
+            COALESCE(AVG(EXTRACT(EPOCH FROM (NOW() - oldest_pending_at)))::integer, 0) AS avg_lag_seconds,
+            COALESCE(MAX(EXTRACT(EPOCH FROM (NOW() - oldest_pending_at)))::integer, 0) AS max_lag_seconds,
+            COALESCE(AVG(pending_messages)::integer, 0) AS avg_offset_lag,
+            COALESCE(MAX(pending_messages)::integer, 0) AS max_offset_lag
+        FROM per_partition
+        GROUP BY queue_id
     )
     INSERT INTO queen.stats (
         stat_type, stat_key, queue_id,

@@ -317,11 +317,17 @@
               </button>
             </div>
             <div>
-              <h4 class="label-xs" style="margin-bottom:10px;">{{ queueOpActive.label }} by Queue (per second)</h4>
+              <h4 class="label-xs" style="margin-bottom:10px;">
+                {{ queueOpActive.label }} by Queue<span v-if="isParkedIndividual"> &amp; Replica</span>
+                <span v-if="queueOpActive.kind === 'rate'" style="color:var(--text-low); font-weight:normal;">(per second)</span>
+                <span v-else-if="isParkedIndividual" style="color:var(--text-low); font-weight:normal;">(in-flight long-polls, per replica, averaged each minute)</span>
+                <span v-else-if="queueOpActive.kind === 'gauge'" style="color:var(--text-low); font-weight:normal;">(in-flight long-polls, averaged each minute)</span>
+              </h4>
               <BaseChart
-                v-if="queueOpsRateChartData.labels.length > 0"
+                v-if="perQueueChartData.labels.length > 0"
+                :key="`per-queue-ops-${queueOpActive.key}-${isParkedIndividual ? 'individual' : 'aggregate'}-${hasExplicitQueueSelection ? 'legend' : 'nolegend'}`"
                 type="line"
-                :data="queueOpsRateChartData"
+                :data="perQueueChartData"
                 :options="perQueueThroughputOptions"
                 height="340px"
               />
@@ -331,6 +337,7 @@
               <h4 class="label-xs" style="margin-bottom:10px;">Avg Latency by Queue</h4>
               <BaseChart
                 v-if="queueLagChartData.labels.length > 0"
+                :key="`per-queue-lag-${hasExplicitQueueSelection ? 'legend' : 'nolegend'}`"
                 type="line"
                 :data="queueLagChartData"
                 :options="perQueueLagOptions"
@@ -358,6 +365,7 @@
               <h4 class="label-xs" style="margin-bottom:10px;">Partition count by Queue</h4>
               <BaseChart
                 v-if="partitionCountChartData.labels.length > 0"
+                :key="`per-queue-partitions-${hasExplicitQueueSelection ? 'legend' : 'nolegend'}`"
                 type="line"
                 :data="partitionCountChartData"
                 :options="perQueuePartitionCountOptions"
@@ -942,7 +950,7 @@
 </template>
 
 <script setup>
-import { ref, reactive, computed, onMounted } from 'vue'
+import { ref, reactive, computed, onMounted, watch } from 'vue'
 import { system } from '@/api'
 import { useRefresh } from '@/composables/useRefresh'
 import BaseChart from '@/components/BaseChart.vue'
@@ -962,6 +970,10 @@ const systemData = ref(null)
 const postgresData = ref(null)
 const queueLagData = ref(null)
 const queueOpsData = ref(null)
+// Per-replica parked breakdown (Parked tab in viewMode='individual'). Only
+// fetched when needed; null otherwise so the existing aggregate path is
+// unaffected.
+const queueParkedReplicasData = ref(null)
 const retentionData = ref(null)
 const selectedQueues = ref([])
 const selectedQueueOp = ref('pop')  // default chart: Pop/s by queue
@@ -1131,17 +1143,60 @@ const retentionChartOptions = {
 }
 
 // Per-queue ops tabs: selects which counter is plotted in the per-queue chart.
+//
+// `kind` distinguishes:
+//   - 'rate'  → value is per-second; the chart heading shows "(per second)".
+//   - 'count' → value is an absolute count over the bucket (transactions).
+//   - 'gauge' → value is a snapshot (parked long-polls); no /sec semantics.
 const queueOpTabs = [
-  { key: 'pop',  label: 'Pop/s',   activeClass: 'chip-mute', activeDot: '#8a8a92', field: 'popPerSecond',  yLabel: 'Pops/s' },
-  { key: 'push', label: 'Push/s',  activeClass: 'chip-mute', activeDot: '#e6e6e6', field: 'pushPerSecond', yLabel: 'Pushes/s' },
-  { key: 'ack',  label: 'Ack/s',   activeClass: 'chip-ok',   activeDot: '#4ade80', field: 'ackPerSecond',  yLabel: 'Acks/s' },
-  { key: 'trx',  label: 'Trx',     activeClass: 'chip-mute', activeDot: '#e6b450', field: 'transactions',  yLabel: 'Transactions' },
+  { key: 'pop',    label: 'Pop/s',   activeClass: 'chip-mute', activeDot: '#8a8a92', field: 'popPerSecond',   yLabel: 'Pops/s',     kind: 'rate'  },
+  { key: 'push',   label: 'Push/s',  activeClass: 'chip-mute', activeDot: '#e6e6e6', field: 'pushPerSecond',  yLabel: 'Pushes/s',   kind: 'rate'  },
+  { key: 'ack',    label: 'Ack/s',   activeClass: 'chip-ok',   activeDot: '#4ade80', field: 'ackPerSecond',   yLabel: 'Acks/s',     kind: 'rate'  },
+  { key: 'empty',  label: 'Empty/s', activeClass: 'chip-mute', activeDot: '#b8b8b8', field: 'emptyPerSecond', yLabel: 'Empty/s',    kind: 'rate'  },
+  { key: 'trx',    label: 'Trx',     activeClass: 'chip-mute', activeDot: '#e6b450', field: 'transactions',   yLabel: 'Transactions', kind: 'count' },
+  { key: 'parked', label: 'Parked',  activeClass: 'chip-mute', activeDot: '#7aa2f7', field: 'parkedCount',    yLabel: 'Parked',     kind: 'gauge' },
 ]
 const queueOpActive = computed(() => queueOpTabs.find(t => t.key === selectedQueueOp.value) || queueOpTabs[0])
+// Convenience flag: Parked tab + individual view mode = per-replica chart.
+const isParkedIndividual = computed(() =>
+  selectedQueueOp.value === 'parked' && viewMode.value === 'individual')
 
-const perQueuePartitionCountOptions = {
+// True when the user has explicitly picked queues via the "Filter queues"
+// MultiSelect. In that mode every per-queue chart shows the legend so the
+// user can read off which line is which. In the default "All queues" mode
+// the legend is suppressed: with dozens of queues it dominates the chart
+// area and obscures the actual data; hover-tooltips still reveal queue
+// names on demand. Lines themselves are still drawn, so the chart still
+// communicates relative activity.
+const hasExplicitQueueSelection = computed(() => selectedQueues.value.length > 0)
+
+// Tooltip behaviour shared by every per-queue chart. With "All queues"
+// selected, Chart.js will by default dump one tooltip row per dataset at
+// the hovered timestamp — that's 80+ rows when most queues are idle at
+// that bucket. Two cheap rules cut the tooltip back to the queues that
+// actually matter at that point in time:
+//   1) `filter` drops items whose value is zero — they convey nothing,
+//      and the chart line is already at y=0 so you can see them silent.
+//   2) `itemSort` orders biggest-first so the most-active queues are at
+//      the top, regardless of dataset insertion order.
+// Used as-is for the throughput / parked / partition-count charts; the
+// lag chart adds a `callbacks.label` formatter on top.
+const queueTooltipBase = {
+  filter: (item) => Number(item.parsed.y) > 0,
+  itemSort: (a, b) => Number(b.parsed.y) - Number(a.parsed.y),
+}
+
+const lagTooltip = {
+  ...queueTooltipBase,
+  callbacks: {
+    label: (ctx) => ` ${ctx.dataset.label}: ${formatDuration(ctx.parsed.y)}`
+  }
+}
+
+const perQueuePartitionCountOptions = computed(() => ({
   plugins: {
-    legend: { display: true, position: 'top', labels: { boxWidth: 12, padding: 8, font: { size: 11 } } }
+    legend: { display: hasExplicitQueueSelection.value, position: 'top', labels: { boxWidth: 12, padding: 8, font: { size: 11 } } },
+    tooltip: queueTooltipBase
   },
   scales: {
     y: {
@@ -1151,7 +1206,7 @@ const perQueuePartitionCountOptions = {
       ticks: { precision: 0 }
     }
   }
-}
+}))
 
 const partitionRateChartOptions = {
   plugins: { legend: { display: true, position: 'top', labels: { boxWidth: 12, padding: 8, font: { size: 11 } } } },
@@ -1164,28 +1219,34 @@ const partitionRateChartOptions = {
   }
 }
 
-// Per-queue chart options (legend visible to distinguish queues)
-const perQueueThroughputOptions = {
+// Per-queue chart options. The y-axis title tracks the active op tab so
+// switching from Pop/s → Parked → Trx relabels the axis instead of leaving
+// the previous unit visible. The legend follows `hasExplicitQueueSelection`
+// so it's only rendered when the user has narrowed down to a manageable
+// set of queues.
+const perQueueThroughputOptions = computed(() => ({
   plugins: {
-    legend: { display: true, position: 'top', labels: { boxWidth: 12, padding: 8, font: { size: 11 } } }
+    legend: { display: hasExplicitQueueSelection.value, position: 'top', labels: { boxWidth: 12, padding: 8, font: { size: 11 } } },
+    tooltip: queueTooltipBase
   },
   scales: {
     y: {
       beginAtZero: true,
       min: 0,
-      title: { display: true, text: 'Pops/s', font: { size: 11 } }
+      title: { display: true, text: queueOpActive.value.yLabel, font: { size: 11 } },
+      // Gauge values are typically small integers — round ticks to whole
+      // numbers when there's no fractional part to show.
+      ticks: queueOpActive.value.kind === 'gauge'
+        ? { precision: 0 }
+        : undefined
     }
   }
-}
+}))
 
-const perQueueLagOptions = {
+const perQueueLagOptions = computed(() => ({
   plugins: {
-    legend: { display: true, position: 'top', labels: { boxWidth: 12, padding: 8, font: { size: 11 } } },
-    tooltip: {
-      callbacks: {
-        label: (ctx) => ` ${ctx.dataset.label}: ${formatDuration(ctx.parsed.y)}`
-      }
-    }
+    legend: { display: hasExplicitQueueSelection.value, position: 'top', labels: { boxWidth: 12, padding: 8, font: { size: 11 } } },
+    tooltip: lagTooltip
   },
   scales: {
     y: {
@@ -1197,7 +1258,7 @@ const perQueueLagOptions = {
       }
     }
   }
-}
+}))
 
 // Per-queue chart palette — 5 distinct grey shades, cycled. We deliberately
 // avoid green / red here because queue index has no health semantics: queue
@@ -1519,6 +1580,68 @@ const buildPerQueueOpsChart = (valueAccessor) => {
 const queueOpsRateChartData = computed(() => {
   const field = queueOpActive.value.field
   return buildPerQueueOpsChart(e => e[field])
+})
+
+// Per-(queue × replica) breakdown for the Parked tab in individual mode.
+// Only computed/used when both conditions hold; otherwise the chart shows
+// queueOpsRateChartData (cluster-aggregated) like before.
+//
+// Each line is keyed "<queue> @ <hostname>:<workerId>" so a queue running
+// across N replicas yields N lines. With selectedQueues filtered to one
+// queue this gives a clean per-replica decomposition; unfiltered it can
+// get busy (which is why the user has to opt-in via viewMode).
+const queueParkedReplicaChartData = computed(() => {
+  const raw = queueParkedReplicasData.value?.series || []
+  if (!raw.length) return { labels: [], datasets: [] }
+
+  const filterQueues = selectedQueues.value.length > 0
+    ? new Set(selectedQueues.value)
+    : null
+
+  const filtered = filterQueues
+    ? raw.filter(r => filterQueues.has(r.queueName))
+    : raw
+
+  const bucketSet = new Set(filtered.map(r => r.bucket))
+  const buckets = [...bucketSet].sort()
+  const multiDay = buckets.length >= 2 &&
+    new Date(buckets[0]).toDateString() !== new Date(buckets[buckets.length - 1]).toDateString()
+  const labels = buckets.map(b => formatChartLabel(new Date(b), multiDay))
+
+  // Group by (queue, hostname, workerId). Order series alphabetically so
+  // colors are stable across refreshes.
+  const seriesKey = r => `${r.queueName}@${r.hostname}:${r.workerId}`
+  const seriesSet = new Set(filtered.map(seriesKey))
+  const series = [...seriesSet].sort()
+
+  const lookup = {}
+  for (const r of filtered) lookup[`${seriesKey(r)}|${r.bucket}`] = r
+
+  const datasets = series.map((s, i) => {
+    const color = queueColors[i % queueColors.length]
+    return {
+      label: s,
+      data: buckets.map(b => {
+        const entry = lookup[`${s}|${b}`]
+        return entry ? (Number(entry.parkedCount) || 0) : 0
+      }),
+      borderColor: color.border,
+      backgroundColor: color.bg,
+      fill: false,
+      tension: 0
+    }
+  })
+  return { labels, datasets }
+})
+
+// The chart picks per-replica data only when Parked tab is active *and* the
+// global view mode is 'individual'. Everything else stays on the existing
+// aggregate path.
+const perQueueChartData = computed(() => {
+  if (selectedQueueOp.value === 'parked' && viewMode.value === 'individual') {
+    return queueParkedReplicaChartData.value
+  }
+  return queueOpsRateChartData.value
 })
 
 // Partition count snapshot per queue (line chart over time, ~one value per minute)
@@ -1898,7 +2021,13 @@ const fetchData = async () => {
         to: to.toISOString()
       }
       
-      const [workerRes, systemRes, queueLagRes, queueOpsRes, retentionRes] = await Promise.all([
+      // The per-replica parked fetch is conditional: only meaningful when
+      // the Parked tab is active and the user has flipped into individual
+      // mode. Skipping it otherwise avoids one round-trip on every refresh.
+      const wantParkedReplicas = selectedQueueOp.value === 'parked'
+        && viewMode.value === 'individual'
+
+      const [workerRes, systemRes, queueLagRes, queueOpsRes, retentionRes, parkedReplicasRes] = await Promise.all([
         system.getWorkerMetrics(params),
         system.getSystemMetrics(params),
         system.getQueueLag(params).catch(e => {
@@ -1912,13 +2041,20 @@ const fetchData = async () => {
         system.getRetention(params).catch(e => {
           console.warn('Failed to fetch retention timeseries:', e.message)
           return { data: { series: [], totals: {} } }
-        })
+        }),
+        wantParkedReplicas
+          ? system.getQueueParkedReplicas(params).catch(e => {
+              console.warn('Failed to fetch per-replica parked metrics:', e.message)
+              return { data: { series: [], replicas: [] } }
+            })
+          : Promise.resolve({ data: null })
       ])
 
       workerData.value = workerRes.data
       systemData.value = systemRes.data
       queueLagData.value = queueLagRes.data
       queueOpsData.value = queueOpsRes.data
+      queueParkedReplicasData.value = parkedReplicasRes.data
       retentionData.value = retentionRes.data
     }
   } catch (err) {
@@ -1932,6 +2068,21 @@ const fetchData = async () => {
 useRefresh(fetchData)
 
 onMounted(fetchData)
+
+// When the user lands on Parked + individual after the initial fetch (or
+// flips between aggregate and individual without changing the time range),
+// kick a refetch so the per-replica series shows up without waiting for the
+// global refresh tick. Watcher is intentionally narrow: only re-runs when
+// either the active op or the view mode actually changes.
+watch([selectedQueueOp, viewMode], ([op, mode], [prevOp, prevMode]) => {
+  // Skip the initial run; onMounted already fetched.
+  if (op === prevOp && mode === prevMode) return
+  // Only refetch when transitioning into Parked+individual (we need new
+  // data) or out of it (we want to release the per-replica payload).
+  const wasIndividualParked = prevOp === 'parked' && prevMode === 'individual'
+  const isIndividualParked  = op === 'parked' && mode === 'individual'
+  if (wasIndividualParked !== isIndividualParked) fetchData()
+})
 </script>
 
 <style scoped>
