@@ -118,6 +118,17 @@
   Read-only users see metrics and message contents but can't delete queues or replay
   DLQ entries; admins get the full destructive surface.
 </p>
+<p class="muted">
+  Queen itself only speaks <strong>Bearer JWT</strong>, there is no built-in
+  username/password login form. If you want a human-friendly login page in front
+  of the dashboard (and your Queen API, on the same hostname), put
+  <a href="server.html#proxy"><code>queen-mq-proxy</code></a> in front of it.
+  The proxy gives you a login UI, manages users in a <code>queen_proxy</code> schema
+  on the same PostgreSQL Queen already uses, and either issues HS256 cookies
+  internally or accepts external SSO tokens via JWKS passthrough &mdash; the
+  Queen server only ever sees a validated <code>Authorization: Bearer</code>
+  header.
+</p>
 
 </main>
 

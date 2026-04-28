@@ -228,6 +228,22 @@ await queen.queue('test-queue')
         <p>Pushes are written to a local file buffer when PostgreSQL is unreachable, then replayed automatically when it recovers. No lost messages.</p>
       </div>
     </div>
+
+    <div class="callout callout-info" style="margin-top: 18px;">
+      <div class="callout-title">Same grammar, five languages.</div>
+      <p style="margin: 0;">
+        The example above is JavaScript, but every Queen client speaks the same fluent verbs:
+        <code>queue(name).partition(p).group(g).push() / .pop() / .consume()</code>.
+        All shipping today, not on a roadmap:
+        <strong>JavaScript</strong> (Node 22+ &amp; browser, <code>npm install queen-mq</code>) ·
+        <strong>Python</strong> (3.8+, <code>pip install queen-mq</code>) ·
+        <strong>Go</strong> (1.24+) ·
+        <strong>PHP / Laravel</strong> (8.1+, <code>composer require smartpricing/queen-mq</code>) ·
+        <strong>C++</strong> (header-only, C++17).
+        Or skip SDKs entirely and call the <a href="http-api.html">raw HTTP API</a>.
+        <a href="clients.html">See the full matrix &rarr;</a>
+      </p>
+    </div>
   </div>
 </section>
 
@@ -281,6 +297,16 @@ await queen.queue('test-queue')
         <div class="card-eyebrow">Operate</div>
         <h3>Vue 3 dashboard</h3>
         <p>Real-time queues, message browser, analytics, trace explorer, DLQ management, all served by the same C++ binary.</p>
+      </a>
+      <a class="card" href="architecture.html#data-model">
+        <div class="card-eyebrow">Postgres health</div>
+        <h3>Bloat &amp; vacuuming, addressed by design</h3>
+        <p>Update-heavy tables ship with <code>FILLFACTOR=50</code> and tuned autovacuum knobs to stay HOT-update-friendly. Advisory locks replace row contention on the hot path. Retention windows on <code>messages_consumed</code> keep the message log bounded.</p>
+      </a>
+      <a class="card" href="server.html#k8s">
+        <div class="card-eyebrow">High availability</div>
+        <h3>Single container, or K8s StatefulSet</h3>
+        <p>One Docker container is enough for most setups. For HA, run a StatefulSet behind a headless service: pods coordinate via UDP peer wake-ups and the UDPSYNC shared-state cache, with affinity routing in the clients.</p>
       </a>
     </div>
   </div>

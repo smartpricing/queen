@@ -55,6 +55,7 @@
   <a href="#postgres">PostgreSQL</a>
   <a href="#env">Environment variables</a>
   <a href="#auth">JWT authentication</a>
+  <a href="#proxy">Auth proxy</a>
   <a href="#cluster">Multi-instance cluster</a>
   <a href="#k8s">Kubernetes</a>
   <a href="#tuning">High-throughput tuning</a>
@@ -181,6 +182,252 @@ export JWT_AUDIENCE=queen-api</code></pre>
   </p>
 </div>
 
+<!-- ============== PROXY ============== -->
+<h2 id="proxy">Auth proxy &mdash; login over the dashboard</h2>
+<p class="muted">
+  The Queen server speaks <strong>Bearer JWT only</strong>, there is no built-in
+  username/password login form. For machine traffic that's exactly what you want.
+  But the Vue 3 dashboard is served from the same port, and you usually want a
+  human-friendly login page in front of it. That's what
+  <a href="https://github.com/smartpricing/queen/tree/master/proxy">queen-mq-proxy</a>
+  is for.
+</p>
+<p class="muted">
+  It's a small Node.js (Express) reverse proxy that sits in front of Queen, gives
+  you a login page, validates credentials, mints a short-lived HS256 JWT into an
+  HTTP-only cookie, and forwards every authenticated request to Queen with
+  <code>Authorization: Bearer &lt;jwt&gt;</code>. It also supports
+  <strong>SSO passthrough</strong>: point it at an external IDP's JWKS URL and it
+  will accept your existing RS256 / EdDSA tokens and pass them through to Queen
+  unchanged. Users live in a <code>queen_proxy</code> schema on the same
+  PostgreSQL Queen already uses, so there is no extra database to operate.
+</p>
+<p class="muted">
+  Topology: <code>browser &rarr; <strong>queen-mq-proxy</strong> (:3000) &rarr; queen-mq (:6632)</code>.
+  The proxy also strips oversized <code>cookie</code> / <code>referer</code> headers
+  before forwarding, which avoids &ldquo;Request Header Fields Too Large&rdquo;
+  errors from Queen on long-running browser sessions.
+</p>
+
+<h3>Run with Docker</h3>
+<div class="code-meta-wrap with-copy">
+  <div class="code-meta"><span>shell, alongside Queen</span><button class="copy-btn" type="button">copy</button></div>
+<pre><code class="language-bash">docker run -d --name queen-proxy --network queen \
+  -p 3000:3000 \
+  -e PG_HOST=qpg \
+  -e PG_DB=postgres \
+  -e PG_USER=postgres \
+  -e PG_PASSWORD=postgres \
+  -e QUEEN_SERVER_URL=http://queen:6632 \
+  -e JWT_SECRET=$(openssl rand -hex 32) \
+  -e JWT_EXPIRES_IN=24h \
+  -e NODE_ENV=production \
+  smartnessai/queen-mq-proxy:latest
+
+# Create the first admin user (interactive prompts).
+docker exec -it queen-proxy node src/create-user.js</code></pre>
+</div>
+<p class="muted">
+  Open <a href="http://localhost:3000/login"><code>http://localhost:3000/login</code></a>,
+  log in, and you'll land on the dashboard at <code>/</code>. The
+  <code>queen_proxy.users</code> and <code>queen_proxy.sessions</code> tables are
+  created automatically on first start.
+</p>
+
+<h3>Roles &amp; method gating</h3>
+<p class="muted">
+  The proxy enforces role-based method access on top of whatever Queen itself does:
+</p>
+<table>
+  <thead>
+    <tr><th>Role</th><th>Allowed HTTP methods</th><th>Use case</th></tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td><code>admin</code></td>
+      <td>All methods</td>
+      <td>Operators. Full read/write/destroy.</td>
+    </tr>
+    <tr>
+      <td><code>read-write</code></td>
+      <td><code>GET</code>, <code>POST</code>, <code>PUT</code>, <code>DELETE</code></td>
+      <td>Standard developer access.</td>
+    </tr>
+    <tr>
+      <td><code>read-only</code></td>
+      <td><code>GET</code> only</td>
+      <td>Monitoring / read-only dashboard users.</td>
+    </tr>
+  </tbody>
+</table>
+<p class="muted">
+  The CLI (<code>src/create-user.js</code>) can also mint a long-lived bearer token
+  at user creation time (<code>24h</code> / <code>7d</code> / <code>30d</code> /
+  <code>1y</code> / <code>never</code>), useful for service accounts that hit the
+  proxy from CI or microservices.
+</p>
+
+<h3>SSO passthrough (optional)</h3>
+<p class="muted">
+  Set <code>EXTERNAL_JWKS_URL</code> and the proxy will verify incoming bearer
+  tokens against your IDP's JWKS (RS256, EdDSA, etc.), normalize the claims
+  (<code>sub</code>, <code>preferred_username</code>, <code>roles</code>), and pass
+  the original token through to Queen unchanged. This way a single token works
+  across the proxy and the API, and you don't run a parallel user database for
+  humans who already authenticate against your IDP.
+</p>
+
+<div class="code-meta-wrap with-copy">
+  <div class="code-meta"><span>SSO env</span><button class="copy-btn" type="button">copy</button></div>
+<pre><code class="language-bash">export EXTERNAL_JWKS_URL=https://idp.example.com/.well-known/jwks.json
+export EXTERNAL_ISSUER=https://idp.example.com
+export EXTERNAL_AUDIENCE=queen-mq</code></pre>
+</div>
+
+<p class="muted">
+  Internal-token verification still works in parallel; the proxy tries the
+  external token first, falls back to the internal HS256 cookie if the external
+  verification fails. Useful while migrating users.
+</p>
+
+<h3>Helm chart</h3>
+<p class="muted">
+  Deploy as a sibling release to <code>queen-mq</code> in the same namespace. The
+  chart we run lives at
+  <a href="https://github.com/smartpricing/queen/tree/master/proxy/helm">proxy/helm/</a>;
+  it ships a StatefulSet, a ClusterIP Service, an HTTPRoute (Gateway API), and a
+  GKE HealthCheckPolicy hitting <code>/health/ready</code>.
+</p>
+
+<div class="code-meta-wrap with-copy">
+  <div class="code-meta"><span>proxy/helm/values-prod.yaml</span><button class="copy-btn" type="button">copy</button></div>
+<pre><code class="language-yaml">replicas: 2
+
+image: smartnessai/queen-mq-proxy
+imageTag: 0.0.13
+
+# External hostname routed to the proxy via the Gateway API.
+proxyHostName: queen.example.com
+
+resources:
+  limits:    { memory: 200Mi }
+  requests:  { memory: 200Mi }</code></pre>
+</div>
+
+<div class="code-meta-wrap with-copy">
+  <div class="code-meta"><span>proxy/helm/templates/statefulset.yaml (excerpt)</span><button class="copy-btn" type="button">copy</button></div>
+<pre><code class="language-yaml">apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{ .Release.Name }}
+  namespace: {{ .Release.Namespace }}
+  labels: { run: {{ .Release.Name }} }
+spec:
+  replicas: {{ .Values.replicas }}
+  selector:
+    matchLabels: { run: {{ .Release.Name }} }
+  template:
+    metadata:
+      labels: { run: {{ .Release.Name }} }
+    spec:
+      terminationGracePeriodSeconds: 5
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: kubernetes.io/hostname
+          whenUnsatisfiable: ScheduleAnyway
+          labelSelector:
+            matchLabels: { run: {{ .Release.Name }} }
+      containers:
+        - name: proxy
+          image: {{ .Values.image }}:{{ .Values.imageTag }}
+          imagePullPolicy: Always
+          ports:
+            - { containerPort: 3000, protocol: TCP }
+          resources: {{- toYaml .Values.resources | nindent 12 }}
+          envFrom:
+            - secretRef: { name: postgres-queen-owner }   # PG creds
+            - secretRef: { name: queen-mq-proxy }         # JWT_SECRET, optional EXTERNAL_*
+          env:
+            - { name: PG_DB,            value: queen }
+            - name: QUEEN_SERVER_URL
+              value: http://queen-mq.{{ .Release.Namespace }}.svc.cluster.local:6632</code></pre>
+</div>
+
+<p class="muted">
+  An <code>HTTPRoute</code> (Gateway API) maps <code>{{ .Values.proxyHostName }}</code>
+  to the proxy's port 3000, and a <code>HealthCheckPolicy</code> probes
+  <code>/health/ready</code>. Apply, then bootstrap the first admin user from
+  inside a running pod:
+</p>
+
+<div class="code-meta-wrap with-copy">
+  <div class="code-meta"><span>install + bootstrap</span><button class="copy-btn" type="button">copy</button></div>
+<pre><code class="language-bash">helm template queen-mq-proxy ./proxy/helm \
+  -f ./proxy/helm/prod.yaml \
+  --namespace queen | kubectl apply -n queen -f -
+
+kubectl exec -n queen -it queen-mq-proxy-0 -- node src/create-user.js</code></pre>
+</div>
+
+<h3>Environment variables</h3>
+<table>
+  <thead>
+    <tr><th>Variable</th><th>Default</th><th>Notes</th></tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td><code>PG_HOST</code> / <code>PG_PORT</code> / <code>PG_DB</code></td>
+      <td><code>localhost</code> / <code>5432</code> / <code>postgres</code></td>
+      <td>Same convention as the Queen server. Schema <code>queen_proxy</code> is created on first start.</td>
+    </tr>
+    <tr>
+      <td><code>PG_USER</code> / <code>PG_PASSWORD</code></td>
+      <td><code>postgres</code> / <code>postgres</code></td>
+      <td>Use <code>envFrom</code> + a Kubernetes Secret in production.</td>
+    </tr>
+    <tr>
+      <td><code>PG_USE_SSL</code></td>
+      <td>off</td>
+      <td>Set to any non-empty value to enable TLS to PostgreSQL.</td>
+    </tr>
+    <tr>
+      <td><code>QUEEN_SERVER_URL</code></td>
+      <td><code>http://localhost:8080</code></td>
+      <td>Where authenticated traffic is forwarded.</td>
+    </tr>
+    <tr>
+      <td><code>JWT_SECRET</code></td>
+      <td>&mdash;</td>
+      <td><strong>Required</strong>. HS256 secret for internally-issued tokens. Generate with <code>openssl rand -hex 32</code>.</td>
+    </tr>
+    <tr>
+      <td><code>JWT_EXPIRES_IN</code></td>
+      <td><code>24h</code></td>
+      <td>Use <code>'never'</code> for service-account tokens minted via the CLI.</td>
+    </tr>
+    <tr>
+      <td><code>EXTERNAL_JWKS_URL</code></td>
+      <td>&mdash;</td>
+      <td>Optional. Enables SSO passthrough against this IDP.</td>
+    </tr>
+    <tr>
+      <td><code>EXTERNAL_ISSUER</code> / <code>EXTERNAL_AUDIENCE</code></td>
+      <td>&mdash;</td>
+      <td>Optional. Validate <code>iss</code> / <code>aud</code> claims on external tokens.</td>
+    </tr>
+    <tr>
+      <td><code>PORT</code></td>
+      <td><code>3000</code></td>
+      <td>Listen port.</td>
+    </tr>
+    <tr>
+      <td><code>NODE_ENV</code></td>
+      <td><code>development</code></td>
+      <td>Set to <code>production</code> to enable the <code>Secure</code> cookie flag.</td>
+    </tr>
+  </tbody>
+</table>
+
 <!-- ============== CLUSTER ============== -->
 <h2 id="cluster">Multi-instance cluster (UDP sync)</h2>
 <p class="muted">
@@ -217,32 +464,196 @@ export QUEEN_UDP_PEERS="queen-a:6633,queen-b:6633"</code></pre>
 <!-- ============== K8S ============== -->
 <h2 id="k8s">Kubernetes</h2>
 <p class="muted">
-  A reference Helm chart and a plain manifest live in the repo:
-  <a href="https://github.com/smartpricing/queen/tree/master/helm">helm/</a> ·
+  We run Queen MQ on Kubernetes as a <code>StatefulSet</code> + headless
+  <code>Service</code>. The chart we run in production lives at
+  <a href="https://github.com/smartpricing/queen/tree/master/helm">helm/</a>; a flat
+  manifest is at
   <a href="https://github.com/smartpricing/queen/blob/master/server/k8s-example.yaml">server/k8s-example.yaml</a>.
-  For the UDP sync layer, run as a <code>StatefulSet</code> with a headless service so
-  pods get stable DNS:
+  The headless service gives each pod a stable DNS name, which is what the UDP sync
+  layer needs to find its peers, and what client-side affinity routing keys off.
+</p>
+
+<h3>values.yaml &mdash; production</h3>
+<p class="muted">
+  The actual values file we ship in production: 3 replicas, peer DNS via the headless
+  service, libqueen knobs raised for a 16+ core PostgreSQL.
 </p>
 
 <div class="code-meta-wrap with-copy">
-  <div class="code-meta"><span>StatefulSet env (excerpt)</span><button class="copy-btn" type="button">copy</button></div>
-<pre><code class="language-yaml">env:
-  - name: PG_HOST
-    value: postgres-rw.db.svc.cluster.local
-  - name: PG_USER
-    valueFrom: { secretKeyRef: { name: queen-db, key: user } }
-  - name: PG_PASSWORD
-    valueFrom: { secretKeyRef: { name: queen-db, key: password } }
-  - name: NUM_WORKERS
-    value: "10"
-  - name: DB_POOL_SIZE
-    value: "150"
-  - name: QUEEN_UDP_PEERS
-    value: "queen-mq-0.queen-mq-headless.default.svc.cluster.local:6633,queen-mq-1.queen-mq-headless.default.svc.cluster.local:6633"
-  - name: QUEEN_UDP_NOTIFY_PORT
-    value: "6633"
-  - name: QUEEN_SYNC_SECRET
-    valueFrom: { secretKeyRef: { name: queen-sync, key: secret } }</code></pre>
+  <div class="code-meta"><span>helm/values-prod.yaml</span><button class="copy-btn" type="button">copy</button></div>
+<pre><code class="language-yaml">replicas: 3
+
+image: smartnessai/queen-mq
+imageTag: 0.14.0
+
+# Postgres database. Queen owns its schema and stored procedures.
+db: queen
+dbPoolSize: 10
+sidecarPoolSize: 30
+
+numWorkers: 1
+logLevel: info
+
+# Pop pacing (long-poll backoff).
+popWaitInitialIntervalMs: 1000
+popWaitBackoffThreshold: 1
+popWaitBackoffMultiplier: 5.0
+popWaitMaxIntervalMs: 10000
+
+# Retention.
+partitionCleanupDays: 7
+retentionBatchSize: 1000
+retentionInterval: 600000
+
+# libqueen tuning (PG cluster >= 16 cores). See LIBQUEEN_TUNING.md.
+queenPushMaxConcurrent: 24
+queenAckMaxConcurrent: 16
+queenPopMaxConcurrent: 16
+queenVegasMaxLimit: 32
+queenVegasBeta: 12
+queenPushPreferredBatchSize: 50
+queenPushMaxHoldMs: 20
+queenPushMaxBatchSize: 500
+
+# UDP peer sync (StatefulSet pod DNS via headless service).
+udpPeers: queen-mq-0.queen-mq-headless.queen.svc.cluster.local,queen-mq-1.queen-mq-headless.queen.svc.cluster.local,queen-mq-2.queen-mq-headless.queen.svc.cluster.local
+udpNotifyPort: 6633
+
+# PVC per pod &mdash; holds the disk push-buffer for PG-down failover.
+storageSize: 10Gi
+
+resources:
+  limits:    { memory: 1000Mi }
+  requests:  { memory: 1000Mi }</code></pre>
+</div>
+
+<h3>StatefulSet template</h3>
+<p class="muted">
+  One container per pod. Probes hit <code>/health</code> on 6632 (HTTP); the pod also
+  listens on UDP <code>{{ .Values.udpNotifyPort }}</code> for peer wake-ups. A PVC
+  mounted at <code>/var/lib/queen/buffers</code> holds the disk push-buffer if
+  PostgreSQL goes away. Postgres credentials and JWT/encryption secrets are pulled
+  via <code>envFrom</code>, never templated into the manifest.
+</p>
+
+<div class="code-meta-wrap with-copy">
+  <div class="code-meta"><span>helm/templates/statefulset.yaml (excerpt)</span><button class="copy-btn" type="button">copy</button></div>
+<pre><code class="language-yaml">apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{ .Release.Name }}
+  namespace: {{ .Release.Namespace }}
+  labels: { run: {{ .Release.Name }} }
+spec:
+  replicas: {{ .Values.replicas }}
+  serviceName: {{ .Release.Name }}-headless
+  selector:
+    matchLabels: { run: {{ .Release.Name }} }
+  template:
+    metadata:
+      labels: { run: {{ .Release.Name }} }
+    spec:
+      terminationGracePeriodSeconds: 40
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: kubernetes.io/hostname
+          whenUnsatisfiable: ScheduleAnyway
+          labelSelector:
+            matchLabels: { run: {{ .Release.Name }} }
+      containers:
+        - name: queen
+          image: {{ .Values.image }}:{{ .Values.imageTag }}
+          imagePullPolicy: Always
+          command: ['./bin/queen-server']
+          ports:
+            - { containerPort: 6632, protocol: TCP }
+            - { containerPort: {{ .Values.udpNotifyPort }}, protocol: UDP }
+          volumeMounts:
+            - { mountPath: /var/lib/queen/buffers, name: buffers }
+          resources: {{- toYaml .Values.resources | nindent 12 }}
+          startupProbe:   { httpGet: { path: /health, port: 6632 }, periodSeconds: 5,  failureThreshold: 12 }
+          livenessProbe:  { httpGet: { path: /health, port: 6632 }, periodSeconds: 10, failureThreshold: 3  }
+          readinessProbe: { httpGet: { path: /health, port: 6632 }, periodSeconds: 5,  failureThreshold: 3  }
+          envFrom:
+            - secretRef: { name: queen-prod }            # JWT, encryption keys
+            - secretRef: { name: postgres-queen-owner }  # PG creds
+          env:
+            - { name: PG_DB,                     value: "{{ .Values.db }}" }
+            - { name: NUM_WORKERS,               value: "{{ .Values.numWorkers }}" }
+            - { name: DB_POOL_SIZE,              value: "{{ .Values.dbPoolSize }}" }
+            - { name: SIDECAR_POOL_SIZE,         value: "{{ .Values.sidecarPoolSize }}" }
+            - { name: LOG_LEVEL,                 value: "{{ .Values.logLevel }}" }
+            - { name: PARTITION_CLEANUP_DAYS,    value: "{{ .Values.partitionCleanupDays }}" }
+            - { name: RETENTION_INTERVAL,        value: "{{ .Values.retentionInterval }}" }
+            # libqueen adaptive engine
+            - { name: QUEEN_PUSH_MAX_CONCURRENT, value: "{{ .Values.queenPushMaxConcurrent }}" }
+            - { name: QUEEN_ACK_MAX_CONCURRENT,  value: "{{ .Values.queenAckMaxConcurrent }}"  }
+            - { name: QUEEN_POP_MAX_CONCURRENT,  value: "{{ .Values.queenPopMaxConcurrent }}"  }
+            - { name: QUEEN_VEGAS_MAX_LIMIT,     value: "{{ .Values.queenVegasMaxLimit }}"     }
+            # UDP sync layer
+            - { name: QUEEN_SYNC_ENABLED,        value: "true" }
+            - { name: QUEEN_UDP_PEERS,           value: "{{ .Values.udpPeers }}" }
+            - { name: QUEEN_UDP_NOTIFY_PORT,     value: "{{ .Values.udpNotifyPort }}" }
+            - name: QUEEN_SYNC_SECRET
+              valueFrom: { secretKeyRef: { name: queen-sync, key: secret } }
+  volumeClaimTemplates:
+    - metadata: { name: buffers }
+      spec:
+        accessModes: [ReadWriteOnce]
+        resources: { requests: { storage: {{ .Values.storageSize }} } }
+        storageClassName: standard-rwo</code></pre>
+</div>
+
+<h3>Service: ClusterIP + headless</h3>
+<p class="muted">
+  Two services. The <strong>ClusterIP</strong> is what your apps hit;
+  <code>sessionAffinity: ClientIP</code> keeps related calls (push then pop, ack
+  chains) on the same pod, which plays nicely with the per-pod partition-id LRU. The
+  <strong>headless service</strong> gives each pod the stable
+  <code>queen-mq-N.queen-mq-headless.&lt;ns&gt;.svc.cluster.local</code> name the
+  UDP peer list points at.
+</p>
+
+<div class="code-meta-wrap with-copy">
+  <div class="code-meta"><span>helm/templates/service.yaml</span><button class="copy-btn" type="button">copy</button></div>
+<pre><code class="language-yaml">---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ .Release.Name }}
+  namespace: {{ .Release.Namespace }}
+spec:
+  selector: { run: {{ .Release.Name }} }
+  sessionAffinity: ClientIP
+  sessionAffinityConfig:
+    clientIP: { timeoutSeconds: 300 }
+  ports:
+    - { name: http, port: 6632, targetPort: 6632, protocol: TCP }
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ .Release.Name }}-headless
+  namespace: {{ .Release.Namespace }}
+spec:
+  clusterIP: None
+  selector: { run: {{ .Release.Name }} }
+  ports:
+    - { name: http,       port: 6632,                       targetPort: 6632,                       protocol: TCP }
+    - { name: udp-notify, port: {{ .Values.udpNotifyPort }}, targetPort: {{ .Values.udpNotifyPort }}, protocol: UDP }</code></pre>
+</div>
+
+<p class="muted">
+  We render and apply with vanilla <code>helm template</code>, no Tiller, no chart
+  hub:
+</p>
+
+<div class="code-meta-wrap with-copy">
+  <div class="code-meta"><span>install</span><button class="copy-btn" type="button">copy</button></div>
+<pre><code class="language-bash">helm template queen-mq ./helm \
+  -f ./helm/prod.yaml \
+  --namespace queen | kubectl apply -n queen -f -</code></pre>
 </div>
 
 <!-- ============== TUNING ============== -->
