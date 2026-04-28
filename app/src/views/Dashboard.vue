@@ -1,271 +1,362 @@
 <template>
   <div class="view-container">
 
-    <!-- Range selector + active-queue filter chip -->
-    <div style="display:flex; align-items:center; gap:12px; margin-bottom:20px; flex-wrap:wrap;">
+    <!--
+      ========================================================================
+      Top bar — range, autorefresh, drilldown chip, last-refresh ticker.
+      One slim row, no legend (per-row sparklines are self-evident).
+      ========================================================================
+    -->
+    <div class="dash-bar">
       <div class="seg">
-        <button v-for="r in timeRanges" :key="r.value" :class="{ on: selectedRange === r.value }" @click="selectedRange = r.value">{{ r.label }}</button>
+        <button
+          v-for="r in timeRanges"
+          :key="r.value"
+          :class="{ on: selectedRange === r.value }"
+          @click="selectedRange = r.value"
+        >{{ r.label }}</button>
       </div>
-      <div style="display:flex; align-items:center; gap:8px; font-size:11px; font-family:'JetBrains Mono',monospace; color:var(--text-mid);">
-        <span class="pulse" /> live · 30s autorefresh
+
+      <div class="dash-live">
+        <span class="pulse" />
+        <span>live · 30s autorefresh</span>
       </div>
-      <!-- Filter chip: appears when operator drilled into a single queue. Click
-           × to clear; charts snap back to system-wide view. -->
-      <button
-        v-if="filterQueue"
-        class="filter-chip"
-        @click="clearQueueFilter"
-        title="Clear queue filter"
-      >
-        <span>filtered by</span>
-        <span class="filter-chip-queue">{{ filterQueue }}</span>
-        <span class="filter-chip-x">×</span>
+
+      <div class="dash-bar-right">
+        <button
+          class="dash-master-toggle"
+          @click="toggleAllRows"
+          :title="anyExpanded ? 'Collapse every metric chart' : 'Expand every metric into a full chart'"
+        >
+          <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+            <!-- Two stacked rows + chevrons. Up-pointing chevrons when
+                 anything is expanded (so click "lifts up" / collapses);
+                 down-pointing when collapsed (click "drops down" / expands). -->
+            <path :d="anyExpanded ? 'M3 7l5-3 5 3M3 11l5-3 5 3' : 'M3 5l5 3 5-3M3 9l5 3 5-3'" />
+          </svg>
+          <span>{{ anyExpanded ? 'Collapse all' : 'Expand all' }}</span>
+        </button>
+        <span class="dash-refresh-tick">last refresh {{ refreshAgo }}</span>
+      </div>
+    </div>
+
+    <!--
+      ========================================================================
+      Counts strip — replaces the four hero MetricCards. One scannable line
+      of "what we're observing", with the clickable counts linking to their
+      list view. The pending count is the only number with a threshold tone.
+      ========================================================================
+    -->
+    <div class="counts-strip">
+      <button class="count-item" @click="$router.push('/messages')" :disabled="loadingOverview">
+        <strong>{{ formatNumber(overview?.messages?.total || 0) }}</strong>
+        <span>messages</span>
       </button>
-      <div style="margin-left:auto; display:flex; gap:12px;">
-        <div class="legend"><span class="sw" style="background:#e6e6e6;"></span> produced</div>
-        <div class="legend"><span class="sw" style="background:#8a8a92;"></span> consumed</div>
-      </div>
+      <span class="count-sep">·</span>
+      <button class="count-item" @click="$router.push('/queues')" :disabled="loadingQueues">
+        <strong>{{ formatNumber(overview?.queues || 0) }}</strong>
+        <span>queues</span>
+      </button>
+      <span class="count-sep">·</span>
+      <span class="count-item count-static">
+        <strong>{{ formatNumber(totalPartitions) }}</strong>
+        <span>partitions</span>
+      </span>
+      <span class="count-sep">·</span>
+      <button class="count-item" @click="$router.push('/consumers')" :disabled="loadingConsumers">
+        <strong>{{ formatNumber(consumers?.length || 0) }}</strong>
+        <span>consumer groups</span>
+      </button>
+      <span class="count-sep">·</span>
+      <span class="count-item count-static">
+        <strong class="num" :class="pendingNumClass(overview?.messages?.pending)">{{ formatNumber(Math.max(0, overview?.messages?.pending || 0)) }}</strong>
+        <span>pending</span>
+      </span>
+      <span class="count-sep">·</span>
+      <span class="count-item count-static count-muted">
+        <strong>{{ formatNumber(overview?.messages?.completed || 0) }}</strong>
+        <span>completed</span>
+      </span>
     </div>
 
-    <!-- STAT CARDS -->
-    <div class="grid-4" style="margin-bottom:20px;">
-      <MetricCard label="Messages" :value="overview?.messages?.total || 0" :subtext="`${formatNumber(totalPartitions)} partitions · ${formatNumber(overview?.messages?.completed || 0)} completed`" :icon="QueuesIcon" icon-color="ice" :loading="loadingOverview" clickable @click="$router.push('/messages')" />
-      <MetricCard label="Pending" :value="Math.max(0, overview?.messages?.pending || 0)" :subtext="`across ${overview?.queues || 0} queues`" :icon="PendingIcon" icon-color="crown" :loading="loadingOverview" />
-      <MetricCard label="Consumer groups" :value="consumers?.length || 0" :icon="ConsumersIcon" icon-color="crown" :loading="loadingConsumers" clickable @click="$router.push('/consumers')" />
-      <MetricCard label="Throughput" :value="throughput.current" format="raw" unit=" msg/s" :trend="throughput.trend" :loading="loadingStatus" />
+    <!--
+      ========================================================================
+      Metric table — the heart of the redesign. Nine rows, each carries:
+        dot · label · value+unit · context · sparkline.
+      Color only fires when a row crosses its threshold; the eye scans the
+      dot column and stops on the first non-grey one. Order is by operator
+      priority (flow → health → admin), not by code structure.
+      ========================================================================
+    -->
+    <div class="metric-table">
+      <div class="metric-head">
+        <span></span>
+        <span>Metric</span>
+        <span class="h-value">Now</span>
+        <span>Context</span>
+        <span class="h-spark">{{ selectedRange }}</span>
+        <span></span>
+      </div>
+
+      <!-- Flow -->
+      <MetricRow
+        label="Throughput"
+        :value="throughput.current"
+        unit="/s"
+        :context="throughputContext"
+        :series="throughputSeries"
+        :labels="chartLabels"
+        :value-format="fmtRate"
+        expand-unit="msgs / sec"
+        :loading="loadingStatus"
+        :expanded="isExpanded('throughput')"
+        @toggle-expand="toggleRow('throughput')"
+      />
+      <MetricRow
+        label="Pending Δ"
+        :value="pendingDeltaDisplay"
+        unit="msgs"
+        :context="pendingDeltaContext"
+        :sparkline="pendingDeltaSeries"
+        :labels="chartLabels"
+        :value-format="fmtCount"
+        expand-unit="msgs (cumulative)"
+        :severity="pendingDeltaSeverity"
+        :loading="loadingStatus"
+        tooltip="Cumulative (push − ack) over the selected window. Positive = falling behind, negative = catching up."
+        :expanded="isExpanded('pendingDelta')"
+        @toggle-expand="toggleRow('pendingDelta')"
+      />
+      <MetricRow
+        label="Time lag"
+        :context="'avg / max p99 across consumer groups'"
+        :series="lagSeriesData"
+        :labels="chartLabels"
+        :value-format="fmtLagMs"
+        expand-unit="ms"
+        :severity="lagSeverity"
+        :loading="loadingOverview"
+        :expanded="isExpanded('timeLag')"
+        @toggle-expand="toggleRow('timeLag')"
+      >
+        <template #value>
+          <span class="num" :class="lagNumClass(overview?.lag?.time?.avg)">{{ formatDuration(overview?.lag?.time?.avg || 0) }}</span>
+          <span class="mr-sep">/</span>
+          <span class="num" :class="lagNumClass(overview?.lag?.time?.max)">{{ formatDuration(overview?.lag?.time?.max || 0) }}</span>
+        </template>
+      </MetricRow>
+
+      <!-- Health -->
+      <MetricRow
+        label="Errors"
+        :value="formatNumber(errorTotal)"
+        :context="errorContext"
+        :series="errorSeriesData"
+        :labels="chartLabels"
+        :value-format="fmtCount"
+        expand-unit="count"
+        :severity="errorSeverity"
+        :clickable="errorTotal > 0"
+        @click="$router.push('/dlq')"
+        :loading="loadingStatus"
+        :expanded="isExpanded('errors')"
+        @toggle-expand="toggleRow('errors')"
+      />
+      <MetricRow
+        label="Event loop"
+        :context="`${workerCount || 0} worker${workerCount === 1 ? '' : 's'} · avg / max`"
+        :series="elSeriesData"
+        :labels="chartLabels"
+        :value-format="(v) => v + ' ms'"
+        expand-unit="ms"
+        :severity="elNumClass(maxEventLoopLag)"
+        :loading="loadingStatus"
+        :expanded="isExpanded('eventLoop')"
+        @toggle-expand="toggleRow('eventLoop')"
+      >
+        <template #value>
+          <span class="num" :class="elNumClass(avgEventLoopLag)">{{ avgEventLoopLag }}<i class="mr-unit">ms</i></span>
+          <span class="mr-sep">/</span>
+          <span class="num" :class="elNumClass(maxEventLoopLag)">{{ maxEventLoopLag }}<i class="mr-unit">ms</i></span>
+        </template>
+      </MetricRow>
+      <MetricRow
+        label="Queen CPU"
+        :value="cpuLatest.toFixed(1)"
+        unit="%"
+        :context="cpuContext"
+        :series="cpuSeriesData"
+        :labels="chartLabels"
+        :value-format="(v) => v.toFixed(1) + '%'"
+        expand-unit="%"
+        :loading="loadingStatus"
+        :expanded="isExpanded('cpu')"
+        @toggle-expand="toggleRow('cpu')"
+      />
+      <MetricRow
+        label="DB pool"
+        :context="poolContext"
+        :series="poolSeriesData"
+        :labels="chartLabels"
+        :value-format="(v) => Math.round(v) + ' conns'"
+        expand-unit="connections"
+        :severity="poolSeverity"
+        :loading="loadingStatus"
+        :expanded="isExpanded('dbPool')"
+        @toggle-expand="toggleRow('dbPool')"
+      >
+        <template #value>
+          <span class="num" :class="poolSeverity">{{ poolLatest?.active ?? 0 }}</span>
+          <span class="mr-sep">/</span>
+          <span class="num">{{ poolLatest?.size ?? '—' }}</span>
+          <i class="mr-unit">conns</i>
+        </template>
+      </MetricRow>
+
+      <!-- Admin -->
+      <MetricRow
+        label="Partitions"
+        :context="'created / deleted in window'"
+        :series="partitionSeriesData"
+        :labels="partitionLabels"
+        :value-format="fmtCount"
+        expand-unit="count"
+        :expanded="isExpanded('partitions')"
+        @toggle-expand="toggleRow('partitions')"
+      >
+        <template #value>
+          <span class="num" style="color:var(--text-hi);">+{{ formatNumber(partitionCreatedTotal) }}</span>
+          <span class="mr-sep">/</span>
+          <span class="num mute">−{{ formatNumber(partitionDeletedTotal) }}</span>
+        </template>
+      </MetricRow>
+      <MetricRow
+        label="Retention"
+        :value="formatNumber(retentionTotal)"
+        unit="msgs"
+        context="evicted + completed-retention in window"
+        :series="retentionSeriesData"
+        :labels="retentionLabels"
+        :value-format="fmtCount"
+        expand-unit="msgs"
+        :expanded="isExpanded('retention')"
+        @toggle-expand="toggleRow('retention')"
+      />
+      <MetricRow
+        label="Batch efficiency"
+        :context="'push · pop · ack — average rows per batch (higher = healthier)'"
+        :sparkline="[]"
+        :expanded="isExpanded('batchEff')"
+        @toggle-expand="toggleRow('batchEff')"
+      >
+        <template #value>
+          <span class="num">{{ batchEfficiency.push }}</span>
+          <span class="mr-sep">·</span>
+          <span class="num">{{ batchEfficiency.pop }}</span>
+          <span class="mr-sep">·</span>
+          <span class="num">{{ batchEfficiency.ack }}</span>
+        </template>
+      </MetricRow>
     </div>
 
-    <!-- Health strip — compact inline row, color only when values cross thresholds -->
-    <div class="health-strip" style="margin-bottom:10px;">
-      <div class="hs-item">
-        <svg width="13" height="13" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="1.6"><path stroke-linecap="round" stroke-linejoin="round" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
-        <span class="hs-label">Time lag</span>
-        <span class="hs-value num" :class="lagNumClass(overview?.lag?.time?.avg)">{{ formatDuration(overview?.lag?.time?.avg || 0) }}</span>
-        <span class="hs-sep">/</span>
-        <span class="hs-value num" :class="lagNumClass(overview?.lag?.time?.max)">{{ formatDuration(overview?.lag?.time?.max || 0) }}</span>
-      </div>
-      <div class="hs-item">
-        <svg width="13" height="13" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="1.6"><path stroke-linecap="round" stroke-linejoin="round" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2"/></svg>
-        <span class="hs-label">Pending</span>
-        <span class="hs-value num">{{ formatNumber(overview?.lag?.offset?.avg || 0) }}</span>
-        <span class="hs-sep">/</span>
-        <span class="hs-value num" :class="pendingNumClass(overview?.lag?.offset?.max)">{{ formatNumber(overview?.lag?.offset?.max || 0) }}</span>
-      </div>
-      <div class="hs-item">
-        <svg width="13" height="13" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="1.6"><path stroke-linecap="round" stroke-linejoin="round" d="M13 10V3L4 14h7v7l9-11h-7z"/></svg>
-        <span class="hs-label">Event loop</span>
-        <span class="hs-value num" :class="elNumClass(avgEventLoopLag)">{{ avgEventLoopLag }}ms</span>
-        <span class="hs-sep">/</span>
-        <span class="hs-value num" :class="elNumClass(maxEventLoopLag)">{{ maxEventLoopLag }}ms</span>
-      </div>
-      <div class="hs-item">
-        <svg width="13" height="13" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="1.6"><path stroke-linecap="round" stroke-linejoin="round" d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10"/></svg>
-        <span class="hs-label">Batch push/pop/ack</span>
-        <span class="hs-value num">{{ batchEfficiency.push }}</span>
-        <span class="hs-sep">·</span>
-        <span class="hs-value num">{{ batchEfficiency.pop }}</span>
-        <span class="hs-sep">·</span>
-        <span class="hs-value num">{{ batchEfficiency.ack }}</span>
-      </div>
-    </div>
-
-    <!-- Small multiples — 3x3 grid of mini-charts on a shared time axis -->
-    <div class="sm-grid" style="margin-bottom:20px;">
-      <!-- 1. Throughput push / pop / ack -->
-      <div class="sm-card">
-        <div class="sm-head">
-          <span class="sm-title">Throughput · msg/s</span>
-          <span v-if="chartData.labels.length" class="sm-chip">{{ throughput.current }}/s</span>
-        </div>
-        <BaseChart v-if="chartData.labels.length > 0" type="line" :data="chartData" :options="miniOpts('msg/s')" height="140px" />
-        <div v-else class="sm-empty">—</div>
-      </div>
-
-      <!-- 2. Pending delta over the window (cumulative push - ack). -->
-      <div class="sm-card">
-        <div class="sm-head">
-          <span class="sm-title">Pending Δ · msgs (window)</span>
-          <span v-if="pendingDeltaLatest !== 0" class="sm-chip"
-                :class="{ 'sm-chip-warn': pendingDeltaLatest > 0, 'sm-chip-ok': pendingDeltaLatest < 0 }">
-            {{ pendingDeltaLatest > 0 ? '+' : '' }}{{ formatNumber(pendingDeltaLatest) }}
-          </span>
-        </div>
-        <BaseChart v-if="pendingDeltaChartData.labels.length > 0" type="line" :data="pendingDeltaChartData" :options="miniOpts('msgs')" height="140px" />
-        <div v-else class="sm-empty">—</div>
-      </div>
-
-      <!-- 3. Queen CPU user / sys (or per-replica when >1 replica) -->
-      <div class="sm-card">
-        <div class="sm-head">
-          <span class="sm-title">Queen CPU · %<span v-if="hasMultipleReplicas" style="font-weight:400; color:var(--text-faint);"> · per replica</span></span>
-          <span v-if="cpuLatest > 0" class="sm-chip">{{ cpuLatest.toFixed(1) }}%</span>
-        </div>
-        <BaseChart v-if="cpuChartData.labels.length > 0" type="line" :data="cpuChartData" :options="miniOpts('%', v => v.toFixed(1) + '%')" height="140px" />
-        <div v-else class="sm-empty">—</div>
-      </div>
-
-      <!-- 3. Time lag avg / max -->
-      <div class="sm-card">
-        <div class="sm-head">
-          <span class="sm-title">Lag · ms</span>
-          <span v-if="lagLatestMax > 0" class="sm-chip" :class="{ 'sm-chip-warn': lagLatestMax > 60000, 'sm-chip-bad': lagLatestMax > 300000 }">{{ formatLagShort(lagLatestMax) }}</span>
-        </div>
-        <BaseChart v-if="lagChartData.labels.length > 0" type="line" :data="lagChartData" :options="miniOpts('ms', formatLagShort)" height="140px" />
-        <div v-else class="sm-empty">—</div>
-      </div>
-
-      <!-- 4. Event loop lag avg / max -->
-      <div class="sm-card">
-        <div class="sm-head">
-          <span class="sm-title">Event loop · ms</span>
-          <span v-if="maxEventLoopLag > 0" class="sm-chip" :class="{ 'sm-chip-warn': maxEventLoopLag > 50, 'sm-chip-bad': maxEventLoopLag > 100 }">{{ maxEventLoopLag }}ms</span>
-        </div>
-        <BaseChart v-if="elChartData.labels.length > 0" type="line" :data="elChartData" :options="miniOpts('ms')" height="140px" />
-        <div v-else class="sm-empty">—</div>
-      </div>
-
-      <!-- 5. Errors: db / ack failed / dlq -->
-      <div class="sm-card">
-        <div class="sm-head">
-          <span class="sm-title">Errors</span>
-          <span v-if="errorTotal > 0" class="sm-chip sm-chip-bad">{{ formatNumber(errorTotal) }}</span>
-        </div>
-        <BaseChart v-if="errorsChartData.labels.length > 0" type="bar" :data="errorsChartData" :options="miniOpts('count')" height="140px" />
-        <div v-else class="sm-empty">—</div>
-      </div>
-
-      <!-- 6. Retention ops stacked -->
-      <div class="sm-card">
-        <div class="sm-head">
-          <span class="sm-title">Retention · msgs</span>
-          <span v-if="retentionTotal > 0" class="sm-chip">{{ formatNumber(retentionTotal) }}</span>
-        </div>
-        <BaseChart v-if="retentionChartData.labels.length > 0" type="bar" :data="retentionChartData" :options="miniOptsStacked('msgs')" height="140px" />
-        <div v-else class="sm-empty">—</div>
-      </div>
-
-      <!-- 7. Partitions created / deleted -->
-      <div class="sm-card">
-        <div class="sm-head">
-          <span class="sm-title">Partitions · events</span>
-          <span v-if="(partitionCreatedTotal + partitionDeletedTotal) > 0" class="sm-chip">
-            <span style="color:var(--text-hi);">+{{ formatNumber(partitionCreatedTotal) }}</span>
-            <span style="color:var(--text-faint); margin:0 4px;">/</span>
-            <span style="color:var(--text-mid);">-{{ formatNumber(partitionDeletedTotal) }}</span>
-          </span>
-        </div>
-        <BaseChart v-if="partitionChartData.labels.length > 0" type="bar" :data="partitionChartData" :options="miniOpts('count')" height="140px" />
-        <div v-else class="sm-empty">—</div>
-      </div>
-
-      <!-- 8. DB pool: active / idle / free slots -->
-      <div class="sm-card">
-        <div class="sm-head">
-          <span class="sm-title">DB pool · conns</span>
-          <span v-if="poolLatest" class="sm-chip">{{ poolLatest.active }}/{{ poolLatest.size }}</span>
-        </div>
-        <BaseChart v-if="poolChartData.labels.length > 0" type="line" :data="poolChartData" :options="miniOpts('conns')" height="140px" />
-        <div v-else class="sm-empty">—</div>
-      </div>
-    </div>
-
-    <!-- Queue time lag (secondary, compact list). Clicking a row filters the
-         small-multiples above to that single queue. Click × in the top chip
-         to clear, or click the same row again. -->
-    <div class="card" style="margin-bottom:20px;">
-      <div class="card-header">
-        <h3>Queue time lag</h3>
-        <span class="muted">max per queue · click to drill down</span>
-      </div>
-      <div class="card-body">
-        <div v-if="queueTimeLag.length > 0" class="grid-3" style="gap:16px 24px;">
-          <div
-            v-for="q in queueTimeLag.slice(0, 9)"
-            :key="q.name"
-            class="ql-row"
-            :class="{ 'ql-row-active': filterQueue === q.name }"
-            @click="toggleQueueFilter(q.name)"
-          >
-            <div style="display:flex; justify-content:space-between; font-size:13px; margin-bottom:6px;">
-              <span style="font-weight:500; color:var(--text-hi); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; max-width:160px;">{{ q.name }}</span>
-              <span class="font-mono tabular-nums font-medium num" :class="{ warn: q.lag > 60 && q.lag <= 600, bad: q.lag > 600, mute: !q.lag }">
-                {{ q.lag > 0 ? formatDuration(q.lag) : '-' }}
-              </span>
-            </div>
-            <div class="bar" style="width:100%; display:block;">
-              <i :class="q.lag > 600 ? 'bad' : q.lag > 60 ? 'warn' : ''" :style="{ width: q.pct + '%' }" />
-            </div>
-          </div>
-        </div>
-        <div v-else style="height:60px; display:flex; align-items:center; justify-content:center; color:var(--text-low); font-size:13px;">
-          No consumer groups
-        </div>
-      </div>
-    </div>
-
-    <!-- Bottom row: tables -->
-    <div class="grid-7-5">
-      <DataTable title="Top queues by pending depth" :subtitle="`${queues.length} queues`" :columns="queueColumns" :data="enrichedQueues" :loading="loadingQueues" :page-size="6" clickable @row-click="(row) => $router.push(`/queues/${row.name}`)">
-        <template #name="{ row }">
-          <div style="display:flex; align-items:center; gap:8px;">
-            <span class="status-dot" :class="statusDotClass(row._status)" />
-            <span style="font-weight:500; color:var(--text-hi);">{{ row.name }}</span>
-          </div>
-        </template>
-        <template #partitions="{ value }">
-          <span class="font-mono tabular-nums" style="color:var(--text-mid); font-size:12px;">{{ value || 1 }}</span>
-        </template>
-        <template #_pending="{ row }">
-          <span class="font-mono tabular-nums">{{ formatNumber(Math.max(0, row.messages?.pending || 0)) }}</span>
-        </template>
-        <template #_depth="{ row }">
-          <div class="bar" style="width:100px; display:block;">
-            <i :class="row._status === 'degraded' ? 'bad' : row._status === 'watch' ? 'warn' : ''" :style="{ width: row._depthPct + '%' }" />
-          </div>
-        </template>
-        <template #_lag="{ row }">
-          <span class="font-mono tabular-nums" style="font-size:12px;" :style="{ color: lagColor(row._lag) }">
-            {{ row._lag > 0 ? formatDuration(row._lag) : '-' }}
-          </span>
-        </template>
-        <template #_status="{ row }">
-          <span class="chip" :class="statusChipClass(row._status)"><span class="dot"></span>{{ row._status }}</span>
-        </template>
-      </DataTable>
-
-      <!-- Consumer groups — opus card list -->
+    <!--
+      ========================================================================
+      Bottom row — two symmetric panels using the same row idiom:
+          dot · name · right-side metric  |  meta line below.
+      Top queues is sorted by pending depth (the operational priority);
+      consumer groups by max time lag (the operational symptom). Click a
+      row to drill into its detail page; "see all" footer links the full
+      list view.
+      ========================================================================
+    -->
+    <div class="grid-2">
       <div class="card">
         <div class="card-header">
-          <h3>Consumer groups</h3>
-          <span class="muted">{{ consumers.length }} total</span>
+          <h3>Top queues by pending</h3>
+          <span class="muted">{{ enrichedQueues.length }} queues</span>
         </div>
-        <div v-if="loadingConsumers" class="card-body" style="display:flex; flex-direction:column; gap:8px;">
-          <div v-for="i in 5" :key="i" class="skeleton" style="height:56px; border-radius:10px;" />
+
+        <div v-if="loadingQueues" class="card-body entity-list">
+          <div v-for="i in 6" :key="i" class="skeleton" style="height:48px; border-radius:8px;" />
         </div>
-        <div v-else-if="sortedConsumers.length" class="card-body" style="display:flex; flex-direction:column; gap:10px;">
-          <div
+
+        <div v-else-if="topPendingQueues.length" class="card-body entity-list">
+          <button
+            v-for="q in topPendingQueues"
+            :key="q.name"
+            class="entity-row"
+            @click="$router.push(`/queues/${encodeURIComponent(q.name)}`)"
+          >
+            <div class="entity-head">
+              <span class="status-dot" :class="statusDotClass(q._status)" />
+              <span class="entity-name">{{ q.name }}</span>
+              <span class="entity-right num" :class="lagNumClass(q._lag)">
+                {{ q._lag > 0 ? formatDuration(q._lag) : '—' }}
+              </span>
+            </div>
+            <div class="entity-meta">
+              <span class="bar bar-meta">
+                <i :class="depthBarClass(q._status)" :style="{ width: q._depthPct + '%' }" />
+              </span>
+              <span class="meta-text">
+                <strong>{{ formatNumber(q._pending) }}</strong> pending
+                <span class="meta-sep">·</span>
+                {{ q.partitions || 1 }} {{ (q.partitions || 1) === 1 ? 'part' : 'parts' }}
+              </span>
+            </div>
+          </button>
+        </div>
+
+        <div v-else class="card-body entity-empty">No queues</div>
+
+        <div class="card-foot">
+          <a class="card-foot-link" @click="$router.push('/queues')">See all queues →</a>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="card-header">
+          <h3>Consumer groups by lag</h3>
+          <span class="muted">{{ consumers.length }} total · {{ laggingCount }} lagging</span>
+        </div>
+
+        <div v-if="loadingConsumers" class="card-body entity-list">
+          <div v-for="i in 6" :key="i" class="skeleton" style="height:48px; border-radius:8px;" />
+        </div>
+
+        <div v-else-if="sortedConsumers.length" class="card-body entity-list">
+          <button
             v-for="g in sortedConsumers.slice(0, 6)"
-            :key="g.name + g.queueName"
-            class="cg-row"
+            :key="g.name + '@' + g.queueName"
+            class="entity-row"
             @click="$router.push('/consumers')"
           >
-            <span class="pulse" :class="cgPulseClass(g)" style="flex-shrink:0;" />
-            <div style="flex:1; min-width:0;">
-              <div style="display:flex; align-items:center; gap:8px;">
-                <span style="font-weight:500; color:var(--text-hi); font-size:13.5px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">{{ g.name }}</span>
-              </div>
-              <div class="font-mono" style="font-size:11px; color:var(--text-low); margin-top:2px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">
-                <span v-if="g.queueName">{{ g.queueName }} · </span>
-                {{ g.members || 0 }} members · lag {{ g.maxTimeLag > 0 ? formatDuration(g.maxTimeLag) : '0s' }}
-              </div>
+            <div class="entity-head">
+              <span class="status-dot" :class="cgDotClass(g)" />
+              <span class="entity-name">{{ g.queueName || '?' }}</span>
+              <span class="entity-right num" :class="lagNumClass(g.maxTimeLag)">
+                {{ (g.maxTimeLag || 0) > 0 ? formatDuration(g.maxTimeLag) : '—' }}
+              </span>
             </div>
-            <span class="chip" :class="cgChipClass(g)" style="flex-shrink:0;">
-              <span class="dot"></span>{{ cgLabel(g) }}
-            </span>
-          </div>
+            <div class="entity-meta">
+              <span class="meta-text">
+                <span v-if="g.name === '__QUEUE_MODE__'" class="meta-tag">queue mode</span>
+                <span v-else><strong>{{ g.name }}</strong></span>
+                <span class="meta-sep">·</span>
+                {{ g.members || 0 }} {{ (g.members || 0) === 1 ? 'member' : 'members' }}
+                <template v-if="(g.partitionsWithLag || 0) > 0">
+                  <span class="meta-sep">·</span>
+                  <span class="num warn">{{ g.partitionsWithLag }} lagging</span>
+                </template>
+              </span>
+            </div>
+          </button>
         </div>
-        <div v-else class="card-body" style="padding:32px; text-align:center; color:var(--text-low); font-size:13px;">
-          No consumer groups
+
+        <div v-else class="card-body entity-empty">No consumer groups</div>
+
+        <div class="card-foot">
+          <a class="card-foot-link" @click="$router.push('/consumers')">See all consumer groups →</a>
         </div>
       </div>
     </div>
@@ -273,24 +364,21 @@
 </template>
 
 <script setup>
-import { ref, computed, onMounted, onUnmounted, watch, h } from 'vue'
+import { ref, computed, onMounted, onUnmounted, watch } from 'vue'
 import { resources, queues as queuesApi, analytics, consumers as consumersApi, system as systemApi } from '@/api'
 import { formatNumber } from '@/composables/useApi'
 import { useRefresh } from '@/composables/useRefresh'
-import MetricCard from '@/components/MetricCard.vue'
-import BaseChart from '@/components/BaseChart.vue'
-import DataTable from '@/components/DataTable.vue'
+import MetricRow from '@/components/MetricRow.vue'
 
+// ---------------------------------------------------------------------------
+// State (unchanged from prior dashboard — same data sources)
+// ---------------------------------------------------------------------------
 const overview = ref(null)
 const queues = ref([])
 const consumers = ref([])
 const statusData = ref(null)
-// Populated by PR 2 (retention timeseries) and PR 3 (per-queue ops / partitions).
-// Kept as empty arrays so computed charts render nothing instead of exploding.
 const retentionData = ref([])
 const partitionOpsData = ref([])
-// Per-replica system metrics, used only when more than one replica is present
-// to split the CPU small-multiple into one line per (hostname, workerId).
 const systemMetricsData = ref(null)
 
 const loadingOverview = ref(true)
@@ -300,55 +388,207 @@ const loadingStatus = ref(true)
 
 const selectedRange = ref('1h')
 const timeRanges = [
-  { label: '1h', value: '1h', minutes: 60 },
-  { label: '6h', value: '6h', minutes: 360 },
+  { label: '1h',  value: '1h',  minutes: 60 },
+  { label: '6h',  value: '6h',  minutes: 360 },
   { label: '24h', value: '24h', minutes: 1440 },
 ]
 
-// Active queue drilldown. When non-empty, all multiples are scoped to this
-// queue via the `queue` query param on /api/v1/status (which routes
-// get_status_v3 into its queue-filtered branch). Click a row in the queue
-// time lag list to set; click × in the filter chip or the same row again to clear.
-const filterQueue = ref('')
-const toggleQueueFilter = (name) => {
-  filterQueue.value = (filterQueue.value === name) ? '' : name
-  // Refetch immediately so the user sees the filtered view without waiting for the 30s interval.
-  fetchStatus()
-  fetchRetention()
-  fetchQueueOps()
+// ---------------------------------------------------------------------------
+// Expand state — per-row + master toggle.
+// We use a Set keyed by stable row ids (not the human-readable label)
+// so future label tweaks don't blow away the user's expanded selection.
+// ---------------------------------------------------------------------------
+const ALL_ROW_KEYS = [
+  'throughput', 'pendingDelta', 'timeLag',
+  'errors', 'eventLoop', 'cpu', 'dbPool',
+  'partitions', 'retention', 'batchEff',
+]
+const expandedRows = ref(new Set())
+const isExpanded = (key) => expandedRows.value.has(key)
+const toggleRow = (key) => {
+  const next = new Set(expandedRows.value)
+  if (next.has(key)) next.delete(key); else next.add(key)
+  expandedRows.value = next
 }
-const clearQueueFilter = () => { if (filterQueue.value) toggleQueueFilter(filterQueue.value) }
+const anyExpanded = computed(() => expandedRows.value.size > 0)
+const toggleAllRows = () => {
+  expandedRows.value = anyExpanded.value ? new Set() : new Set(ALL_ROW_KEYS)
+}
 
+// Dashboard is cluster-wide by design. Per-queue investigation lives on
+// /queues/[name] (and will get its own metric table when that page is
+// redesigned), so we no longer host a queue-scope filter here.
 const getTimeRangeParams = () => {
   const r = timeRanges.find(x => x.value === selectedRange.value) || timeRanges[0]
   const now = new Date()
-  const params = { from: new Date(now.getTime() - r.minutes * 60 * 1000).toISOString(), to: now.toISOString() }
-  // Scope every analytics call to the drilldown queue when active. The
-  // status/queue-ops/retention procedures all accept a `queue` filter field.
-  if (filterQueue.value) params.queue = filterQueue.value
-  return params
+  return {
+    from: new Date(now.getTime() - r.minutes * 60 * 1000).toISOString(),
+    to: now.toISOString(),
+  }
 }
 
+// ---------------------------------------------------------------------------
+// History (oldest → newest) — single source for every chart below.
+// chartLabels are pre-formatted timestamps so RowChart tooltips can render
+// "01:33 PM" or "Apr 28, 01:33 PM" as the title without the children
+// having to know about the time-axis convention.
+// ---------------------------------------------------------------------------
+const history = computed(() => {
+  if (!statusData.value?.throughput?.length) return []
+  return [...statusData.value.throughput].reverse()
+})
+const multiDay = computed(() => {
+  const h = history.value
+  if (h.length < 2) return false
+  return new Date(h[0].timestamp).toDateString() !== new Date(h[h.length - 1].timestamp).toDateString()
+})
+const formatChartLabel = (date, multi) => multi
+  ? date.toLocaleString('en-US', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })
+  : date.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' })
+const chartLabels = computed(() =>
+  history.value.map(h => formatChartLabel(new Date(h.timestamp), multiDay.value))
+)
+
+// ---------------------------------------------------------------------------
+// Counts strip helpers
+// ---------------------------------------------------------------------------
 const totalPartitions = computed(() =>
   queues.value.reduce((sum, q) => sum + (q.partitions || 1), 0)
 )
 
+// ---------------------------------------------------------------------------
+// Throughput row — three real series (push / pop / ack) so the operator
+// can hover and see all three rates at any moment in time. ack is given
+// the semantic green color (healthy completion) so it visually pops when
+// it falls behind push.
+// ---------------------------------------------------------------------------
 const throughput = computed(() => {
-  if (!overview.value?.throughput) return { current: '0.0', trend: 0 }
-  const current = overview.value.throughput.ingestedPerSecond || overview.value.throughput.processedPerSecond || 0
-  let trend = 0
-  if (statusData.value?.throughput?.length >= 2) {
-    const h = statusData.value.throughput
-    const cr = h[0]?.ingestedPerSecond || 0
-    const older = h.length > 5 ? h.slice(5) : h.slice(1)
-    const pr = older.length ? older.reduce((s, x) => s + (x.ingestedPerSecond || 0), 0) / older.length : 0
-    if (pr > 0 && cr > 0) trend = Math.round(((cr - pr) / pr) * 100)
-    else if (pr === 0 && cr > 0) trend = 100
-    else if (pr > 0 && cr === 0) trend = -100
-  }
-  return { current: current.toFixed(1), trend }
+  if (!overview.value?.throughput) return { current: '0.0' }
+  const current =
+    overview.value.throughput.ingestedPerSecond ||
+    overview.value.throughput.processedPerSecond || 0
+  return { current: current.toFixed(1) }
+})
+const throughputSeries = computed(() => {
+  const h = history.value
+  if (!h.length) return null
+  return [
+    { label: 'Push', data: h.map(x => Number(x.ingestedPerSecond) || 0) },
+    { label: 'Pop',  data: h.map(x => Number(x.popPerSecond) || 0) },
+    { label: 'Ack',  data: h.map(x => Number(x.processedPerSecond) || 0), color: '#4ade80' },
+  ]
+})
+const throughputPeak = computed(() => {
+  const h = history.value
+  if (!h.length) return 0
+  return Math.max(0, ...h.map(x => Number(x.ingestedPerSecond) || 0))
+})
+const throughputContext = computed(() => {
+  const peak = throughputPeak.value
+  const cur = Number(throughput.value.current) || 0
+  if (peak === 0 && cur === 0) return 'idle · no traffic in window'
+  if (peak === 0) return `current ${cur.toFixed(1)} /s`
+  return `peak ${formatNumber(Math.round(peak))} /s · push ≈ ack`
 })
 
+// ---------------------------------------------------------------------------
+// Pending Δ row — cumulative (ingested - processed) across the window.
+// Positive = falling behind, negative = catching up. The severity tone is
+// what makes this row tell its story: grey at zero, amber when growing,
+// red when growing fast, green only when actively shrinking by a lot.
+// ---------------------------------------------------------------------------
+const pendingDeltaSeries = computed(() => {
+  const h = history.value
+  if (!h.length) return []
+  let cum = 0
+  return h.map(x => {
+    cum += (Number(x.ingested) || 0) - (Number(x.processed) || 0)
+    return cum
+  })
+})
+const pendingDeltaLatest = computed(() => {
+  const s = pendingDeltaSeries.value
+  return s.length ? s[s.length - 1] : 0
+})
+const pendingDeltaDisplay = computed(() => {
+  const v = pendingDeltaLatest.value
+  if (v === 0) return '0'
+  return (v > 0 ? '+' : '−') + formatNumber(Math.abs(v))
+})
+const pendingDeltaContext = computed(() => {
+  const v = pendingDeltaLatest.value
+  if (v === 0) return 'flat · push = ack across window'
+  if (v > 0) return 'falling behind · push > ack'
+  return 'catching up · ack > push'
+})
+const pendingDeltaSeverity = computed(() => {
+  const v = pendingDeltaLatest.value
+  if (v > 100000) return 'bad'
+  if (v > 1000)   return 'warn'
+  if (v < -1000)  return 'ok'
+  return ''
+})
+
+// ---------------------------------------------------------------------------
+// Time lag row — uses overview.lag.time.{avg,max} (seconds) for the value
+// shown left-of-chart. The chart pulls avg + max from history.{avg,max}LagMs
+// so hovering the chart reveals both at any given timestamp.
+// ---------------------------------------------------------------------------
+const lagSeriesData = computed(() => {
+  const h = history.value
+  if (!h.length) return null
+  return [
+    { label: 'Avg', data: h.map(x => Number(x.avgLagMs) || 0) },
+    { label: 'Max', data: h.map(x => Number(x.maxLagMs) || 0) },
+  ]
+})
+const lagNumClass = (s) => !s || s === 0 ? '' : s < 60 ? '' : s < 300 ? 'warn' : 'bad'
+const lagSeverity = computed(() => lagNumClass(overview.value?.lag?.time?.max || 0))
+
+// ---------------------------------------------------------------------------
+// Errors row
+// ---------------------------------------------------------------------------
+// Errors chart has TWO series: db errors (red) and ack failures (amber).
+// dlqCount is a cumulative snapshot rather than a per-bucket count, so we
+// only show its latest value in the context line — never on the chart.
+const errorSeriesData = computed(() => {
+  const h = history.value
+  if (!h.length) return null
+  return [
+    { label: 'DB errors', data: h.map(x => Number(x.dbErrors) || 0), color: '#fb7185' },
+    { label: 'Ack failed', data: h.map(x => Number(x.ackFailed) || 0), color: '#e6b450' },
+  ]
+})
+const errorBuckets = computed(() => {
+  let db = 0, ack = 0
+  for (const x of history.value) {
+    db  += Number(x.dbErrors)  || 0
+    ack += Number(x.ackFailed) || 0
+  }
+  // dlq we read once from the most recent point as a snapshot.
+  const last = history.value[history.value.length - 1]
+  const dlq = last ? (Number(last.dlqCount) || 0) : 0
+  return { db, ack, dlq }
+})
+const errorTotal = computed(() => {
+  const b = errorBuckets.value
+  return b.db + b.ack + b.dlq
+})
+const errorContext = computed(() => {
+  const b = errorBuckets.value
+  return `db ${formatNumber(b.db)} · ack ${formatNumber(b.ack)} · dlq ${formatNumber(b.dlq)}`
+})
+const errorSeverity = computed(() => {
+  const b = errorBuckets.value
+  if (b.db > 0 || b.ack > 100) return 'bad'
+  if (b.ack > 0 || b.dlq > 0)  return 'warn'
+  return ''
+})
+
+// ---------------------------------------------------------------------------
+// Event loop row
+// ---------------------------------------------------------------------------
+const workerCount = computed(() => statusData.value?.workers?.length || 0)
 const avgEventLoopLag = computed(() => {
   const w = statusData.value?.workers
   if (!w?.length) return 0
@@ -359,172 +599,48 @@ const maxEventLoopLag = computed(() => {
   if (!w?.length) return 0
   return Math.max(...w.map(x => x.maxEventLoopLagMs || 0))
 })
-
-const batchEfficiency = computed(() => {
-  const b = statusData.value?.messages?.batchEfficiency
-  return { push: b?.push?.toFixed(1) || '0', pop: b?.pop?.toFixed(1) || '0', ack: b?.ack?.toFixed(1) || '0' }
-})
-
-const lagColor = (s) => !s || s === 0 ? 'var(--text-mid)' : s < 60 ? '#4ade80' : s < 300 ? '#e6b450' : '#fb7185'
-const elColor = (ms) => !ms || ms === 0 ? 'var(--text-mid)' : ms < 50 ? '#4ade80' : ms < 100 ? '#e6b450' : '#fb7185'
-
-// Threshold → class name helpers (monochrome by default, color only when crossing a threshold)
-const lagNumClass     = (s)  => !s || s === 0 ? ''         : s  < 60  ? ''     : s  < 300 ? 'warn' : 'bad'
-const elNumClass      = (ms) => !ms || ms === 0 ? ''       : ms < 50  ? ''     : ms < 100 ? 'warn' : 'bad'
-const pendingNumClass = (n)  => !n || n < 1000 ? ''        : n  < 10000 ? 'warn' : 'bad'
-
-const formatDuration = (seconds) => {
-  if (!seconds || seconds === 0) return '0s'
-  if (seconds < 60) return `${Math.round(seconds)}s`
-  if (seconds < 3600) { const m = Math.floor(seconds / 60); const s = Math.round(seconds % 60); return s ? `${m}m ${s}s` : `${m}m` }
-  if (seconds < 86400) { const h = Math.floor(seconds / 3600); const m = Math.floor((seconds % 3600) / 60); return m ? `${h}h ${m}m` : `${h}h` }
-  const d = Math.floor(seconds / 86400); const h = Math.floor((seconds % 86400) / 3600); return h ? `${d}d ${h}h` : `${d}d`
-}
-
-const formatChartLabel = (date, multi) => multi
-  ? date.toLocaleString('en-US', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })
-  : date.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' })
-
-// Reversed history (ascending time) for all charts — computed once.
-const history = computed(() => {
-  if (!statusData.value?.throughput?.length) return []
-  return [...statusData.value.throughput].reverse()
-})
-const multiDay = computed(() => {
+const elSeriesData = computed(() => {
   const h = history.value
-  if (h.length < 2) return false
-  return new Date(h[0].timestamp).toDateString() !== new Date(h[h.length-1].timestamp).toDateString()
+  if (!h.length) return null
+  return [
+    { label: 'Avg', data: h.map(x => Number(x.avgEventLoopLagMs) || 0) },
+    { label: 'Max', data: h.map(x => Number(x.maxEventLoopLagMs) || 0) },
+  ]
 })
-const chartLabels = computed(() => history.value.map(h => formatChartLabel(new Date(h.timestamp), multiDay.value)))
+const elNumClass = (ms) => !ms || ms === 0 ? '' : ms < 50 ? '' : ms < 100 ? 'warn' : 'bad'
 
-// Format lag (stored in ms) with human-friendly scale: ms → s → m.
-const formatLagShort = (v) => {
-  const n = Number(v) || 0
-  if (n < 1) return '0'
-  if (n < 1000) return `${Math.round(n)}ms`
-  if (n < 60000) return `${(n / 1000).toFixed(1)}s`
-  return `${(n / 60000).toFixed(1)}m`
-}
-
-// Shared mini-chart options (small multiples look).
-const miniOpts = (yLabel, tickFmt) => ({
-  plugins: { legend: { display: false } },
-  scales: {
-    y: {
-      title: { display: true, text: yLabel, font: { size: 10 } },
-      ticks: tickFmt ? { callback: tickFmt } : undefined,
-    }
-  }
-})
-const miniOptsStacked = (yLabel) => ({
-  plugins: { legend: { display: false } },
-  scales: {
-    x: { stacked: true },
-    y: { stacked: true, title: { display: true, text: yLabel, font: { size: 10 } } }
-  }
-})
-
-// 1. Throughput — Push / Pop / Ack on the same axis. Push vs Ack is the
-// producer/consumer view of the system; Pop shows the read-side pressure
-// separately (matters in bus mode where one message is popped by many
-// consumer groups). Push/Pop are grey siblings; Ack is green (semantic
-// "healthy completion") so the eye quickly spots when acks lag pops.
-const chartData = computed(() => {
-  const h = history.value
-  if (!h.length) return { labels: [], datasets: [] }
-  return {
-    labels: chartLabels.value,
-    datasets: [
-      { label: 'Push/s', data: h.map(x => Number(x.ingestedPerSecond) || 0),
-        fill: true, borderColor: '#e6e6e6', backgroundColor: 'rgba(230,230,230,0.12)' },
-      { label: 'Pop/s',  data: h.map(x => Number(x.popPerSecond) || 0),
-        fill: false, borderColor: '#8a8a92' },
-      { label: 'Ack/s',  data: h.map(x => Number(x.processedPerSecond) || 0),
-        fill: true, borderColor: '#4ade80', backgroundColor: 'rgba(74,222,128,0.10)' },
-    ]
-  }
-})
-
-// 2. Pending Δ — cumulative (ingested - processed) across the window,
-// anchored at 0 on the left edge. Positive slope = pending is growing
-// (we're falling behind), negative slope = catching up. Not absolute
-// pending; deliberately labeled "Δ (window)" to make that clear.
-const pendingDeltaSeries = computed(() => {
-  const h = history.value
-  if (!h.length) return []
-  let cum = 0
-  return h.map(x => {
-    const ingested = Number(x.ingested) || 0
-    const processed = Number(x.processed) || 0
-    cum += (ingested - processed)
-    return cum
-  })
-})
-const pendingDeltaChartData = computed(() => {
-  const series = pendingDeltaSeries.value
-  if (!series.length) return { labels: [], datasets: [] }
-  // Two overlaid series: fill area (accent color for visibility on mini chart)
-  // plus a zero baseline marker so operators see which side they're on.
-  return {
-    labels: chartLabels.value,
-    datasets: [
-      { label: 'Pending Δ', data: series, fill: true,
-        borderColor: '#e6e6e6', backgroundColor: 'rgba(230,230,230,0.10)' }
-    ]
-  }
-})
-const pendingDeltaLatest = computed(() => {
-  const s = pendingDeltaSeries.value
-  return s.length ? s[s.length - 1] : 0
-})
-
-// 2. Queen CPU.
-// - Single-replica deploys: show the aggregate user / system split so the
-//   operator sees the kernel vs user work balance.
-// - Multi-replica deploys: flip to one line per replica so fanout imbalance
-//   is visible. We use the dedicated getSystemMetrics feed (per-replica
-//   time series) rather than the status_v3 average, which would hide skew.
-const replicaIdentity = (r) => `${r.hostname}:${r.port}:${r.worker_id || r.workerId || ''}`
-const hasMultipleReplicas = computed(() => (systemMetricsData.value?.replicas || []).length > 1)
-
-const cpuChartData = computed(() => {
-  // Multi-replica: plot one line per replica (user+sys summed).
+// ---------------------------------------------------------------------------
+// Queen CPU row — single replica or "hottest" replica when multi-replica.
+// CPU is reported as cumulative-across-cores % (so 4 cores fully pinned =
+// 400%); we don't tone it semantic without core count, just show the
+// number and a contextual breakdown.
+// ---------------------------------------------------------------------------
+const hasMultipleReplicas = computed(() =>
+  (systemMetricsData.value?.replicas || []).length > 1
+)
+// Single replica → split into user/system so the chart shows the kernel
+// vs userspace work balance. Multi replica → one line per replica so
+// fanout imbalance becomes visible (the metric value still shows the
+// hottest replica). Both modes are real multi-series charts.
+const cpuSeriesData = computed(() => {
   if (hasMultipleReplicas.value) {
     const replicas = systemMetricsData.value?.replicas || []
-    // Use the first replica's time-series as the shared time axis.
-    const ts = replicas[0]?.timeSeries || []
-    if (!ts.length) return { labels: [], datasets: [] }
-    const multi = ts.length >= 2 &&
-      new Date(ts[0].timestamp).toDateString() !== new Date(ts[ts.length - 1].timestamp).toDateString()
-    const labels = ts.map(t => formatChartLabel(new Date(t.timestamp), multi))
-    const palette = ['#e6e6e6', '#8a8a92', '#6a6a6a', '#b8b8b8', '#4a4a4f', '#9a9a9a']
-    const datasets = replicas.map((r, i) => {
-      const color = palette[i % palette.length]
-      return {
-        label: r.hostname.substring(0, 10),  // keep legend short
-        data: (r.timeSeries || []).map(t =>
-          ((t.metrics?.cpu?.user_us?.avg || 0) + (t.metrics?.cpu?.system_us?.avg || 0)) / 100),
-        fill: false,
-        borderColor: color,
-      }
-    })
-    return { labels, datasets }
+    return replicas.map(r => ({
+      label: r.hostname?.substring(0, 12) || 'replica',
+      data: (r.timeSeries || []).map(t =>
+        ((t.metrics?.cpu?.user_us?.avg || 0) + (t.metrics?.cpu?.system_us?.avg || 0)) / 100
+      ),
+    }))
   }
-  // Single-replica fallback: show user / system split from status_v3.
   const h = history.value
-  const hasCpu = h.some(x => x.queenCpuUserPct != null || x.queenCpuSysPct != null)
-  if (!hasCpu) return { labels: [], datasets: [] }
-  return {
-    labels: chartLabels.value,
-    datasets: [
-      { label: 'User %',   data: h.map(x => Number(x.queenCpuUserPct) || 0), fill: true },
-      { label: 'System %', data: h.map(x => Number(x.queenCpuSysPct)  || 0), fill: true },
-    ]
-  }
+  if (!h.length) return null
+  return [
+    { label: 'User',   data: h.map(x => Number(x.queenCpuUserPct) || 0) },
+    { label: 'System', data: h.map(x => Number(x.queenCpuSysPct)  || 0) },
+  ]
 })
 const cpuLatest = computed(() => {
   if (hasMultipleReplicas.value) {
-    // Show the hottest replica's latest CPU — the one operators care about.
     const replicas = systemMetricsData.value?.replicas || []
     let max = 0
     for (const r of replicas) {
@@ -539,156 +655,125 @@ const cpuLatest = computed(() => {
   if (!last) return 0
   return (Number(last.queenCpuUserPct) || 0) + (Number(last.queenCpuSysPct) || 0)
 })
-
-// 3. Time lag avg / max
-const lagChartData = computed(() => {
-  const h = history.value
-  if (!h.length) return { labels: [], datasets: [] }
-  return {
-    labels: chartLabels.value,
-    datasets: [
-      { label: 'Avg (ms)', data: h.map(x => Number(x.avgLagMs) || 0), fill: true },
-      { label: 'Max (ms)', data: h.map(x => Number(x.maxLagMs) || 0), fill: false, borderColor: '#8a8a92' },
-    ]
+const cpuContext = computed(() => {
+  if (hasMultipleReplicas.value) {
+    const n = (systemMetricsData.value?.replicas || []).length
+    return `${n} replicas · hottest shown`
   }
-})
-const lagLatestMax = computed(() => {
   const last = history.value[history.value.length - 1]
-  return last ? (Number(last.maxLagMs) || 0) : 0
+  if (!last) return '—'
+  const u = Number(last.queenCpuUserPct) || 0
+  const s = Number(last.queenCpuSysPct)  || 0
+  return `user ${u.toFixed(0)}% · sys ${s.toFixed(0)}%`
 })
 
-// 4. Event loop lag
-const elChartData = computed(() => {
-  const h = history.value
-  const has = h.some(x => x.avgEventLoopLagMs != null || x.maxEventLoopLagMs != null)
-  if (!has) return { labels: [], datasets: [] }
-  return {
-    labels: chartLabels.value,
-    datasets: [
-      { label: 'Avg (ms)', data: h.map(x => Number(x.avgEventLoopLagMs) || 0), fill: true },
-      { label: 'Max (ms)', data: h.map(x => Number(x.maxEventLoopLagMs) || 0), fill: false, borderColor: '#8a8a92' },
-    ]
-  }
-})
-
-// 5. Errors: db / ack failed / dlq (stacked-ish bars; we use simple bars)
-const errorsChartData = computed(() => {
-  const h = history.value
-  const has = h.some(x => (x.dbErrors || 0) + (x.ackFailed || 0) + (x.dlqCount || 0) > 0)
-  if (!has) return { labels: [], datasets: [] }
-  return {
-    labels: chartLabels.value,
-    datasets: [
-      { label: 'DB errors', data: h.map(x => Number(x.dbErrors) || 0), backgroundColor: 'rgba(244,63,94,0.6)', borderColor: '#f43f5e' },
-      { label: 'Ack failed', data: h.map(x => Number(x.ackFailed) || 0), backgroundColor: 'rgba(230,180,80,0.5)', borderColor: '#e6b450' },
-      { label: 'DLQ', data: h.map(x => Number(x.dlqCount) || 0), backgroundColor: 'rgba(230,230,230,0.5)', borderColor: '#e6e6e6' },
-    ]
-  }
-})
-const errorTotal = computed(() => history.value.reduce((s, x) =>
-  s + (Number(x.dbErrors) || 0) + (Number(x.ackFailed) || 0) + (Number(x.dlqCount) || 0), 0))
-
-// 6. Retention ops (populated in PR 2; empty placeholder safe today)
-const retentionChartData = computed(() => {
-  const rows = retentionData.value || []
-  if (!rows.length) return { labels: [], datasets: [] }
-  const labels = rows.map(r => formatChartLabel(new Date(r.bucket), false))
-  return {
-    labels,
-    datasets: [
-      { label: 'Retention', data: rows.map(r => Number(r.retentionMsgs) || 0), backgroundColor: 'rgba(230,230,230,0.6)', borderColor: '#e6e6e6' },
-      { label: 'Completed', data: rows.map(r => Number(r.completedRetentionMsgs) || 0), backgroundColor: 'rgba(138,138,146,0.6)', borderColor: '#8a8a92' },
-      { label: 'Evicted', data: rows.map(r => Number(r.evictionMsgs) || 0), backgroundColor: 'rgba(230,180,80,0.5)', borderColor: '#e6b450' },
-    ]
-  }
-})
-const retentionTotal = computed(() => (retentionData.value || []).reduce((s, r) =>
-  s + (Number(r.retentionMsgs) || 0) + (Number(r.completedRetentionMsgs) || 0) + (Number(r.evictionMsgs) || 0), 0))
-
-// 7. Partitions created / deleted — both as positive bars on a shared axis.
-// Earlier versions plotted deleted as negative to get a diverging view, but
-// when a retention sweep deletes thousands while creates trickle in tens,
-// the positive side gets compressed to invisibility. Two honest series side
-// by side is more truthful; Chart.js groups them on the same tick.
-const partitionChartData = computed(() => {
-  const rows = partitionOpsData.value || []
-  if (!rows.length) return { labels: [], datasets: [] }
-  const labels = rows.map(r => formatChartLabel(new Date(r.bucket), false))
-  return {
-    labels,
-    datasets: [
-      { label: 'Created', data: rows.map(r => Number(r.partitionsCreated) || 0),
-        backgroundColor: 'rgba(230,230,230,0.5)', borderColor: '#e6e6e6', borderWidth: 1 },
-      { label: 'Deleted', data: rows.map(r => Number(r.partitionsDeleted) || 0),
-        backgroundColor: 'rgba(138,138,146,0.5)', borderColor: '#8a8a92', borderWidth: 1 },
-    ]
-  }
-})
-// Totals for the chip so operators see at-a-glance magnitude balance.
-const partitionCreatedTotal = computed(() => (partitionOpsData.value || []).reduce((s, r) => s + (Number(r.partitionsCreated) || 0), 0))
-const partitionDeletedTotal = computed(() => (partitionOpsData.value || []).reduce((s, r) => s + (Number(r.partitionsDeleted) || 0), 0))
-
-// 8. DB pool active / idle / size (free slots from worker_metrics as bonus)
-const poolChartData = computed(() => {
-  const h = history.value
-  const has = h.some(x => x.dbPoolActive != null || x.dbPoolIdle != null || x.minFreeSlots != null)
-  if (!has) return { labels: [], datasets: [] }
-  return {
-    labels: chartLabels.value,
-    datasets: [
-      { label: 'Active', data: h.map(x => Number(x.dbPoolActive) || 0), fill: true },
-      { label: 'Idle', data: h.map(x => Number(x.dbPoolIdle) || 0), fill: false },
-      { label: 'Free slots', data: h.map(x => Number(x.minFreeSlots) || 0), fill: false, borderColor: '#6a6a6a' },
-    ]
-  }
-})
+// ---------------------------------------------------------------------------
+// DB pool row — saturation = waiters; warn at 80% util, bad once active = size.
+// ---------------------------------------------------------------------------
 const poolLatest = computed(() => {
   const last = history.value[history.value.length - 1]
   if (!last) return null
   const active = Math.round(Number(last.dbPoolActive) || 0)
-  const idle = Math.round(Number(last.dbPoolIdle) || 0)
-  const size = Math.round(Number(last.dbPoolSize) || (active + idle))
+  const idle   = Math.round(Number(last.dbPoolIdle) || 0)
+  const size   = Math.round(Number(last.dbPoolSize) || (active + idle))
   return { active, idle, size }
 })
-
-const queueTimeLag = computed(() => {
-  if (!consumers.value.length) return []
-  const m = {}
-  consumers.value.forEach(c => { const n = c.queueName || '?'; const l = c.maxTimeLag || 0; if (!m[n] || l > m[n]) m[n] = l })
-  const arr = Object.entries(m).map(([n, l]) => ({ name: n, lag: l }))
-  const mx = Math.max(...arr.map(x => x.lag), 1)
-  return arr.sort((a, b) => b.lag - a.lag).map(x => ({ ...x, pct: (x.lag / mx) * 100 }))
+const poolSeriesData = computed(() => {
+  const h = history.value
+  if (!h.length) return null
+  return [
+    { label: 'Active', data: h.map(x => Number(x.dbPoolActive) || 0) },
+    { label: 'Idle',   data: h.map(x => Number(x.dbPoolIdle) || 0) },
+  ]
+})
+const poolSeverity = computed(() => {
+  const p = poolLatest.value
+  if (!p || !p.size) return ''
+  if (p.active >= p.size) return 'bad'
+  if (p.active / p.size > 0.8) return 'warn'
+  return ''
+})
+const poolContext = computed(() => {
+  const p = poolLatest.value
+  if (!p) return '—'
+  return `idle ${p.idle} · size ${p.size}`
 })
 
-const queueColumns = [
-  { key: 'name', label: 'Queue', sortable: true },
-  { key: 'partitions', label: 'Parts', sortable: true, align: 'right' },
-  { key: '_pending', label: 'Pending', sortable: true, align: 'right' },
-  { key: '_depth', label: 'Depth' },
-  { key: '_lag', label: 'Lag', align: 'right' },
-  { key: '_status', label: 'Status' },
-]
+// ---------------------------------------------------------------------------
+// Partitions row — admin events; no severity, just shape + counts.
+// Partitions and retention have their own time-series buckets (separate
+// from the throughput history), so they each carry their own labels too.
+// ---------------------------------------------------------------------------
+const partitionSeriesData = computed(() => {
+  const rows = partitionOpsData.value || []
+  if (!rows.length) return null
+  return [
+    { label: 'Created', data: rows.map(r => Number(r.partitionsCreated) || 0) },
+    { label: 'Deleted', data: rows.map(r => Number(r.partitionsDeleted) || 0) },
+  ]
+})
+const partitionLabels = computed(() =>
+  (partitionOpsData.value || []).map(r => formatChartLabel(new Date(r.bucket), false))
+)
+const partitionCreatedTotal = computed(() =>
+  (partitionOpsData.value || []).reduce((s, r) => s + (Number(r.partitionsCreated) || 0), 0)
+)
+const partitionDeletedTotal = computed(() =>
+  (partitionOpsData.value || []).reduce((s, r) => s + (Number(r.partitionsDeleted) || 0), 0)
+)
 
-const statusDotClass = (s) => s === 'degraded' ? 'status-dot-danger' : s === 'watch' ? 'status-dot-warning' : 'status-dot-success'
-const statusChipClass = (s) => s === 'degraded' ? 'chip-bad' : s === 'watch' ? 'chip-warn' : 'chip-ok'
+// ---------------------------------------------------------------------------
+// Retention row — three series (retention sweep, completed-retention sweep,
+// hard eviction). Only "Evicted" gets the warn color; the others are quiet.
+// ---------------------------------------------------------------------------
+const retentionSeriesData = computed(() => {
+  const rows = retentionData.value || []
+  if (!rows.length) return null
+  return [
+    { label: 'Retention', data: rows.map(r => Number(r.retentionMsgs) || 0) },
+    { label: 'Completed', data: rows.map(r => Number(r.completedRetentionMsgs) || 0) },
+    { label: 'Evicted',   data: rows.map(r => Number(r.evictionMsgs) || 0), color: '#e6b450' },
+  ]
+})
+const retentionLabels = computed(() =>
+  (retentionData.value || []).map(r => formatChartLabel(new Date(r.bucket), false))
+)
+const retentionTotal = computed(() =>
+  (retentionData.value || []).reduce((s, r) =>
+    s +
+    (Number(r.retentionMsgs) || 0) +
+    (Number(r.completedRetentionMsgs) || 0) +
+    (Number(r.evictionMsgs) || 0)
+  , 0)
+)
 
-// Consumer group status derivation
-const cgStatus = (g) => {
-  const lag = g.maxTimeLag || 0
-  if (lag >= 300) return 'stuck'
-  if (lag >= 60 || (g.partitionsWithLag || 0) > 0) return 'lag'
-  return 'healthy'
-}
-const cgPulseClass = (g) => {
-  const s = cgStatus(g)
-  return s === 'stuck' ? 'pulse-ember' : s === 'lag' ? 'pulse-amber' : ''
-}
-const cgChipClass = (g) => {
-  const s = cgStatus(g)
-  return s === 'stuck' ? 'chip-bad' : s === 'lag' ? 'chip-warn' : 'chip-ok'
-}
-const cgLabel = (g) => cgStatus(g)
-// Aggregate max time lag per queue from consumer groups
+// ---------------------------------------------------------------------------
+// Batch efficiency row — point-in-time averages (no series), shows whether
+// batching is healthy. <5 means we're committing tiny batches (overhead-bound).
+// ---------------------------------------------------------------------------
+const batchEfficiency = computed(() => {
+  const b = statusData.value?.messages?.batchEfficiency
+  return {
+    push: b?.push?.toFixed(1) || '0',
+    pop:  b?.pop?.toFixed(1)  || '0',
+    ack:  b?.ack?.toFixed(1)  || '0',
+  }
+})
+
+// ---------------------------------------------------------------------------
+// Counts strip — pending tone (only number that gets thresholded inline)
+// ---------------------------------------------------------------------------
+const pendingNumClass = (n) => !n || n < 1000 ? '' : n < 10000 ? 'warn' : 'bad'
+
+// ---------------------------------------------------------------------------
+// Bottom panels — Top queues by pending + Consumer groups by lag.
+// Both panels share one row idiom (dot · name · right metric · meta line),
+// so the entity-row / .entity-head / .entity-meta classes are applied
+// identically below regardless of which entity is rendered.
+// ---------------------------------------------------------------------------
+
+// Per-queue worst-lag rollup, keyed off consumer-group lag (the queue
+// itself doesn't carry a lag; it's a property of its consumer groups).
 const queueLagMap = computed(() => {
   const m = {}
   for (const c of consumers.value) {
@@ -706,9 +791,10 @@ const enrichedQueues = computed(() => {
   return base
     .map(q => {
       const lag = queueLagMap.value[q.name] || 0
-      const status = lag >= 300 || (q._pending / maxPending) > 0.8 ? 'degraded'
-                   : lag >= 60 || (q._pending / maxPending) > 0.5 ? 'watch'
-                   : 'healthy'
+      const status =
+        lag >= 300 || (q._pending / maxPending) > 0.8 ? 'degraded'
+      : lag >= 60  || (q._pending / maxPending) > 0.5 ? 'watch'
+      : 'healthy'
       return {
         ...q,
         _lag: lag,
@@ -719,27 +805,133 @@ const enrichedQueues = computed(() => {
     .sort((a, b) => b._pending - a._pending)
 })
 
-const sortedQueues = enrichedQueues
-const sortedConsumers = computed(() => [...consumers.value].sort((a, b) => (b.maxTimeLag || 0) - (a.maxTimeLag || 0)))
+// Top 6 by pending depth — the operational priority for "what's piling up".
+const topPendingQueues = computed(() =>
+  enrichedQueues.value.filter(q => q._pending > 0).slice(0, 6)
+    // If no queue has pending, still show the top 6 (mostly to populate
+    // the panel with something rather than the empty state).
+    .concat(enrichedQueues.value.filter(q => q._pending === 0).slice(0, 6))
+    .slice(0, 6)
+)
 
-const fetchOverview = async () => { if (!overview.value) loadingOverview.value = true; try { overview.value = (await resources.getOverview()).data } catch {} finally { loadingOverview.value = false } }
-const fetchQueues = async () => { if (!queues.value.length) loadingQueues.value = true; try { const r = await queuesApi.list(); queues.value = r.data?.queues || r.data || [] } catch {} finally { loadingQueues.value = false } }
-const fetchConsumers = async () => { if (!consumers.value.length) loadingConsumers.value = true; try { const r = await consumersApi.list(); consumers.value = Array.isArray(r.data) ? r.data : r.data?.consumer_groups || [] } catch {} finally { loadingConsumers.value = false } }
-const fetchStatus = async () => { if (!statusData.value) loadingStatus.value = true; try { statusData.value = (await analytics.getStatus(getTimeRangeParams())).data } catch {} finally { loadingStatus.value = false } }
+const sortedConsumers = computed(() =>
+  [...consumers.value].sort((a, b) => (b.maxTimeLag || 0) - (a.maxTimeLag || 0))
+)
+const laggingCount = computed(() =>
+  consumers.value.filter(c => (c.maxTimeLag || 0) >= 60 || (c.partitionsWithLag || 0) > 0).length
+)
+
+// Severity → status-dot class mapping. Reused for both panels.
+const statusDotClass = (s) =>
+  s === 'degraded' ? 'status-dot-danger'
+: s === 'watch'    ? 'status-dot-warning'
+                   : 'status-dot-success'
+
+const cgStatus = (g) => {
+  const lag = g.maxTimeLag || 0
+  if (lag >= 300) return 'stuck'
+  if (lag >= 60 || (g.partitionsWithLag || 0) > 0) return 'lag'
+  return 'healthy'
+}
+const cgDotClass = (g) => {
+  const s = cgStatus(g)
+  return s === 'stuck' ? 'status-dot-danger'
+       : s === 'lag'   ? 'status-dot-warning'
+                       : 'status-dot-success'
+}
+
+// Bar fill color follows queue status (same severity vocabulary).
+const depthBarClass = (s) => s === 'degraded' ? 'bad' : s === 'watch' ? 'warn' : ''
+
+// ---------------------------------------------------------------------------
+// Tooltip value formatters — passed to RowChart so hover tooltips render
+// human-friendly numbers instead of raw floats. fmtRate caps precision the
+// same way the Queues page does (no IEEE-754 tails).
+// ---------------------------------------------------------------------------
+const fmtRate = (n) => {
+  const v = Number(n) || 0
+  if (Math.abs(v) >= 1000) return (v / 1000).toFixed(1) + 'k /s'
+  if (Math.abs(v) >= 100)  return Math.round(v) + ' /s'
+  if (Math.abs(v) >= 10)   return v.toFixed(1) + ' /s'
+  return v.toFixed(2) + ' /s'
+}
+const fmtCount = (n) => {
+  const v = Number(n) || 0
+  return formatNumber(Math.round(v))
+}
+const fmtLagMs = (n) => {
+  const v = Number(n) || 0
+  if (v < 1) return '0'
+  if (v < 1000) return Math.round(v) + ' ms'
+  if (v < 60000) return (v / 1000).toFixed(1) + ' s'
+  return (v / 60000).toFixed(1) + ' m'
+}
+
+// ---------------------------------------------------------------------------
+// Helpers — duration + last-refresh ticker
+// ---------------------------------------------------------------------------
+const formatDuration = (seconds) => {
+  if (!seconds || seconds === 0) return '0s'
+  if (seconds < 60) return `${Math.round(seconds)}s`
+  if (seconds < 3600) {
+    const m = Math.floor(seconds / 60); const s = Math.round(seconds % 60)
+    return s ? `${m}m ${s}s` : `${m}m`
+  }
+  if (seconds < 86400) {
+    const h = Math.floor(seconds / 3600); const m = Math.floor((seconds % 3600) / 60)
+    return m ? `${h}h ${m}m` : `${h}h`
+  }
+  const d = Math.floor(seconds / 86400); const h = Math.floor((seconds % 86400) / 3600)
+  return h ? `${d}d ${h}h` : `${d}d`
+}
+
+const lastRefreshAt = ref(null)
+const nowTick = ref(Date.now())
+const refreshAgo = computed(() => {
+  if (!lastRefreshAt.value) return '—'
+  const sec = Math.max(0, Math.floor((nowTick.value - lastRefreshAt.value) / 1000))
+  if (sec < 5) return 'just now'
+  if (sec < 60) return `${sec}s ago`
+  if (sec < 3600) return `${Math.floor(sec / 60)}m ago`
+  return `${Math.floor(sec / 3600)}h ago`
+})
+
+// ---------------------------------------------------------------------------
+// Fetchers (unchanged)
+// ---------------------------------------------------------------------------
+const fetchOverview = async () => {
+  if (!overview.value) loadingOverview.value = true
+  try { overview.value = (await resources.getOverview()).data } catch {}
+  finally { loadingOverview.value = false }
+}
+const fetchQueues = async () => {
+  if (!queues.value.length) loadingQueues.value = true
+  try { const r = await queuesApi.list(); queues.value = r.data?.queues || r.data || [] } catch {}
+  finally { loadingQueues.value = false }
+}
+const fetchConsumers = async () => {
+  if (!consumers.value.length) loadingConsumers.value = true
+  try {
+    const r = await consumersApi.list()
+    consumers.value = Array.isArray(r.data) ? r.data : r.data?.consumer_groups || []
+  } catch {}
+  finally { loadingConsumers.value = false }
+}
+const fetchStatus = async () => {
+  if (!statusData.value) loadingStatus.value = true
+  try { statusData.value = (await analytics.getStatus(getTimeRangeParams())).data } catch {}
+  finally { loadingStatus.value = false }
+}
 const fetchRetention = async () => {
   try {
     const r = await systemApi.getRetention(getTimeRangeParams())
     retentionData.value = r.data?.series || []
   } catch { retentionData.value = [] }
 }
-// Queue-ops feed: aggregate per-bucket partitions_created/deleted across all
-// queues for the Dashboard's "Partitions" small multiple. The System view
-// consumes the full per-queue series separately.
 const fetchQueueOps = async () => {
   try {
     const r = await systemApi.getQueueOps(getTimeRangeParams())
     const series = r.data?.series || []
-    // Aggregate to one row per bucket.
     const byBucket = {}
     for (const row of series) {
       const b = byBucket[row.bucket] ||= { bucket: row.bucket, partitionsCreated: 0, partitionsDeleted: 0 }
@@ -749,10 +941,6 @@ const fetchQueueOps = async () => {
     partitionOpsData.value = Object.values(byBucket).sort((a, b) => a.bucket.localeCompare(b.bucket))
   } catch { partitionOpsData.value = [] }
 }
-// Per-replica system metrics. Only consumed by the CPU small-multiple when
-// more than one replica is present; otherwise the status-v3 average is used.
-// This fetch is cheap — same payload the System view already uses. We do NOT
-// scope it by filterQueue because CPU is system-wide regardless of queue.
 const fetchSystemMetrics = async () => {
   try {
     const r = timeRanges.find(x => x.value === selectedRange.value) || timeRanges[0]
@@ -771,111 +959,287 @@ const fetchAll = async () => {
     fetchStatus(), fetchRetention(), fetchQueueOps(),
     fetchSystemMetrics(),
   ])
+  lastRefreshAt.value = Date.now()
 }
 
 useRefresh(fetchAll)
 watch(selectedRange, () => { fetchStatus(); fetchRetention(); fetchQueueOps(); fetchSystemMetrics() })
 
 let interval = null
-onMounted(() => { fetchAll(); interval = setInterval(fetchAll, 30000) })
-onUnmounted(() => { if (interval) clearInterval(interval) })
-
-function QueuesIcon(p) { return h('svg', { ...p, fill:'none', viewBox:'0 0 24 24', stroke:'currentColor', 'stroke-width':'2' }, [h('path',{'stroke-linecap':'round','stroke-linejoin':'round', d:'M3 7h18M3 12h18M3 17h12'})]) }
-function PendingIcon(p) { return h('svg', { ...p, fill:'none', viewBox:'0 0 24 24', stroke:'currentColor', 'stroke-width':'2' }, [h('circle',{cx:'12',cy:'12',r:'9'}),h('path',{d:'M12 7v5l3 2'})]) }
-function ConsumersIcon(p) { return h('svg', { ...p, fill:'none', viewBox:'0 0 24 24', stroke:'currentColor', 'stroke-width':'2' }, [h('circle',{cx:'9',cy:'8',r:'3'}),h('circle',{cx:'17',cy:'10',r:'2.2'}),h('path',{d:'M3 20c0-3.3 2.7-6 6-6s6 2.7 6 6M15 20c.2-2 1.6-3.5 3.3-3.9'})]) }
+let tickInterval = null
+onMounted(() => {
+  fetchAll()
+  interval = setInterval(fetchAll, 30000)
+  tickInterval = setInterval(() => { nowTick.value = Date.now() }, 1000)
+})
+onUnmounted(() => {
+  if (interval) clearInterval(interval)
+  if (tickInterval) clearInterval(tickInterval)
+})
 </script>
 
 <style scoped>
-.cg-row {
-  display: flex; align-items: center; gap: 10px;
-  padding: 10px 12px; border-radius: 10px;
-  border: 1px solid var(--bd);
-  cursor: pointer;
-  transition: background .15s var(--ease), border-color .15s var(--ease);
+/* ---------------------------------------------------------------------------
+   Top bar
+   --------------------------------------------------------------------------- */
+.dash-bar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 14px;
+  flex-wrap: wrap;
 }
-:global(.dark) .cg-row { background: rgba(255,255,255,.015); }
-:global(.light) .cg-row { background: rgba(10,10,10,.015); }
-.cg-row:hover { border-color: var(--bd-hi); }
-:global(.dark) .cg-row:hover { background: rgba(255,255,255,.03); }
-:global(.light) .cg-row:hover { background: rgba(10,10,10,.03); }
-
-/* Small-multiples grid: dense 3x3 on wide screens (9 cells), 2xN on medium,
-   1xN on mobile. 3-wide reads better than 4-wide at this chart density. */
-.sm-grid {
-  display: grid;
-  grid-template-columns: repeat(3, 1fr);
-  gap: 10px;
+.dash-live {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 11px;
+  font-family: 'JetBrains Mono', monospace;
+  color: var(--text-mid);
 }
-@media (max-width: 1280px) { .sm-grid { grid-template-columns: repeat(2, 1fr); } }
-@media (max-width: 640px)  { .sm-grid { grid-template-columns: 1fr; } }
-
-.sm-card {
+.dash-bar-right {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+.dash-refresh-tick {
+  font-size: 11px;
+  font-family: 'JetBrains Mono', monospace;
+  color: var(--text-low);
+}
+.dash-master-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px 4px 8px;
+  border-radius: 6px;
   border: 1px solid var(--bd);
   background: var(--ink-2);
-  border-radius: 10px;
-  padding: 10px 12px 6px;
-  display: flex; flex-direction: column;
-  min-height: 178px;
-}
-.sm-head {
-  display: flex; align-items: center; justify-content: space-between;
-  margin-bottom: 6px; gap: 8px;
-}
-.sm-title {
-  font-size: 11px;
-  font-weight: 600;
   color: var(--text-mid);
-  letter-spacing: .02em;
-  text-transform: uppercase;
-}
-.sm-chip {
-  font-family: 'JetBrains Mono', monospace;
   font-size: 11px;
+  font-family: 'JetBrains Mono', monospace;
+  cursor: pointer;
+  transition: color .12s var(--ease), border-color .12s var(--ease), background .12s var(--ease);
+}
+.dash-master-toggle:hover {
   color: var(--text-hi);
+  border-color: var(--bd-hi);
   background: var(--ink-3);
+}
+
+/* ---------------------------------------------------------------------------
+   Counts strip — replaces the four MetricCards. One scannable line.
+   --------------------------------------------------------------------------- */
+.counts-strip {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  flex-wrap: wrap;
+  padding: 12px 16px;
+  margin-bottom: 14px;
   border: 1px solid var(--bd);
-  padding: 1px 6px;
-  border-radius: 99px;
+  background: var(--ink-2);
+  border-radius: 8px;
+}
+.count-item {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 6px;
+  background: transparent;
+  border: none;
+  padding: 0;
+  color: var(--text-mid);
+  font-size: 12.5px;
+  cursor: pointer;
+  transition: color .12s var(--ease);
+}
+.count-item.count-static { cursor: default; }
+.count-item:not(:disabled):not(.count-static):hover { color: var(--text-hi); }
+.count-item:not(:disabled):not(.count-static):hover strong { color: var(--accent); }
+.count-item:disabled { opacity: .5; cursor: default; }
+.count-item strong {
+  font-family: 'JetBrains Mono', monospace;
+  font-variant-numeric: tabular-nums;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text-hi);
+  letter-spacing: -.005em;
+}
+.count-muted strong { color: var(--text-mid); }
+.count-sep {
+  color: var(--bd-hi);
+  font-size: 11px;
+  user-select: none;
+}
+
+/* ---------------------------------------------------------------------------
+   Metric table — the heart of the redesign.
+   --------------------------------------------------------------------------- */
+.metric-table {
+  border: 1px solid var(--bd);
+  background: var(--ink-2);
+  border-radius: 8px;
+  overflow: hidden;
+  margin-bottom: 14px;
+}
+.metric-head {
+  display: grid;
+  grid-template-columns: 14px 150px 160px 1fr 260px 24px;
+  gap: 16px;
+  padding: 9px 16px;
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: .08em;
+  text-transform: uppercase;
+  color: var(--text-low);
+  border-bottom: 1px solid var(--bd);
+  background: rgba(255, 255, 255, .015);
+}
+.metric-head .h-value { text-align: right; }
+.metric-head .h-spark { text-align: left; font-family: 'JetBrains Mono', monospace; letter-spacing: .04em; text-transform: lowercase; }
+@media (max-width: 1100px) {
+  .metric-head {
+    grid-template-columns: 14px 140px 140px 1fr 180px 24px;
+    gap: 12px;
+  }
+}
+@media (max-width: 900px) {
+  .metric-head {
+    grid-template-columns: 14px 1fr auto 110px 24px;
+  }
+  .metric-head > :nth-child(4) { display: none; }
+}
+
+/* The slot-defined value separators — used by compound rows like "avg / max" */
+:deep(.mr-sep) {
+  color: var(--text-low);
+  margin: 0 4px;
+  font-weight: 400;
+}
+:deep(.mr-unit) {
+  font-style: normal;
+  color: var(--text-low);
+  margin-left: 3px;
+  font-size: 11px;
+  font-weight: 400;
+}
+
+/* ---------------------------------------------------------------------------
+   Bottom panels — symmetric entity rows.
+
+   One idiom, two panels. Each row is a 2-line card: the head carries
+   the leading severity dot, the entity name (left), and the right-side
+   numeric metric; the meta line below carries either a depth bar with
+   counts (queues) or a tag + counts (consumer groups). The two panels
+   render the same .entity-row class so they read as a single visual
+   system on the dashboard.
+   --------------------------------------------------------------------------- */
+.entity-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 10px 10px 6px;
+}
+
+.entity-row {
+  display: block;
+  width: 100%;
+  text-align: left;
+  border: 1px solid var(--bd);
+  border-radius: 8px;
+  background: transparent;
+  padding: 9px 12px 10px;
+  cursor: pointer;
+  transition: border-color .12s var(--ease), background .12s var(--ease);
+}
+:global(.dark) .entity-row { background: rgba(255, 255, 255, .012); }
+:global(.light) .entity-row { background: rgba(10, 10, 10, .012); }
+.entity-row:hover { border-color: var(--bd-hi); }
+:global(.dark) .entity-row:hover { background: rgba(255, 255, 255, .03); }
+:global(.light) .entity-row:hover { background: rgba(10, 10, 10, .03); }
+
+.entity-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.entity-name {
+  flex: 1;
+  font-size: 13.5px;
+  font-weight: 500;
+  color: var(--text-hi);
+  letter-spacing: -.005em;
+  overflow: hidden;
+  text-overflow: ellipsis;
   white-space: nowrap;
 }
-.sm-chip-ok   { color: #4ade80; border-color: rgba(74,222,128,0.3); }
-.sm-chip-warn { color: #e6b450; border-color: rgba(230,180,80,0.3); }
-.sm-chip-bad  { color: #fb7185; border-color: rgba(251,113,133,0.3); }
-.sm-empty {
-  flex: 1;
-  display: flex; align-items: center; justify-content: center;
-  color: var(--text-faint); font-size: 18px;
+.entity-right {
+  font-family: 'JetBrains Mono', monospace;
+  font-variant-numeric: tabular-nums;
+  font-size: 12px;
+  color: var(--text-mid);
+  white-space: nowrap;
+  flex-shrink: 0;
 }
 
-/* Filter chip — pill above the multiples showing active drilldown. */
-.filter-chip {
-  display: inline-flex; align-items: center; gap: 6px;
-  padding: 3px 8px 3px 10px;
+.entity-meta {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 6px;
+  padding-left: 14px;  /* indent under the dot so the meta line aligns with name */
+}
+.entity-meta .bar-meta {
+  flex: 0 1 160px;
+  width: 160px;
+  height: 4px;
+}
+.meta-text {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 11px;
+  color: var(--text-low);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.meta-text strong {
+  color: var(--text-mid);
+  font-weight: 600;
+}
+.meta-sep { color: var(--bd-hi); margin: 0 4px; }
+.meta-tag {
+  display: inline-block;
+  padding: 1px 6px;
   border-radius: 99px;
-  border: 1px solid var(--bd-hi);
+  border: 1px solid var(--bd);
   background: var(--ink-3);
   color: var(--text-mid);
-  font-size: 11px;
-  font-family: 'JetBrains Mono', monospace;
-  cursor: pointer;
-  transition: background .15s var(--ease), border-color .15s var(--ease), color .15s var(--ease);
+  font-size: 10px;
+  font-weight: 500;
+  letter-spacing: .02em;
+  margin-right: 2px;
 }
-.filter-chip:hover { background: var(--ink-4); color: var(--text-hi); border-color: var(--text-low); }
-.filter-chip-queue { color: var(--text-hi); font-weight: 500; }
-.filter-chip-x { color: var(--text-low); font-size: 14px; line-height: 1; padding-left: 2px; }
 
-/* Clickable queue lag row — subtle affordance, strong active state. */
-.ql-row {
-  padding: 4px 8px;
-  margin: -4px -8px;
-  border-radius: 6px;
+.entity-empty {
+  padding: 32px 16px;
+  text-align: center;
+  color: var(--text-low);
+  font-size: 13px;
+}
+
+.card-foot {
+  border-top: 1px solid var(--bd);
+  padding: 8px 14px;
+  display: flex;
+  justify-content: flex-end;
+}
+.card-foot-link {
+  font-size: 11.5px;
+  color: var(--text-mid);
   cursor: pointer;
-  transition: background .12s var(--ease);
+  letter-spacing: -.005em;
+  transition: color .12s var(--ease);
 }
-.ql-row:hover { background: rgba(255,255,255,0.03); }
-.ql-row-active {
-  background: rgba(255,255,255,0.06);
-  box-shadow: inset 2px 0 0 var(--accent);
-}
+.card-foot-link:hover { color: var(--text-hi); }
 </style>
-

@@ -171,7 +171,11 @@ function fmt(n) {
 function fmtRate(n) {
   if (!n) return '0'
   if (n >= 1000) return (n / 1000).toFixed(1) + 'k'
-  return String(n)
+  if (n >= 100)  return Math.round(n).toString()
+  if (n >= 10)   return n.toFixed(1)
+  // Sub-10 rates come from float division (e.g. 2 msgs / 18s = 0.111…),
+  // so we always cap precision at 2 decimals — never render the raw float.
+  return n.toFixed(2)
 }
 function fmtLag(ms) {
   if (!ms) return '—'
