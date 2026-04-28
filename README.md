@@ -4,8 +4,6 @@
 
 **Unlimited ordered partitions that never block each other. Consumer groups, replay, transactional delivery — ACID-guaranteed.**
 
-*Note that queen-mq is available also as a experimental PostgreSQL extension, see [pg_qpubsub](pg_qpubsub/README.md) for more details.*
-
 
 [![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE.md)
 [![Node](https://img.shields.io/badge/node-%3E%3D22.0.0-brightgreen.svg)](https://nodejs.org/)
@@ -25,31 +23,26 @@
 
 </div>
 
+> **Version 0.14.0 — the biggest release yet.** New dynamic libqueen loop, rewritten push / pop / ack / stats stored procedures, `maxPartitions` on all clients, new frontend. Benchmarked on real hardware: **104k msg/s** push (batch=100), **165k msg/s** fan-out across 10 consumer groups, pop throughput **+80–90%** vs 0.12 under partition contention, server RSS under **52 MB** at peak, zero message loss across **1.6 billion events**. [Full benchmark results →](docs/benchmarks.html#version)
+
 ---
 
-Queen MQ is a partitioned message queue backed by PostgreSQL, built with uWebSockets, libuv, and libpq async API. It features unlimited FIFO partitions that process independently, consumer groups with replay, transactional delivery, tracing, and ACID-guaranteed durability. With Queen you get Kafka semantics on PostgreSQL, using stateless clients that speak HTTP to a stateless server, easy to deploy and manage, but still powerful and flexible enough to sustain tens of thousands of requests per second across thousands of partitions.
+Queen MQ is a partitioned message queue backed by PostgreSQL, built with uWebSockets, libuv, and libpq async API. It features unlimited FIFO partitions that process independently, consumer groups with replay, transactional delivery, tracing, and ACID-guaranteed durability — all in a single stateless binary alongside the Postgres you already run. Version 0.14.0 sustains **104k msg/s** push and **165k msg/s** fan-out on a 32-core host, with a broker RSS under 52 MB.
 
-For a experimental PostgreSQL extension version of Queen MQ, see [pg_qpubsub](pg_qpubsub/README.md).
-
-See [examples/base.js](examples/base.js) for a complete (push, consume, transactionally ack and push to another queue) example.
+See [examples/base.js](examples/base.js) for a complete (push, consume, transactionally ack and push to another queue) example. An experimental PostgreSQL extension version is also available at [pg_qpubsub](pg_qpubsub/README.md).
 
 ## Why Queen?
 
 Born at [Smartness](https://www.linkedin.com/company/smartness-com/) to power **Smartchat**, Queen solves a unique problem: **unlimited FIFO partitions** where slow processing in one partition doesn't block others.
 
-
-
 Perfect for:
 
-- Processing messages in order, without losing them somewhere in the middle
-- Avoid slow message processing blocking other partitions, solving Head of Line Blocking problem
-- When you need tens of thousands of partitions to process messages in parallel, respecting the order of the messages
-- Process the same messages in multiple pipelines
-- Have a clear view of the message processing flow and traceability
-- Build event-driven microservices with exactly-once delivery guarantees
-- Critical systems that need to be highly available and reliable with zero message loss
-
-On a 32-core server with 24 PostgreSQL cores, Queen sustains **~47,300 msg/s** push throughput (batch=100, 1 KB payload) and **~194 MB/s** ingestion at 10 KB payloads, with zero errors and PostgreSQL running at 36-40 % of its cap. Sustained mixed PUSH+POP is around 10k req/s, and consumer-group fan-out reaches ~60k msg/s across 10 groups. See [test-perf/results.md](test-perf/results.md) for the full ledger.
+- **One ordered lane per entity, no preallocation** — 10,000 partitions cost index rows, not 10,000 commit-log files. A partition is created on first push; a slow consumer on one partition never stalls another.
+- **Transactional integration with PostgreSQL** — `BEGIN; INSERT order; queen.push(...); COMMIT;` in a single PG transaction. The transactional-outbox pattern is built in.
+- **Fan-out with fairness** — consumer groups each get a full copy of every message; the adaptive engine keeps delivery fair across groups at sub-linear CPU cost.
+- **52 MB broker at 104k msg/s** — no JVM, no Erlang, no cluster to operate. One Docker container plus your existing Postgres.
+- **Replay and DLQ** — rewind any consumer group to any timestamp; failed messages surface in a per-queue dead-letter queue automatically.
+- **Zero message loss, verified** — 1.6 billion events across the benchmark suite, zero lost, zero duplicates.
 
 ## Quick Start
 
@@ -66,7 +59,7 @@ docker run --name qpg --network queen -e POSTGRES_PASSWORD=postgres -p 5433:5432
 sleep 2
 
 # Start Queen Server
-docker run -p 6632:6632 --network queen -e PG_HOST=qpg -e PG_PORT=5432 -e PG_PASSWORD=postgres -e NUM_WORKERS=2 -e DB_POOL_SIZE=5 -e SIDECAR_POOL_SIZE=30 smartnessai/queen-mq:0.13.0
+docker run -p 6632:6632 --network queen -e PG_HOST=qpg -e PG_PORT=5432 -e PG_PASSWORD=postgres -e NUM_WORKERS=2 -e DB_POOL_SIZE=5 -e SIDECAR_POOL_SIZE=30 smartnessai/queen-mq:0.14.0
 ```
 
 Then in another terminal, use cURL (or the client libraries) to push and consume messages
@@ -145,6 +138,7 @@ The repository is structured as follows:
 
 | Server Version | Description                                                                                                                     | Compatible Clients                                          |
 | -------------- | ------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------- |
+| **0.14.0**     | Major release: new dynamic libqueen loop; rewritten `push_messages_v3`, `pop_messages_v3`, `ack_messages_v2`, and `stats` stored procedures; `maxPartitions` on all clients (JS, Python, Go, Laravel, C++); new frontend. Benchmarked on real hardware: **104k msg/s** push (batch=100), **165k msg/s** fan-out across 10 consumer groups, pop throughput **+80–90%** vs 0.12 under partition contention, 52 MB server RSS at peak, zero message loss across 1.6B events. [See benchmarks →](docs/benchmarks.html#version) | All ≥0.13.x clients work unchanged — upgrade clients to gain `maxPartitions` support |
 | **0.13.0**     | Major release: new libqueen with adaptive batch/concurrency/scheduling engine (S1 ~2x, S3 ~3x push throughput), new `push_messages_v3` stored procedure, new Vue 3 dashboard, and server-stamped `producerSub` from the JWT on every message (closes #23) | All ≥0.12.x work unchanged — 0.13.0 pop responses add a new `producerSub` field that older clients silently ignore. Upgrade to 0.13.0 clients only if you want typed access to `producerSub` (Go struct field, Python TypedDict hint) |
 | **0.12.19**    | Fix bug that on seek or cg delete do not deleted the watermark                                                                  | JS ≥0.7.4, Python ≥0.7.4                                    |
 | **0.12.18**    | Improved charts and filters                                                                                                     | JS ≥0.7.4, Python ≥0.7.4                                    |
@@ -170,29 +164,23 @@ The repository is structured as follows:
 
 ---
 
-## Bug fixing and improvements
+## Latest bug fixing and improvements
 
+- Server and clients 0.14.0: **New dynamic libqueen loop.** Full rewrite of the core scheduling engine — adaptive concurrency controller (TCP-Vegas-style) now drives push, pop, ack, and stats independently. Active DB connections stay at ~2.5 even with a pool of 50 under 104k msg/s peak load. Eliminates the PG deadlock mode that appeared under heavy fan-out at high partition counts on 0.12.
+- Server 0.14.0: **Rewritten stored procedures.** `push_messages_v3`, `pop_messages_v3`, `ack_messages_v2`, and stats procedures redesigned around the new loop. PG memory usage 30–70% lower for equivalent workloads vs 0.12. Pop throughput +80–90% under partition contention.
+- Clients 0.14.0: **`maxPartitions` on all clients.** JS, Python, Go, Laravel, and C++ clients expose `maxPartitions` on queue creation and configuration.
+- Server 0.14.0: **New frontend.** Redesigned dashboard for the new stats model.
 - Server 0.13.0: **New libqueen with adaptive engine.** Per-worker push/ack drain factored into three independently-tuned concerns — batching, concurrency, scheduling — glued by an event-driven orchestrator. Fixes two long-standing bottlenecks: per-commit overhead amortization on small-batch workloads, and the single-slot-per-drain cap on high-fanout workloads. Perf harness numbers: S1 ~6.2k → ~13k pg_ins/s, S3 ~4.7k → ~20k pg_ins/s, PG pinned instead of idle. Design notes in `cdocs/LIBQUEEN_IMPROVEMENTS.md`.
 - Server 0.13.0: **New push stored procedure.** `queen.push_messages_v2` rewritten around a temp-table + batched-insert pipeline that feeds cleanly into the adaptive engine. HTTP contract (queued/duplicate/failed) unchanged.
 - Server 0.13.0: **New Vue 3 dashboard.** Reworked queues, analytics, DLQ management, and maintenance-mode views. Served by the same C++ acceptor at `/`.
 - Server 0.13.0: Added server-stamped `producerSub` to close the impersonation vector from GitHub issue #23. When JWT auth is enabled the server stamps the validated `sub` claim on every pushed message; clients cannot set this field and it is exposed on pop responses and admin message APIs. Schema migration is additive and metadata-only (no table rewrite), safe on tables with millions of rows.
 - Clients 0.13.0: All clients (JS, Python, Go, Laravel, C++) expose `producerSub` on popped messages; Go adds a typed `Message.ProducerSub` field.
-- Server 0.12.19: Fix bug that on seek or cg delete do not deleted the watermark
-- Server 0.12.17: Improved stats
-- Server 0.12.13: Added watermark tracking for efficient wildcard POP discovery. x20 faster pop on high partition count queues
-- Server 0.12.12: Added built-in database migration — stream pg_dump | pg_restore directly from the dashboard, no temp file, selective table groups, row count validation, PG 18 client in Docker image
-- Clients 0.12.2: Added custom `headers` option to JS, Python, and Go clients for API gateway authentication
-- Server 0.12.10: Fixed JWKS fetch over HTTPS (added CPPHTTPLIB_OPENSSL_SUPPORT to enable TLS in cpp-httplib)
-- Server 0.12.9: Fixed server crash (SIGSEGV) on lease renewal caused by use-after-free of HttpRequest pointer
-- Server 0.12.9: Added native EdDSA and JWKS JWT authentication (auto-discovery via JWT_JWKS_URL)
-- Server 0.12.9: Fixed quickstart consumer example (autoAck + onError silent conflict)
-- Server 0.12.9: Fixed examples 03-transactional-pipeline.js and 08-consumer-groups.js (missing .each())
-- Server 0.12.8: Added single partition move to now to frontend
-- Server 0.12.7: Optimized cg metadata creation for new consumer groups
-- Server 0.12.6: Improved slow cg discovery when there are tons of partitions
-- Server 0.12.5: Fixed cg lag calculation for "new" cg at first message
-- Server 0.12.4: Fixed window buffer debounce behavior
-- Clients 0.12.1: Fixed bug in transaction with consumer groups
+- Server 0.12.19: Fix bug where seek or cg delete did not delete the watermark.
+- Server 0.12.13: Added watermark tracking for efficient wildcard POP discovery — x20 faster pop on high partition count queues.
+- Server 0.12.12: Added built-in database migration — stream pg_dump | pg_restore directly from the dashboard, no temp file, selective table groups, row count validation.
+- Clients 0.12.2: Added custom `headers` option to JS, Python, and Go clients for API gateway authentication.
+- Server 0.12.9: Fixed server crash (SIGSEGV) on lease renewal; added native EdDSA and JWKS JWT authentication (auto-discovery via `JWT_JWKS_URL`).
+- Server 0.12.3: Added JWT authentication.
 
 ---
 
@@ -201,8 +189,6 @@ The repository is structured as follows:
 Queen MQ is released under the [Apache 2.0 License](LICENSE.md).
 
 ---
-
-
 
 **Built with ❤️ by [Smartness](https://www.linkedin.com/company/smartness-com/)**
 

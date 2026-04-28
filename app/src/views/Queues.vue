@@ -101,14 +101,18 @@ import { ref, computed, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { queues as queuesApi, system as systemApi } from '@/api'
 import { useRefresh } from '@/composables/useRefresh'
+import { useQueuesStore } from '@/stores/queuesStore'
 import QueueHealthGrid from '@/components/QueueHealthGrid.vue'
 
 const router = useRouter()
 
-// State
-const queues = ref([])
+// Shared store — same singleton the Consumers page reads. Calling
+// fetchQueues({ force: true }) on auto-refresh keeps it fresh; navigating
+// to Consumers afterwards returns instantly from cache.
+const queuesStore = useQueuesStore()
+const { queues, loading, namespaces: storeNamespaces, tasks: storeTasks, fetchQueues: fetchQueuesShared, invalidate } = queuesStore
+
 const opsByQueue = ref(new Map())
-const loading = ref(true)
 const searchQuery = ref('')
 const filterNamespace = ref('')
 const filterTask = ref('')
@@ -126,15 +130,10 @@ const sortOptions = [
   { value: 'name', label: 'Name' },
 ]
 
-// Unique namespaces and tasks
-const namespaces = computed(() => {
-  const set = new Set(queues.value.map(q => q.namespace).filter(ns => ns !== undefined))
-  return [...set].sort()
-})
-const tasks = computed(() => {
-  const set = new Set(queues.value.map(q => q.task).filter(t => t !== undefined))
-  return [...set].sort()
-})
+// Re-export the store-derived lists with the names this template already
+// uses, so the template doesn't need to change.
+const namespaces = storeNamespaces
+const tasks = storeTasks
 
 /**
  * Merge each queue with its latest queue-ops aggregate and derive the
@@ -187,19 +186,10 @@ const filteredQueues = computed(() => {
   return result
 })
 
-// Methods
-const fetchQueues = async () => {
-  if (!queues.value.length) loading.value = true
-  try {
-    const response = await queuesApi.list()
-    const allQueues = response.data?.queues || response.data || []
-    queues.value = allQueues.filter(q => q.name && q.name.trim() !== '')
-  } catch (err) {
-    console.error('Failed to fetch queues:', err)
-  } finally {
-    loading.value = false
-  }
-}
+// Methods — fetchQueues is now thin shim around the shared store.
+// On mount we use the cache (instant if Consumers/Dashboard already loaded
+// queues); on auto-refresh we force-bust so we get fresh data.
+const fetchQueues = (force = false) => fetchQueuesShared({ force })
 
 /* Pull last 15m of queue-ops and aggregate per queue across the window.
  *
@@ -248,8 +238,9 @@ const fetchQueueOps = async () => {
   }
 }
 
+// Auto-refresh forces fresh queues; mount-time call reuses cache.
 const refreshAll = async () => {
-  await Promise.all([fetchQueues(), fetchQueueOps()])
+  await Promise.all([fetchQueues(true), fetchQueueOps()])
 }
 
 const viewQueue = (queue) => {
@@ -267,6 +258,7 @@ const deleteQueue = async () => {
     await queuesApi.delete(queueToDelete.value.name)
     showDeleteModal.value = false
     queueToDelete.value = null
+    invalidate()  // mutation happened — bust the cache so other views see it
     refreshAll()
   } catch (err) {
     console.error('Failed to delete queue:', err)
@@ -274,7 +266,13 @@ const deleteQueue = async () => {
 }
 
 useRefresh(refreshAll)
-onMounted(refreshAll)
+
+// On mount, hit the cache first. If the data is fresh (e.g. user just came
+// from /consumers), the queue list shows instantly with zero network.
+onMounted(() => {
+  fetchQueues()       // cache-respecting
+  fetchQueueOps()
+})
 </script>
 
 <style scoped>
