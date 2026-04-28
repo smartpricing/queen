@@ -472,11 +472,16 @@ static void worker_thread(const Config& config, int worker_id, int num_workers,
                 // commit via queen.update_partition_lookup_v1(); this service
                 // catches anything missed during crashes or transient
                 // failures of that call.
+                //
+                // Gated on queen.is_stats_leader (shared with StatsService) so
+                // only the elected leader actually executes the reconcile
+                // query. Followers wake up, check leadership, and skip.
                 spdlog::info("[Worker 0] Starting background partition_lookup reconcile service...");
                 global_partition_lookup_reconcile_service =
                     std::make_shared<queen::PartitionLookupReconcileService>(
                         global_async_db_pool,
                         global_system_thread_pool,
+                        global_system_info.hostname,
                         config.jobs.partition_lookup_reconcile_interval_ms,
                         config.jobs.partition_lookup_reconcile_lookback_seconds
                     );

@@ -1,16 +1,19 @@
 #include "queen/partition_lookup_reconcile_service.hpp"
+#include <unistd.h>  // getpid()
 
 namespace queen {
 
 PartitionLookupReconcileService::PartitionLookupReconcileService(
     std::shared_ptr<AsyncDbPool> db_pool,
     std::shared_ptr<astp::ThreadPool> system_thread_pool,
+    const std::string& hostname,
     int reconcile_interval_ms,
     int reconcile_lookback_seconds
 ) : db_pool_(db_pool),
     system_thread_pool_(system_thread_pool),
     reconcile_interval_ms_(reconcile_interval_ms),
-    reconcile_lookback_seconds_(reconcile_lookback_seconds) {
+    reconcile_lookback_seconds_(reconcile_lookback_seconds),
+    hostname_(hostname) {
 }
 
 PartitionLookupReconcileService::~PartitionLookupReconcileService() {
@@ -26,8 +29,10 @@ void PartitionLookupReconcileService::start() {
     running_ = true;
     schedule_next_run();
 
-    spdlog::info("PartitionLookupReconcileService started: interval={}ms, lookback={}s",
-                 reconcile_interval_ms_, reconcile_lookback_seconds_);
+    spdlog::info(
+        "PartitionLookupReconcileService started (stats-leader gated): "
+        "interval={}ms, lookback={}s, hostname={}",
+        reconcile_interval_ms_, reconcile_lookback_seconds_, hostname_);
 }
 
 void PartitionLookupReconcileService::stop() {
@@ -44,44 +49,51 @@ void PartitionLookupReconcileService::schedule_next_run() {
     });
 }
 
+bool PartitionLookupReconcileService::is_stats_leader() {
+    try {
+        auto conn = db_pool_->acquire();
+
+        // Pass hostname AND pid: handles multiple instances on the same host
+        // (e.g. local dev) and matches the StatsService convention.
+        sendQueryParamsAsync(conn.get(),
+            "SELECT queen.is_stats_leader($1, $2)",
+            {hostname_, std::to_string(getpid())});
+        auto result = getTuplesResult(conn.get());
+
+        if (PQntuples(result.get()) > 0) {
+            const char* val = PQgetvalue(result.get(), 0, 0);
+            return val && val[0] == 't';
+        }
+        // Empty result is unexpected; assume leader to avoid silent
+        // safety-net outages. Same fail-open posture as StatsService.
+        return true;
+
+    } catch (const std::exception& e) {
+        spdlog::warn(
+            "PartitionLookupReconcileService: leader check failed ({}); "
+            "assuming leader to avoid safety-net gap", e.what());
+        return true;
+    }
+}
+
 void PartitionLookupReconcileService::reconcile_cycle() {
     auto cycle_start = std::chrono::steady_clock::now();
-
-    // Advisory lock id distinct from RetentionService/EvictionService (737001).
-    // Prevents multiple server instances from running the reconciler
-    // concurrently. Transaction-level lock is PgBouncer-compatible.
-    constexpr int64_t RECONCILE_LOCK_ID = 737002;
-
-    AsyncDbPool::PooledConnection lock_conn;
-    bool has_lock = false;
-    bool in_transaction = false;
     int fixed_count = 0;
 
     try {
-        lock_conn = db_pool_->acquire();
-
-        // Begin transaction to hold the xact-level advisory lock.
-        sendQueryParamsAsync(lock_conn.get(), "BEGIN", {});
-        getCommandResult(lock_conn.get());
-        in_transaction = true;
-
-        sendQueryParamsAsync(lock_conn.get(),
-            "SELECT pg_try_advisory_xact_lock($1::bigint)",
-            {std::to_string(RECONCILE_LOCK_ID)});
-        auto lock_result = getTuplesResult(lock_conn.get());
-
-        if (PQntuples(lock_result.get()) > 0) {
-            std::string result_str = PQgetvalue(lock_result.get(), 0, 0);
-            has_lock = (result_str == "t");
-        }
-
-        if (!has_lock) {
-            spdlog::debug("PartitionLookupReconcileService: skipping cycle, another instance holds the lock");
+        if (!is_stats_leader()) {
+            // Followers skip the heavy query entirely. The leader runs it.
+            // No advisory lock needed: queen.is_stats_leader is the
+            // single point of coordination.
+            spdlog::debug(
+                "PartitionLookupReconcileService: skipping cycle "
+                "(not stats leader, hostname={})", hostname_);
         } else {
-            sendQueryParamsAsync(lock_conn.get(),
+            auto conn = db_pool_->acquire();
+            sendQueryParamsAsync(conn.get(),
                 "SELECT queen.reconcile_partition_lookup_v1($1::int)",
                 {std::to_string(reconcile_lookback_seconds_)});
-            auto result = getTuplesResult(lock_conn.get());
+            auto result = getTuplesResult(conn.get());
 
             if (PQntuples(result.get()) > 0) {
                 const char* val = PQgetvalue(result.get(), 0, 0);
@@ -89,25 +101,18 @@ void PartitionLookupReconcileService::reconcile_cycle() {
             }
 
             if (fixed_count > 0) {
-                spdlog::info("PartitionLookupReconcileService: fixed {} partition_lookup rows",
-                             fixed_count);
+                spdlog::info(
+                    "PartitionLookupReconcileService: fixed {} partition_lookup rows "
+                    "(stats leader, hostname={})",
+                    fixed_count, hostname_);
             } else {
-                spdlog::debug("PartitionLookupReconcileService: no partitions needed reconciliation");
+                spdlog::debug(
+                    "PartitionLookupReconcileService: no partitions needed reconciliation "
+                    "(stats leader, hostname={})", hostname_);
             }
         }
     } catch (const std::exception& e) {
         spdlog::error("PartitionLookupReconcileService cycle error: {}", e.what());
-    }
-
-    // COMMIT releases the advisory lock.
-    if (in_transaction && lock_conn) {
-        try {
-            sendQueryParamsAsync(lock_conn.get(), "COMMIT", {});
-            getCommandResult(lock_conn.get());
-        } catch (const std::exception& e) {
-            spdlog::debug("PartitionLookupReconcileService: failed to commit lock transaction: {}",
-                          e.what());
-        }
     }
 
     if (running_) {
@@ -115,6 +120,10 @@ void PartitionLookupReconcileService::reconcile_cycle() {
         auto cycle_duration = std::chrono::duration_cast<std::chrono::milliseconds>(
             cycle_end - cycle_start
         );
+        // Followers' cycle is just one cheap is_stats_leader() call (~ms).
+        // The leader's cycle includes the heavy query. Either way we sleep
+        // until the next interval boundary relative to cycle start so the
+        // configured cadence is honored.
         auto sleep_time = reconcile_interval_ms_ - cycle_duration.count();
         if (sleep_time < 0) sleep_time = 0;
 

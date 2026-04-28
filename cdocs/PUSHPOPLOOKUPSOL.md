@@ -89,7 +89,7 @@ Pop's claim mechanics are a secondary concern — but not a non-issue, as
                                 │       └── UPSERT into partition_lookup (monotonic)
                                 └──────────────────┘
 
- ┌──────────────────────────┐       (every 5 s, advisory-locked)
+ ┌──────────────────────────┐       (every 5 s, gated on queen.is_stats_leader)
  │ PartitionLookupReconcile │ ──▶   PG: queen.reconcile_partition_lookup_v1(60)
  │      Service             │           └── LATERAL scan + FOR UPDATE SKIP LOCKED
  └──────────────────────────┘
@@ -121,10 +121,16 @@ Pop's claim mechanics are a secondary concern — but not a non-issue, as
    retries, and concurrent callers are all safe.
 4. **Non-blocking pop claim.** Pop never takes row locks on
   `partition_lookup`. Advisory locks only.
-5. **A single writer advisory ID (`737002`) on the reconciler** so
-  multiple server instances don't reconcile concurrently (primary
-   writer is the faster path; the reconciler just needs to *eventually*
-   run).
+5. **Leader-gated reconciler.** Only the elected stats leader
+  (`queen.is_stats_leader(hostname, pid)`, shared with `StatsService`)
+   actually runs `queen.reconcile_partition_lookup_v1`. Followers wake
+   up, check leadership, and skip — primary writer is the faster path,
+   the reconciler just needs to *eventually* run, and exactly one
+   replica running it is the cheapest correct shape. Replaced an
+   earlier `pg_try_advisory_xact_lock(737002)` design that prevented
+   simultaneous execution but did not rate-limit across a time window
+   (with N replicas in different phase offsets the query effectively
+   ran every `interval / N` seconds).
 
 ---
 
@@ -318,22 +324,44 @@ output (monotonic `WHERE`).
 `server/src/services/partition_lookup_reconcile_service.cpp` /
 `server/include/queen/partition_lookup_reconcile_service.hpp`
 
-Modeled on `RetentionService`. Runs on the `system_thread_pool` (not on
+Modeled on `StatsService`. Runs on the `system_thread_pool` (not on
 the HTTP worker loops). Each cycle:
 
-1. `BEGIN` on a pooled connection.
-2. `pg_try_advisory_xact_lock(737002)`. If another server instance holds
-  it, log at DEBUG and skip the cycle.
-3. `SELECT queen.reconcile_partition_lookup_v1($lookback)`.
-4. Log the returned row count at INFO if non-zero; DEBUG otherwise.
-5. `COMMIT` (releases the advisory lock).
-6. Sleep `interval_ms - cycle_duration`, then loop.
+1. `SELECT queen.is_stats_leader($hostname, $pid)` on a pooled
+  connection. If false, log at DEBUG and skip the cycle.
+2. `SELECT queen.reconcile_partition_lookup_v1($lookback)`.
+3. Log the returned row count at INFO if non-zero; DEBUG otherwise.
+4. Sleep `interval_ms - cycle_duration`, then loop.
+
+The leader is the lex-smallest `(hostname, pid)` reporting in
+`queen.worker_metrics` within the last 2 minutes (see
+`queen.is_stats_leader` in `lib/schema/procedures/013_stats.sql`).
+A dead leader stays "current" until its row ages out, so worst-case
+repair latency for a missed primary-writer call goes from the legacy
+~5 s (advisory-lock) to ~2 minutes (leadership timeout). Acceptable
+for a safety net — the row also self-heals on the next push to the
+affected partition via `update_partition_lookup_v1`.
+
+**Why no advisory lock anymore.** The earlier
+`pg_try_advisory_xact_lock(737002)` design is gone because it only
+prevented *simultaneous* execution, not closely-spaced execution.
+With N replicas at 5 s cadence whose phases drift apart, the lock
+would be free for ~3.7 s of every 5 s window (the period after the
+holder commits but before the next replica wakes), so each replica's
+cycle would successfully acquire it. The reconcile query effectively
+ran every `interval / N` seconds at the database, driving its CPU
+cost on a ~5k-partition deployment to ~half a core continuously
+(visible in RDS Performance Insights for the query family).
+Leader election keeps the configured cadence honest regardless of
+replica count.
 
 **Advisory lock IDs used elsewhere** (don't reuse):
 
 - `737000` — RetentionService
 - `737001` — EvictionService
-- `737002` — **PartitionLookupReconcileService** (this service)
+- `737002` — *(formerly PartitionLookupReconcileService; freed by
+  the leader-election migration. Safe to repurpose for a future
+  service that genuinely needs cross-replica advisory coordination.)*
 
 ### 4.7 Config (`server/include/queen/config.hpp`)
 
@@ -363,6 +391,7 @@ Instantiated only in `Worker 0` at startup:
 global_partition_lookup_reconcile_service =
     std::make_shared<queen::PartitionLookupReconcileService>(
         db_pool, system_thread_pool,
+        global_system_info.hostname,  // for queen.is_stats_leader
         config.jobs.partition_lookup_reconcile_interval_ms,
         config.jobs.partition_lookup_reconcile_lookback_seconds
     );
@@ -854,7 +883,7 @@ psql -c "\sf queen.pop_unified_batch_v3" | grep -n 'NO LIMIT'
 # → shows the 'NO LIMIT: advisory-loop EXIT' comment line
 
 # confirm the reconcile service is running (look for log line on startup)
-# PartitionLookupReconcileService started: interval=5000ms, lookback=60s
+# PartitionLookupReconcileService started (stats-leader gated): interval=5000ms, lookback=60s, hostname=...
 ```
 
 Under combined load, the single strongest positive signal is this
@@ -884,7 +913,7 @@ GROUP BY 1 ORDER BY n DESC;
 | `lib/queen/pending_job.hpp`                                         | `JobType::POP → pop_unified_batch_v3`                                                                                            |
 | `lib/queen.hpp`                                                     | Parse `{items, partition_updates}` from `push_messages_v3`; fire `update_partition_lookup_v1` as `JobType::CUSTOM` post-response |
 | `server/include/queen/partition_lookup_reconcile_service.hpp` (new) | Service header                                                                                                                   |
-| `server/src/services/partition_lookup_reconcile_service.cpp` (new)  | Service implementation (advisory lock 737002)                                                                                    |
+| `server/src/services/partition_lookup_reconcile_service.cpp` (new)  | Service implementation (gated on `queen.is_stats_leader`)                                                                        |
 | `server/include/queen/config.hpp`                                   | Added `partition_lookup_reconcile_interval_ms`, `partition_lookup_reconcile_lookback_seconds` + env overrides                    |
 | `server/src/acceptor_server.cpp`                                    | Instantiate & start service on `Worker 0`                                                                                        |
 
