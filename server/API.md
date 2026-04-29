@@ -59,11 +59,47 @@ curl http://localhost:6632/metrics
 
 #### `GET /metrics/prometheus`
 Get metrics in the Prometheus text exposition format. Designed to be scraped
-by Prometheus / Grafana. Per-replica live state (db pool, threadpools, file
-buffer, sidecar ops, latest CPU/memory sample) is reported with no extra
-label; cluster-wide lifetime totals are reported with a synthetic
-`scope="cluster"` label so PromQL queries can use `max(queen_cluster_*)`
-across replicas without summing the same singleton value N times.
+by Prometheus / Grafana.
+
+Each scrape:
+- Reads in-process state (no DB hit) for per-replica live metrics: process
+  CPU/memory, db pool, threadpools, response registries, file buffer,
+  maintenance flag, sidecar ops, queue backoff, shared-state status.
+- Performs **one DB call** to `queen.get_prometheus_metrics_v1()` for all
+  cluster-wide series: lifetime totals, per-queue last-bucket throughput
+  and lag, per-worker last-bucket health and throughput, DLQ depth.
+
+Series labelling conventions:
+- Cluster-singleton series (lifetime totals, DLQ totals) carry
+  `scope="cluster"` so PromQL across replicas should use `max(...)` not
+  `sum(...)`.
+- Per-replica series carry no extra label — Prometheus adds `instance`
+  automatically from the scrape config.
+- Per-queue series: `queue="<name>"`.
+- Per-worker series: `hostname`, `worker_id`, `pid`.
+
+Metric families exposed:
+
+| Family | Source | Notes |
+|---|---|---|
+| `queen_uptime_seconds`, `queen_cpu_*`, `queen_process_*` | live | Process gauges |
+| `queen_db_pool_*` | live | Async PG pool |
+| `queen_threadpool_*{pool}` | live | DB / system threadpools |
+| `queen_response_registry_size{worker_id}` | live | In-flight HTTP responses per worker |
+| `queen_file_buffer_*` | live | File buffer pending / failed / db_healthy |
+| `queen_maintenance_mode_enabled` | live | Push maintenance flag |
+| `queen_sidecar_op_*{op}` | live | Latest sample sidecar ops/latency/items |
+| `queen_queue_backoff_*` | live | Aggregate backoff stats |
+| `queen_shared_state_enabled`, `queen_qc_cache_*`, `queen_servers{state}`, `queen_transport_messages_total{dir}` | live | Cluster-sync (when enabled) |
+| `queen_cluster_*_total{scope="cluster"}` | DB | Lifetime totals from `worker_metrics_summary` |
+| `queen_queue_*_per_minute{queue}`, `queen_queue_pop_lag_milliseconds{queue, stat}`, `queen_queue_parked_consumers{queue}`, `queen_queue_metrics_age_seconds{queue}` | DB | Latest minute bucket per queue |
+| `queen_worker_*{hostname, worker_id, pid, ...}` | DB | Latest minute bucket per worker |
+| `queen_dlq_depth{scope="cluster"}`, `queen_dlq_depth_by_queue{queue}` | DB | Current DLQ depth |
+
+> The `*_per_minute` gauges are minute-bucket deltas (already aggregated
+> server-side). Use them as-is or divide by 60 for per-second; do **not**
+> wrap them in `rate()` because they are gauges, not cumulative counters.
+
 ```bash
 curl http://localhost:6632/metrics/prometheus
 ```

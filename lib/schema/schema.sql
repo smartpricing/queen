@@ -338,6 +338,10 @@ CREATE INDEX IF NOT EXISTS idx_system_metrics_metrics ON queen.system_metrics US
 CREATE INDEX IF NOT EXISTS idx_message_traces_message_id ON queen.message_traces(message_id);
 CREATE INDEX IF NOT EXISTS idx_message_traces_transaction_partition ON queen.message_traces(transaction_id, partition_id);
 CREATE INDEX IF NOT EXISTS idx_message_traces_created_at ON queen.message_traces(created_at DESC);
+-- Required FK supporting index for queen.message_traces.partition_id (ON DELETE CASCADE).
+-- Without this, every parent row deleted from queen.partitions triggers a full seq scan of
+-- queen.message_traces during the cascade, making partition cleanup take tens of seconds.
+CREATE INDEX IF NOT EXISTS idx_message_traces_partition_id ON queen.message_traces(partition_id);
 CREATE INDEX IF NOT EXISTS idx_message_trace_names_name ON queen.message_trace_names(trace_name);
 CREATE INDEX IF NOT EXISTS idx_message_trace_names_trace_id ON queen.message_trace_names(trace_id);
 CREATE INDEX IF NOT EXISTS idx_system_state_key ON queen.system_state(key);
@@ -347,6 +351,15 @@ CREATE INDEX IF NOT EXISTS idx_system_state_key ON queen.system_state(key);
 CREATE INDEX IF NOT EXISTS idx_messages_partition_created ON queen.messages (partition_id, created_at, id);
 -- NOTE: idx_partition_lookup_queue_message_ts removed - it prevented HOT updates
 -- causing severe bloat on this high-update table (600x bloat in 10 hours)
+--
+-- The index below is HOT-safe: partition_id is set on insert and never modified by
+-- the upsert path (which only changes last_message_id, last_message_created_at,
+-- updated_at). It is also already in the HOT-breaking column set via the existing
+-- UNIQUE(queue_name, partition_id) constraint, so adding it does not enlarge the
+-- set of indexed columns. Required as the FK supporting index for the
+-- ON DELETE CASCADE from queen.partitions; without it, partition cleanup
+-- triggers a seq scan of partition_lookup per deleted parent row.
+CREATE INDEX IF NOT EXISTS idx_partition_lookup_partition_id ON queen.partition_lookup(partition_id);
 
 -- ============================================================================
 -- Trigger Functions

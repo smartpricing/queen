@@ -146,7 +146,15 @@ int RetentionService::cleanup_expired_messages() {
     try {
         auto conn = db_pool_->acquire();
         
-        // Step 1: Get all partitions with retention enabled and their cutoff times
+        // Step 1: Get partitions that actually have expired messages.
+        //
+        // Two pre-filters skip partitions that can't have anything to delete and
+        // cut the per-partition probe loop from ~90k iterations to a few hundred:
+        //   - p.created_at < cutoff: a partition newer than the cutoff cannot
+        //     contain expired messages (a message can't be older than its partition).
+        //   - EXISTS over queen.messages: skips partitions whose oldest remaining
+        //     message is still within retention. Uses idx_messages_partition_created
+        //     and short-circuits on the first matching row.
         std::string partitions_sql = R"(
             SELECT p.id as partition_id, 
                    NOW() - (q.retention_seconds || ' seconds')::INTERVAL as cutoff
@@ -154,6 +162,12 @@ int RetentionService::cleanup_expired_messages() {
             JOIN queen.queues q ON p.queue_id = q.id
             WHERE q.retention_enabled = true
               AND q.retention_seconds > 0
+              AND p.created_at < NOW() - (q.retention_seconds || ' seconds')::INTERVAL
+              AND EXISTS (
+                  SELECT 1 FROM queen.messages m
+                  WHERE m.partition_id = p.id
+                    AND m.created_at < NOW() - (q.retention_seconds || ' seconds')::INTERVAL
+              )
         )";
         
         sendQueryParamsAsync(conn.get(), partitions_sql, {});
@@ -213,6 +227,15 @@ int RetentionService::cleanup_completed_messages() {
         // and the MINIMUM last_consumed_id across ALL consumer groups.
         // This ensures we only delete messages that ALL consumer groups have processed.
         // Note: PostgreSQL doesn't have MIN() for UUID, so we cast to text and back.
+        //
+        // Two pre-filters skip partitions that can't have anything to delete and
+        // cut the per-partition probe loop from ~90k iterations to a few hundred:
+        //   - p.created_at < cutoff: a partition newer than the cutoff cannot
+        //     contain old-enough messages.
+        //   - EXISTS over queen.messages: skips partitions whose oldest remaining
+        //     message is still within the completed-retention window.
+        // The MIN(last_consumed_id::text)::uuid aggregate now only runs on the
+        // (small) set of partitions that survive both pre-filters.
         std::string partitions_sql = R"(
             SELECT p.id as partition_id,
                    NOW() - (q.completed_retention_seconds || ' seconds')::INTERVAL as cutoff,
@@ -222,6 +245,12 @@ int RetentionService::cleanup_completed_messages() {
             JOIN queen.partition_consumers pc ON pc.partition_id = p.id
             WHERE q.retention_enabled = true
               AND q.completed_retention_seconds > 0
+              AND p.created_at < NOW() - (q.completed_retention_seconds || ' seconds')::INTERVAL
+              AND EXISTS (
+                  SELECT 1 FROM queen.messages m
+                  WHERE m.partition_id = p.id
+                    AND m.created_at < NOW() - (q.completed_retention_seconds || ' seconds')::INTERVAL
+              )
             GROUP BY p.id, q.completed_retention_seconds
             HAVING MIN(pc.last_consumed_id::text)::uuid != '00000000-0000-0000-0000-000000000000'
         )";

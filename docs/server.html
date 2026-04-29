@@ -290,6 +290,121 @@ export EXTERNAL_AUDIENCE=queen-mq</code></pre>
   verification fails. Useful while migrating users.
 </p>
 
+<h3 id="proxy-google">Sign in with Google (OAuth 2.0)</h3>
+<p class="muted">
+  In addition to local username/password and JWKS passthrough, the proxy can
+  drive a full <strong>OAuth 2.0 Authorization Code flow</strong> with Google
+  itself, so the login page exposes a <em>Sign in with Google</em> button. The
+  proxy verifies Google's <code>id_token</code> against
+  <a href="https://www.googleapis.com/oauth2/v3/certs"><code>oauth2/v3/certs</code></a>,
+  resolves (or auto-provisions) a row in <code>queen_proxy.users</code>, and
+  then mints the same internal HS256 cookie as the password flow, so RBAC and
+  token-forwarding to the Queen server work unchanged.
+</p>
+
+<h4>1. Create the OAuth client</h4>
+<p class="muted">
+  In <strong>Google Cloud Console &rarr; APIs &amp; Services &rarr; Credentials</strong>,
+  create an <strong>OAuth 2.0 Client ID</strong> of type <em>Web application</em>:
+</p>
+<ul>
+  <li><strong>Authorized JavaScript origins</strong> &mdash; not required (we
+    don't use the browser-side flow), but harmless to fill in.</li>
+  <li><strong>Authorized redirect URIs</strong> &mdash; <em>required, must match
+    character-for-character</em>. One per environment, all ending in
+    <code>/api/auth/google/callback</code>:
+    <ul>
+      <li><code>https://queen.example.com/api/auth/google/callback</code></li>
+      <li><code>https://queen-stage.example.com/api/auth/google/callback</code></li>
+      <li><code>http://localhost:3000/api/auth/google/callback</code> (only
+        <code>http</code> URL Google accepts &mdash; useful for local dev).</li>
+    </ul>
+  </li>
+</ul>
+<p class="muted">
+  Save and copy the <strong>Client ID</strong> and <strong>Client secret</strong>.
+  Best practice is one OAuth client per environment, so a leaked stage secret
+  can't be replayed against prod.
+</p>
+
+<h4>2. Provide the env vars</h4>
+<p class="muted">
+  The proxy reads six <code>GOOGLE_*</code> variables. The recommended pattern
+  is a single Kubernetes Secret consumed via <code>envFrom</code>:
+</p>
+<div class="code-meta-wrap with-copy">
+  <div class="code-meta"><span>kubectl create secret</span><button class="copy-btn" type="button">copy</button></div>
+<pre><code class="language-bash">kubectl create secret generic queen-proxy-google -n queen \
+  --from-literal=GOOGLE_CLIENT_ID='&lt;client-id&gt;.apps.googleusercontent.com' \
+  --from-literal=GOOGLE_CLIENT_SECRET='&lt;client-secret&gt;' \
+  --from-literal=GOOGLE_REDIRECT_URI='https://queen.example.com/api/auth/google/callback' \
+  --from-literal=GOOGLE_ALLOWED_DOMAINS='example.com' \
+  --from-literal=GOOGLE_AUTO_PROVISION='true' \
+  --from-literal=GOOGLE_DEFAULT_ROLE='read-only'</code></pre>
+</div>
+
+<p class="muted">
+  Then enable the Google block in the chart values; the StatefulSet adds the
+  secret to <code>envFrom</code> automatically.
+</p>
+<div class="code-meta-wrap with-copy">
+  <div class="code-meta"><span>proxy/helm/prod.yaml</span><button class="copy-btn" type="button">copy</button></div>
+<pre><code class="language-yaml">googleAuth:
+  enabled: true
+  secretName: queen-proxy-google   # default: queen-mq-proxy-google-&lt;env&gt;</code></pre>
+</div>
+
+<h4>3. Egress &mdash; let the pod reach Google</h4>
+<p class="muted">
+  The callback exchanges the authorization code by calling
+  <code>https://oauth2.googleapis.com/token</code> from the pod. If your cluster
+  uses NetworkPolicies that block outbound traffic by default, that call will
+  time out with <code>ConnectTimeoutError</code>. Add an egress label that
+  matches a policy permitting public-internet egress (or at least the
+  <code>googleapis.com</code> hosts), e.g. <code>np.egress.internet: 'true'</code>
+  on the proxy pod template.
+</p>
+
+<h4>4. User resolution</h4>
+<p class="muted">
+  After verifying the <code>id_token</code> the proxy looks up the local user
+  in this order:
+</p>
+<ol class="muted">
+  <li>by <code>google_sub</code> if previously linked &mdash; sign in;</li>
+  <li>else by <strong>verified</strong> email (links the Google identity to
+    the existing local user) &mdash; sign in;</li>
+  <li>else if <code>GOOGLE_AUTO_PROVISION=true</code> &mdash; create a new user
+    with role <code>GOOGLE_DEFAULT_ROLE</code>;</li>
+  <li>else &mdash; deny with <code>?error=not_provisioned</code>.</li>
+</ol>
+<p class="muted">
+  Linking by email is gated on Google reporting <code>email_verified=true</code>
+  to prevent takeover by a third party who registers a Google account at
+  someone else's address. Promotion to <code>read-write</code> /
+  <code>admin</code> stays a manual <code>UPDATE</code> on
+  <code>queen_proxy.users</code>.
+</p>
+
+<h4>Common pitfalls</h4>
+<ul class="muted">
+  <li><strong><code>Error 400: redirect_uri_mismatch</code></strong> &mdash; the
+    URI we send doesn't exactly match a registered one. Compare the
+    <code>redirect_uri</code> query param in the redirect to
+    <code>accounts.google.com</code> with the entries in Google Cloud Console;
+    they must be byte-identical (scheme, host, path, no trailing slash).</li>
+  <li><strong>Lands back on <code>/login</code> with no error</strong> &mdash;
+    fixed in <code>0.0.14</code>; the session cookie used <code>SameSite=Strict</code>,
+    which the browser refuses to send on the first navigation after a
+    cross-site redirect. The proxy now sets it to <code>Lax</code>.</li>
+  <li><strong>&ldquo;Verify it's you&rdquo; without an SMS option</strong>
+    &mdash; rendered by Google, not the proxy. Use the <em>Google</em> app on
+    a phone, an offline security code, or enroll an authenticator/security key
+    in Google Account &rarr; Security.</li>
+  <li><strong>Auto-provisioned users only get <code>read-only</code></strong>
+    by design. Promote via SQL once you've reviewed the row.</li>
+</ul>
+
 <h3>Helm chart</h3>
 <p class="muted">
   Deploy as a sibling release to <code>queen-mq</code> in the same namespace. The
@@ -347,6 +462,10 @@ spec:
           envFrom:
             - secretRef: { name: postgres-queen-owner }   # PG creds
             - secretRef: { name: queen-mq-proxy }         # JWT_SECRET, optional EXTERNAL_*
+            # Optional, mounted only when .Values.googleAuth.enabled is true.
+            # Defaults to queen-mq-proxy-google-{{ .Values.env }} unless
+            # .Values.googleAuth.secretName is set.
+            # - secretRef: { name: queen-proxy-google }   # GOOGLE_*
           env:
             - { name: PG_DB,            value: queen }
             - name: QUEEN_SERVER_URL
@@ -414,6 +533,36 @@ kubectl exec -n queen -it queen-mq-proxy-0 -- node src/create-user.js</code></pr
       <td><code>EXTERNAL_ISSUER</code> / <code>EXTERNAL_AUDIENCE</code></td>
       <td>&mdash;</td>
       <td>Optional. Validate <code>iss</code> / <code>aud</code> claims on external tokens.</td>
+    </tr>
+    <tr>
+      <td><code>GOOGLE_CLIENT_ID</code></td>
+      <td>&mdash;</td>
+      <td>Optional. Sets together with <code>GOOGLE_CLIENT_SECRET</code> and <code>GOOGLE_REDIRECT_URI</code> to enable the <em>Sign in with Google</em> button.</td>
+    </tr>
+    <tr>
+      <td><code>GOOGLE_CLIENT_SECRET</code></td>
+      <td>&mdash;</td>
+      <td>OAuth 2.0 client secret from Google Cloud Console.</td>
+    </tr>
+    <tr>
+      <td><code>GOOGLE_REDIRECT_URI</code></td>
+      <td>&mdash;</td>
+      <td>Must <strong>exactly</strong> match an authorized redirect URI on the OAuth client, e.g. <code>https://queen.example.com/api/auth/google/callback</code>.</td>
+    </tr>
+    <tr>
+      <td><code>GOOGLE_ALLOWED_DOMAINS</code></td>
+      <td>&mdash;</td>
+      <td>Comma-separated allowlist matched against the Google <code>hd</code> claim or the email domain. Empty = allow any verified email.</td>
+    </tr>
+    <tr>
+      <td><code>GOOGLE_AUTO_PROVISION</code></td>
+      <td><code>false</code></td>
+      <td>If <code>true</code>, create a local user on first Google login. If <code>false</code>, the user must already exist in <code>queen_proxy.users</code> (matched by verified email).</td>
+    </tr>
+    <tr>
+      <td><code>GOOGLE_DEFAULT_ROLE</code></td>
+      <td><code>read-only</code></td>
+      <td>Role assigned to auto-provisioned Google users (<code>admin</code>, <code>read-write</code>, or <code>read-only</code>).</td>
     </tr>
     <tr>
       <td><code>PORT</code></td>

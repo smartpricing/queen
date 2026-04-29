@@ -247,6 +247,24 @@ void write_file_buffer_metrics(Body& b, const RouteContext& ctx) {
     b.sample("queen_file_buffer_db_healthy", healthy);
 }
 
+// Push-maintenance flag. Reads through the AsyncQueueManager's TTL-cached
+// accessor — same path the push handler uses, so we never hit the DB on a
+// scrape.
+void write_maintenance_metrics(Body& b, const RouteContext& ctx) {
+    int enabled = 0;
+    if (ctx.async_queue_manager) {
+        try {
+            enabled = ctx.async_queue_manager->get_maintenance_mode() ? 1 : 0;
+        } catch (const std::exception& e) {
+            spdlog::debug("[/metrics/prometheus] maintenance check failed: {}", e.what());
+        }
+    }
+    b.help("queen_maintenance_mode_enabled",
+           "1 when push maintenance mode is active (push requests are buffered to disk), 0 otherwise.");
+    b.type("queen_maintenance_mode_enabled", "gauge");
+    b.sample("queen_maintenance_mode_enabled", enabled);
+}
+
 // Sidecar / cluster-sync metrics from the latest MetricsSample. These are
 // running counters reported as gauges because MetricsCollector resets them
 // each aggregation window — Prometheus will compute rates via PromQL on the
@@ -325,107 +343,316 @@ void write_sidecar_metrics(Body& b, const RouteContext& ctx) {
     b.sample("queen_transport_messages_total", labels({{"dir", "dropped"}}),  s.transport_dropped);
 }
 
-// Cluster-wide lifetime totals from queen.worker_metrics_summary. Returns
-// the formatted Prometheus block to append to the body. Returns the empty
-// string when the SP result is absent or malformed.
-std::string format_cluster_totals(const std::string& sp_result) {
-    nlohmann::json j;
-    try {
-        j = nlohmann::json::parse(sp_result);
-    } catch (const std::exception& e) {
-        spdlog::debug("[/metrics/prometheus] cluster totals parse failed: {}", e.what());
-        return {};
+// ---------------------------------------------------------------------------
+// JSON parsing helpers — libqueen's CUSTOM op wraps SP results in slightly
+// different shapes depending on the row count, so all unwrap helpers probe
+// both common shapes (raw object and array-of-single-row).
+// ---------------------------------------------------------------------------
+
+nlohmann::json unwrap_sp(const nlohmann::json& j, const char* sp_name) {
+    if (j.is_object() && j.contains(sp_name)) return j[sp_name];
+    if (j.is_array() && !j.empty()) {
+        const auto& first = j[0];
+        if (first.is_object() && first.contains(sp_name)) return first[sp_name];
+        return first;
     }
+    return j;
+}
 
-    // libqueen's CUSTOM op wraps the SP result. The exact wrapping varies
-    // across queens: it may be the raw object, or an array of single-row
-    // objects whose first key is the SP function name. We probe both.
-    auto unwrap = [&]() -> nlohmann::json {
-        if (j.is_object() && j.contains("get_system_totals_v1")) {
-            return j["get_system_totals_v1"];
-        }
-        if (j.is_array() && !j.empty()) {
-            const auto& first = j[0];
-            if (first.is_object() && first.contains("get_system_totals_v1")) {
-                return first["get_system_totals_v1"];
-            }
-            return first;
-        }
-        return j;
-    };
+uint64_t json_u64(const nlohmann::json& obj, const char* key) {
+    if (!obj.is_object() || !obj.contains(key) || obj[key].is_null()) return 0;
+    const auto& v = obj[key];
+    if (v.is_number_unsigned()) return v.get<uint64_t>();
+    if (v.is_number_integer())  return static_cast<uint64_t>(std::max<int64_t>(0, v.get<int64_t>()));
+    if (v.is_number_float())    return static_cast<uint64_t>(std::max(0.0, v.get<double>()));
+    if (v.is_string()) {
+        try { return std::stoull(v.get<std::string>()); } catch (...) { return 0; }
+    }
+    return 0;
+}
 
-    nlohmann::json totals = unwrap();
-    if (!totals.is_object()) return {};
+// ---------------------------------------------------------------------------
+// Cluster lifetime totals (queen.worker_metrics_summary).
+// Emitted with scope="cluster" so PromQL across replicas can use max(...)
+// instead of sum(...) on these singleton series.
+// ---------------------------------------------------------------------------
+void format_cluster_totals(Body& b, const nlohmann::json& totals) {
+    if (!totals.is_object()) return;
 
-    auto u64 = [&](const char* key) -> uint64_t {
-        if (!totals.contains(key) || totals[key].is_null()) return 0;
-        if (totals[key].is_number_unsigned()) return totals[key].get<uint64_t>();
-        if (totals[key].is_number_integer())  return static_cast<uint64_t>(totals[key].get<int64_t>());
-        if (totals[key].is_number_float())    return static_cast<uint64_t>(totals[key].get<double>());
-        if (totals[key].is_string()) {
-            try { return std::stoull(totals[key].get<std::string>()); } catch (...) { return 0; }
-        }
-        return 0;
-    };
-
-    Body b;
     const std::string scope = labels({{"scope", "cluster"}});
-
     auto counter = [&](const char* name, const char* help, uint64_t v) {
-        b.help(name, help);
-        b.type(name, "counter");
-        b.sample(name, scope, v);
-    };
-    auto gauge = [&](const char* name, const char* help, uint64_t v) {
-        b.help(name, help);
-        b.type(name, "gauge");
-        b.sample(name, scope, v);
+        b.help(name, help); b.type(name, "counter"); b.sample(name, scope, v);
     };
 
     counter("queen_cluster_push_requests_total",
             "Cumulative push HTTP requests handled across the cluster.",
-            u64("pushRequests"));
+            json_u64(totals, "pushRequests"));
     counter("queen_cluster_pop_requests_total",
             "Cumulative pop HTTP requests handled across the cluster.",
-            u64("popRequests"));
+            json_u64(totals, "popRequests"));
     counter("queen_cluster_ack_requests_total",
             "Cumulative ack HTTP requests handled across the cluster.",
-            u64("ackRequests"));
+            json_u64(totals, "ackRequests"));
     counter("queen_cluster_transactions_total",
             "Cumulative transaction calls handled across the cluster.",
-            u64("transactions"));
+            json_u64(totals, "transactions"));
 
     counter("queen_cluster_push_messages_total",
             "Cumulative messages pushed across the cluster.",
-            u64("pushMessages"));
+            json_u64(totals, "pushMessages"));
     counter("queen_cluster_pop_messages_total",
-            "Cumulative messages popped across the cluster.",
-            u64("popMessages"));
+            "Cumulative messages popped across the cluster (may exceed push_messages due to consumer-group fan-out).",
+            json_u64(totals, "popMessages"));
     counter("queen_cluster_ack_messages_total",
             "Cumulative ack attempts across the cluster.",
-            u64("ackMessages"));
+            json_u64(totals, "ackMessages"));
 
     b.help("queen_cluster_ack_total",
            "Cumulative acks across the cluster, by result.");
     b.type("queen_cluster_ack_total", "counter");
     b.sample("queen_cluster_ack_total",
              labels({{"scope", "cluster"}, {"result", "success"}}),
-             u64("ackSuccess"));
+             json_u64(totals, "ackSuccess"));
     b.sample("queen_cluster_ack_total",
              labels({{"scope", "cluster"}, {"result", "failed"}}),
-             u64("ackFailed"));
+             json_u64(totals, "ackFailed"));
 
     counter("queen_cluster_db_errors_total",
             "Cumulative database errors observed across the cluster.",
-            u64("dbErrors"));
+            json_u64(totals, "dbErrors"));
     counter("queen_cluster_dlq_total",
             "Cumulative messages routed to the dead-letter queue across the cluster.",
-            u64("dlqCount"));
+            json_u64(totals, "dlqCount"));
+}
 
-    gauge("queen_cluster_pending_messages",
-          "Pending = push_messages_total - pop_messages_total (cluster wide).",
-          u64("pendingMessages"));
+// ---------------------------------------------------------------------------
+// Per-queue last-minute series (queen.queue_lag_metrics).
+// Each metric is emitted as a gauge — values are deltas for the most recent
+// minute bucket, not lifetime cumulative — so PromQL should NOT use rate().
+// Use the metric value directly as "events per minute" or divide by 60 for
+// per-second.
+// ---------------------------------------------------------------------------
+void format_per_queue(Body& b, const nlohmann::json& per_queue) {
+    if (!per_queue.is_array() || per_queue.empty()) return;
 
+    auto family = [&](const char* name, const char* help, const char* type) {
+        b.help(name, help); b.type(name, type);
+    };
+
+    family("queen_queue_pop_messages_per_minute",
+           "Messages popped from this queue in the most recent minute bucket "
+           "(includes consumer-group fan-out).", "gauge");
+    family("queen_queue_pop_lag_milliseconds",
+           "Pop latency over the most recent minute bucket, by stat.", "gauge");
+    family("queen_queue_push_requests_per_minute",
+           "Push HTTP requests targeting this queue in the most recent minute.", "gauge");
+    family("queen_queue_push_messages_per_minute",
+           "Messages enqueued to this queue in the most recent minute.", "gauge");
+    family("queen_queue_pop_empty_per_minute",
+           "Empty pop responses for this queue in the most recent minute.", "gauge");
+    family("queen_queue_ack_per_minute",
+           "Acks for this queue in the most recent minute, by result.", "gauge");
+    family("queen_queue_transactions_per_minute",
+           "Transactions touching this queue in the most recent minute.", "gauge");
+    family("queen_queue_parked_consumers",
+           "Consumers currently parked on this queue (cluster-wide minute-average).", "gauge");
+    family("queen_queue_metrics_age_seconds",
+           "Seconds since the latest queue_lag_metrics bucket was flushed.", "gauge");
+
+    for (const auto& q : per_queue) {
+        if (!q.is_object()) continue;
+        std::string queue;
+        if (q.contains("queue") && q["queue"].is_string()) queue = q["queue"].get<std::string>();
+        if (queue.empty()) continue;
+
+        const std::string l = labels({{"queue", queue}});
+        b.sample("queen_queue_pop_messages_per_minute",   l, json_u64(q, "pop_count"));
+        b.sample("queen_queue_pop_lag_milliseconds",
+                 labels({{"queue", queue}, {"stat", "avg"}}),
+                 json_u64(q, "avg_lag_ms"));
+        b.sample("queen_queue_pop_lag_milliseconds",
+                 labels({{"queue", queue}, {"stat", "max"}}),
+                 json_u64(q, "max_lag_ms"));
+        b.sample("queen_queue_push_requests_per_minute",  l, json_u64(q, "push_request_count"));
+        b.sample("queen_queue_push_messages_per_minute",  l, json_u64(q, "push_message_count"));
+        b.sample("queen_queue_pop_empty_per_minute",      l, json_u64(q, "pop_empty_count"));
+        b.sample("queen_queue_ack_per_minute",
+                 labels({{"queue", queue}, {"result", "success"}}),
+                 json_u64(q, "ack_success_count"));
+        b.sample("queen_queue_ack_per_minute",
+                 labels({{"queue", queue}, {"result", "failed"}}),
+                 json_u64(q, "ack_failed_count"));
+        b.sample("queen_queue_transactions_per_minute",   l, json_u64(q, "transaction_count"));
+        b.sample("queen_queue_parked_consumers",          l, json_u64(q, "parked_count"));
+        b.sample("queen_queue_metrics_age_seconds",       l, json_u64(q, "bucket_age_seconds"));
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Per-worker last-minute series (queen.worker_metrics).
+// Labels: hostname, worker_id, pid. Surfaces uneven workload across workers
+// (event-loop lag spikes, queue backlog) that's invisible in cluster totals.
+// ---------------------------------------------------------------------------
+void format_per_worker(Body& b, const nlohmann::json& per_worker) {
+    if (!per_worker.is_array() || per_worker.empty()) return;
+
+    auto family = [&](const char* name, const char* help, const char* type) {
+        b.help(name, help); b.type(name, type);
+    };
+
+    family("queen_worker_event_loop_lag_milliseconds",
+           "Event-loop lag in the most recent minute bucket, by stat.", "gauge");
+    family("queen_worker_free_slots",
+           "Free job slots in the libqueen scheduler, by stat.", "gauge");
+    family("queen_worker_db_connections", "DB connections held by this worker.", "gauge");
+    family("queen_worker_job_queue_size",
+           "libqueen job queue depth in the most recent minute, by stat.", "gauge");
+    family("queen_worker_backoff_size",
+           "Number of pop requests in backoff for this worker.", "gauge");
+    family("queen_worker_jobs_done_per_minute",
+           "Jobs completed by this worker in the most recent minute.", "gauge");
+    family("queen_worker_requests_per_minute",
+           "Requests handled by this worker in the most recent minute, by op.", "gauge");
+    family("queen_worker_messages_per_minute",
+           "Messages handled by this worker in the most recent minute, by op.", "gauge");
+    family("queen_worker_ack_per_minute",
+           "Acks handled by this worker in the most recent minute, by result.", "gauge");
+    family("queen_worker_lag_milliseconds",
+           "Pop lag observed by this worker in the most recent minute, by stat.", "gauge");
+    family("queen_worker_db_errors_per_minute",
+           "DB errors observed by this worker in the most recent minute.", "gauge");
+    family("queen_worker_dlq_per_minute",
+           "Messages routed to DLQ by this worker in the most recent minute.", "gauge");
+    family("queen_worker_metrics_age_seconds",
+           "Seconds since this worker's last metrics bucket was flushed.", "gauge");
+
+    for (const auto& w : per_worker) {
+        if (!w.is_object()) continue;
+        std::string host = w.value("hostname", std::string{});
+        std::string wid  = std::to_string(json_u64(w, "worker_id"));
+        std::string pid  = std::to_string(json_u64(w, "pid"));
+
+        const std::string base = labels({
+            {"hostname",  host},
+            {"worker_id", wid},
+            {"pid",       pid},
+        });
+
+        b.sample("queen_worker_event_loop_lag_milliseconds",
+                 labels({{"hostname", host}, {"worker_id", wid}, {"pid", pid}, {"stat", "avg"}}),
+                 json_u64(w, "avg_event_loop_lag_ms"));
+        b.sample("queen_worker_event_loop_lag_milliseconds",
+                 labels({{"hostname", host}, {"worker_id", wid}, {"pid", pid}, {"stat", "max"}}),
+                 json_u64(w, "max_event_loop_lag_ms"));
+        b.sample("queen_worker_free_slots",
+                 labels({{"hostname", host}, {"worker_id", wid}, {"pid", pid}, {"stat", "avg"}}),
+                 json_u64(w, "avg_free_slots"));
+        b.sample("queen_worker_free_slots",
+                 labels({{"hostname", host}, {"worker_id", wid}, {"pid", pid}, {"stat", "min"}}),
+                 json_u64(w, "min_free_slots"));
+        b.sample("queen_worker_db_connections",   base, json_u64(w, "db_connections"));
+        b.sample("queen_worker_job_queue_size",
+                 labels({{"hostname", host}, {"worker_id", wid}, {"pid", pid}, {"stat", "avg"}}),
+                 json_u64(w, "avg_job_queue_size"));
+        b.sample("queen_worker_job_queue_size",
+                 labels({{"hostname", host}, {"worker_id", wid}, {"pid", pid}, {"stat", "max"}}),
+                 json_u64(w, "max_job_queue_size"));
+        b.sample("queen_worker_backoff_size",        base, json_u64(w, "backoff_size"));
+        b.sample("queen_worker_jobs_done_per_minute", base, json_u64(w, "jobs_done"));
+
+        b.sample("queen_worker_requests_per_minute",
+                 labels({{"hostname", host}, {"worker_id", wid}, {"pid", pid}, {"op", "push"}}),
+                 json_u64(w, "push_request_count"));
+        b.sample("queen_worker_requests_per_minute",
+                 labels({{"hostname", host}, {"worker_id", wid}, {"pid", pid}, {"op", "pop"}}),
+                 json_u64(w, "pop_request_count"));
+        b.sample("queen_worker_requests_per_minute",
+                 labels({{"hostname", host}, {"worker_id", wid}, {"pid", pid}, {"op", "ack"}}),
+                 json_u64(w, "ack_request_count"));
+        b.sample("queen_worker_requests_per_minute",
+                 labels({{"hostname", host}, {"worker_id", wid}, {"pid", pid}, {"op", "transaction"}}),
+                 json_u64(w, "transaction_count"));
+
+        b.sample("queen_worker_messages_per_minute",
+                 labels({{"hostname", host}, {"worker_id", wid}, {"pid", pid}, {"op", "push"}}),
+                 json_u64(w, "push_message_count"));
+        b.sample("queen_worker_messages_per_minute",
+                 labels({{"hostname", host}, {"worker_id", wid}, {"pid", pid}, {"op", "pop"}}),
+                 json_u64(w, "pop_message_count"));
+        b.sample("queen_worker_messages_per_minute",
+                 labels({{"hostname", host}, {"worker_id", wid}, {"pid", pid}, {"op", "ack"}}),
+                 json_u64(w, "ack_message_count"));
+
+        b.sample("queen_worker_ack_per_minute",
+                 labels({{"hostname", host}, {"worker_id", wid}, {"pid", pid}, {"result", "success"}}),
+                 json_u64(w, "ack_success_count"));
+        b.sample("queen_worker_ack_per_minute",
+                 labels({{"hostname", host}, {"worker_id", wid}, {"pid", pid}, {"result", "failed"}}),
+                 json_u64(w, "ack_failed_count"));
+
+        b.sample("queen_worker_lag_milliseconds",
+                 labels({{"hostname", host}, {"worker_id", wid}, {"pid", pid}, {"stat", "avg"}}),
+                 json_u64(w, "avg_lag_ms"));
+        b.sample("queen_worker_lag_milliseconds",
+                 labels({{"hostname", host}, {"worker_id", wid}, {"pid", pid}, {"stat", "max"}}),
+                 json_u64(w, "max_lag_ms"));
+
+        b.sample("queen_worker_db_errors_per_minute",  base, json_u64(w, "db_error_count"));
+        b.sample("queen_worker_dlq_per_minute",        base, json_u64(w, "dlq_count"));
+        b.sample("queen_worker_metrics_age_seconds",   base, json_u64(w, "bucket_age_seconds"));
+    }
+}
+
+// ---------------------------------------------------------------------------
+// DLQ depth — current count, total + per-queue.
+// ---------------------------------------------------------------------------
+void format_dlq(Body& b, const nlohmann::json& dlq) {
+    if (!dlq.is_object()) return;
+
+    b.help("queen_dlq_depth",
+           "Messages currently sitting in the dead-letter queue.");
+    b.type("queen_dlq_depth", "gauge");
+    b.sample("queen_dlq_depth",
+             labels({{"scope", "cluster"}}),
+             json_u64(dlq, "total"));
+
+    if (!dlq.contains("per_queue") || !dlq["per_queue"].is_array()) return;
+
+    b.help("queen_dlq_depth_by_queue",
+           "Messages in DLQ per queue.");
+    b.type("queen_dlq_depth_by_queue", "gauge");
+    for (const auto& row : dlq["per_queue"]) {
+        if (!row.is_object()) continue;
+        std::string queue = row.value("queue", std::string{});
+        if (queue.empty()) continue;
+        b.sample("queen_dlq_depth_by_queue",
+                 labels({{"queue", queue}}),
+                 json_u64(row, "count"));
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Top-level: parse SP result and append all DB-sourced metric families.
+// Returns the empty string if the SP result is unusable so the route falls
+// back to live-only metrics gracefully.
+// ---------------------------------------------------------------------------
+std::string format_db_metrics(const std::string& sp_result) {
+    nlohmann::json j;
+    try {
+        j = nlohmann::json::parse(sp_result);
+    } catch (const std::exception& e) {
+        spdlog::debug("[/metrics/prometheus] DB metrics parse failed: {}", e.what());
+        return {};
+    }
+
+    nlohmann::json root = unwrap_sp(j, "get_prometheus_metrics_v1");
+    if (!root.is_object()) return {};
+
+    Body b;
+    if (root.contains("system_totals")) format_cluster_totals(b, root["system_totals"]);
+    if (root.contains("per_queue_lag")) format_per_queue(b, root["per_queue_lag"]);
+    if (root.contains("per_worker"))    format_per_worker(b, root["per_worker"]);
+    if (root.contains("dlq"))           format_dlq(b, root["dlq"]);
     return b.str();
 }
 
@@ -456,6 +683,7 @@ void setup_prometheus_routes(uWS::App* app, const RouteContext& ctx) {
             write_threadpool_metrics(body, ctx);
             write_registry_metrics(body);
             write_file_buffer_metrics(body, ctx);
+            write_maintenance_metrics(body, ctx);
             write_sidecar_metrics(body, ctx);
         } catch (const std::exception& e) {
             spdlog::warn("[/metrics/prometheus] live block failed: {}", e.what());
@@ -482,7 +710,7 @@ void setup_prometheus_routes(uWS::App* app, const RouteContext& ctx) {
         queen::JobRequest job_req;
         job_req.op_type    = queen::JobType::CUSTOM;
         job_req.request_id = "prom_" + queen::generate_uuidv7();
-        job_req.sql        = "SELECT queen.get_system_totals_v1()";
+        job_req.sql        = "SELECT queen.get_prometheus_metrics_v1()";
 
         ctx.queen->submit(std::move(job_req),
             [res, worker_loop, aborted, live = std::move(live)](std::string result) {
@@ -490,13 +718,9 @@ void setup_prometheus_routes(uWS::App* app, const RouteContext& ctx) {
                     [res, aborted, live = std::move(live), result = std::move(result)]() mutable {
                         if (aborted->load(std::memory_order_relaxed)) return;
 
-                        std::string cluster = format_cluster_totals(result);
-                        if (cluster.empty()) {
-                            send_prometheus(res, live);
-                        } else {
-                            live.append(cluster);
-                            send_prometheus(res, live);
-                        }
+                        std::string db_block = format_db_metrics(result);
+                        if (!db_block.empty()) live.append(db_block);
+                        send_prometheus(res, live);
                     });
             });
     });
