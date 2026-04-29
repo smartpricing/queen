@@ -23,7 +23,7 @@
 
 </div>
 
-> **Version 0.14.0 — the biggest release yet.** New dynamic libqueen loop, rewritten push / pop / ack / stats stored procedures, `maxPartitions` on all clients, new frontend. Benchmarked on real hardware: **104k msg/s** push (batch=100), **165k msg/s** fan-out across 10 consumer groups, pop throughput **+80–90%** vs 0.12 under partition contention, server RSS under **52 MB** at peak, zero message loss across **1.6 billion events**. [Full benchmark results →](docs/benchmarks.html#version)
+> **Version 0.14.1** — Updated frontend with new metrics and embedded dev guide; Google auth on the proxy; Prometheus metrics route; significantly optimized lease renewal; delete partition and delete messages support. Built on top of the 0.14.0 engine — see table below for full history.
 
 ---
 
@@ -59,7 +59,7 @@ docker run --name qpg --network queen -e POSTGRES_PASSWORD=postgres -p 5433:5432
 sleep 2
 
 # Start Queen Server
-docker run -p 6632:6632 --network queen -e PG_HOST=qpg -e PG_PORT=5432 -e PG_PASSWORD=postgres -e NUM_WORKERS=2 -e DB_POOL_SIZE=5 -e SIDECAR_POOL_SIZE=30 smartnessai/queen-mq:0.14.0
+docker run -p 6632:6632 --network queen -e PG_HOST=qpg -e PG_PORT=5432 -e PG_PASSWORD=postgres -e NUM_WORKERS=2 -e DB_POOL_SIZE=5 -e SIDECAR_POOL_SIZE=30 smartnessai/queen-mq:0.14.1
 ```
 
 Then in another terminal, use cURL (or the client libraries) to push and consume messages
@@ -138,6 +138,7 @@ The repository is structured as follows:
 
 | Server Version | Description                                                                                                                     | Compatible Clients                                          |
 | -------------- | ------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------- |
+| **0.14.1**     | Updated frontend: new metrics views and embedded developer guide; Google OAuth on the proxy; Prometheus metrics route (`/metrics`); significantly optimized lease renewal (reduced lock contention and DB round-trips); delete partition and delete messages API. | All ≥0.14.0 clients work unchanged |
 | **0.14.0**     | Major release: new dynamic libqueen loop; rewritten `push_messages_v3`, `pop_messages_v3`, `ack_messages_v2`, and `stats` stored procedures; `maxPartitions` on all clients (JS, Python, Go, Laravel, C++); new frontend. Benchmarked on real hardware: **104k msg/s** push (batch=100), **165k msg/s** fan-out across 10 consumer groups, pop throughput **+80–90%** vs 0.12 under partition contention, 52 MB server RSS at peak, zero message loss across 1.6B events. [See benchmarks →](docs/benchmarks.html#version) | All ≥0.13.x clients work unchanged — upgrade clients to gain `maxPartitions` support |
 | **0.13.0**     | Major release: new libqueen with adaptive batch/concurrency/scheduling engine (S1 ~2x, S3 ~3x push throughput), new `push_messages_v3` stored procedure, new Vue 3 dashboard, and server-stamped `producerSub` from the JWT on every message (closes #23) | All ≥0.12.x work unchanged — 0.13.0 pop responses add a new `producerSub` field that older clients silently ignore. Upgrade to 0.13.0 clients only if you want typed access to `producerSub` (Go struct field, Python TypedDict hint) |
 | **0.12.19**    | Fix bug that on seek or cg delete do not deleted the watermark                                                                  | JS ≥0.7.4, Python ≥0.7.4                                    |
@@ -166,6 +167,11 @@ The repository is structured as follows:
 
 ## Latest bug fixing and improvements
 
+- Server/App 0.14.1: **Updated frontend.** New metrics views and an embedded developer guide surfaced directly in the dashboard.
+- Proxy 0.14.1: **Google OAuth support.** The proxy now supports Google as an OAuth provider for end-to-end authentication without a custom identity server.
+- Server 0.14.1: **Prometheus metrics route.** A `/metrics` endpoint exposes standard Prometheus-compatible metrics for scraping.
+- Server 0.14.1: **Significantly optimized lease renewal.** Reduced lock contention and database round-trips on the hot lease-renewal path, lowering tail latency under high consumer concurrency.
+- Server/App 0.14.1: **Delete partition and delete messages.** New API and dashboard actions to delete individual partitions or bulk-delete messages from a queue.
 - Server and clients 0.14.0: **New dynamic libqueen loop.** Full rewrite of the core scheduling engine — adaptive concurrency controller (TCP-Vegas-style) now drives push, pop, ack, and stats independently. Active DB connections stay at ~2.5 even with a pool of 50 under 104k msg/s peak load. Eliminates the PG deadlock mode that appeared under heavy fan-out at high partition counts on 0.12.
 - Server 0.14.0: **Rewritten stored procedures.** `push_messages_v3`, `pop_messages_v3`, `ack_messages_v2`, and stats procedures redesigned around the new loop. PG memory usage 30–70% lower for equivalent workloads vs 0.12. Pop throughput +80–90% under partition contention.
 - Clients 0.14.0: **`maxPartitions` on all clients.** JS, Python, Go, Laravel, and C++ clients expose `maxPartitions` on queue creation and configuration.
