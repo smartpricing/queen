@@ -2,7 +2,7 @@
 
 PHP client library for [Queen MQ](https://github.com/smartpricing/queen) with optional Laravel integration.
 
-Works standalone with any PHP 8.1+ project. Laravel extras (service provider, facade, artisan command) are auto-discovered.
+Works standalone with any PHP 8.3+ project. Laravel extras (service provider, facade, artisan command) are auto-discovered.
 
 ## Installation
 

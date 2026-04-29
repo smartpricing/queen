@@ -15,7 +15,7 @@
 [![libpq](https://img.shields.io/badge/libpq-15.5-blue.svg)](https://www.postgresql.org/)
 [![uWebSockets](https://img.shields.io/badge/uWebSockets-22.0.0-blue.svg)](https://github.com/uNetworking/uWebSockets)
 
-📚 **[Complete Documentation](https://smartpricing.github.io/queen/)** • 🚀 **[Quick Start](https://smartpricing.github.io/queen/guide/quickstart)** • ⚖️ **[Comparison](https://smartpricing.github.io/queen/guide/comparison)** • 🛠️ **[Contributing — Developer Guide](DEVELOPING.md)**
+📚 **[Complete Documentation](https://smartpricing.github.io/queen/)** • 🚀 **[Quick Start](https://smartpricing.github.io/queen/quickstart.html)** • ⚖️ **[Comparison & Benchmarks](https://smartpricing.github.io/queen/benchmarks.html)** • 🛠️ **[Contributing — Developer Guide](DEVELOPING.md)**
 
 <p align="center">
   <img src="assets/queen_logo.png" alt="Queen Logo" width="120" />
@@ -98,17 +98,20 @@ Then go to the dashboard ([http://localhost:6632](http://localhost:6632)) to see
 
 ### Getting Started
 
-- [Quick Start Guide](https://smartpricing.github.io/queen/guide/quickstart)
-- [Basic Concepts](https://smartpricing.github.io/queen/guide/concepts)
+- [Quick Start Guide](https://smartpricing.github.io/queen/quickstart.html)
+- [Basic Concepts](https://smartpricing.github.io/queen/concepts.html)
+- [Architecture](https://smartpricing.github.io/queen/architecture.html)
+- [Benchmarks](https://smartpricing.github.io/queen/benchmarks.html) · [Sizing calculator](https://smartpricing.github.io/queen/sizing.html)
 
-### Client Libraries
+### Client Libraries & API
 
-- [JavaScript Client](https://smartpricing.github.io/queen/clients/javascript)
-- [Python Client](https://smartpricing.github.io/queen/clients/python)
-- [Go Client](https://smartpricing.github.io/queen/clients/go)
-- [PHP / Laravel Client](https://smartpricing.github.io/queen/clients/laravel)
-- [C++ Client](https://smartpricing.github.io/queen/clients/cpp)
-- [HTTP API Reference](https://smartpricing.github.io/queen/api/http)
+- [Client libraries overview](https://smartpricing.github.io/queen/clients.html) — JavaScript, Python, Go, PHP / Laravel, C++ (same fluent grammar across all five)
+- [HTTP API Reference](https://smartpricing.github.io/queen/http-api.html)
+
+### Operate
+
+- [Server setup](https://smartpricing.github.io/queen/server.html) — env vars, Docker, Kubernetes, multi-instance UDP sync, JWT auth, proxy
+- [Dashboard tour](https://smartpricing.github.io/queen/dashboard.html)
 
 ---
 
@@ -121,8 +124,8 @@ The repository is structured as follows:
 - `pg_qpubsub`: PostgreSQL extension for using queen-mq semantics as a PostgreSQL extension
 - `clients/client-js`: JavaScript client library (browser and node.js)
 - `clients/client-py`: Python client library (python 3.8+)
-- `clients/client-go`: Go client library (go 1.21+)
-- `clients/client-laravel`: PHP / Laravel client library (php 8.1+)
+- `clients/client-go`: Go client library (go 1.24+)
+- `clients/client-laravel`: PHP / Laravel client library (php 8.3+)
 - `clients/client-cpp`: C++ client library (cpp 17)
 - `proxy`: Proxy server (authentication)
 - `app`: Vue.js dashboard (vue 3)
@@ -140,12 +143,12 @@ The repository is structured as follows:
 | -------------- | ------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------- |
 | **0.14.1**     | Updated frontend: new metrics views and embedded developer guide; Google OAuth on the proxy; Prometheus metrics route (`/metrics`); significantly optimized lease renewal (reduced lock contention and DB round-trips); delete partition and delete messages API. | All ≥0.14.0 clients work unchanged |
 | **0.14.0**     | Major release: new dynamic libqueen loop; rewritten `push_messages_v3`, `pop_messages_v3`, `ack_messages_v2`, and `stats` stored procedures; `maxPartitions` on all clients (JS, Python, Go, Laravel, C++); new frontend. Benchmarked on real hardware: **104k msg/s** push (batch=100), **165k msg/s** fan-out across 10 consumer groups, pop throughput **+80–90%** vs 0.12 under partition contention, 52 MB server RSS at peak, zero message loss across 1.6B events. [See benchmarks →](docs/benchmarks.html#version) | All ≥0.13.x clients work unchanged — upgrade clients to gain `maxPartitions` support |
-| **0.13.0**     | Major release: new libqueen with adaptive batch/concurrency/scheduling engine (S1 ~2x, S3 ~3x push throughput), new `push_messages_v3` stored procedure, new Vue 3 dashboard, and server-stamped `producerSub` from the JWT on every message (closes #23) | All ≥0.12.x work unchanged — 0.13.0 pop responses add a new `producerSub` field that older clients silently ignore. Upgrade to 0.13.0 clients only if you want typed access to `producerSub` (Go struct field, Python TypedDict hint) |
+| **0.13.0**     | Major release: new libqueen with adaptive batch/concurrency/scheduling engine (S1 ~2x, S3 ~3x push throughput), new `push_messages_v2` stored procedure (temp-table + batched-insert pipeline), new Vue 3 dashboard, and server-stamped `producerSub` from the JWT on every message (closes #23) | All ≥0.12.x work unchanged — 0.13.0 pop responses add a new `producerSub` field that older clients silently ignore. Upgrade to 0.13.0 clients only if you want typed access to `producerSub` (Go struct field, Python TypedDict hint) |
 | **0.12.19**    | Fix bug that on seek or cg delete do not deleted the watermark                                                                  | JS ≥0.7.4, Python ≥0.7.4                                    |
 | **0.12.18**    | Improved charts and filters                                                                                                     | JS ≥0.7.4, Python ≥0.7.4                                    |
 | **0.12.17**    | Improved stats                                                                                                                  | JS ≥0.7.4, Python ≥0.7.4                                    |
 | **0.12.13**    | Added watermark tracking for efficient wildcard POP discovery. x20 faster pop on high partition count queues                    | JS ≥0.7.4, Python ≥0.7.4                                    |
-| **0.12.12**    | Built-in database migration (pg_dump | pg_restore, no temp file, selective table groups, row count validation)                  | JS ≥0.7.4, Python ≥0.7.4                                    |
+| **0.12.12**    | Built-in database migration (pg_dump \| pg_restore, no temp file, selective table groups, row count validation)                  | JS ≥0.7.4, Python ≥0.7.4                                    |
 | **0.12.10**    | Fixed JWKS fetch over HTTPS (cpp-httplib TLS support)                                                                           | JS ≥0.7.4, Python ≥0.7.4, 0.12.0 if needs to use            |
 | **0.12.9**     | Fixed server crash (SIGSEGV) on lease renewal, added EdDSA/JWKS auth, fixed examples                                            | JS ≥0.7.4, Python ≥0.7.4, 0.12.0 if needs to use            |
 | **0.12.8**     | Added single partition move to now to frontend                                                                                  | JS ≥0.7.4, Python ≥0.7.4, 0.12.0 if needs to use            |
@@ -161,7 +164,7 @@ The repository is structured as follows:
 | **0.7.5**      | First stable release                                                                                                            | JS ≥0.7.4, Python ≥0.7.4                                    |
 
 
-**[Full Release Notes →](https://smartpricing.github.io/queen/server/releases)**
+**[Full Release Notes →](https://github.com/smartpricing/queen/releases)**
 
 ---
 
@@ -172,7 +175,7 @@ The repository is structured as follows:
 - Server 0.14.1: **Prometheus metrics route.** A `/metrics` endpoint exposes standard Prometheus-compatible metrics for scraping.
 - Server 0.14.1: **Significantly optimized lease renewal.** Reduced lock contention and database round-trips on the hot lease-renewal path, lowering tail latency under high consumer concurrency.
 - Server/App 0.14.1: **Delete partition and delete messages.** New API and dashboard actions to delete individual partitions or bulk-delete messages from a queue.
-- Server and clients 0.14.0: **New dynamic libqueen loop.** Full rewrite of the core scheduling engine — adaptive concurrency controller (TCP-Vegas-style) now drives push, pop, ack, and stats independently. Active DB connections stay at ~2.5 even with a pool of 50 under 104k msg/s peak load. Eliminates the PG deadlock mode that appeared under heavy fan-out at high partition counts on 0.12.
+- Server and clients 0.14.0: **New dynamic libqueen loop.** Full rewrite of the core scheduling engine — adaptive concurrency controller (TCP-Vegas-style) now drives push, pop, ack, and stats independently. Active DB connections stay at ~2.5 even with a pool of 50 under 104k msg/s peak load. Largely eliminates the PG deadlock mode that appeared under heavy fan-out at high partition counts on 0.12 (occasional deadlocks still observed at 10 001 partitions, all absorbed by file-buffer failover — see [benchmarks](https://smartpricing.github.io/queen/benchmarks.html)).
 - Server 0.14.0: **Rewritten stored procedures.** `push_messages_v3`, `pop_messages_v3`, `ack_messages_v2`, and stats procedures redesigned around the new loop. PG memory usage 30–70% lower for equivalent workloads vs 0.12. Pop throughput +80–90% under partition contention.
 - Clients 0.14.0: **`maxPartitions` on all clients.** JS, Python, Go, Laravel, and C++ clients expose `maxPartitions` on queue creation and configuration.
 - Server 0.14.0: **New frontend.** Redesigned dashboard for the new stats model.

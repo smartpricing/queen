@@ -1,4 +1,4 @@
-# Queen benchmarks — 2026-05-25 session
+# Queen benchmarks — 2026-04-26 session
 
 Compacted overview of 18 benchmarks run over a single day on  (32 vCPU, 62 GiB RAM, no swap, Ubuntu 24.04, PostgreSQL upstream `postgres:latest`, fresh DB per test).
 

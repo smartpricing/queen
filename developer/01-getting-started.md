@@ -19,7 +19,7 @@ This page takes you from "fresh clone" to "broker running, message pushed, messa
 | Node.js                       | **22+**              | Frontend, JS client, examples |
 | Python                        | 3.8+                 | Python client                 |
 | Go                            | 1.24+                | Go client                     |
-| PHP                           | 8.1+ + Composer      | PHP/Laravel client            |
+| PHP                           | 8.3+ + Composer      | PHP/Laravel client            |
 
 
 > Use `nvm use 22 &&` before any `npm` command so versions match CI and the JS client's `engines` field.

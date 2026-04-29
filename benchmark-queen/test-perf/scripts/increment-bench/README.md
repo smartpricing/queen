@@ -12,7 +12,7 @@ A focused, reproducible micro-benchmark for `queen.increment_message_counts_v1()
    only -- no producers, no consumers, no pop / ack code under measurement.
    Push/pop/ack regressions, if we ever cause any while refactoring, are the
    job of the existing E2E benchmarks under
-   `benchmark-queen/2026-05-25/_runner/`.
+   `benchmark-queen/2026-04-26/_runner/`.
 
 ## Why a synthetic micro-benchmark
 
@@ -72,7 +72,7 @@ The hot path (`push_messages_v3`, `pop_unified_batch_v3`, `ack_*`) is not
 touched by this harness -- if we propose v2 changes that add or modify
 indexes on `queen.messages` or `queen.partition_lookup`, regression-testing
 those is the job of the E2E benchmark under
-`benchmark-queen/2026-05-25/_runner/run_test_v3.sh`.
+`benchmark-queen/2026-04-26/_runner/run_test_v3.sh`.
 
 ## Running
 
@@ -154,7 +154,7 @@ A v2 candidate is acceptable iff:
 4. `summary.json`'s `messages_seq_scan.p50` drops to 0 (v2 should use
    `partition_lookup.updated_at` to drive the scan and never seq-scan
    `queen.messages`).
-5. The full E2E benchmark (`benchmark-queen/2026-05-25/_runner/run_test_v3.sh`)
+5. The full E2E benchmark (`benchmark-queen/2026-04-26/_runner/run_test_v3.sh`)
    shows no regression in push/pop/ack throughput or latency. (Tier B,
    not driven by this harness.)
 

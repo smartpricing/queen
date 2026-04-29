@@ -130,7 +130,7 @@ This bench drives only `queen.increment_message_counts_v1()` via psql.
 not add or remove any indexes on those tables, so there is no plausible
 mechanism by which v2 could regress the hot path. The full E2E sanity check
 is the existing benchmark at
-`benchmark-queen/2026-05-25/_runner/run_test_v3.sh`, which drives real
+`benchmark-queen/2026-04-26/_runner/run_test_v3.sh`, which drives real
 producers and consumers through queen and reports `pg_stat_user_functions`
 totals for `push_messages_v3` / `pop_unified_batch_v3`. Run that with v1 and
 v2 and compare; we do not expect to see any movement on those rows because

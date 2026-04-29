@@ -9,7 +9,7 @@ clients/
 ├── client-js/        Node.js 22+         queen-mq          npm
 ├── client-py/        Python 3.8+         queen-mq          PyPI
 ├── client-go/        Go 1.24+            client-go         Go modules
-├── client-laravel/   PHP 8.1+ + Laravel  smartpricing/queen-mq  Packagist
+├── client-laravel/   PHP 8.3+ + Laravel  smartpricing/queen-mq  Packagist
 └── client-cpp/       C++17               header-only       in-repo
 ```
 
@@ -225,7 +225,7 @@ cd clients/client-laravel
 composer install
 ```
 
-PHP 8.1 or newer.
+PHP 8.3 or newer.
 
 ### Run the tests
 

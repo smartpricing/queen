@@ -353,7 +353,7 @@ SELECT jsonb_build_object('items', …, 'partition_updates', …);</code></pre>
 
 // Every batchable type maps to exactly one stored procedure:
 { JobType::PUSH,        "SELECT queen.push_messages_v3($1::jsonb)" },
-{ JobType::POP,         "SELECT queen.pop_unified_batch_v3($1::jsonb)" },
+{ JobType::POP,         "SELECT queen.pop_unified_batch_v4($1::jsonb)" },
 { JobType::ACK,         "SELECT queen.ack_messages_v2($1::jsonb)" },
 { JobType::TRANSACTION, "SELECT queen.execute_transaction_v2($1::jsonb)" },
 { JobType::RENEW_LEASE, "SELECT queen.renew_lease_v2($1::jsonb)" },</code></pre>
@@ -648,7 +648,7 @@ ctx.queen-&gt;submit(std::move(job_req),
       We picked HTTP/JSON because every language has an HTTP client and the operational
       story is dead simple. The cost: <strong>~5× more CPU per msg/s than RabbitMQ's
       AMQP</strong>, and ~80× more than Kafka's binary protocol. At 10k msg/s you don't
-      notice. At 100k msg/s, the protocol cost is most of the queen's CPU budget. A
+      notice. At 100k msg/s, the protocol cost is most of Queen's CPU budget. A
       future binary protocol would help here; today HTTP is what we ship.
     </p>
   </div>
