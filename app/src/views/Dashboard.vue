@@ -152,6 +152,47 @@
         :expanded="isExpanded('pendingDelta')"
         @toggle-expand="toggleRow('pendingDelta')"
       />
+      <!-- Parked + Fill ratio sit between Pending Δ and Time lag because
+           together they answer the consumer-side of the flow story:
+           who's waiting (Parked) and how often they're actually fed
+           (Fill). Time lag below tells you how *late* messages are
+           when they finally do get delivered. -->
+      <MetricRow
+        label="Parked"
+        :value="formatNumber(Math.round(parkedLatest))"
+        unit="consumers"
+        :context="parkedContext"
+        :series="parkedSeriesData"
+        :labels="partitionLabels"
+        :value-format="fmtCount"
+        expand-unit="long-polls"
+        :loading="loadingStatus"
+        tooltip="Long-poll consumer connections currently waiting for work, summed across all queues. Approximates idle connected consumers (busy consumers, mid-job, not counted)."
+        :expanded="isExpanded('parked')"
+        @toggle-expand="toggleRow('parked')"
+      />
+      <MetricRow
+        label="Fill ratio"
+        :context="fillContext"
+        :series="fillSeriesData"
+        :labels="partitionLabels"
+        :value-format="fmtFillPct"
+        expand-unit="%"
+        :severity="fillSeverity"
+        :loading="loadingStatus"
+        tooltip="Long-polls returning a message ÷ all long-poll completions, across all queues. Below 30% with traffic = consumers mostly waiting (over-provisioned); near 100% sustained = consumers fully utilized — watch the Time lag row for under-provisioning."
+        :expanded="isExpanded('fillRatio')"
+        @toggle-expand="toggleRow('fillRatio')"
+      >
+        <template #value>
+          <template v-if="fillLatest === null">
+            <span class="num">—</span>
+          </template>
+          <template v-else>
+            <span class="num" :class="fillSeverity">{{ fillLatest.toFixed(1) }}</span><i class="mr-unit">%</i>
+          </template>
+        </template>
+      </MetricRow>
       <MetricRow
         label="Time lag"
         :context="'avg / max p99 across consumer groups'"
@@ -409,7 +450,7 @@ const timeRanges = [
 // so future label tweaks don't blow away the user's expanded selection.
 // ---------------------------------------------------------------------------
 const ALL_ROW_KEYS = [
-  'throughput', 'pendingDelta', 'timeLag',
+  'throughput', 'pendingDelta', 'parked', 'fillRatio', 'timeLag',
   'errors', 'eventLoop', 'cpu', 'dbPool',
   'partitions', 'retention',
 ]
@@ -747,6 +788,106 @@ const partitionDeletedTotal = computed(() =>
 )
 
 // ---------------------------------------------------------------------------
+// Parked row — gauge: in-flight long-poll consumer connections, summed
+// across all queues per bucket. Approximates "idle connected consumers"
+// at any moment in time (busy consumers, mid-job, are NOT counted —
+// they're not parked). The latest bucket is what reads on the row; the
+// sparkline is the trend across the selected window.
+// ---------------------------------------------------------------------------
+const parkedSeriesData = computed(() => {
+  const rows = partitionOpsData.value || []
+  if (!rows.length) return null
+  return [{ label: 'Parked', data: rows.map(r => Number(r.parkedTotal) || 0) }]
+})
+const parkedLatest = computed(() => {
+  const rows = partitionOpsData.value || []
+  return rows.length ? (Number(rows[rows.length - 1].parkedTotal) || 0) : 0
+})
+const parkedAvg = computed(() => {
+  const rows = partitionOpsData.value || []
+  if (!rows.length) return 0
+  let sum = 0
+  for (const r of rows) sum += Number(r.parkedTotal) || 0
+  return sum / rows.length
+})
+const parkedContext = computed(() => {
+  const rows = partitionOpsData.value || []
+  if (!rows.length) return '—'
+  return `avg ${parkedAvg.value.toFixed(1)} across window · idle long-polls`
+})
+
+// ---------------------------------------------------------------------------
+// Fill ratio row — popMessages / (popMessages + popEmpty) aggregated across
+// queues per bucket, rendered as a percentage. The single best "is my
+// consumer pool sized right?" signal computable from queue-ops alone:
+//   • near 0% with traffic → consumers waiting in vain (over-provisioned)
+//   • near 100% sustained  → consumers fully utilized; watch lag for
+//                            under-provisioning
+// We gate on FILL_NOISE_FLOOR completions per bucket to silence single-event
+// noise in quiet windows (and return null so RowChart renders gaps rather
+// than misleading drops to zero).
+// ---------------------------------------------------------------------------
+const FILL_NOISE_FLOOR = 5
+
+// Quiet-bucket handling: RowChart strips non-finite values from its data
+// arrays via Number.isFinite, but Number(null) === 0 sneaks past that
+// check and would render quiet buckets as a misleading "0% fill" dip.
+// Returning NaN/undefined would drop the points but desync the timestamp
+// labels in the expanded chart. Pragmatic compromise: carry forward the
+// previous bucket's measured value through quiet periods so the sparkline
+// stays continuous and honest. The headline "Now" value (fillLatest)
+// uses its own gating with a real null → "—" to make truly-idle windows
+// distinguishable in the row's value cell.
+const fillSeriesData = computed(() => {
+  const rows = partitionOpsData.value || []
+  if (!rows.length) return null
+  let last = 0
+  const data = rows.map(r => {
+    const pop = Number(r.popMessages) || 0
+    const empty = Number(r.popEmpty) || 0
+    const total = pop + empty
+    if (total < FILL_NOISE_FLOOR) return last
+    last = Math.round((pop / total) * 1000) / 10
+    return last
+  })
+  return [{ label: 'Fill', data }]
+})
+
+// "Now" value smoothed across the last few buckets so a single noisy
+// minute doesn't dictate the headline number. Returns null when the
+// recent window has too little long-poll activity to compute meaningfully.
+const fillLatest = computed(() => {
+  const rows = partitionOpsData.value || []
+  if (!rows.length) return null
+  const tail = rows.slice(-5)
+  let pop = 0, empty = 0
+  for (const r of tail) {
+    pop   += Number(r.popMessages) || 0
+    empty += Number(r.popEmpty)    || 0
+  }
+  if (pop + empty < FILL_NOISE_FLOOR) return null
+  return Math.round((pop / (pop + empty)) * 1000) / 10
+})
+
+const fillContext = computed(() => {
+  const v = fillLatest.value
+  if (v === null) return 'idle window · no long-poll activity'
+  if (v >= 80) return 'high utilization · consumers busy serving'
+  if (v < 30)  return 'low utilization · consumers mostly empty'
+  return 'balanced · consumer pool sized OK'
+})
+
+// We only flag low fill as `warn` — high fill is a positive signal in
+// isolation (becomes a problem only when paired with rising lag, which
+// already has its own row). Without traffic, leave neutral.
+const fillSeverity = computed(() => {
+  const v = fillLatest.value
+  if (v === null) return ''
+  if (v < 30) return 'warn'
+  return ''
+})
+
+// ---------------------------------------------------------------------------
 // Retention row — three series (retention sweep, completed-retention sweep,
 // hard eviction). Only "Evicted" gets the warn color; the others are quiet.
 // ---------------------------------------------------------------------------
@@ -890,6 +1031,16 @@ const fmtLagMs = (n) => {
   if (v < 60000) return (v / 1000).toFixed(1) + ' s'
   return (v / 60000).toFixed(1) + ' m'
 }
+// Fill ratio tooltip formatter — the Fill row inserts null in `data` for
+// buckets that didn't have enough long-poll activity to compute meaningfully.
+// We render those as an em dash so the user can tell "no data" apart from
+// "0% delivered".
+const fmtFillPct = (n) => {
+  if (n === null || n === undefined) return '—'
+  const v = Number(n)
+  if (!Number.isFinite(v)) return '—'
+  return v.toFixed(1) + '%'
+}
 
 // ---------------------------------------------------------------------------
 // Helpers — duration + last-refresh ticker
@@ -956,11 +1107,26 @@ const fetchQueueOps = async () => {
   try {
     const r = await systemApi.getQueueOps(getTimeRangeParams())
     const series = r.data?.series || []
+    // Roll up the per-(queue, bucket) series into one row per bucket.
+    // Beyond the original partition lifecycle counters, we also accumulate
+    // parked / popMessages / popEmpty across queues so the Parked and
+    // Fill ratio rows below can chart cluster-wide gauges/derivations.
+    // (parkedCount is a SUM across workers per (queue, bucket), and we
+    // SUM again here across queues for the cluster-wide gauge — a
+    // legitimate gauge composition since each long-poll lives on exactly
+    // one (queue, partition, worker).)
     const byBucket = {}
     for (const row of series) {
-      const b = byBucket[row.bucket] ||= { bucket: row.bucket, partitionsCreated: 0, partitionsDeleted: 0 }
+      const b = byBucket[row.bucket] ||= {
+        bucket: row.bucket,
+        partitionsCreated: 0, partitionsDeleted: 0,
+        parkedTotal: 0, popMessages: 0, popEmpty: 0
+      }
       b.partitionsCreated += Number(row.partitionsCreated) || 0
       b.partitionsDeleted += Number(row.partitionsDeleted) || 0
+      b.parkedTotal       += Number(row.parkedCount)      || 0
+      b.popMessages       += Number(row.popMessages)      || 0
+      b.popEmpty          += Number(row.popEmpty)         || 0
     }
     partitionOpsData.value = Object.values(byBucket).sort((a, b) => a.bucket.localeCompare(b.bucket))
   } catch { partitionOpsData.value = [] }

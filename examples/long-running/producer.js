@@ -3,8 +3,8 @@ import axios from 'axios';
 
 const SERVER_URL = process.env.SERVER_URL || 'http://localhost:6632';
 const QUEUE_NAME = 'queen-long-running';
-const workers = 2;
-const connections = 500;
+const workers = 1;
+const connections = 1;
 const maxPartition = 500;
 const duration = 60 * 5; // 10 minutes
 

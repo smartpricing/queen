@@ -28,6 +28,7 @@
       <a href="dashboard.html">Dashboard</a>
       <a href="benchmarks.html">Benchmarks</a>
       <a href="sizing.html">Sizing</a>
+      <a href="https://github.com/smartpricing/queen/blob/main/DEVELOPING.md" target="_blank" rel="noopener">Develop ↗</a>
     </nav>
     <div class="topnav-right">
       <a class="icon-link" href="https://github.com/smartpricing/queen" aria-label="GitHub">
@@ -149,7 +150,7 @@ docker run -p 6632:6632 --network queen \
 <table>
   <thead><tr><th>Level</th><th>Routes</th><th>Required role</th></tr></thead>
   <tbody>
-    <tr><td>PUBLIC</td><td><code>/health</code>, <code>/metrics</code>, <code>/</code> (dashboard)</td><td>none</td></tr>
+    <tr><td>PUBLIC</td><td><code>/health</code>, <code>/metrics</code>, <code>/metrics/prometheus</code>, <code>/</code> (dashboard)</td><td>none</td></tr>
     <tr><td>READ_ONLY</td><td>GET <code>/api/v1/status/*</code>, <code>/api/v1/resources/*</code></td><td>any valid token</td></tr>
     <tr><td>READ_WRITE</td><td>POST <code>/api/v1/push</code>, GET <code>/api/v1/pop/*</code></td><td><code>read-write</code> or <code>admin</code></td></tr>
     <tr><td>ADMIN</td><td><code>/api/v1/system/*</code>, DELETE operations</td><td><code>admin</code></td></tr>

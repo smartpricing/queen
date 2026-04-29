@@ -50,10 +50,16 @@ const routes = [
     meta: { title: 'Dead Letter', subtitle: 'Inspect, replay, and purge failed messages' }
   },
   {
+    path: '/operations',
+    name: 'QueueOperations',
+    component: () => import('@/views/QueueOperations.vue'),
+    meta: { title: 'Queue Operations', subtitle: 'Per-queue throughput, lag, and consumer health' }
+  },
+  {
     path: '/system',
     name: 'System',
     component: () => import('@/views/System.vue'),
-    meta: { title: 'System', subtitle: 'Server health and resources' }
+    meta: { title: 'System', subtitle: 'Server resources and Postgres internals' }
   },
   {
     path: '/migration',

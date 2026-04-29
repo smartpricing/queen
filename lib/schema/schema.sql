@@ -361,6 +361,33 @@ CREATE INDEX IF NOT EXISTS idx_messages_partition_created ON queen.messages (par
 -- triggers a seq scan of partition_lookup per deleted parent row.
 CREATE INDEX IF NOT EXISTS idx_partition_lookup_partition_id ON queen.partition_lookup(partition_id);
 
+-- Supports queen.renew_lease_v2 (filters partition_consumers by worker_id alone)
+-- and the lease-validation EXISTS subqueries in queen.ack_messages_v2 and
+-- queen.execute_transaction_v2. Without this, every renew_lease_v2 inner-loop
+-- iteration sequentially scans partition_consumers, pushing avg latency to
+-- ~90ms per call on prod-class deployments (5k-10k+ rows). With the index, the
+-- UPDATE/EXISTS lookups become O(log N) B-tree descents.
+--
+-- Partial on (worker_id IS NOT NULL): the table holds one row per
+-- (partition_id, consumer_group), most of which sit at worker_id IS NULL
+-- (no active lease). Indexing only the active-lease rows keeps the index in
+-- the kilobyte range and bounds churn to lease-acquire/release transitions
+-- (one entry insert per pop, one delete per ack/transaction-completion).
+--
+-- HOT trade-off: pop_unified_batch_v4 / ack_messages_v2 mutate worker_id at
+-- lease boundaries and so lose HOT eligibility for those specific UPDATEs,
+-- paying one extra index-page write per lease cycle. renew_lease_v2 does NOT
+-- mutate worker_id (only lease_expires_at), so it stays HOT-safe even with
+-- this index in place. The fillfactor=50 setting on partition_consumers was
+-- already provisioned to absorb non-HOT in-page updates.
+--
+-- Production rollout: deploy via CREATE INDEX CONCURRENTLY first (cannot run
+-- inside the transactional schema apply), then this IF NOT EXISTS form is a
+-- no-op on existing prod databases and creates the index on fresh deploys.
+CREATE INDEX IF NOT EXISTS idx_partition_consumers_worker_id_active
+    ON queen.partition_consumers (worker_id)
+    WHERE worker_id IS NOT NULL;
+
 -- ============================================================================
 -- Trigger Functions
 -- ============================================================================
