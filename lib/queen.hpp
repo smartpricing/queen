@@ -266,6 +266,25 @@ class Queen {
           _worker_id(worker_id) {
         uv_mutex_init(&_mutex_backoff_signal);
 
+        // In-flight deadline: a slot whose query hasn't completed within
+        // this many ms is treated as dead (jobs requeued, slot disconnected,
+        // reconnect thread takes over). This is the safety net for silent
+        // network drops where neither libpq nor the kernel raises an error
+        // — exactly the case observed during Cloud SQL maintenance windows.
+        //
+        // Default: statement_timeout + 5 s grace. The grace covers normal
+        // round-trip + JSON marshalling + per-job dispatch; queries that
+        // legitimately take longer would already have been killed on the PG
+        // side by `SET statement_timeout`. Floor at 2 s so very aggressive
+        // statement_timeout values (e.g. 100 ms) don't cause spurious kills.
+        {
+            const char* env = std::getenv("LIBQUEEN_INFLIGHT_DEADLINE_MS");
+            uint64_t v = env ? static_cast<uint64_t>(std::atoll(env))
+                             : static_cast<uint64_t>(statement_timeout_ms) + 5000ull;
+            if (v < 2000ull) v = 2000ull;
+            _inflight_deadline_ms = std::chrono::milliseconds(v);
+        }
+
         // Build per-type state (policy + concurrency controller). The
         // `queue_interval_ms` constructor arg is honored as the legacy
         // fallback for any type-specific MAX_HOLD_MS that isn't set via
@@ -412,6 +431,11 @@ class Queen {
     uint16_t    _db_connection_count;
     std::vector<uint16_t>     _free_slot_indexes;
     std::vector<DBConnection> _db_connections;
+
+    // Slots whose in-flight query has been outstanding longer than this
+    // are treated as dead in `_check_stuck_slots` (event-loop thread).
+    // Initialized in the constructor from LIBQUEEN_INFLIGHT_DEADLINE_MS.
+    std::chrono::milliseconds _inflight_deadline_ms{std::chrono::milliseconds(35000)};
 
     // ------------------------------------------------------------------
     // POP long-poll state
@@ -604,6 +628,7 @@ class Queen {
         auto* self = static_cast<Queen*>(uv_handle_get_data((uv_handle_t*)handle));
 
         self->_cleanup_stale_backoff_entries();
+        self->_check_stuck_slots();
 
         size_t backoff_size            = self->_pop_backoff_tracker.size();
         size_t free_slot_indexes_size  = self->_free_slot_indexes.size();
@@ -681,6 +706,55 @@ class Queen {
         self->_jobs_done = 0;
     }
 
+    // Scan every slot for queries that have been in-flight longer than
+    // `_inflight_deadline_ms`. Such slots are recycled the same way as a
+    // poll-error or PQconsumeInput failure: jobs requeued, slot
+    // disconnected, concurrency released, drain re-kicked. The reconnect
+    // thread then picks up the disconnected slot and rebuilds it.
+    //
+    // This is the safety net for silent network drops (cloud-managed PG
+    // maintenance, load-balancer reroutes, hypervisor pause, etc.) where
+    // neither libpq nor the kernel surfaces an error on the FD within
+    // a useful timeframe. Without this check, a stuck slot would keep
+    // its concurrency counter held indefinitely and block new fires of
+    // the same JobType.
+    //
+    // Runs on the event-loop thread (called from `_uv_stats_timer_cb`),
+    // so it shares all the same single-thread invariants as the rest of
+    // the orchestrator.
+    void
+    _check_stuck_slots() noexcept(false) {
+        auto now = std::chrono::steady_clock::now();
+
+        for (uint16_t i = 0; i < _db_connection_count; i++) {
+            DBConnection& slot = _db_connections[i];
+
+            // current_type == _SENTINEL means the slot is idle. There is
+            // no in-flight query, so the deadline does not apply.
+            if (slot.current_type == JobType::_SENTINEL) continue;
+
+            // If the connection has already been torn down (slot.conn ==
+            // nullptr), the reconnect thread owns it. Don't double-handle.
+            if (slot.conn == nullptr) continue;
+
+            auto age = now - slot.current_fire.fire_time;
+            if (age <= _inflight_deadline_ms) continue;
+
+            auto age_ms = std::chrono::duration_cast<std::chrono::milliseconds>(age).count();
+            spdlog::warn(
+                "[Worker {}] [libqueen] Slot {} in-flight deadline exceeded "
+                "({} ms > {} ms, type={}, batch={}) - treating as dead connection",
+                _worker_id, slot.idx, age_ms, _inflight_deadline_ms.count(),
+                job_type_name(slot.current_type),
+                slot.current_fire.batch_size);
+
+            _handle_slot_error(
+                slot,
+                "In-flight deadline exceeded after " +
+                std::to_string(age_ms) + "ms (suspected silent network drop)");
+        }
+    }
+
     void
     _cleanup_stale_backoff_entries() noexcept(true) {
         auto now = std::chrono::steady_clock::now();
@@ -741,7 +815,24 @@ class Queen {
         auto* pool = slot->pool;
 
         if (status < 0) {
-            spdlog::error("[Worker {}] [libqueen] Poll error: {}", pool->_worker_id, uv_strerror(status));
+            // libuv reports a socket-level failure (POLLERR / POLLHUP / EBADF
+            // / etc). Previously this branch only logged and returned, which
+            // left the slot permanently in-flight: jobs were never requeued,
+            // the concurrency counter was never released, and the reconnect
+            // thread skipped the slot because `slot->conn != nullptr`. That
+            // is the "broker doesn't recover after PG comes back" failure
+            // mode observed during Cloud SQL maintenance windows.
+            //
+            // Treat it the same as a PQconsumeInput failure: requeue jobs,
+            // disconnect, release concurrency, kick the drain orchestrator.
+            // The reconnect thread will pick the slot up on its next pass.
+            spdlog::error(
+                "[Worker {}] [libqueen] Poll error on slot {}: {} - "
+                "treating as dead connection",
+                pool->_worker_id, slot->idx, uv_strerror(status));
+            pool->_handle_slot_error(
+                *slot,
+                std::string("uv_poll error: ") + uv_strerror(status));
             return;
         }
 

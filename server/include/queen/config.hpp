@@ -67,7 +67,18 @@ struct DatabaseConfig {
     int connection_timeout = 2000;       // 2 seconds
     int statement_timeout = 30000;       // 30 seconds
     int lock_timeout = 10000;            // 10 seconds
-    
+
+    // Socket-level health checks. These bound how long a TCP connection
+    // can sit unresponsive before the kernel raises an error on the FD,
+    // so the broker can detect silent network drops (cloud-managed PG
+    // maintenance, load-balancer reroutes, hypervisor pause, etc.) without
+    // waiting for the OS defaults (~14 min TCP retransmit / ~2 h keepalive).
+    // Defaults: kernel notices a black-holed peer within ~30 s.
+    int tcp_user_timeout_ms = 30000;     // TCP_USER_TIMEOUT (ms, Linux only)
+    int keepalives_idle = 60;            // seconds idle before first probe
+    int keepalives_interval = 10;        // seconds between probes
+    int keepalives_count = 3;            // probes before declaring dead
+
     static DatabaseConfig from_env() {
         DatabaseConfig config;
         config.user = get_env_string("PG_USER", "postgres");
@@ -84,7 +95,12 @@ struct DatabaseConfig {
         config.connection_timeout = get_env_int("DB_CONNECTION_TIMEOUT", 2000);
         config.statement_timeout = get_env_int("DB_STATEMENT_TIMEOUT", 30000);
         config.lock_timeout = get_env_int("DB_LOCK_TIMEOUT", 10000);
-        
+
+        config.tcp_user_timeout_ms = get_env_int("DB_TCP_USER_TIMEOUT_MS", 30000);
+        config.keepalives_idle     = get_env_int("DB_KEEPALIVES_IDLE", 60);
+        config.keepalives_interval = get_env_int("DB_KEEPALIVES_INTERVAL", 10);
+        config.keepalives_count    = get_env_int("DB_KEEPALIVES_COUNT", 3);
+
         return config;
     }
     
@@ -107,7 +123,23 @@ struct DatabaseConfig {
         // This is the only timeout that can safely be in connection string
         // (works with both direct PostgreSQL and PgBouncer)
         conn_str += " connect_timeout=" + std::to_string(connection_timeout / 1000);
-        
+
+        // Socket-level keepalive + TCP_USER_TIMEOUT. Without these, libpq
+        // inherits OS defaults (Linux: ~2 h before the first keepalive probe,
+        // ~14 min before tcp_retries2 gives up on retransmits). That window
+        // is longer than any cloud-managed maintenance pause, so the broker
+        // would never observe the connection going bad — exactly the failure
+        // mode hit during Cloud SQL maintenance/migration. With the defaults
+        // here, the kernel raises an error on the socket within ~30 s of a
+        // silent black-hole, which surfaces to libqueen as a poll error and
+        // to AsyncDbPool as a failed health check. tcp_user_timeout is a
+        // Linux-only setting; libpq silently ignores it on other platforms.
+        conn_str += " keepalives=1"
+                    " keepalives_idle=" + std::to_string(keepalives_idle) +
+                    " keepalives_interval=" + std::to_string(keepalives_interval) +
+                    " keepalives_count=" + std::to_string(keepalives_count) +
+                    " tcp_user_timeout=" + std::to_string(tcp_user_timeout_ms);
+
         // NOTE: statement_timeout, lock_timeout, and idle_in_transaction_session_timeout
         // CANNOT be set via connection string options when using PgBouncer
         // These are now set in DatabaseConnection constructor via SET commands

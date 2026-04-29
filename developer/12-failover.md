@@ -8,13 +8,14 @@ This is one of Queen's strongest correctness guarantees ("zero message loss acro
 
 ## What "DB is down" means here
 
-Three things trigger the failover path:
+Four things trigger the failover path:
 
 1. **Connection acquisition timeout** — the broker's `AsyncDbPool` tries to get a connection, exceeds `DB_CONNECTION_TIMEOUT` (default 2 s), gives up.
 2. **Statement timeout** — a query starts but exceeds `DB_STATEMENT_TIMEOUT` (default 2 s in failover-tuned setups, 30 s by default).
-3. **Connection error** — TCP-level error from libpq (refused, reset, RST after replication failover).
+3. **Connection error** — TCP-level error from libpq (refused, reset, RST after replication failover) — surfaces to libqueen as either a `PQconsumeInput` failure or a `uv_poll` `status < 0` error; both go through `_handle_slot_error`.
+4. **In-flight deadline exceeded** — a libqueen slot has been waiting for a query result longer than `LIBQUEEN_INFLIGHT_DEADLINE_MS` (default `DB_STATEMENT_TIMEOUT + 5 s`). This is the safety net for silent network drops where neither libpq nor the kernel raises an error on the socket. The per-worker stats timer scans every slot once per second; any slot whose `current_fire.fire_time` is older than the deadline is recycled (jobs requeued, slot disconnected, reconnect thread rebuilds it).
 
-In all three cases, the broker:
+In all four cases, the broker:
 
 - Marks `db_healthy_ = false` (atomic flag, shared across workers via `SharedStateManager`)
 - For the *current* request: writes the buffered event to the file system instead of failing
@@ -100,6 +101,24 @@ export FILE_BUFFER_EVENTS_PER_FILE=50000  # bigger files
 export DB_STATEMENT_TIMEOUT=2000          # detect DB down in 2 s
 export DB_POOL_SIZE=300                   # more conns for recovery throughput
 ```
+
+### Silent network drops (Cloud SQL maintenance, LB reroutes, hypervisor pause)
+
+The defaults above already detect a *clean* PG shutdown (RST / FIN) within ~1 s. The harder case is a *silent* disruption — packets being black-holed by a managed proxy or load-balancer while the underlying instance is being moved — because no application-level or kernel-level error is raised on the broker's existing TCP connections for many minutes by default.
+
+Three settings together close that gap:
+
+
+| Variable                        | Default                       | Effect                                                                                                                                            |
+| ------------------------------- | ----------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `DB_TCP_USER_TIMEOUT_MS`        | `30000`                       | Linux `TCP_USER_TIMEOUT`. Bounds how long unacknowledged outgoing data can sit before the kernel errors the FD. Without it: ~14 min default.      |
+| `DB_KEEPALIVES_IDLE`            | `60`                          | Seconds of idle before the first keepalive probe. Without tuning, libpq inherits the OS default (typically 2 h on Linux).                         |
+| `LIBQUEEN_INFLIGHT_DEADLINE_MS` | `DB_STATEMENT_TIMEOUT + 5000` | Per-slot safety net: a libqueen slot in-flight longer than this is treated as a dead connection regardless of whether the kernel raised an error. |
+
+
+Together these guarantee that, even when the network silently swallows packets, the broker observes the dead connection within ~30–60 s and falls over to the file buffer for new requests, and that the libqueen slot is recycled even if no socket event ever fires.
+
+The `_uv_socket_event_cb` callback also routes `uv_poll` `status < 0` errors through `_handle_slot_error` — earlier versions only logged them, which left the slot permanently in-flight and was the proximate cause of "broker doesn't recover after Postgres returns" reports.
 
 ---
 

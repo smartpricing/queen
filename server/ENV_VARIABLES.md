@@ -37,6 +37,34 @@ This document lists all environment variables supported by the Queen C++ server.
 | `DB_STATEMENT_TIMEOUT` | int | 30000 | Statement timeout in milliseconds |
 | `DB_LOCK_TIMEOUT` | int | 10000 | Lock timeout in milliseconds |
 
+### Connection Health (silent-drop detection)
+
+These settings control how quickly the broker notices that an existing
+TCP connection to PostgreSQL has become unresponsive without an explicit
+close (e.g. cloud-managed PG maintenance, load-balancer reroute,
+hypervisor pause). They are added verbatim to the libpq connection
+string. Without them, libpq inherits OS defaults: ~2 hours before the
+first keepalive probe and ~14 minutes for `tcp_retries2` to give up —
+which is much longer than any realistic maintenance window.
+
+| Variable | Type | Default | Description |
+|----------|------|---------|-------------|
+| `DB_TCP_USER_TIMEOUT_MS` | int | 30000 | `TCP_USER_TIMEOUT` in ms (Linux only; ignored on macOS/Windows). Bounds how long unacknowledged outgoing data can sit before the kernel errors the socket. |
+| `DB_KEEPALIVES_IDLE` | int | 60 | Seconds of idle before the first keepalive probe is sent. |
+| `DB_KEEPALIVES_INTERVAL` | int | 10 | Seconds between successive keepalive probes. |
+| `DB_KEEPALIVES_COUNT` | int | 3 | Number of failed probes before the connection is declared dead. |
+
+With the defaults, a black-holed peer is detected within ~30 s
+(keepalives) or sooner on Linux (tcp_user_timeout). Both libqueen's
+per-worker pool and `AsyncDbPool` benefit, since both build their
+connection strings from `DatabaseConfig::connection_string()`.
+
+### Stuck-slot deadline (libqueen)
+
+| Variable | Type | Default | Description |
+|----------|------|---------|-------------|
+| `LIBQUEEN_INFLIGHT_DEADLINE_MS` | int | `DB_STATEMENT_TIMEOUT + 5000` (floored at 2000) | Maximum time a libqueen slot may stay in-flight before it is treated as a dead connection (jobs requeued, slot disconnected, reconnect thread takes over). This is the safety net for the case where neither libpq nor the kernel surfaces an error on the FD — checked once per second by the per-worker stats timer. |
+
 ## Queue Processing Configuration
 
 ### Pop Operation Defaults
