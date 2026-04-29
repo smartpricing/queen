@@ -77,6 +77,22 @@ void setup_lease_routes(uWS::App* app, const RouteContext& ctx);
 void setup_metrics_routes(uWS::App* app, const RouteContext& ctx);
 
 /**
+ * Setup Prometheus exposition endpoint.
+ *
+ * Returns metrics in the Prometheus text format
+ * (Content-Type: text/plain; version=0.0.4) so Prometheus / Grafana can
+ * scrape this replica directly.
+ *
+ * Live process state (db pool, threadpools, file buffer, response
+ * registries, latest MetricsCollector sample, shared_state) is read
+ * in-process; lifetime throughput counters are read once per scrape from
+ * queen.worker_metrics_summary via libqueen.
+ *
+ * Routes: GET /metrics/prometheus
+ */
+void setup_prometheus_routes(uWS::App* app, const RouteContext& ctx);
+
+/**
  * Setup resource listing endpoints
  * Routes:
  *   GET /api/v1/resources/queues

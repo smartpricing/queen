@@ -113,7 +113,10 @@ static void setup_worker_routes(uWS::App* app,
                                 std::shared_ptr<astp::ThreadPool> db_thread_pool,
                                 std::shared_ptr<PushFailoverStorage> push_failover_storage) {
     
-    // Create route context with all dependencies
+    // Create route context with all dependencies. The Prometheus exporter
+    // additionally needs the global MetricsCollector + system threadpool +
+    // replica identity (hostname/port) — these are populated lazily and may
+    // be null on routes that do not require them.
     queen::routes::RouteContext ctx(
         async_queue_manager,
         file_buffer,
@@ -122,7 +125,11 @@ static void setup_worker_routes(uWS::App* app,
         config,
         worker_id,
         db_thread_pool,
-        push_failover_storage
+        push_failover_storage,
+        global_metrics_collector,
+        global_system_thread_pool,
+        global_system_info.hostname,
+        global_system_info.port
     );
     
     // Setup all routes in organized categories
@@ -155,6 +162,9 @@ static void setup_worker_routes(uWS::App* app,
     
     spdlog::debug("[Worker {}] Setting up metrics routes...", worker_id);
     queen::routes::setup_metrics_routes(app, ctx);
+    
+    spdlog::debug("[Worker {}] Setting up Prometheus exposition route...", worker_id);
+    queen::routes::setup_prometheus_routes(app, ctx);
     
     spdlog::debug("[Worker {}] Setting up resource routes...", worker_id);
     queen::routes::setup_resource_routes(app, ctx);

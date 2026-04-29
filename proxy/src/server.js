@@ -4,6 +4,12 @@ import { createProxyMiddleware } from 'http-proxy-middleware';
 import { authenticateUser, generateToken, verifyToken, verifyExternalToken, isExternalAuthEnabled } from './auth.js';
 import { requireAuth, checkMethodAccess } from './middleware.js';
 import { initDatabase } from './db.js';
+import {
+  isGoogleAuthEnabled,
+  getGoogleConfig,
+  buildAuthorizeUrl,
+  handleGoogleCallback,
+} from './google-auth.js';
 import path from 'path';
 import { fileURLToPath } from 'url';
 
@@ -52,11 +58,13 @@ app.post('/api/login', async (req, res) => {
 
     const token = generateToken(user);
 
-    // Set HTTP-only cookie for security
+    // Set HTTP-only cookie for security. `lax` (not `strict`) is required so
+    // the cookie is attached on top-level navigations after auth flows that
+    // bounce through external sites (OAuth, etc.).
     res.cookie('token', token, {
       httpOnly: true,
       secure: process.env.NODE_ENV === 'production',
-      sameSite: 'strict',
+      sameSite: 'lax',
       maxAge: 24 * 60 * 60 * 1000 // 24 hours
     });
 
@@ -79,6 +87,95 @@ app.post('/api/logout', (req, res) => {
   res.json({ success: true });
 });
 
+// Public auth-config probe — lets the login page decide which buttons to show.
+app.get('/api/auth/config', (req, res) => {
+  res.json({
+    google: { enabled: isGoogleAuthEnabled() },
+  });
+});
+
+const COOKIE_SECURE = process.env.NODE_ENV === 'production';
+// `lax` (not `strict`) is required so the cookie survives the cross-site
+// redirect back from accounts.google.com.
+const OAUTH_COOKIE_OPTS = {
+  httpOnly: true,
+  secure: COOKIE_SECURE,
+  sameSite: 'lax',
+  path: '/api/auth/google',
+  maxAge: 5 * 60 * 1000,
+};
+
+// Step 1: kick off the Google OAuth Authorization Code flow.
+app.get('/api/auth/google', (req, res) => {
+  if (!isGoogleAuthEnabled()) {
+    return res.status(503).json({ error: 'Google auth is not configured' });
+  }
+  try {
+    const next = typeof req.query.next === 'string' && req.query.next.startsWith('/') ? req.query.next : '/';
+    const { url, state, nonce } = buildAuthorizeUrl({ redirectAfterLogin: next });
+    res.cookie('g_state', state, OAUTH_COOKIE_OPTS);
+    res.cookie('g_nonce', nonce, OAUTH_COOKIE_OPTS);
+    res.cookie('g_next', next, OAUTH_COOKIE_OPTS);
+    res.redirect(url);
+  } catch (error) {
+    console.error('[GoogleAuth] failed to start flow:', error);
+    res.status(500).json({ error: 'Failed to start Google sign-in' });
+  }
+});
+
+// Step 2: handle the redirect back from Google.
+app.get('/api/auth/google/callback', async (req, res) => {
+  const clearOAuthCookies = () => {
+    res.clearCookie('g_state', { path: '/api/auth/google' });
+    res.clearCookie('g_nonce', { path: '/api/auth/google' });
+    res.clearCookie('g_next', { path: '/api/auth/google' });
+  };
+
+  if (!isGoogleAuthEnabled()) {
+    clearOAuthCookies();
+    return res.status(503).send('Google auth is not configured');
+  }
+
+  if (req.query.error) {
+    clearOAuthCookies();
+    return res.redirect(`/login?error=${encodeURIComponent(String(req.query.error))}`);
+  }
+
+  const code = typeof req.query.code === 'string' ? req.query.code : '';
+  const state = typeof req.query.state === 'string' ? req.query.state : '';
+  const expectedState = req.cookies.g_state;
+  const expectedNonce = req.cookies.g_nonce;
+  const next = typeof req.cookies.g_next === 'string' && req.cookies.g_next.startsWith('/') ? req.cookies.g_next : '/';
+
+  if (!code || !state || !expectedState || state !== expectedState) {
+    clearOAuthCookies();
+    return res.redirect('/login?error=invalid_state');
+  }
+
+  try {
+    const user = await handleGoogleCallback({ code, expectedNonce });
+    const token = generateToken(user);
+
+    res.cookie('token', token, {
+      httpOnly: true,
+      secure: COOKIE_SECURE,
+      sameSite: 'lax',
+      maxAge: 24 * 60 * 60 * 1000,
+    });
+
+    clearOAuthCookies();
+    res.redirect(next);
+  } catch (error) {
+    clearOAuthCookies();
+    if (error.code === 'NOT_PROVISIONED') {
+      console.warn('[GoogleAuth] sign-in denied (not provisioned):', error.message);
+      return res.redirect('/login?error=not_provisioned');
+    }
+    console.error('[GoogleAuth] callback error:', error);
+    res.redirect('/login?error=google_failed');
+  }
+});
+
 // Get current user info
 app.get('/api/me', requireAuth, (req, res) => {
   res.json({
@@ -90,8 +187,14 @@ app.get('/api/me', requireAuth, (req, res) => {
 // Middleware to check if user is authenticated, redirect to login if not
 // Supports both internal (proxy-generated) and external (SSO/IDP) tokens
 app.use(async (req, res, next) => {
-  // Skip auth check for login page and API endpoints
-  if (req.path === '/login' || req.path.startsWith('/api/login')) {
+  // Skip auth check for login page, login API, OAuth flow and the public
+  // auth-config probe used by the login UI.
+  if (
+    req.path === '/login' ||
+    req.path.startsWith('/api/login') ||
+    req.path.startsWith('/api/auth/google') ||
+    req.path === '/api/auth/config'
+  ) {
     return next();
   }
 
@@ -194,6 +297,17 @@ async function startServer() {
         console.log(`    JWKS URL: ${process.env.EXTERNAL_JWKS_URL || process.env.JWT_JWKS_URL}`);
       } else {
         console.log(`  External SSO: disabled (internal auth only)`);
+      }
+      if (isGoogleAuthEnabled()) {
+        const cfg = getGoogleConfig();
+        console.log(`  Google OAuth: enabled`);
+        console.log(`    Redirect URI: ${cfg.redirectUri}`);
+        if (cfg.allowedDomains.length) {
+          console.log(`    Allowed domains: ${cfg.allowedDomains.join(', ')}`);
+        }
+        console.log(`    Auto-provision: ${cfg.autoProvision} (default role: ${cfg.defaultRole})`);
+      } else {
+        console.log(`  Google OAuth: disabled`);
       }
     });
   } catch (error) {

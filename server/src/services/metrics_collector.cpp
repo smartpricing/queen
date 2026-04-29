@@ -59,6 +59,14 @@ void MetricsCollector::stop() {
     spdlog::info("MetricsCollector stopped");
 }
 
+MetricsSample MetricsCollector::get_latest_sample() const {
+    std::lock_guard<std::mutex> lock(samples_mutex_);
+    if (samples_.empty()) {
+        return MetricsSample{};
+    }
+    return samples_.back();
+}
+
 void MetricsCollector::schedule_next_collection() {
     if (!running_) return;
     

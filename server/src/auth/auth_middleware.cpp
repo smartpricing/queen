@@ -164,7 +164,7 @@ AccessLevel get_route_access_level(std::string_view method, std::string_view pat
     // =========================================================================
     
     // Health and metrics
-    if (p == "/health" || p == "/metrics") {
+    if (p == "/health" || p == "/metrics" || p == "/metrics/prometheus") {
         return AccessLevel::PUBLIC;
     }
     

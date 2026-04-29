@@ -288,7 +288,7 @@ Queen supports optional JWT-based authentication for securing API endpoints.
 | `JWT_ISSUER` | string | - | Expected `iss` claim (empty = any issuer) |
 | `JWT_AUDIENCE` | string | - | Expected `aud` claim (empty = any audience) |
 | `JWT_CLOCK_SKEW` | int | `30` | Tolerance in seconds for time claims |
-| `JWT_SKIP_PATHS` | string | `/health,/metrics,/` | Comma-separated paths to skip auth |
+| `JWT_SKIP_PATHS` | string | `/health,/metrics/prometheus,/metrics,/` | Comma-separated paths to skip auth |
 
 ### JWKS Settings (RS256/EdDSA)
 
@@ -313,7 +313,7 @@ Routes are protected based on access levels:
 
 | Level | Description | Example Routes |
 |-------|-------------|----------------|
-| **PUBLIC** | No auth required | `/health`, `/metrics`, `/` (dashboard) |
+| **PUBLIC** | No auth required | `/health`, `/metrics`, `/metrics/prometheus`, `/` (dashboard) |
 | **READ_ONLY** | Any valid token | GET `/api/v1/status/*`, `/api/v1/resources/*` |
 | **READ_WRITE** | `read-write` or `admin` role | POST `/api/v1/push`, GET `/api/v1/pop/*` |
 | **ADMIN** | `admin` role only | `/api/v1/system/*`, DELETE operations |

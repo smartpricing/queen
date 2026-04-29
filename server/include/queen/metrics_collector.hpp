@@ -267,7 +267,7 @@ private:
     
     // Sample buffer
     std::vector<MetricsSample> samples_;
-    std::mutex samples_mutex_;
+    mutable std::mutex samples_mutex_;
     
 public:
     MetricsCollector(
@@ -287,6 +287,13 @@ public:
     
     void start();
     void stop();
+    
+    // Returns the most recent in-memory sample, or a default-constructed
+    // MetricsSample (timestamp == epoch) when no sample has been collected
+    // yet. Thread-safe — used by /metrics/prometheus to emit live process
+    // gauges (CPU, memory, db pool, threadpools, sidecar ops, …) without
+    // hitting the database.
+    MetricsSample get_latest_sample() const;
     
 private:
     void schedule_next_collection();

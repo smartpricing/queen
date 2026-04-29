@@ -433,8 +433,10 @@ struct AuthConfig {
     std::string audience = "";            // Expected 'aud' claim (empty = any audience)
     int clock_skew_seconds = 30;          // Tolerance for exp/nbf/iat checks
     
-    // Paths that skip authentication (comma-separated in env var)
-    std::vector<std::string> skip_paths = {"/health", "/metrics", "/"};
+    // Paths that skip authentication (comma-separated in env var).
+    // should_skip_path() does an exact match plus a trailing-slash prefix
+    // match — both /metrics and /metrics/prometheus need explicit entries.
+    std::vector<std::string> skip_paths = {"/health", "/metrics/prometheus", "/metrics", "/"};
     
     // JWKS refresh settings (for RS256)
     int jwks_refresh_interval_seconds = 3600;  // Refresh JWKS every hour
@@ -460,7 +462,7 @@ struct AuthConfig {
         config.clock_skew_seconds = get_env_int("JWT_CLOCK_SKEW", 30);
         
         // Parse skip paths from comma-separated list
-        std::string skip_str = get_env_string("JWT_SKIP_PATHS", "/health,/metrics,/");
+        std::string skip_str = get_env_string("JWT_SKIP_PATHS", "/health,/metrics/prometheus,/metrics,/");
         config.skip_paths.clear();
         if (!skip_str.empty()) {
             size_t pos = 0;

@@ -32,7 +32,15 @@ export async function initDatabase() {
   `);
   
   await query('CREATE INDEX IF NOT EXISTS idx_users_username ON queen_proxy.users(username)');
-  
+
+  // Migration: relax password_hash and add OAuth columns. All idempotent.
+  await query('ALTER TABLE queen_proxy.users ALTER COLUMN password_hash DROP NOT NULL');
+  await query('ALTER TABLE queen_proxy.users ADD COLUMN IF NOT EXISTS email VARCHAR(255)');
+  await query('ALTER TABLE queen_proxy.users ADD COLUMN IF NOT EXISTS google_sub VARCHAR(255)');
+  await query(`ALTER TABLE queen_proxy.users ADD COLUMN IF NOT EXISTS auth_provider VARCHAR(50) NOT NULL DEFAULT 'local'`);
+  await query('CREATE UNIQUE INDEX IF NOT EXISTS idx_users_email ON queen_proxy.users(email) WHERE email IS NOT NULL');
+  await query('CREATE UNIQUE INDEX IF NOT EXISTS idx_users_google_sub ON queen_proxy.users(google_sub) WHERE google_sub IS NOT NULL');
+
   await query(`
     CREATE TABLE IF NOT EXISTS queen_proxy.sessions (
       id SERIAL PRIMARY KEY,
@@ -49,7 +57,7 @@ export async function initDatabase() {
 
 export async function getUserByUsername(username) {
   const result = await query(
-    'SELECT id, username, password_hash, role FROM queen_proxy.users WHERE username = $1',
+    'SELECT id, username, password_hash, role, email, google_sub, auth_provider FROM queen_proxy.users WHERE username = $1',
     [username]
   );
   return result.rows[0];
@@ -57,8 +65,53 @@ export async function getUserByUsername(username) {
 
 export async function createUser(username, passwordHash, role) {
   const result = await query(
-    'INSERT INTO queen_proxy.users (username, password_hash, role) VALUES ($1, $2, $3) RETURNING id, username, role',
+    `INSERT INTO queen_proxy.users (username, password_hash, role, auth_provider)
+     VALUES ($1, $2, $3, 'local')
+     RETURNING id, username, role`,
     [username, passwordHash, role]
+  );
+  return result.rows[0];
+}
+
+export async function getUserByGoogleSub(googleSub) {
+  const result = await query(
+    'SELECT id, username, password_hash, role, email, google_sub, auth_provider FROM queen_proxy.users WHERE google_sub = $1',
+    [googleSub]
+  );
+  return result.rows[0];
+}
+
+export async function getUserByEmail(email) {
+  const result = await query(
+    'SELECT id, username, password_hash, role, email, google_sub, auth_provider FROM queen_proxy.users WHERE email = $1',
+    [email.toLowerCase()]
+  );
+  return result.rows[0];
+}
+
+// Attach a Google identity to an existing local user (account linking).
+export async function linkGoogleAccount(userId, googleSub, email) {
+  const result = await query(
+    `UPDATE queen_proxy.users
+       SET google_sub = $2,
+           email = COALESCE(email, $3),
+           updated_at = CURRENT_TIMESTAMP
+     WHERE id = $1
+     RETURNING id, username, role, email, google_sub, auth_provider`,
+    [userId, googleSub, email.toLowerCase()]
+  );
+  return result.rows[0];
+}
+
+// Auto-provision a Google-only user. Username defaults to the email.
+export async function createGoogleUser({ email, googleSub, role, username }) {
+  const normalizedEmail = email.toLowerCase();
+  const finalUsername = (username || normalizedEmail).slice(0, 255);
+  const result = await query(
+    `INSERT INTO queen_proxy.users (username, password_hash, role, email, google_sub, auth_provider)
+     VALUES ($1, NULL, $2, $3, $4, 'google')
+     RETURNING id, username, role, email, google_sub, auth_provider`,
+    [finalUsername, role, normalizedEmail, googleSub]
   );
   return result.rows[0];
 }

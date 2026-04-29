@@ -5,7 +5,8 @@
 | Category | Endpoint | Method | Description |
 |----------|----------|--------|-------------|
 | **Health** | `/health` | GET | Health check |
-| **Health** | `/metrics` | GET | Performance metrics |
+| **Health** | `/metrics` | GET | Performance metrics (JSON) |
+| **Health** | `/metrics/prometheus` | GET | Prometheus text exposition for Prometheus/Grafana scraping |
 | **Queue Config** | `/api/v1/configure` | POST | Configure/create queue |
 | **Messages** | `/api/v1/push` | POST | Push messages |
 | **Messages** | `/api/v1/pop/queue/:queue` | GET | Pop from any partition |
@@ -51,9 +52,28 @@ Response:
 ```
 
 #### `GET /metrics`
-Get performance metrics.
+Get performance metrics (JSON).
 ```bash
 curl http://localhost:6632/metrics
+```
+
+#### `GET /metrics/prometheus`
+Get metrics in the Prometheus text exposition format. Designed to be scraped
+by Prometheus / Grafana. Per-replica live state (db pool, threadpools, file
+buffer, sidecar ops, latest CPU/memory sample) is reported with no extra
+label; cluster-wide lifetime totals are reported with a synthetic
+`scope="cluster"` label so PromQL queries can use `max(queen_cluster_*)`
+across replicas without summing the same singleton value N times.
+```bash
+curl http://localhost:6632/metrics/prometheus
+```
+Configure Prometheus to scrape with:
+```yaml
+scrape_configs:
+  - job_name: queen
+    metrics_path: /metrics/prometheus
+    static_configs:
+      - targets: ['queen-host:6632']
 ```
 
 ---

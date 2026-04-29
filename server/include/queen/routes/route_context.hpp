@@ -11,6 +11,7 @@ class AsyncQueueManager;
 class FileBufferManager;
 class Queen;  // From libqueen (queen.hpp)
 class PushFailoverStorage;
+class MetricsCollector;
 struct Config;
 
 } // namespace queen
@@ -52,6 +53,20 @@ struct RouteContext {
     // Storage for pending push items (for file buffer failover on failure)
     std::shared_ptr<PushFailoverStorage> push_failover_storage;
     
+    // Background metrics collector (singleton, started by Worker 0; may be
+    // null on non-Worker-0 routes if scrape arrives before initialization
+    // completes — handle defensively in callers).
+    std::shared_ptr<MetricsCollector> metrics_collector;
+    
+    // System threadpool used by background services. Exposed here so the
+    // Prometheus exporter can publish queue/depth gauges without having to
+    // reach into file-static globals.
+    std::shared_ptr<astp::ThreadPool> system_thread_pool;
+    
+    // Replica identity used as Prometheus labels.
+    std::string hostname;
+    int port = 0;
+    
     RouteContext(
         std::shared_ptr<AsyncQueueManager> qm,
         std::shared_ptr<FileBufferManager> fb,
@@ -60,7 +75,11 @@ struct RouteContext {
         const Config& cfg,
         int wid,
         std::shared_ptr<astp::ThreadPool> dbtp,
-        std::shared_ptr<PushFailoverStorage> pfs = nullptr
+        std::shared_ptr<PushFailoverStorage> pfs = nullptr,
+        std::shared_ptr<MetricsCollector> mc = nullptr,
+        std::shared_ptr<astp::ThreadPool> systp = nullptr,
+        std::string host = "",
+        int p = 0
     ) : async_queue_manager(std::move(qm)),
         file_buffer(std::move(fb)),
         queen(q),
@@ -68,7 +87,11 @@ struct RouteContext {
         config(cfg),
         worker_id(wid),
         db_thread_pool(std::move(dbtp)),
-        push_failover_storage(std::move(pfs))
+        push_failover_storage(std::move(pfs)),
+        metrics_collector(std::move(mc)),
+        system_thread_pool(std::move(systp)),
+        hostname(std::move(host)),
+        port(p)
     {}
 };
 

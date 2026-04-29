@@ -7,6 +7,8 @@ Mainly intended for exposing the Webapp.
 ## Features
 
 - JWT-based authentication
+- Optional Sign in with Google (OAuth 2.0 / OIDC)
+- Optional external SSO passthrough (verify any IDP via JWKS)
 - Role-based access control (admin, read-write, read-only)
 - Auto-initializes database schema on startup
 - Strips large headers to prevent upstream errors
@@ -118,6 +120,37 @@ helm upgrade --install queen-proxy ./helm -f helm/prod.yaml
 | `JWT_EXPIRES_IN` | `24h` | JWT token expiration |
 | `PORT` | `3000` | Proxy server port |
 | `NODE_ENV` | `development` | Environment mode |
+| `GOOGLE_CLIENT_ID` | _(unset)_ | Google OAuth 2.0 client id (enables "Sign in with Google" when set together with the secret + redirect URI) |
+| `GOOGLE_CLIENT_SECRET` | _(unset)_ | Google OAuth 2.0 client secret |
+| `GOOGLE_REDIRECT_URI` | _(unset)_ | Must match the Authorized redirect URI in Google Cloud Console, e.g. `https://queen.example.com/api/auth/google/callback` |
+| `GOOGLE_ALLOWED_DOMAINS` | _(empty)_ | Comma-separated domain allowlist matched against the `hd` claim or the email domain. Empty = allow any verified email. |
+| `GOOGLE_AUTO_PROVISION` | `false` | If `true`, create a local user on first Google login. If `false`, the user must already exist in `queen_proxy.users` (matched by email). |
+| `GOOGLE_DEFAULT_ROLE` | `read-only` | Role assigned to auto-provisioned Google users (`admin`, `read-write`, or `read-only`). |
+
+## Sign in with Google
+
+When `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET` and `GOOGLE_REDIRECT_URI` are
+all set, the login page exposes a "Sign in with Google" button and the proxy
+runs the OAuth 2.0 Authorization Code flow:
+
+1. Browser hits `GET /api/auth/google` → 302 to `accounts.google.com`.
+2. Google redirects back to `GET /api/auth/google/callback?code=…&state=…`.
+3. The proxy exchanges the code, verifies the `id_token` against Google's JWKS,
+   then resolves the local user:
+   - by `google_sub` if previously linked, else
+   - by verified email (links the Google identity to the existing local user),
+     else
+   - auto-provisions a new user when `GOOGLE_AUTO_PROVISION=true`, else
+   - denies with `?error=not_provisioned`.
+4. A standard internal JWT cookie is set, identical to the password flow, so
+   the rest of the system (RBAC + Queen forwarding) is unchanged.
+
+### Google Cloud Console setup
+
+1. Create an OAuth 2.0 Client ID of type **Web application**.
+2. Add the redirect URI you'll set in `GOOGLE_REDIRECT_URI` (must include the
+   `/api/auth/google/callback` path).
+3. Request scopes `openid email profile` (the proxy does this automatically).
 
 ## Security
 
