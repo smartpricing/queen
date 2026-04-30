@@ -344,5 +344,5 @@ pytest tests/test_yourfile.py::test_new_feature -v
 
 - [Node.js Tests](../../client-js/test-v2/)
 - [Python Client Documentation](../README.md)
-- [Queen MQ Documentation](https://smartpricing.github.io/queen/)
+- [Queen MQ Documentation](https://queenmq.com/)
 

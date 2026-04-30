@@ -15,7 +15,7 @@
 [![libpq](https://img.shields.io/badge/libpq-15.5-blue.svg)](https://www.postgresql.org/)
 [![uWebSockets](https://img.shields.io/badge/uWebSockets-22.0.0-blue.svg)](https://github.com/uNetworking/uWebSockets)
 
-📚 **[Complete Documentation](https://smartpricing.github.io/queen/)** • 🚀 **[Quick Start](https://smartpricing.github.io/queen/quickstart.html)** • ⚖️ **[Comparison & Benchmarks](https://smartpricing.github.io/queen/benchmarks.html)** • 🛠️ **[Contributing — Developer Guide](DEVELOPING.md)**
+📚 **[Complete Documentation](https://queenmq.com/)** • 🚀 **[Quick Start](https://queenmq.com/quickstart.html)** • ⚖️ **[Comparison & Benchmarks](https://queenmq.com/benchmarks.html)** • 🛠️ **[Contributing — Developer Guide](DEVELOPING.md)**
 
 <p align="center">
   <img src="assets/queen_logo.png" alt="Queen Logo" width="120" />
@@ -94,24 +94,24 @@ Then go to the dashboard ([http://localhost:6632](http://localhost:6632)) to see
 
 ## Documentation
 
-📚 **[Complete Documentation](https://smartpricing.github.io/queen/)**
+📚 **[Complete Documentation](https://queenmq.com/)**
 
 ### Getting Started
 
-- [Quick Start Guide](https://smartpricing.github.io/queen/quickstart.html)
-- [Basic Concepts](https://smartpricing.github.io/queen/concepts.html)
-- [Architecture](https://smartpricing.github.io/queen/architecture.html)
-- [Benchmarks](https://smartpricing.github.io/queen/benchmarks.html) · [Sizing calculator](https://smartpricing.github.io/queen/sizing.html)
+- [Quick Start Guide](https://queenmq.com/quickstart.html)
+- [Basic Concepts](https://queenmq.com/concepts.html)
+- [Architecture](https://queenmq.com/architecture.html)
+- [Benchmarks](https://queenmq.com/benchmarks.html) · [Sizing calculator](https://queenmq.com/sizing.html)
 
 ### Client Libraries & API
 
-- [Client libraries overview](https://smartpricing.github.io/queen/clients.html) — JavaScript, Python, Go, PHP / Laravel, C++ (same fluent grammar across all five)
-- [HTTP API Reference](https://smartpricing.github.io/queen/http-api.html)
+- [Client libraries overview](https://queenmq.com/clients.html) — JavaScript, Python, Go, PHP / Laravel, C++ (same fluent grammar across all five)
+- [HTTP API Reference](https://queenmq.com/http-api.html)
 
 ### Operate
 
-- [Server setup](https://smartpricing.github.io/queen/server.html) — env vars, Docker, Kubernetes, multi-instance UDP sync, JWT auth, proxy
-- [Dashboard tour](https://smartpricing.github.io/queen/dashboard.html)
+- [Server setup](https://queenmq.com/server.html) — env vars, Docker, Kubernetes, multi-instance UDP sync, JWT auth, proxy
+- [Dashboard tour](https://queenmq.com/dashboard.html)
 
 ---
 
@@ -175,7 +175,7 @@ The repository is structured as follows:
 - Server 0.14.1: **Prometheus metrics route.** A `/metrics` endpoint exposes standard Prometheus-compatible metrics for scraping.
 - Server 0.14.1: **Significantly optimized lease renewal.** Reduced lock contention and database round-trips on the hot lease-renewal path, lowering tail latency under high consumer concurrency.
 - Server/App 0.14.1: **Delete partition and delete messages.** New API and dashboard actions to delete individual partitions or bulk-delete messages from a queue.
-- Server and clients 0.14.0: **New dynamic libqueen loop.** Full rewrite of the core scheduling engine — adaptive concurrency controller (TCP-Vegas-style) now drives push, pop, ack, and stats independently. Active DB connections stay at ~2.5 even with a pool of 50 under 104k msg/s peak load. Largely eliminates the PG deadlock mode that appeared under heavy fan-out at high partition counts on 0.12 (occasional deadlocks still observed at 10 001 partitions, all absorbed by file-buffer failover — see [benchmarks](https://smartpricing.github.io/queen/benchmarks.html)).
+- Server and clients 0.14.0: **New dynamic libqueen loop.** Full rewrite of the core scheduling engine — adaptive concurrency controller (TCP-Vegas-style) now drives push, pop, ack, and stats independently. Active DB connections stay at ~2.5 even with a pool of 50 under 104k msg/s peak load. Largely eliminates the PG deadlock mode that appeared under heavy fan-out at high partition counts on 0.12 (occasional deadlocks still observed at 10 001 partitions, all absorbed by file-buffer failover — see [benchmarks](https://queenmq.com/benchmarks.html)).
 - Server 0.14.0: **Rewritten stored procedures.** `push_messages_v3`, `pop_messages_v3`, `ack_messages_v2`, and stats procedures redesigned around the new loop. PG memory usage 30–70% lower for equivalent workloads vs 0.12. Pop throughput +80–90% under partition contention.
 - Clients 0.14.0: **`maxPartitions` on all clients.** JS, Python, Go, Laravel, and C++ clients expose `maxPartitions` on queue creation and configuration.
 - Server 0.14.0: **New frontend.** Redesigned dashboard for the new stats model.

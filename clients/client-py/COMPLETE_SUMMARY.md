@@ -337,10 +337,10 @@ python -m tests.run_tests
 ### Online Documentation
 
 Once website is deployed:
-- Homepage: https://smartpricing.github.io/queen/
-- Python Client: https://smartpricing.github.io/queen/clients/python
-- Python Examples: https://smartpricing.github.io/queen/clients/examples/python
-- Quick Start: https://smartpricing.github.io/queen/guide/quickstart
+- Homepage: https://queenmq.com/
+- Python Client: https://queenmq.com/clients/python
+- Python Examples: https://queenmq.com/clients/examples/python
+- Quick Start: https://queenmq.com/guide/quickstart
 
 ### Local Documentation
 
@@ -844,7 +844,7 @@ The Queen MQ Python client is **COMPLETE, TESTED, and DOCUMENTED**:
 
 Users can now:
 1. Install with `pip install queen-mq`
-2. Read docs at https://smartpricing.github.io/queen/clients/python
+2. Read docs at https://queenmq.com/clients/python
 3. Follow 20+ examples
 4. Use type hints for IDE support
 5. Run 57 tests to verify behavior
