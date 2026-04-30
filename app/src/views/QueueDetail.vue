@@ -147,11 +147,6 @@
             <strong>{{ formatNumber(partitions.length) }}</strong>
             <span>{{ partitions.length === 1 ? 'partition' : 'partitions' }}</span>
           </span>
-          <span class="count-sep">·</span>
-          <button class="count-item" @click="$router.push('/consumers')" :disabled="loadingConsumers">
-            <strong>{{ formatNumber(queueConsumers.length) }}</strong>
-            <span>consumer {{ queueConsumers.length === 1 ? 'group' : 'groups' }}</span>
-          </button>
         </div>
 
         <div class="counts-group counts-group-right" :title="'Now-rates from queue-ops time series; parked = currently waiting long-poll consumers.'">
@@ -328,233 +323,6 @@
       </div>
 
       <!-- ====================================================================
-           Two-column row — Consumer groups (left) + Lagging partitions (right).
-           Same dot · name · right-metric · meta-line idiom as Dashboard.
-           ==================================================================== -->
-      <div class="grid-2">
-        <!-- Consumer groups on this queue -->
-        <div class="card">
-          <div class="card-header">
-            <h3>Consumer groups</h3>
-            <span class="muted">
-              {{ queueConsumers.length }} on this queue<template v-if="queueConsumersLagging > 0"> · <span class="num warn">{{ queueConsumersLagging }} lagging</span></template>
-            </span>
-          </div>
-
-          <div v-if="loadingConsumers && !queueConsumers.length" class="card-body entity-list">
-            <div v-for="i in 4" :key="i" class="skeleton" style="height:48px; border-radius:8px;" />
-          </div>
-
-          <div v-else-if="queueConsumers.length" class="card-body entity-list">
-            <button
-              v-for="g in queueConsumers"
-              :key="g.name + '@' + g.queueName"
-              class="entity-row"
-              @click="$router.push('/consumers')"
-            >
-              <div class="entity-head">
-                <span class="status-dot" :class="cgDotClass(g)" />
-                <span class="entity-name">
-                  <template v-if="g.name === '__QUEUE_MODE__'">
-                    <span class="meta-tag">queue mode</span>
-                  </template>
-                  <template v-else>{{ g.name }}</template>
-                </span>
-                <span class="entity-right num" :class="lagNumClass((g.maxTimeLag || 0) * 1000)">
-                  {{ (g.maxTimeLag || 0) > 0 ? formatDurationSec(g.maxTimeLag) : '—' }}
-                </span>
-              </div>
-              <div class="entity-meta">
-                <span class="meta-text">
-                  <strong>{{ g.members || 0 }}</strong> {{ (g.members || 0) === 1 ? 'partition' : 'partitions' }}
-                  <template v-if="(g.partitionsWithLag || 0) > 0">
-                    <span class="meta-sep">·</span>
-                    <span class="num warn">{{ g.partitionsWithLag }} lagging</span>
-                  </template>
-                  <template v-if="g.subscriptionMode">
-                    <span class="meta-sep">·</span>
-                    <span class="meta-tag">{{ g.subscriptionMode }}</span>
-                  </template>
-                  <template v-if="g.subscriptionTimestamp">
-                    <span class="meta-sep">·</span>
-                    since {{ formatRelative(g.subscriptionTimestamp) }}
-                  </template>
-                </span>
-              </div>
-            </button>
-          </div>
-
-          <div v-else class="card-body entity-empty">No consumer groups have subscribed yet</div>
-
-          <div class="card-foot">
-            <a class="card-foot-link" @click="$router.push('/consumers')">Open consumers →</a>
-          </div>
-        </div>
-
-        <!-- Lagging partitions on this queue -->
-        <div class="card">
-          <div class="card-header" style="gap:8px;">
-            <h3>Lagging partitions</h3>
-            <span v-if="laggingFiltered.length > 0" class="chip chip-warn">{{ laggingFiltered.length }} above {{ getLagLabel(lagThreshold) }}</span>
-            <span v-else-if="laggingLoaded" class="chip chip-ok">all caught up</span>
-            <span style="margin-left:auto;" />
-            <span class="label-xs" style="color:var(--text-low);">Threshold</span>
-            <div class="seg">
-              <button
-                v-for="p in lagPresets"
-                :key="p.value"
-                :class="{ on: lagThreshold === p.value }"
-                @click="lagThreshold = p.value; loadLaggingPartitions()"
-              >{{ p.label }}</button>
-            </div>
-          </div>
-
-          <div v-if="laggingLoading && !laggingFiltered.length" class="card-body entity-list">
-            <div v-for="i in 3" :key="i" class="skeleton" style="height:48px; border-radius:8px;" />
-          </div>
-
-          <div v-else-if="laggingFiltered.length" class="card-body entity-list">
-            <div
-              v-for="p in laggingFiltered"
-              :key="p.consumer_group + '@' + p.partition_name"
-              class="entity-row entity-row-static"
-            >
-              <div class="entity-head">
-                <span class="status-dot status-dot-warning" />
-                <span class="entity-name font-mono">{{ p.partition_name }}</span>
-                <span class="entity-right num" :class="lagSecClass(p.time_lag_seconds)">
-                  {{ formatDurationSec(p.time_lag_seconds || 0) }}
-                </span>
-              </div>
-              <div class="entity-meta" style="display:flex; align-items:center; justify-content:space-between;">
-                <span class="meta-text">
-                  <span v-if="p.consumer_group === '__QUEUE_MODE__'" class="meta-tag">queue mode</span>
-                  <strong v-else>{{ p.consumer_group }}</strong>
-                  <span class="meta-sep">·</span>
-                  <span class="num warn">{{ formatNumber(p.offset_lag) }}</span> unconsumed
-                  <template v-if="p.oldest_unconsumed_at">
-                    <span class="meta-sep">·</span>
-                    oldest {{ formatRelative(p.oldest_unconsumed_at) }}
-                  </template>
-                </span>
-                <button
-                  class="btn btn-ghost"
-                  style="font-size:11px; padding:3px 8px;"
-                  :disabled="skippingPartition === skipKey(p)"
-                  @click.stop="handleSkipPartition(p)"
-                >{{ skippingPartition === skipKey(p) ? 'Skipping…' : 'Skip to end' }}</button>
-              </div>
-            </div>
-          </div>
-
-          <div v-else class="card-body entity-empty">
-            <span style="color:var(--ok-500);">●</span>
-            <span style="margin-left:6px;">No partitions lag above {{ getLagLabel(lagThreshold) }}</span>
-          </div>
-        </div>
-      </div>
-
-      <!-- ====================================================================
-           Partitions table — enriched with status dot, oldest message,
-           last-activity, cursor depth, and per-partition severity tone.
-           ==================================================================== -->
-      <div class="card" style="margin-top:14px;">
-        <div class="card-header" style="justify-content:space-between;">
-          <div style="display:flex; align-items:center; gap:10px;">
-            <h3>Partitions</h3>
-            <span class="chip chip-ice">{{ sortedPartitions.length }} of {{ partitions.length }}</span>
-          </div>
-          <div style="width:200px;">
-            <input
-              v-model="partitionSearch"
-              type="text"
-              placeholder="Search partitions..."
-              class="input"
-              style="font-size:12px;"
-            />
-          </div>
-        </div>
-
-        <div style="overflow-x:auto;">
-          <table class="t qd-parts" style="width:100%;">
-            <thead>
-              <tr>
-                <th></th>
-                <th @click="sortPartitions('name')" class="qd-sortable">
-                  <div class="qd-th-inner">Partition <SortIcon :active="partitionSortColumn === 'name'" :asc="partitionSortDirection === 'asc'" /></div>
-                </th>
-                <th @click="sortPartitions('pending')" class="qd-sortable" style="text-align:right;">
-                  <div class="qd-th-inner" style="justify-content:flex-end;">Pending <SortIcon :active="partitionSortColumn === 'pending'" :asc="partitionSortDirection === 'asc'" /></div>
-                </th>
-                <th @click="sortPartitions('processing')" class="qd-sortable" style="text-align:right;">
-                  <div class="qd-th-inner" style="justify-content:flex-end;">Processing <SortIcon :active="partitionSortColumn === 'processing'" :asc="partitionSortDirection === 'asc'" /></div>
-                </th>
-                <th @click="sortPartitions('completed')" class="qd-sortable" style="text-align:right;">
-                  <div class="qd-th-inner" style="justify-content:flex-end;">Completed <SortIcon :active="partitionSortColumn === 'completed'" :asc="partitionSortDirection === 'asc'" /></div>
-                </th>
-                <th @click="sortPartitions('deadLetter')" class="qd-sortable" style="text-align:right;">
-                  <div class="qd-th-inner" style="justify-content:flex-end;">DLQ <SortIcon :active="partitionSortColumn === 'deadLetter'" :asc="partitionSortDirection === 'asc'" /></div>
-                </th>
-                <th @click="sortPartitions('consumed')" class="qd-sortable" style="text-align:right;">
-                  <div class="qd-th-inner" style="justify-content:flex-end;">Consumed <SortIcon :active="partitionSortColumn === 'consumed'" :asc="partitionSortDirection === 'asc'" /></div>
-                </th>
-                <th @click="sortPartitions('oldest')" class="qd-sortable">
-                  <div class="qd-th-inner">Oldest <SortIcon :active="partitionSortColumn === 'oldest'" :asc="partitionSortDirection === 'asc'" /></div>
-                </th>
-                <th @click="sortPartitions('lastActivity')" class="qd-sortable">
-                  <div class="qd-th-inner">Last activity <SortIcon :active="partitionSortColumn === 'lastActivity'" :asc="partitionSortDirection === 'asc'" /></div>
-                </th>
-              </tr>
-            </thead>
-            <tbody>
-              <tr v-for="p in sortedPartitions" :key="p.id || p.name">
-                <td class="qd-pdot">
-                  <span class="status-dot" :class="partitionDotClass(p)" :title="partitionStatusText(p)" />
-                </td>
-                <td>
-                  <div class="qd-pname font-mono">{{ p.name }}</div>
-                </td>
-                <td style="text-align:right;" class="font-mono tabular-nums num"
-                    :class="{ warn: pendingWarn(p), bad: pendingBad(p) }">
-                  {{ formatNumber(Math.max(0, p.messages?.pending || 0)) }}
-                </td>
-                <td style="text-align:right;" class="font-mono tabular-nums">{{ formatNumber(p.messages?.processing || 0) }}</td>
-                <td style="text-align:right; color:var(--text-mid);" class="font-mono tabular-nums">
-                  {{ formatNumber(p.messages?.completed || 0) }}
-                </td>
-                <td style="text-align:right;" class="font-mono tabular-nums num" :class="{ bad: (p.messages?.deadLetter || 0) > 0 }">
-                  {{ formatNumber(p.messages?.deadLetter || 0) }}
-                </td>
-                <td style="text-align:right;">
-                  <div class="font-mono tabular-nums" style="font-size:13px;">{{ formatNumber(p.cursor?.totalConsumed || 0) }}</div>
-                  <div style="font-size:11px; color:var(--text-low);">
-                    {{ formatNumber(p.cursor?.batchesConsumed || 0) }} batches
-                  </div>
-                </td>
-                <td>
-                  <span v-if="p.oldestMessage" class="font-mono" :class="oldestClass(p.oldestMessage)" style="font-size:12px;">
-                    {{ formatRelative(p.oldestMessage) }}
-                  </span>
-                  <span v-else style="color:var(--text-low); font-size:12px;">—</span>
-                </td>
-                <td>
-                  <span v-if="p.lastActivity" class="font-mono" style="font-size:12px; color:var(--text-mid);">
-                    {{ formatRelative(p.lastActivity) }}
-                  </span>
-                  <span v-else style="color:var(--text-low); font-size:12px;">—</span>
-                </td>
-              </tr>
-              <tr v-if="sortedPartitions.length === 0">
-                <td colspan="9" style="text-align:center; padding:32px; color:var(--text-low); font-size:13px;">
-                  {{ partitions.length === 0 ? 'No partitions yet' : 'No partitions match your search' }}
-                </td>
-              </tr>
-            </tbody>
-          </table>
-        </div>
-      </div>
-
-      <!-- ====================================================================
            Configuration card — full queue config + identity chips.
            Always at the bottom: config rarely changes, but is the canonical
            record when something is misbehaving.
@@ -643,9 +411,9 @@
 </template>
 
 <script setup>
-import { ref, computed, onMounted, onUnmounted, watch, h } from 'vue'
+import { ref, computed, onMounted, onUnmounted, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { analytics, queues as queuesApi, consumers as consumersApi, system as systemApi } from '@/api'
+import { analytics, queues as queuesApi, system as systemApi } from '@/api'
 import { formatNumber, formatDuration, toNum, latestFinite, trimIncompleteBuckets } from '@/composables/useApi'
 import { useRefresh } from '@/composables/useRefresh'
 import MetricRow from '@/components/MetricRow.vue'
@@ -653,23 +421,6 @@ import MetricRow from '@/components/MetricRow.vue'
 const route = useRoute()
 const router = useRouter()
 const queueName = computed(() => route.params.queueName)
-
-// Inline sort caret — kept inside this file as a tiny render-only component
-// so the partitions table doesn't need a new file just for an icon.
-const SortIcon = {
-  props: { active: Boolean, asc: Boolean },
-  setup(p) {
-    return () => h('svg', {
-      width: 10, height: 10, viewBox: '0 0 16 16',
-      fill: 'none', stroke: 'currentColor', 'stroke-width': 1.6,
-      style: {
-        opacity: p.active ? 1 : 0.3,
-        transform: p.active && !p.asc ? 'rotate(180deg)' : undefined,
-        transition: 'transform .15s var(--ease)'
-      }
-    }, [h('path', { d: 'M4 6l4 4 4-4', 'stroke-linecap': 'round', 'stroke-linejoin': 'round' })])
-  }
-}
 
 // ---------------------------------------------------------------------------
 // State
@@ -680,35 +431,16 @@ const error = ref(null)
 const queueData = ref(null)
 const statusData = ref(null)
 const opsData = ref(null)
-const consumers = ref([])
-const laggingPartitionsRaw = ref([])
 
 const loadingOps = ref(true)
-const loadingConsumers = ref(true)
-const laggingLoading = ref(false)
-const laggingLoaded = ref(false)
-
-const partitionSearch = ref('')
-const partitionSortColumn = ref('pending')
-const partitionSortDirection = ref('desc')
 
 const showDeleteModal = ref(false)
-
-const skippingPartition = ref(null)
 
 const selectedRange = ref('1h')
 const timeRanges = [
   { label: '1h',  value: '1h',  minutes: 60 },
   { label: '6h',  value: '6h',  minutes: 360 },
   { label: '24h', value: '24h', minutes: 1440 },
-]
-
-const lagThreshold = ref(60)
-const lagPresets = [
-  { label: '1m',  value: 60 },
-  { label: '5m',  value: 300 },
-  { label: '1h',  value: 3600 },
-  { label: '24h', value: 86400 },
 ]
 
 const lastRefreshAt = ref(null)
@@ -807,26 +539,6 @@ const totalMessages = computed(() => {
   t.pending = Math.max(0, t.pending)
   return t
 })
-
-// ---------------------------------------------------------------------------
-// Consumer groups for THIS queue (filtered from the global list)
-// ---------------------------------------------------------------------------
-const queueConsumers = computed(() =>
-  consumers.value
-    .filter(c => c.queueName === queueName.value)
-    .sort((a, b) => (b.maxTimeLag || 0) - (a.maxTimeLag || 0))
-)
-const queueConsumersLagging = computed(() =>
-  queueConsumers.value.filter(c => (c.maxTimeLag || 0) >= 60 || (c.partitionsWithLag || 0) > 0).length
-)
-
-// ---------------------------------------------------------------------------
-// Lagging partitions for THIS queue (filtered from cluster-wide list)
-// ---------------------------------------------------------------------------
-const laggingFiltered = computed(() =>
-  laggingPartitionsRaw.value.filter(p => p.queue_name === queueName.value)
-)
-const skipKey = (p) => `${p.consumer_group}-${p.queue_name}-${p.partition_name}`
 
 // ---------------------------------------------------------------------------
 // Now-snapshot (right side of counts strip) — latest *finite* bucket per
@@ -1067,12 +779,9 @@ const consumedTotal = computed(() =>
   partitions.value.reduce((s, p) => s + (toNum(p.cursor?.totalConsumed) || 0), 0)
 )
 const popSeries = computed(() => history.value.map(x => toNum(x.popMessages)))
-const consumedContext = computed(() => {
-  const groups = queueConsumers.value.length
-  return groups > 0
-    ? `lifetime · ${groups} consumer ${groups === 1 ? 'group' : 'groups'}`
-    : 'lifetime · no consumer groups'
-})
+const consumedContext = computed(() =>
+  'lifetime across all consumer groups · sparkline shows pop rate'
+)
 
 // ---------------------------------------------------------------------------
 // Banner derivation — only the worst signals show, ordered by severity.
@@ -1086,13 +795,6 @@ const banners = computed(() => {
       detail: `${formatNumber(totalMessages.value.deadLetter)} message${totalMessages.value.deadLetter === 1 ? '' : 's'} require investigation.`,
       cta: 'Open DLQ',
       action: goDLQ,
-    })
-  }
-  if (laggingFiltered.value.length > 0) {
-    out.push({
-      tone: 'warn',
-      title: `${laggingFiltered.value.length} lagging partition${laggingFiltered.value.length === 1 ? '' : 's'}`,
-      detail: `Above ${getLagLabel(lagThreshold.value)} threshold. Inspect per-partition status below.`,
     })
   }
   if (errorsTotal.value > 0) {
@@ -1113,118 +815,11 @@ const banners = computed(() => {
 })
 
 // ---------------------------------------------------------------------------
-// Partition severity / sort
-// ---------------------------------------------------------------------------
-const pendingWarn = (p) => {
-  const pending = Math.max(0, p.messages?.pending || 0)
-  return pending >= 1000 && pending < 10000
-}
-const pendingBad = (p) => {
-  const pending = Math.max(0, p.messages?.pending || 0)
-  return pending >= 10000
-}
-const partitionStatus = (p) => {
-  if ((p.messages?.deadLetter || 0) > 0 || pendingBad(p)) return 'bad'
-  if (pendingWarn(p)) return 'warn'
-  // Stale partitions (no recent activity but have pending) → watch
-  if ((p.messages?.pending || 0) > 0 && p.lastActivity) {
-    const ageMin = (Date.now() - new Date(p.lastActivity).getTime()) / 60000
-    if (ageMin > 30) return 'warn'
-  }
-  return p.messages?.pending > 0 ? 'ok' : 'idle'
-}
-const partitionDotClass = (p) => {
-  const s = partitionStatus(p)
-  if (s === 'bad') return 'status-dot-danger'
-  if (s === 'warn') return 'status-dot-warning'
-  if (s === 'ok') return 'status-dot-success'
-  return 'qd-dot-idle'
-}
-const partitionStatusText = (p) => {
-  const s = partitionStatus(p)
-  if (s === 'bad') return 'Saturated or has DLQ'
-  if (s === 'warn') return 'Pending depth elevated'
-  if (s === 'ok') return 'Active'
-  return 'Idle'
-}
-
-const oldestClass = (ts) => {
-  if (!ts) return ''
-  const ageMin = (Date.now() - new Date(ts).getTime()) / 60000
-  if (ageMin > 60) return 'num bad'
-  if (ageMin > 5) return 'num warn'
-  return 'num'
-}
-
-const sortedPartitions = computed(() => {
-  let result = [...partitions.value]
-  if (partitionSearch.value) {
-    const q = partitionSearch.value.toLowerCase()
-    result = result.filter(p => p.name.toLowerCase().includes(q))
-  }
-  const dir = partitionSortDirection.value === 'asc' ? 1 : -1
-  result.sort((a, b) => {
-    const k = partitionSortColumn.value
-    const A = a, B = b
-    let av, bv
-    switch (k) {
-      case 'name':
-        av = a.name?.toLowerCase() || ''; bv = b.name?.toLowerCase() || ''
-        return av.localeCompare(bv) * dir
-      case 'pending': av = a.messages?.pending || 0; bv = b.messages?.pending || 0; break
-      case 'processing': av = a.messages?.processing || 0; bv = b.messages?.processing || 0; break
-      case 'completed': av = a.messages?.completed || 0; bv = b.messages?.completed || 0; break
-      case 'deadLetter': av = a.messages?.deadLetter || 0; bv = b.messages?.deadLetter || 0; break
-      case 'consumed': av = a.cursor?.totalConsumed || 0; bv = b.cursor?.totalConsumed || 0; break
-      case 'oldest':
-        av = a.oldestMessage ? new Date(a.oldestMessage).getTime() : (dir === 1 ? Infinity : -Infinity)
-        bv = b.oldestMessage ? new Date(b.oldestMessage).getTime() : (dir === 1 ? Infinity : -Infinity)
-        break
-      case 'lastActivity':
-        av = a.lastActivity ? new Date(a.lastActivity).getTime() : (dir === 1 ? Infinity : -Infinity)
-        bv = b.lastActivity ? new Date(b.lastActivity).getTime() : (dir === 1 ? Infinity : -Infinity)
-        break
-      default: return 0
-    }
-    return (av - bv) * dir
-  })
-  return result
-})
-const sortPartitions = (column) => {
-  if (partitionSortColumn.value === column) {
-    partitionSortDirection.value = partitionSortDirection.value === 'asc' ? 'desc' : 'asc'
-  } else {
-    partitionSortColumn.value = column
-    partitionSortDirection.value = column === 'name' ? 'asc' : 'desc'
-  }
-}
-
-// ---------------------------------------------------------------------------
-// Consumer-group dot helper (mirrors Dashboard rules)
-// ---------------------------------------------------------------------------
-const cgDotClass = (g) => {
-  const lag = g.maxTimeLag || 0
-  if (lag >= 300) return 'status-dot-danger'
-  if (lag >= 60 || (g.partitionsWithLag || 0) > 0) return 'status-dot-warning'
-  return 'status-dot-success'
-}
-
-// ---------------------------------------------------------------------------
 // Numeric tone for top-strip pending
 // ---------------------------------------------------------------------------
 const pendingNumClass = (n) => {
   if (!n || n < 1000) return ''
   if (n < 10000) return 'warn'
-  return 'bad'
-}
-
-// ---------------------------------------------------------------------------
-// Lag-secs tone (used by lagging-partitions list and consumer-group right metric)
-// ---------------------------------------------------------------------------
-const lagSecClass = (s) => {
-  if (!s) return ''
-  if (s < 60) return ''
-  if (s < 600) return 'warn'
   return 'bad'
 }
 
@@ -1277,14 +872,6 @@ const formatRelative = (ts) => {
   if (diffMs < 30 * 86400_000) return `${Math.floor(diffMs / 86400_000)}d ago`
   return formatDate(ts)
 }
-const formatDurationSec = (sec) => formatDuration(Math.round((sec || 0) * 1000))
-const getLagLabel = (seconds) => {
-  if (seconds < 60) return `${seconds}s`
-  if (seconds < 3600) return `${Math.round(seconds / 60)}m`
-  if (seconds < 86400) return `${Math.round(seconds / 3600)}h`
-  return `${Math.round(seconds / 86400)}d`
-}
-
 // ---------------------------------------------------------------------------
 // Navigation helpers
 // ---------------------------------------------------------------------------
@@ -1336,33 +923,12 @@ const fetchOps = async () => {
   }
 }
 
-const fetchConsumers = async () => {
-  if (!consumers.value.length) loadingConsumers.value = true
-  try {
-    const r = await consumersApi.list()
-    consumers.value = Array.isArray(r.data) ? r.data : (r.data?.consumer_groups || [])
-  } catch {
-    consumers.value = []
-  } finally {
-    loadingConsumers.value = false
-  }
-}
-
-const loadLaggingPartitions = async () => {
-  laggingLoading.value = true
-  try {
-    const r = await consumersApi.getLagging(lagThreshold.value)
-    laggingPartitionsRaw.value = Array.isArray(r.data) ? r.data : (r.data || [])
-  } catch {
-    laggingPartitionsRaw.value = []
-  } finally {
-    laggingLoading.value = false
-    laggingLoaded.value = true
-  }
-}
-
 const fetchAll = async () => {
-  await Promise.all([fetchQueueDetail(), fetchOps(), fetchConsumers(), loadLaggingPartitions()])
+  // Two calls only: queue detail (for config + totals) and queue-ops
+  // (for the metric table). Consumer-group + lagging-partition scans are
+  // expensive at scale and intentionally skipped here — they live on
+  // the dedicated /consumers page.
+  await Promise.all([fetchQueueDetail(), fetchOps()])
   lastRefreshAt.value = Date.now()
   loading.value = false
 }
@@ -1377,21 +943,6 @@ const deleteQueue = async () => {
     router.push('/queues')
   } catch (err) {
     console.error('Failed to delete queue:', err)
-  }
-}
-const handleSkipPartition = async (p) => {
-  const key = skipKey(p)
-  const groupLabel = p.consumer_group === '__QUEUE_MODE__' ? '(queue mode)' : p.consumer_group
-  if (!confirm(`Skip "${p.partition_name}" to end for "${groupLabel}"?\n\nThis advances the cursor past all pending messages on this partition.`)) return
-  skippingPartition.value = key
-  try {
-    await consumersApi.seekPartition(p.consumer_group, p.queue_name, p.partition_name)
-    await loadLaggingPartitions()
-  } catch (err) {
-    console.error('Failed to skip partition:', err)
-    alert('Failed to skip partition: ' + (err.response?.data?.error || err.message))
-  } finally {
-    skippingPartition.value = null
   }
 }
 
@@ -1610,89 +1161,6 @@ onUnmounted(() => {
   font-style: normal; color: var(--text-low);
   margin-left: 3px; font-size: 11px; font-weight: 400;
 }
-
-/* ---------------------------------------------------------------------------
-   Two-column entity panels (Dashboard idiom, reused verbatim)
-   --------------------------------------------------------------------------- */
-.entity-list {
-  display: flex; flex-direction: column;
-  gap: 6px; padding: 10px 10px 6px;
-}
-.entity-row {
-  display: block; width: 100%;
-  text-align: left;
-  border: 1px solid var(--bd); border-radius: 8px;
-  background: rgba(255, 255, 255, .012);
-  padding: 9px 12px 10px;
-  cursor: pointer;
-  transition: border-color .12s var(--ease), background .12s var(--ease);
-}
-.entity-row-static { cursor: default; }
-.entity-row:not(.entity-row-static):hover { border-color: var(--bd-hi); background: rgba(255, 255, 255, .03); }
-.entity-head {
-  display: flex; align-items: center; gap: 8px;
-}
-.entity-name {
-  flex: 1;
-  font-size: 13.5px; font-weight: 500;
-  color: var(--text-hi); letter-spacing: -.005em;
-  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
-}
-.entity-right {
-  font-family: 'JetBrains Mono', monospace;
-  font-variant-numeric: tabular-nums;
-  font-size: 12px; color: var(--text-mid);
-  white-space: nowrap; flex-shrink: 0;
-}
-.entity-meta {
-  display: flex; align-items: center;
-  gap: 10px; margin-top: 6px;
-  padding-left: 14px;
-}
-.meta-text {
-  font-family: 'JetBrains Mono', monospace;
-  font-size: 11px; color: var(--text-low);
-  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
-}
-.meta-text strong { color: var(--text-mid); font-weight: 600; }
-.meta-sep { color: var(--bd-hi); margin: 0 4px; }
-.meta-tag {
-  display: inline-block;
-  padding: 1px 6px; border-radius: 99px;
-  border: 1px solid var(--bd);
-  background: var(--ink-3); color: var(--text-mid);
-  font-size: 10px; font-weight: 500;
-  letter-spacing: .02em; margin-right: 2px;
-}
-.entity-empty {
-  padding: 32px 16px; text-align: center;
-  color: var(--text-low); font-size: 13px;
-}
-.card-foot {
-  border-top: 1px solid var(--bd);
-  padding: 8px 14px;
-  display: flex; justify-content: flex-end;
-}
-.card-foot-link {
-  font-size: 11.5px; color: var(--text-mid);
-  cursor: pointer; transition: color .12s var(--ease);
-}
-.card-foot-link:hover { color: var(--text-hi); }
-
-/* ---------------------------------------------------------------------------
-   Partitions table — a sortable, dense list of every partition.
-   --------------------------------------------------------------------------- */
-.qd-parts th { white-space: nowrap; }
-.qd-sortable { cursor: pointer; user-select: none; }
-.qd-sortable:hover { color: var(--text-hi); }
-.qd-th-inner { display: flex; align-items: center; gap: 4px; }
-.qd-pdot { width: 16px; padding-right: 0; }
-.qd-pname {
-  font-weight: 500;
-  color: var(--text-hi);
-  font-size: 12.5px;
-}
-.qd-dot-idle { background: var(--text-faint); opacity: .55; }
 
 /* ---------------------------------------------------------------------------
    Configuration grid
