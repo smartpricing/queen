@@ -116,26 +116,35 @@ let chart = null
 // Render-mode selection. Mirrors the old SVG Sparkline contract so empty
 // states stay visually distinct from quiet-but-present data.
 // ---------------------------------------------------------------------------
+// Normalize an input array so that:
+//   - null / undefined / NaN  →  null   (rendered as a chart gap)
+//   - real numeric values     →  Number (preserved, including 0)
+// Critically, the array length is *preserved* so the data stays aligned
+// with the labels array. This is the difference between an honest gap
+// (the metric had no sample for this bucket) and a misleading zero.
+const normalizeArr = (arr) =>
+  (arr || []).map(v => {
+    if (v === null || v === undefined) return null
+    const n = Number(v)
+    return Number.isFinite(n) ? n : null
+  })
+
 const flatSeries = computed(() => {
   if (props.series && props.series.length) {
-    return props.series.map(s => ({
-      ...s,
-      data: (s.data || []).map(v => Number(v)).filter(v => Number.isFinite(v)),
-    }))
+    return props.series.map(s => ({ ...s, data: normalizeArr(s.data) }))
   }
-  return [{
-    label: 'Value',
-    data: (props.data || []).map(v => Number(v)).filter(v => Number.isFinite(v)),
-  }]
+  return [{ label: 'Value', data: normalizeArr(props.data) }]
 })
 
 const renderMode = computed(() => {
   const ss = flatSeries.value
-  // Treat as empty if all series are missing/short.
-  const anyHasPoints = ss.some(s => s.data.length >= 2)
+  // A series has "points" if at least 2 entries are finite (non-null).
+  const finiteCount = (s) => s.data.reduce((c, v) => v === null ? c : c + 1, 0)
+  const anyHasPoints = ss.some(s => finiteCount(s) >= 2)
   if (!anyHasPoints) return 'empty'
-  // Treat as flat if every series is all-zero (or near-zero).
-  const anyNonZero = ss.some(s => s.data.some(v => v !== 0))
+  // Flat = every finite point is zero. We ignore nulls here so a window
+  // with one real "0" between gaps still reads as flat (not noisy).
+  const anyNonZero = ss.some(s => s.data.some(v => v !== null && v !== 0))
   if (!anyNonZero) return 'flat'
   return 'chart'
 })
@@ -180,6 +189,9 @@ function buildChartData() {
         pointHoverBorderWidth: 1,
         tension: 0.4,
         fill: true,
+        // Don't bridge null buckets — render them as actual gaps so the
+        // operator can tell "no sample yet" from "real zero".
+        spanGaps: false,
       }],
     }
   }
@@ -209,6 +221,7 @@ function buildChartData() {
         pointHoverBorderWidth: 1,
         tension: 0.4,
         fill: i === 0 || s.fill === true,
+        spanGaps: false,
       }
     }),
   }

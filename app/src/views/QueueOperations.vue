@@ -534,6 +534,7 @@
 <script setup>
 import { ref, reactive, computed, onMounted, watch } from 'vue'
 import { system } from '@/api'
+import { toNum, trimIncompleteBuckets } from '@/composables/useApi'
 import { useRefresh } from '@/composables/useRefresh'
 import BaseChart from '@/components/BaseChart.vue'
 import MultiSelect from '@/components/MultiSelect.vue'
@@ -795,19 +796,21 @@ const queueOpTabs = [
   // meaningfully — a once-a-minute blip mustn't read as 100%.
   { key: 'fill',   label: 'Fill %',  activeClass: 'chip-ok',   activeDot: '#4ade80',
     field: (e) => {
-      const pop = Number(e.popMessages) || 0
-      const empty = Number(e.popEmpty) || 0
-      const total = pop + empty
+      const pop = toNum(e.popMessages)
+      const empty = toNum(e.popEmpty)
+      if (pop === null && empty === null) return null
+      const total = (pop || 0) + (empty || 0)
       if (total < 2) return null
-      return Math.round((pop / total) * 1000) / 10
+      return Math.round(((pop || 0) / total) * 1000) / 10
     },
     yLabel: 'Fill %', kind: 'percent' },
   // Signed push − pop rate: positive = backlog growing, negative = draining.
   { key: 'delta',  label: 'Push−Pop Δ', activeClass: 'chip-warn', activeDot: '#e6b450',
     field: (e) => {
-      const push = Number(e.pushPerSecond) || 0
-      const pop = Number(e.popPerSecond) || 0
-      return Math.round((push - pop) * 100) / 100
+      const push = toNum(e.pushPerSecond)
+      const pop  = toNum(e.popPerSecond)
+      if (push === null && pop === null) return null
+      return Math.round(((push || 0) - (pop || 0)) * 100) / 100
     },
     yLabel: 'Push − Pop (msgs/s)', kind: 'rate-signed' },
   { key: 'trx',    label: 'Trx',     activeClass: 'chip-mute', activeDot: '#e6b450', field: 'transactions',   yLabel: 'Transactions', kind: 'count' },
@@ -949,7 +952,7 @@ const queueColors = [
 const totalErrors = computed(() => {
   if (!workerData.value?.timeSeries?.length) return 0
   return workerData.value.timeSeries.reduce((sum, t) => {
-    return sum + (t.dbErrors || 0) + (t.ackFailed || 0) + (t.dlqCount || 0)
+    return sum + (toNum(t.dbErrors) || 0) + (toNum(t.ackFailed) || 0) + (toNum(t.dlqCount) || 0)
   }, 0)
 })
 
@@ -963,21 +966,21 @@ const throughputChartData = computed(() => {
   const datasets = []
   if (selectedThroughputMetrics.push) {
     datasets.push({
-      label: 'Push/s', data: ts.map(t => t.pushPerSecond || 0),
+      label: 'Push/s', data: ts.map(t => toNum(t.pushPerSecond)),
       borderColor: '#e6e6e6', backgroundColor: 'rgba(230, 230, 230, 0.12)',
       fill: true, tension: 0
     })
   }
   if (selectedThroughputMetrics.pop) {
     datasets.push({
-      label: 'Pop/s', data: ts.map(t => t.popPerSecond || 0),
+      label: 'Pop/s', data: ts.map(t => toNum(t.popPerSecond)),
       borderColor: '#8a8a92', backgroundColor: 'rgba(138, 138, 146, 0.12)',
       fill: true, tension: 0
     })
   }
   if (selectedThroughputMetrics.ack) {
     datasets.push({
-      label: 'Ack/s', data: ts.map(t => t.ackPerSecond || 0),
+      label: 'Ack/s', data: ts.map(t => toNum(t.ackPerSecond)),
       borderColor: '#6a6a6a', backgroundColor: 'rgba(106, 106, 106, 0.12)',
       fill: true, tension: 0
     })
@@ -993,10 +996,10 @@ const latencyChartData = computed(() => {
   return {
     labels,
     datasets: [
-      { label: 'Avg Lag (ms)', data: ts.map(t => t.avgLagMs || 0),
+      { label: 'Avg Lag (ms)', data: ts.map(t => toNum(t.avgLagMs)),
         borderColor: '#e6e6e6', backgroundColor: 'rgba(230, 230, 230, 0.1)',
         fill: true, tension: 0 },
-      { label: 'Max Lag (ms)', data: ts.map(t => t.maxLagMs || 0),
+      { label: 'Max Lag (ms)', data: ts.map(t => toNum(t.maxLagMs)),
         borderColor: '#8a8a92', fill: false, tension: 0 }
     ]
   }
@@ -1010,14 +1013,14 @@ const eventLoopChartData = computed(() => {
   const datasets = []
   if (selectedEventLoopMetrics.avg) {
     datasets.push({
-      label: 'Avg Event Loop (ms)', data: ts.map(t => t.avgEventLoopLagMs || 0),
+      label: 'Avg Event Loop (ms)', data: ts.map(t => toNum(t.avgEventLoopLagMs)),
       borderColor: '#e6e6e6', backgroundColor: 'rgba(230, 230, 230, 0.12)',
       fill: true, tension: 0
     })
   }
   if (selectedEventLoopMetrics.max) {
     datasets.push({
-      label: 'Max Event Loop (ms)', data: ts.map(t => t.maxEventLoopLagMs || 0),
+      label: 'Max Event Loop (ms)', data: ts.map(t => toNum(t.maxEventLoopLagMs)),
       borderColor: '#8a8a92', backgroundColor: 'rgba(138, 138, 146, 0.10)',
       fill: true, tension: 0
     })
@@ -1033,10 +1036,10 @@ const connectionPoolChartData = computed(() => {
   return {
     labels,
     datasets: [
-      { label: 'Free Slots', data: ts.map(t => t.avgFreeSlots || 0),
+      { label: 'Free Slots', data: ts.map(t => toNum(t.avgFreeSlots)),
         borderColor: '#e6e6e6', backgroundColor: 'rgba(230, 230, 230, 0.12)',
         fill: true, tension: 0 },
-      { label: 'DB Connections', data: ts.map(t => t.dbConnections || 0),
+      { label: 'DB Connections', data: ts.map(t => toNum(t.dbConnections)),
         borderColor: '#8a8a92', fill: false, tension: 0 }
     ]
   }
@@ -1048,9 +1051,12 @@ const connectionPoolChartData = computed(() => {
 const jobQueueChartData = computed(() => {
   if (!workerData.value?.timeSeries?.length) return { labels: [], datasets: [] }
   const ts = [...workerData.value.timeSeries].reverse()
-  const avgs = ts.map(t => Number(t.avgJobQueueSize) || 0)
-  const maxes = ts.map(t => Number(t.maxJobQueueSize) || 0)
-  if (avgs.every(v => v === 0) && maxes.every(v => v === 0)) {
+  const avgs = ts.map(t => toNum(t.avgJobQueueSize))
+  const maxes = ts.map(t => toNum(t.maxJobQueueSize))
+  // "Empty" panel = no series has any non-zero finite value. Nulls don't
+  // count as zero — they're simply missing.
+  const allZero = (a) => a.every(v => v === null || v === 0)
+  if (allZero(avgs) && allZero(maxes)) {
     return { labels: [], datasets: [] }
   }
   const multiDay = isMultiDay(ts)
@@ -1075,19 +1081,19 @@ const errorsChartData = computed(() => {
   const datasets = []
   if (selectedErrorMetrics.dbErrors) {
     datasets.push({
-      label: 'DB Errors', data: ts.map(t => t.dbErrors || 0),
+      label: 'DB Errors', data: ts.map(t => toNum(t.dbErrors)),
       backgroundColor: 'rgba(244, 63, 94, 0.6)', borderColor: '#f43f5e', borderWidth: 1
     })
   }
   if (selectedErrorMetrics.ackFailed) {
     datasets.push({
-      label: 'Ack Failed', data: ts.map(t => t.ackFailed || 0),
+      label: 'Ack Failed', data: ts.map(t => toNum(t.ackFailed)),
       backgroundColor: 'rgba(138, 138, 146, 0.6)', borderColor: '#8a8a92', borderWidth: 1
     })
   }
   if (selectedErrorMetrics.dlq) {
     datasets.push({
-      label: 'DLQ', data: ts.map(t => t.dlqCount || 0),
+      label: 'DLQ', data: ts.map(t => toNum(t.dlqCount)),
       backgroundColor: 'rgba(230, 230, 230, 0.6)', borderColor: '#e6e6e6', borderWidth: 1
     })
   }
@@ -1102,8 +1108,8 @@ const errorsChartData = computed(() => {
 const dlqChartData = computed(() => {
   if (!workerData.value?.timeSeries?.length) return { labels: [], datasets: [] }
   const ts = [...workerData.value.timeSeries].reverse()
-  const data = ts.map(t => Number(t.dlqCount) || 0)
-  if (data.every(v => v === 0)) return { labels: [], datasets: [] }
+  const data = ts.map(t => toNum(t.dlqCount))
+  if (data.every(v => v === null || v === 0)) return { labels: [], datasets: [] }
   const multiDay = isMultiDay(ts)
   const labels = ts.map(t => formatChartLabel(new Date(t.timestamp), multiDay))
   return {
@@ -1118,7 +1124,7 @@ const dlqChartData = computed(() => {
 
 const dlqTotal = computed(() => {
   if (!workerData.value?.timeSeries?.length) return 0
-  return workerData.value.timeSeries.reduce((sum, t) => sum + (Number(t.dlqCount) || 0), 0)
+  return workerData.value.timeSeries.reduce((sum, t) => sum + (toNum(t.dlqCount) || 0), 0)
 })
 
 // Retention / eviction time series
@@ -1132,11 +1138,11 @@ const retentionChartData = computed(() => {
   return {
     labels,
     datasets: [
-      { label: 'Retention',          data: rows.map(r => Number(r.retentionMsgs) || 0),
+      { label: 'Retention',           data: rows.map(r => toNum(r.retentionMsgs)),
         backgroundColor: 'rgba(230,230,230,0.6)', borderColor: '#e6e6e6', borderWidth: 1 },
-      { label: 'Completed retention', data: rows.map(r => Number(r.completedRetentionMsgs) || 0),
+      { label: 'Completed retention', data: rows.map(r => toNum(r.completedRetentionMsgs)),
         backgroundColor: 'rgba(138,138,146,0.6)', borderColor: '#8a8a92', borderWidth: 1 },
-      { label: 'Eviction',           data: rows.map(r => Number(r.evictionMsgs) || 0),
+      { label: 'Eviction',            data: rows.map(r => toNum(r.evictionMsgs)),
         backgroundColor: 'rgba(230,180,80,0.5)', borderColor: '#e6b450', borderWidth: 1 },
     ]
   }
@@ -1169,10 +1175,11 @@ const buildPerQueueOpsChart = (valueAccessor) => {
       label: q,
       // valueAccessor may return null to indicate "not enough data this
       // bucket" (e.g. fill ratio with <2 events). Preserve null so
-      // Chart.js renders a gap instead of a misleading drop to zero.
+      // Chart.js renders a gap. Likewise: missing (queue, bucket) row →
+      // null so quiet queues don't draw a phantom flat line at zero.
       data: buckets.map(b => {
         const entry = lookup[`${q}|${b}`]
-        if (!entry) return 0
+        if (!entry) return null
         const v = valueAccessor(entry)
         if (v === null || v === undefined) return null
         const n = Number(v)
@@ -1229,9 +1236,11 @@ const queueParkedReplicaChartData = computed(() => {
     const color = queueColors[i % queueColors.length]
     return {
       label: s,
+      // No entry for this (series, bucket) → null so the chart renders a
+      // gap rather than an artificial 0 on the line.
       data: buckets.map(b => {
         const entry = lookup[`${s}|${b}`]
-        return entry ? (Number(entry.parkedCount) || 0) : 0
+        return entry ? toNum(entry.parkedCount) : null
       }),
       borderColor: color.border,
       backgroundColor: color.bg,
@@ -1324,9 +1333,13 @@ const buildPerQueueChart = (valueAccessor) => {
     const color = queueColors[i % queueColors.length]
     return {
       label: q,
+      // No entry → null (gap), so a queue that didn't report this bucket
+      // doesn't read as "0 lag" / "0 rate" along the bottom of the chart.
       data: buckets.map(b => {
         const entry = lookup[`${q}|${b}`]
-        return entry ? valueAccessor(entry) : 0
+        if (!entry) return null
+        const v = valueAccessor(entry)
+        return v === undefined ? null : v
       }),
       borderColor: color.border,
       backgroundColor: color.bg,
@@ -1337,7 +1350,7 @@ const buildPerQueueChart = (valueAccessor) => {
   return { labels, datasets }
 }
 
-const queueLagChartData = computed(() => buildPerQueueChart(entry => entry.avgLagMs || 0))
+const queueLagChartData = computed(() => buildPerQueueChart(entry => toNum(entry.avgLagMs)))
 
 // ---------------------------------------------------------------------------
 // Top queues leaderboard
@@ -1463,11 +1476,42 @@ const fetchData = async () => {
         : Promise.resolve({ data: null })
     ])
 
-    workerData.value = workerRes.data
-    queueLagData.value = queueLagRes.data
-    queueOpsData.value = queueOpsRes.data
-    queueParkedReplicasData.value = parkedReplicasRes.data
-    retentionData.value = retentionRes.data
+    // Trim the in-flight current bucket from each time series so the
+    // right edge of every chart isn't dragged towards zero by partial
+    // samples. Worker / per-queue / parked / retention data all share
+    // the same once-per-minute flush cadence.
+    workerData.value = workerRes.data ? {
+      ...workerRes.data,
+      timeSeries: trimIncompleteBuckets(workerRes.data.timeSeries || [], {
+        bucketKey: 'timestamp',
+        bucketMinutes: workerRes.data.bucketMinutes || 1,
+      }),
+    } : null
+    queueLagData.value = trimIncompleteBuckets(queueLagRes.data || [], {
+      bucketKey: 'bucketTime',
+      bucketMinutes: 1,
+    })
+    queueOpsData.value = queueOpsRes.data ? {
+      ...queueOpsRes.data,
+      series: trimIncompleteBuckets(queueOpsRes.data.series || [], {
+        bucketKey: 'bucket',
+        bucketMinutes: queueOpsRes.data.bucketMinutes || 1,
+      }),
+    } : null
+    queueParkedReplicasData.value = parkedReplicasRes.data ? {
+      ...parkedReplicasRes.data,
+      series: trimIncompleteBuckets(parkedReplicasRes.data.series || [], {
+        bucketKey: 'bucket',
+        bucketMinutes: parkedReplicasRes.data.bucketMinutes || 1,
+      }),
+    } : null
+    retentionData.value = retentionRes.data ? {
+      ...retentionRes.data,
+      series: trimIncompleteBuckets(retentionRes.data.series || [], {
+        bucketKey: 'bucket',
+        bucketMinutes: retentionRes.data.bucketMinutes || 1,
+      }),
+    } : null
   } catch (err) {
     console.error('Failed to fetch queue operations metrics:', err)
   } finally {

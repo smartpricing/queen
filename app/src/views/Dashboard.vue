@@ -417,7 +417,7 @@
 <script setup>
 import { ref, computed, onMounted, onUnmounted, watch } from 'vue'
 import { resources, queues as queuesApi, analytics, consumers as consumersApi, system as systemApi } from '@/api'
-import { formatNumber } from '@/composables/useApi'
+import { formatNumber, toNum, latestFinite, trimIncompleteBuckets } from '@/composables/useApi'
 import { useRefresh } from '@/composables/useRefresh'
 import MetricRow from '@/components/MetricRow.vue'
 
@@ -486,7 +486,14 @@ const getTimeRangeParams = () => {
 // ---------------------------------------------------------------------------
 const history = computed(() => {
   if (!statusData.value?.throughput?.length) return []
-  return [...statusData.value.throughput].reverse()
+  // Status v3 returns throughput rows newest → oldest; reverse for charts.
+  // Then drop the in-flight current bucket so the right edge of each
+  // chart doesn't show the partial-minute sample reading low/zero.
+  const sorted = [...statusData.value.throughput].reverse()
+  return trimIncompleteBuckets(sorted, {
+    bucketKey: 'timestamp',
+    bucketMinutes: statusData.value?.bucketMinutes || 1,
+  })
 })
 const multiDay = computed(() => {
   const h = history.value
@@ -524,15 +531,17 @@ const throughputSeries = computed(() => {
   const h = history.value
   if (!h.length) return null
   return [
-    { label: 'Push', data: h.map(x => Number(x.ingestedPerSecond) || 0) },
-    { label: 'Pop',  data: h.map(x => Number(x.popPerSecond) || 0) },
-    { label: 'Ack',  data: h.map(x => Number(x.processedPerSecond) || 0), color: '#4ade80' },
+    { label: 'Push', data: h.map(x => toNum(x.ingestedPerSecond)) },
+    { label: 'Pop',  data: h.map(x => toNum(x.popPerSecond)) },
+    { label: 'Ack',  data: h.map(x => toNum(x.processedPerSecond)), color: '#4ade80' },
   ]
 })
 const throughputPeak = computed(() => {
   const h = history.value
   if (!h.length) return 0
-  return Math.max(0, ...h.map(x => Number(x.ingestedPerSecond) || 0))
+  // Math.max ignores nulls when filtered first; default to 0 if all missing.
+  const finite = h.map(x => toNum(x.ingestedPerSecond)).filter(v => v !== null)
+  return finite.length ? Math.max(0, ...finite) : 0
 })
 const throughputContext = computed(() => {
   const peak = throughputPeak.value
@@ -548,19 +557,23 @@ const throughputContext = computed(() => {
 // what makes this row tell its story: grey at zero, amber when growing,
 // red when growing fast, green only when actively shrinking by a lot.
 // ---------------------------------------------------------------------------
+// Cumulative push − ack across the window. When a bucket's source values
+// are missing we emit `null` (not 0) so the chart shows a gap instead of
+// the line lying flat. The cumulative carries forward across gaps so the
+// next valid bucket continues from the last known total.
 const pendingDeltaSeries = computed(() => {
   const h = history.value
   if (!h.length) return []
   let cum = 0
   return h.map(x => {
-    cum += (Number(x.ingested) || 0) - (Number(x.processed) || 0)
+    const ingested = toNum(x.ingested)
+    const processed = toNum(x.processed)
+    if (ingested === null && processed === null) return null
+    cum += (ingested || 0) - (processed || 0)
     return cum
   })
 })
-const pendingDeltaLatest = computed(() => {
-  const s = pendingDeltaSeries.value
-  return s.length ? s[s.length - 1] : 0
-})
+const pendingDeltaLatest = computed(() => latestFinite(pendingDeltaSeries.value) ?? 0)
 const pendingDeltaDisplay = computed(() => {
   const v = pendingDeltaLatest.value
   if (v === 0) return '0'
@@ -589,8 +602,8 @@ const lagSeriesData = computed(() => {
   const h = history.value
   if (!h.length) return null
   return [
-    { label: 'Avg', data: h.map(x => Number(x.avgLagMs) || 0) },
-    { label: 'Max', data: h.map(x => Number(x.maxLagMs) || 0) },
+    { label: 'Avg', data: h.map(x => toNum(x.avgLagMs)) },
+    { label: 'Max', data: h.map(x => toNum(x.maxLagMs)) },
   ]
 })
 const lagNumClass = (s) => !s || s === 0 ? '' : s < 60 ? '' : s < 300 ? 'warn' : 'bad'
@@ -606,19 +619,19 @@ const errorSeriesData = computed(() => {
   const h = history.value
   if (!h.length) return null
   return [
-    { label: 'DB errors', data: h.map(x => Number(x.dbErrors) || 0), color: '#fb7185' },
-    { label: 'Ack failed', data: h.map(x => Number(x.ackFailed) || 0), color: '#e6b450' },
+    { label: 'DB errors', data: h.map(x => toNum(x.dbErrors)), color: '#fb7185' },
+    { label: 'Ack failed', data: h.map(x => toNum(x.ackFailed)), color: '#e6b450' },
   ]
 })
 const errorBuckets = computed(() => {
   let db = 0, ack = 0
   for (const x of history.value) {
-    db  += Number(x.dbErrors)  || 0
-    ack += Number(x.ackFailed) || 0
+    db  += toNum(x.dbErrors)  || 0
+    ack += toNum(x.ackFailed) || 0
   }
-  // dlq we read once from the most recent point as a snapshot.
-  const last = history.value[history.value.length - 1]
-  const dlq = last ? (Number(last.dlqCount) || 0) : 0
+  // DLQ is a cumulative snapshot — read the most recent finite value
+  // (skipping over null buckets so an in-flight last bucket doesn't read 0).
+  const dlq = latestFinite(history.value.map(x => x.dlqCount)) ?? 0
   return { db, ack, dlq }
 })
 const errorTotal = computed(() => {
@@ -643,19 +656,24 @@ const workerCount = computed(() => statusData.value?.workers?.length || 0)
 const avgEventLoopLag = computed(() => {
   const w = statusData.value?.workers
   if (!w?.length) return 0
-  return Math.round(w.reduce((s, x) => s + (x.avgEventLoopLagMs || 0), 0) / w.length)
+  // Average only over workers that actually reported a value — a worker
+  // missing the field shouldn't pull the cluster average towards zero.
+  const finite = w.map(x => toNum(x.avgEventLoopLagMs)).filter(v => v !== null)
+  if (!finite.length) return 0
+  return Math.round(finite.reduce((s, x) => s + x, 0) / finite.length)
 })
 const maxEventLoopLag = computed(() => {
   const w = statusData.value?.workers
   if (!w?.length) return 0
-  return Math.max(...w.map(x => x.maxEventLoopLagMs || 0))
+  const finite = w.map(x => toNum(x.maxEventLoopLagMs)).filter(v => v !== null)
+  return finite.length ? Math.max(...finite) : 0
 })
 const elSeriesData = computed(() => {
   const h = history.value
   if (!h.length) return null
   return [
-    { label: 'Avg', data: h.map(x => Number(x.avgEventLoopLagMs) || 0) },
-    { label: 'Max', data: h.map(x => Number(x.maxEventLoopLagMs) || 0) },
+    { label: 'Avg', data: h.map(x => toNum(x.avgEventLoopLagMs)) },
+    { label: 'Max', data: h.map(x => toNum(x.maxEventLoopLagMs)) },
   ]
 })
 const elNumClass = (ms) => !ms || ms === 0 ? '' : ms < 50 ? '' : ms < 100 ? 'warn' : 'bad'
@@ -678,16 +696,21 @@ const cpuSeriesData = computed(() => {
     const replicas = systemMetricsData.value?.replicas || []
     return replicas.map(r => ({
       label: r.hostname?.substring(0, 12) || 'replica',
-      data: (r.timeSeries || []).map(t =>
-        ((t.metrics?.cpu?.user_us?.avg || 0) + (t.metrics?.cpu?.system_us?.avg || 0)) / 100
-      ),
+      // If either user_us or system_us is missing for a bucket we have no
+      // honest CPU number — emit null so the line renders a gap there.
+      data: (r.timeSeries || []).map(t => {
+        const user = toNum(t.metrics?.cpu?.user_us?.avg)
+        const sys  = toNum(t.metrics?.cpu?.system_us?.avg)
+        if (user === null && sys === null) return null
+        return ((user || 0) + (sys || 0)) / 100
+      }),
     }))
   }
   const h = history.value
   if (!h.length) return null
   return [
-    { label: 'User',   data: h.map(x => Number(x.queenCpuUserPct) || 0) },
-    { label: 'System', data: h.map(x => Number(x.queenCpuSysPct)  || 0) },
+    { label: 'User',   data: h.map(x => toNum(x.queenCpuUserPct)) },
+    { label: 'System', data: h.map(x => toNum(x.queenCpuSysPct)) },
   ]
 })
 
@@ -704,51 +727,61 @@ const cpuLabels = computed(() => {
     new Date(ts[0].timestamp).toDateString() !== new Date(ts[ts.length - 1].timestamp).toDateString()
   return ts.map(t => formatChartLabel(new Date(t.timestamp), multi))
 })
+// Per-replica CPU "Now" — pull each replica's latest finite combined %
+// (so a replica that hasn't reported in the last bucket doesn't drag the
+// hottest reading down to 0).
 const cpuLatest = computed(() => {
   if (hasMultipleReplicas.value) {
     const replicas = systemMetricsData.value?.replicas || []
     let max = 0
     for (const r of replicas) {
-      const last = r.timeSeries?.[r.timeSeries.length - 1]
-      if (!last) continue
-      const v = ((last.metrics?.cpu?.user_us?.avg || 0) + (last.metrics?.cpu?.system_us?.avg || 0)) / 100
+      const ts = r.timeSeries || []
+      const combined = ts.map(t => {
+        const user = toNum(t.metrics?.cpu?.user_us?.avg)
+        const sys  = toNum(t.metrics?.cpu?.system_us?.avg)
+        if (user === null && sys === null) return null
+        return ((user || 0) + (sys || 0)) / 100
+      })
+      const v = latestFinite(combined) || 0
       if (v > max) max = v
     }
     return max
   }
-  const last = history.value[history.value.length - 1]
-  if (!last) return 0
-  return (Number(last.queenCpuUserPct) || 0) + (Number(last.queenCpuSysPct) || 0)
+  const u = latestFinite(history.value.map(x => x.queenCpuUserPct)) || 0
+  const s = latestFinite(history.value.map(x => x.queenCpuSysPct)) || 0
+  return u + s
 })
 const cpuContext = computed(() => {
   if (hasMultipleReplicas.value) {
     const n = (systemMetricsData.value?.replicas || []).length
     return `${n} replicas · hottest shown`
   }
-  const last = history.value[history.value.length - 1]
-  if (!last) return '—'
-  const u = Number(last.queenCpuUserPct) || 0
-  const s = Number(last.queenCpuSysPct)  || 0
-  return `user ${u.toFixed(0)}% · sys ${s.toFixed(0)}%`
+  const u = latestFinite(history.value.map(x => x.queenCpuUserPct))
+  const s = latestFinite(history.value.map(x => x.queenCpuSysPct))
+  if (u === null && s === null) return '—'
+  return `user ${(u || 0).toFixed(0)}% · sys ${(s || 0).toFixed(0)}%`
 })
 
 // ---------------------------------------------------------------------------
 // DB pool row — saturation = waiters; warn at 80% util, bad once active = size.
 // ---------------------------------------------------------------------------
+// Pool "Now" reads the most recent finite value per field, since the
+// bucket boundary often arrives with system_metrics not yet flushed.
 const poolLatest = computed(() => {
-  const last = history.value[history.value.length - 1]
-  if (!last) return null
-  const active = Math.round(Number(last.dbPoolActive) || 0)
-  const idle   = Math.round(Number(last.dbPoolIdle) || 0)
-  const size   = Math.round(Number(last.dbPoolSize) || (active + idle))
+  const h = history.value
+  if (!h.length) return null
+  const active = Math.round(latestFinite(h.map(x => x.dbPoolActive)) ?? 0)
+  const idle   = Math.round(latestFinite(h.map(x => x.dbPoolIdle))   ?? 0)
+  const sizeRaw = latestFinite(h.map(x => x.dbPoolSize))
+  const size   = Math.round(sizeRaw ?? (active + idle))
   return { active, idle, size }
 })
 const poolSeriesData = computed(() => {
   const h = history.value
   if (!h.length) return null
   return [
-    { label: 'Active', data: h.map(x => Number(x.dbPoolActive) || 0) },
-    { label: 'Idle',   data: h.map(x => Number(x.dbPoolIdle) || 0) },
+    { label: 'Active', data: h.map(x => toNum(x.dbPoolActive)) },
+    { label: 'Idle',   data: h.map(x => toNum(x.dbPoolIdle)) },
   ]
 })
 const poolSeverity = computed(() => {
@@ -773,18 +806,18 @@ const partitionSeriesData = computed(() => {
   const rows = partitionOpsData.value || []
   if (!rows.length) return null
   return [
-    { label: 'Created', data: rows.map(r => Number(r.partitionsCreated) || 0) },
-    { label: 'Deleted', data: rows.map(r => Number(r.partitionsDeleted) || 0) },
+    { label: 'Created', data: rows.map(r => toNum(r.partitionsCreated)) },
+    { label: 'Deleted', data: rows.map(r => toNum(r.partitionsDeleted)) },
   ]
 })
 const partitionLabels = computed(() =>
   (partitionOpsData.value || []).map(r => formatChartLabel(new Date(r.bucket), false))
 )
 const partitionCreatedTotal = computed(() =>
-  (partitionOpsData.value || []).reduce((s, r) => s + (Number(r.partitionsCreated) || 0), 0)
+  (partitionOpsData.value || []).reduce((s, r) => s + (toNum(r.partitionsCreated) || 0), 0)
 )
 const partitionDeletedTotal = computed(() =>
-  (partitionOpsData.value || []).reduce((s, r) => s + (Number(r.partitionsDeleted) || 0), 0)
+  (partitionOpsData.value || []).reduce((s, r) => s + (toNum(r.partitionsDeleted) || 0), 0)
 )
 
 // ---------------------------------------------------------------------------
@@ -797,18 +830,20 @@ const partitionDeletedTotal = computed(() =>
 const parkedSeriesData = computed(() => {
   const rows = partitionOpsData.value || []
   if (!rows.length) return null
-  return [{ label: 'Parked', data: rows.map(r => Number(r.parkedTotal) || 0) }]
+  return [{ label: 'Parked', data: rows.map(r => toNum(r.parkedTotal)) }]
 })
 const parkedLatest = computed(() => {
   const rows = partitionOpsData.value || []
-  return rows.length ? (Number(rows[rows.length - 1].parkedTotal) || 0) : 0
+  // Walk back to the most recent populated bucket — avoids reading "0
+  // parked" from a still-aggregating tail bucket.
+  return latestFinite(rows.map(r => r.parkedTotal)) ?? 0
 })
 const parkedAvg = computed(() => {
   const rows = partitionOpsData.value || []
   if (!rows.length) return 0
-  let sum = 0
-  for (const r of rows) sum += Number(r.parkedTotal) || 0
-  return sum / rows.length
+  const finite = rows.map(r => toNum(r.parkedTotal)).filter(v => v !== null)
+  if (!finite.length) return 0
+  return finite.reduce((s, v) => s + v, 0) / finite.length
 })
 const parkedContext = computed(() => {
   const rows = partitionOpsData.value || []
@@ -841,13 +876,20 @@ const FILL_NOISE_FLOOR = 5
 const fillSeriesData = computed(() => {
   const rows = partitionOpsData.value || []
   if (!rows.length) return null
-  let last = 0
+  // We distinguish three states per bucket:
+  //   - null source data       → emit null (real gap)
+  //   - <FILL_NOISE_FLOOR pops → carry the last computed value (so the
+  //                              chart stays visually continuous through
+  //                              quiet but populated minutes)
+  //   - enough activity        → compute and remember it
+  let last = null
   const data = rows.map(r => {
-    const pop = Number(r.popMessages) || 0
-    const empty = Number(r.popEmpty) || 0
-    const total = pop + empty
+    const pop = toNum(r.popMessages)
+    const empty = toNum(r.popEmpty)
+    if (pop === null && empty === null) return null
+    const total = (pop || 0) + (empty || 0)
     if (total < FILL_NOISE_FLOOR) return last
-    last = Math.round((pop / total) * 1000) / 10
+    last = Math.round(((pop || 0) / total) * 1000) / 10
     return last
   })
   return [{ label: 'Fill', data }]
@@ -862,8 +904,8 @@ const fillLatest = computed(() => {
   const tail = rows.slice(-5)
   let pop = 0, empty = 0
   for (const r of tail) {
-    pop   += Number(r.popMessages) || 0
-    empty += Number(r.popEmpty)    || 0
+    pop   += toNum(r.popMessages) || 0
+    empty += toNum(r.popEmpty)    || 0
   }
   if (pop + empty < FILL_NOISE_FLOOR) return null
   return Math.round((pop / (pop + empty)) * 1000) / 10
@@ -895,9 +937,9 @@ const retentionSeriesData = computed(() => {
   const rows = retentionData.value || []
   if (!rows.length) return null
   return [
-    { label: 'Retention', data: rows.map(r => Number(r.retentionMsgs) || 0) },
-    { label: 'Completed', data: rows.map(r => Number(r.completedRetentionMsgs) || 0) },
-    { label: 'Evicted',   data: rows.map(r => Number(r.evictionMsgs) || 0), color: '#e6b450' },
+    { label: 'Retention', data: rows.map(r => toNum(r.retentionMsgs)) },
+    { label: 'Completed', data: rows.map(r => toNum(r.completedRetentionMsgs)) },
+    { label: 'Evicted',   data: rows.map(r => toNum(r.evictionMsgs)), color: '#e6b450' },
   ]
 })
 const retentionLabels = computed(() =>
@@ -906,9 +948,9 @@ const retentionLabels = computed(() =>
 const retentionTotal = computed(() =>
   (retentionData.value || []).reduce((s, r) =>
     s +
-    (Number(r.retentionMsgs) || 0) +
-    (Number(r.completedRetentionMsgs) || 0) +
-    (Number(r.evictionMsgs) || 0)
+    (toNum(r.retentionMsgs) || 0) +
+    (toNum(r.completedRetentionMsgs) || 0) +
+    (toNum(r.evictionMsgs) || 0)
   , 0)
 )
 
@@ -1100,7 +1142,13 @@ const fetchStatus = async () => {
 const fetchRetention = async () => {
   try {
     const r = await systemApi.getRetention(getTimeRangeParams())
-    retentionData.value = r.data?.series || []
+    const series = r.data?.series || []
+    // Trim the still-aggregating current bucket so the right edge of the
+    // retention sparkline doesn't read a partial-minute sample.
+    retentionData.value = trimIncompleteBuckets(series, {
+      bucketKey: 'bucket',
+      bucketMinutes: r.data?.bucketMinutes || 1,
+    })
   } catch { retentionData.value = [] }
 }
 const fetchQueueOps = async () => {
@@ -1128,7 +1176,11 @@ const fetchQueueOps = async () => {
       b.popMessages       += Number(row.popMessages)      || 0
       b.popEmpty          += Number(row.popEmpty)         || 0
     }
-    partitionOpsData.value = Object.values(byBucket).sort((a, b) => a.bucket.localeCompare(b.bucket))
+    const sorted = Object.values(byBucket).sort((a, b) => a.bucket.localeCompare(b.bucket))
+    partitionOpsData.value = trimIncompleteBuckets(sorted, {
+      bucketKey: 'bucket',
+      bucketMinutes: r.data?.bucketMinutes || 1,
+    })
   } catch { partitionOpsData.value = [] }
 }
 const fetchSystemMetrics = async () => {

@@ -185,6 +185,87 @@ export function formatDateTime(date) {
 }
 
 /**
+ * Convert a value to a finite number, or `null` when missing or non-numeric.
+ *
+ * Use this when building chart series so a missing bucket value renders as
+ * a gap in the line rather than collapsing to a misleading zero.
+ *
+ *   toNum(0)         === 0
+ *   toNum(1.5)       === 1.5
+ *   toNum('2.3')     === 2.3
+ *   toNum(null)      === null
+ *   toNum(undefined) === null
+ *   toNum('abc')     === null
+ *
+ * Note: `Number(null) === 0` and `null || 0 === 0`, which is exactly the
+ * trap this helper avoids.
+ */
+export function toNum(v) {
+  if (v === null || v === undefined) return null
+  const n = Number(v)
+  return Number.isFinite(n) ? n : null
+}
+
+/**
+ * Walk a series from the end and return the most recent finite value.
+ * Useful for "Now" displays where the latest bucket may be null/missing
+ * and falling back to 0 would lie about the metric (e.g. throughput
+ * appearing to drop to zero when really we just don't have the sample yet).
+ *
+ * Returns `null` when the series is empty or every value is missing.
+ */
+export function latestFinite(arr) {
+  if (!arr || !arr.length) return null
+  for (let i = arr.length - 1; i >= 0; i--) {
+    const n = toNum(arr[i])
+    if (n !== null) return n
+  }
+  return null
+}
+
+/**
+ * Drop the most recent bucket from a time series if its window covers the
+ * current wall-clock moment (i.e. it's still aggregating). Otherwise the
+ * partial-minute sample reads low or zero and paints a phantom "drop
+ * towards zero" on the right edge of every chart.
+ *
+ * Workers buffer metrics in memory and flush on minute boundaries, so a
+ * bucket with start time T is only complete once `now >= T + bucketMinutes`.
+ *
+ * Options:
+ *   - bucketKey: field name on each row that holds the bucket timestamp
+ *                (default 'bucket'). Pass 'timestamp' for status_v3 rows.
+ *   - bucketMinutes: rollup width in minutes (default 1). Read from the
+ *                    response's bucketMinutes field when available.
+ *
+ * The input is assumed to be sorted oldest → newest. Returns a *new* array
+ * (never mutates) and is safe to call on null/empty inputs.
+ */
+export function trimIncompleteBuckets(rows, { bucketKey = 'bucket', bucketMinutes = 1 } = {}) {
+  if (!rows || rows.length === 0) return rows || []
+  // Find the latest bucket by string-compare (ISO-like timestamps sort
+  // lexicographically). This works whether rows are sorted or not, and
+  // whether the response carries one row per bucket (worker_metrics) or
+  // many (queue-ops with one row per queue per bucket).
+  let latest = null
+  for (const r of rows) {
+    const ts = r && r[bucketKey]
+    if (typeof ts === 'string' && (latest === null || ts > latest)) latest = ts
+  }
+  if (!latest) return rows
+  const startMs = new Date(latest).getTime()
+  if (!Number.isFinite(startMs)) return rows
+  const bucketMs = (Number(bucketMinutes) || 1) * 60 * 1000
+  // Bucket is "in-flight" if its start is more recent than one bucket-width
+  // ago — i.e. its end time hasn't been reached. Trim every row that
+  // belongs to that bucket; older buckets have completed and are safe.
+  if (Date.now() - startMs < bucketMs) {
+    return rows.filter(r => r && r[bucketKey] !== latest)
+  }
+  return rows
+}
+
+/**
  * Format relative time
  */
 export function formatRelativeTime(date) {

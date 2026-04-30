@@ -48,6 +48,10 @@ function buildChartData(data) {
       pointHoverBackgroundColor: ds.borderColor || c.line,
       tension: 0.4,
       fill: ds.fill !== false,
+      // Don't bridge null buckets — render them as honest gaps so a
+      // still-aggregating tail bucket doesn't draw a phantom drop to 0.
+      // Per-dataset override still wins (e.g. `spanGaps: true`).
+      spanGaps: ds.spanGaps !== undefined ? ds.spanGaps : false,
     }
   })
   return { labels: data.labels, datasets }
