@@ -28,6 +28,32 @@
   color: var(--text-hi);
   font-weight: 500;
 }
+
+/* Animated pipeline figure under the hero. */
+.pipeline-figure {
+  margin: 0 auto;
+  max-width: 1180px;
+  border: 1px solid var(--bd);
+  border-radius: 14px;
+  background: var(--ink-0);
+  overflow: hidden;
+}
+.pipeline-figure img {
+  display: block;
+  width: 100%;
+  height: auto;
+}
+.pipeline-figure figcaption {
+  border-top: 1px solid var(--bd);
+  padding: 12px 18px;
+  font-size: 12.5px;
+  color: var(--text-mid);
+  line-height: 1.55;
+}
+.pipeline-figure figcaption strong {
+  color: var(--text-hi);
+  font-weight: 500;
+}
 </style>
 </head>
 <body>
@@ -104,6 +130,22 @@
       into a Postgres vCPU budget. Above ~200k msg/s sustained, or for
       multi-region replication, you want Kafka.
     </p>
+  </div>
+</section>
+
+<!-- ============================ PIPELINE DIAGRAM ============================ -->
+<section class="section" style="padding-top: 0;">
+  <div class="shell">
+    <figure class="pipeline-figure">
+      <img src="assets/queen-partitions.svg" alt="Queen MQ pipeline: four producers (chat ui, scheduler, webhook, replay) push to one queue (agent-tasks) split into five ordered partitions (sess:7af2, sess:9c1d, sess:b03a, sess:e51f, sess:f8d2) plus 9,995 more. Two consumer groups (agent runner, tracer) each see every message independently. One slow session running a 28-second tool call stalls only its own partition." />
+      <figcaption>
+        <strong>One queue, ordered lanes per agent session, fan-out per group.</strong>
+        Producers push tasks; each session is its own FIFO partition; <code>agent runner</code>
+        and <code>tracer</code> each consume the same stream with their own offset. A 28-second
+        tool call on <code>sess:9c1d</code> stalls only that lane &mdash; the other 9,999
+        sessions keep flowing. <a href="concepts.html#partitions">Read the concepts &rarr;</a>
+      </figcaption>
+    </figure>
   </div>
 </section>
 
