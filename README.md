@@ -2,7 +2,7 @@
 
 <div align="center">
 
-<img src="assets/queen-partitions.svg" alt="Queen MQ pipeline: producers push to one queue split into ordered partitions per agent session; two consumer groups (agent runner, tracer) each see every message; one slow tool call stalls only its own partition." width="100%" />
+<img src="assets/queen-partitions.svg" alt="Queen MQ pipeline: producers push to one queue split into ordered partitions per agent session; two consumer groups (agent runner, tracer) each see every message; one slow tool call stalls only its own partition." width="780" />
 
 **Unlimited ordered partitions that never block each other. Consumer groups, replay, transactional delivery — ACID-guaranteed.**
 
